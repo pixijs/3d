@@ -33,9 +33,14 @@ jobs:
         run: |
           file=$(npm pack --silent)
           version=$(node -p "require('./package.json').version")
+          # The sync commit names the pixi-3d commit it mirrors; that sha is the
+          # one worth quoting, since a mirror sha maps to nothing upstream.
+          sha=$(git log -1 --pretty=%s | sed -n 's/.*sync pixi-3d@\([0-9a-f]\{7,\}\).*/\1/p')
+          sha=${sha:-${GITHUB_SHA::7}}
           echo "file=$file" >> "$GITHUB_OUTPUT"
-          echo "tag=beta-$version-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "tag=beta-$version-$sha" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Draft release
         env:
@@ -43,11 +48,12 @@ jobs:
           FILE: ${{ steps.pack.outputs.file }}
           TAG: ${{ steps.pack.outputs.tag }}
           VERSION: ${{ steps.pack.outputs.version }}
+          SHA: ${{ steps.pack.outputs.sha }}
         run: |
           # Re-running the workflow on the same commit replaces the draft.
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           cat > notes.md <<EOF
-          Closed beta build of \`@pixi/3d\` from commit \`${GITHUB_SHA::7}\`.
+          Closed beta build of \`@pixi/3d\` from commit \`$SHA\`.
 
           Download \`$FILE\`, then install it next to PixiJS:
 
@@ -65,5 +71,5 @@ jobs:
           EOF
           gh release create "$TAG" "$FILE" \
             --draft \
-            --title "Beta $VERSION (${GITHUB_SHA::7})" \
+            --title "Beta $VERSION ($SHA)" \
             --notes-file notes.md
