@@ -247,6 +247,8 @@ fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
   gl: {
     vertex: /* glsl */ `#version 300 es
 precision highp float;
+precision highp sampler2D;
+precision highp samplerCube;
 precision highp sampler2DArrayShadow;
 
 {{header}}
@@ -259,6 +261,8 @@ void main() {
 `,
     fragment: /* glsl */ `#version 300 es
 precision highp float;
+precision highp samplerCube;
+precision highp sampler2D;
 precision highp sampler2DArrayShadow;
 
 {{header}}

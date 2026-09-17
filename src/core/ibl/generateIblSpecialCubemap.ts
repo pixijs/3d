@@ -155,6 +155,8 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
   const glTemplate = {
     vertex: /* glsl */ `#version 300 es
         precision highp float;
+        precision highp sampler2D;
+        precision highp samplerCube;
         {{header}}
 
         // Convert cube face index and UV to 3D direction
@@ -185,6 +187,9 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
       `,
     fragment: /* glsl */ `#version 300 es
         precision highp float;
+        precision highp sampler2D;
+        precision highp int;
+        precision highp samplerCube;
         {{header}}
 
         out vec4 fragColor;

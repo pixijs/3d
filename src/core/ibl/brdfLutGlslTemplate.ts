@@ -20,6 +20,7 @@ export const brdfLutGlslTemplate: ShaderBitTemplate = {
     `,
     fragment: /* glsl */ `#version 300 es
       precision highp float;
+      precision highp int;
       {{header}}
 
       // Geometry function (Smith GGX) for a single direction
