@@ -1,0 +1,17 @@
+{
+  "name": "@pixi/3d-docs",
+  "private": true,
+  "description": "Isolated typedoc toolchain — typedoc needs the TS 5.x compiler API, which the root typescript (tsgo) does not ship",
+  "scripts": {
+    "build": "typedoc --options ../../.configs/typedoc.json && node html-to-md.mts",
+    "watch": "http-server ../../.s3_uploads/docs -c-1 & typedoc --options ../../.configs/typedoc.json --watch --preserveWatchOutput"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "typedoc": "^0.28.16",
+    "typedoc-plugin-markdown": "^4.13.0",
+    "typedoc-plugin-mdn-links": "^5.1.1",
+    "typedoc-plugin-no-inherit": "^1.6.1",
+    "typescript": "~5.9.0"
+  }
+}

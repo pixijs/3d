@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "WebWorker"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // vite.config.ts imports the .mts download script; the playground only ever
+    // builds through vite, so emitting is off and .ts-extension imports are fine.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@pixi/3d": ["../src/index.ts"],
+      "@pixi/3d/webgl": ["../src/core/gl/init.ts"],
+      "@pixi/3d/webgpu": ["../src/core/gpu/init.ts"]
+    }
+  },
+  "include": [".", "../src/**/*.d.ts", "../scripts/test/compare-command.mts"]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@pixi/3d-playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --force",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "preact": "*"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "*",
+    "vite": "^8"
+  }
+}

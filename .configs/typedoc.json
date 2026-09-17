@@ -1,0 +1,130 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["../src/index.docs.ts"],
+  "tsconfig": "../scripts/typedoc/tsconfig.json",
+  "gaID": "G-ZXJM5CB1QM",
+  "disableSources": true,
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true,
+    "excludeReferences": false,
+    "includeFolders": true
+  },
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeProtected": true,
+  "excludeExternals": true,
+  "customCss": "../scripts/typedoc/resources/typedoc-custom.css",
+  "customJs": "../scripts/typedoc/resources/typedoc-custom.mjs",
+  "favicon": "../scripts/typedoc/resources/favicon.svg",
+  "router": "pixi",
+  "outputs": [
+    {
+      "name": "markdown",
+      "path": "../.s3_uploads/docs_md"
+    },
+    {
+      "name": "html",
+      "path": "../.s3_uploads/docs",
+      "options": { "theme": "pixi" }
+    }
+  ],
+  "plugin": [
+    "../scripts/typedoc/plugins/typedoc-plugin-ga.mjs",
+    "typedoc-plugin-mdn-links",
+    "typedoc-plugin-no-inherit",
+    "typedoc-plugin-markdown",
+    "../scripts/typedoc/plugins/typedoc-plugin-remove-standard-tag.mjs",
+    "../scripts/typedoc/plugins/typedoc-plugin-router.mjs",
+    "../scripts/typedoc/plugins/typedoc-plugin-nested-categories.mjs",
+    "../scripts/typedoc/plugins/typedoc-plugin-llms-txt.mjs",
+    "../scripts/typedoc/plugins/typedoc-plugin-stackblitz.mjs"
+  ],
+  "lightHighlightTheme": "github-light-default",
+  "darkHighlightTheme": "github-dark-default",
+  "highlightLanguages": [
+    "bash",
+    "css",
+    "html",
+    "javascript",
+    "json",
+    "jsonc",
+    "ts",
+    "tsx",
+    "typescript",
+    "wgsl",
+    "glsl"
+  ],
+  "externalSymbolLinkMappings": {
+    "pixi.js": {
+      "*": "https://pixijs.download/release/docs/index.html"
+    }
+  },
+  "kindSortOrder": [
+    "Document",
+    "Reference",
+    "Project",
+    "Module",
+    "Namespace",
+    "Class",
+    "Constructor",
+    "Variable",
+    "Function",
+    "Property",
+    "Accessor",
+    "Method",
+    "Parameter",
+    "TypeParameter",
+    "TypeLiteral",
+    "CallSignature",
+    "ConstructorSignature",
+    "IndexSignature",
+    "GetSignature",
+    "SetSignature",
+    "Enum",
+    "EnumMember",
+    "Interface",
+    "TypeAlias"
+  ],
+  "categoryOrder": [
+    "animation",
+    "scene",
+    "rendering",
+    "filters",
+    "accessibility",
+    "assets",
+    "utils",
+    "environment",
+    "events",
+    "extensions",
+    "maths",
+    "geometry",
+    "materials",
+    "extras:camera",
+    "extras:debug",
+    "extras:materials",
+    "extras:particles",
+    "extras:post-processing",
+    "*"
+  ],
+  "navigationLinks": {
+    "Website": "https://pixijs.com",
+    "GitHub": "https://github.com/pixijs/pixi-3d",
+    "Discord": "https://discord.gg/QrnxmQUPGV"
+  },
+  "hideGenerator": true,
+  "visibilityFilters": {
+    "inherited": true,
+    "@advanced": false
+  },
+  "validation": {
+    "notExported": false,
+    "invalidLink": true,
+    "rewrittenLink": true,
+    "notDocumented": false,
+    "unusedMergeModuleWith": true
+  },
+  "searchGroupBoosts": {
+    "Classes": 1.5
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Worker scripts run in a worker global, not a document, so they get their own program with
+    // the WebWorker lib: that lib can't load beside the `@types/web` the root program uses. The
+    // root config lists this one as a project reference, which is how oxlint's type-aware pass
+    // finds it; a referenced project has to be composite.
+    "lib": ["ESNext", "WebWorker"],
+    "types": [],
+    "composite": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.worker.tsbuildinfo"
+  },
+  "include": ["src/**/*.worker.ts"],
+  "exclude": ["node_modules", "dist"]
+}

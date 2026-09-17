@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // typedoc runs on TypeScript 5.9, so the docs build takes the TypeScript 5 route: the
+    // built-in DOM lib plus `@webgpu/types`. The root config uses `@types/web` instead, which
+    // conflicts with the `@webgpu/types` that pixi.js's TypeScript 5 declarations load.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node", "@webgpu/types", "vite/client"]
+  },
+  "include": ["../../src"],
+  "exclude": ["../../src/**/__tests__", "../../src/**/*.test.ts", "../../src/**/*.worker.ts"]
+}

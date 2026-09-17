@@ -1,0 +1,146 @@
+{
+  "name": "@pixi/3d",
+  "version": "0.0.0",
+  "description": "A 3D extension for PixiJS",
+  "homepage": "https://github.com/pixijs/pixi-3d#readme",
+  "bugs": {
+    "url": "https://github.com/pixijs/pixi-3d/issues"
+  },
+  "license": "MIT",
+  "author": "PixiJS",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pixijs/pixi-3d.git"
+  },
+  "workspaces": [
+    "playground",
+    "examples/racing",
+    "examples/gltf-compare",
+    "examples/perf-compare",
+    "scripts/typedoc"
+  ],
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "./src/index.ts",
+    "./src/index.bundle.ts",
+    "./src/**/init.ts",
+    "./dist/index.*",
+    "./dist/**/init.*"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./extras": {
+      "import": {
+        "types": "./dist/extras/index.d.ts",
+        "default": "./dist/extras/index.mjs"
+      },
+      "require": {
+        "types": "./dist/extras/index.d.cts",
+        "default": "./dist/extras/index.js"
+      }
+    },
+    "./package.json": "./package.json",
+    "./webgl": {
+      "import": {
+        "types": "./dist/core/gl/init.d.ts",
+        "default": "./dist/core/gl/init.mjs"
+      },
+      "require": {
+        "types": "./dist/core/gl/init.d.cts",
+        "default": "./dist/core/gl/init.js"
+      }
+    },
+    "./webgpu": {
+      "import": {
+        "types": "./dist/core/gpu/init.d.ts",
+        "default": "./dist/core/gpu/init.mjs"
+      },
+      "require": {
+        "types": "./dist/core/gpu/init.d.cts",
+        "default": "./dist/core/gpu/init.js"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "start": "npm run dev --prefix playground --",
+    "clean": "rm -rf dist .pr_uploads .s3_uploads",
+    "build": "npm run build:lib && npm run build:cdn",
+    "build:lib": "tsdown",
+    "build:cdn": "node scripts/build/index.mts --write && tsdown -c tsdown.cdn.config.ts",
+    "build:docs": "npm run build -w @pixi/3d-docs",
+    "dist": "npm run clean && npm run build && npm run build:docs && node scripts/build/collect-uploads.mts",
+    "watch:lib": "tsdown --watch",
+    "watch:docs": "npm run watch -w @pixi/3d-docs",
+    "watch:test": "vitest",
+    "download:assets": "node scripts/assets/download-assets.mts",
+    "test": "npm run test:lint && npm run test:types && vitest run --browser.headless",
+    "test:unit": "vitest run src --browser.headless",
+    "test:visual": "vitest run scenes --browser.headless",
+    "test:update": "vitest run --browser.headless --update=true",
+    "test:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p playground/tsconfig.json && tsc --noEmit -p examples/tsconfig.json",
+    "test:lint": "oxlint --deny-warnings && oxfmt --check",
+    "test:bundle": "node scripts/build/check-split.mts",
+    "test:dts": "node scripts/build/check-dts.mts",
+    "lint": "oxlint --fix && oxfmt --write",
+    "release": "node scripts/release.mts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "meshoptimizer": "^1.2.0"
+  },
+  "devDependencies": {
+    "@actions/core": "^3.0.1",
+    "@actions/github": "^9.1.1",
+    "@types/node": "^26.3.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/semver": "^7.8.0",
+    "@types/web": "^0.0.356",
+    "@vitest/browser-playwright": "^5.0.0",
+    "@webgpu/types": "^0.1.72",
+    "eslint-plugin-jsdoc": "^64.3.8",
+    "glob": "^13.0.6",
+    "husky": "^9.1.7",
+    "inquirer": "^14.1.0",
+    "lint-staged": "^17.3.0",
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.82.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "pixelmatch": "^7.2.0",
+    "pixi.js": "^8.21.0",
+    "playwright": "^1.62.1",
+    "pngjs": "^7.0.0",
+    "rolldown": "1.2.8",
+    "semver": "^7.8.5",
+    "tsdown": "^0.23.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  },
+  "peerDependencies": {
+    "pixi.js": "^8.21.0"
+  },
+  "lint-staged": {
+    "*": [
+      "oxlint --fix --no-error-on-unmatched-pattern",
+      "oxfmt --write --no-error-on-unmatched-pattern"
+    ]
+  }
+}

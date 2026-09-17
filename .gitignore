@@ -1,0 +1,31 @@
+node_modules
+dist
+*.log
+.DS_Store
+
+# A folder that will be uploaded with every PR
+# This is useful for things like visual testing artifacts that can be used to debug a PR if it fails
+.pr_uploads
+
+# A folder that will be uploaded with every release
+# This is useful for things like docs and bundled versions of the library
+.s3_uploads
+
+# A folder that will be used for temporary files
+# This is useful for things like screenshots and diffs
+.temp
+
+# CI-only: pixi.js source built from a branch and overlaid on node_modules
+.pixi-src
+
+# Generated per-scene test wrappers (one *.test.ts per *.scene.ts); see
+# scripts/test/generate-scene-tests.mts. Regenerated on every vitest start.
+tests/scenes/**/*.test.ts
+
+# Local mirror of the remote assets in examples/assets/manifest.ts; normally a symlink
+# to the shared ~/.pixijs/mirror store, populated by `npm run download:assets`
+# (auto-run on vitest start) and cached in CI.
+examples/assets/mirror
+
+# Big local models dropped in for benchmarking (see examples/perf-compare)
+examples/assets/local/

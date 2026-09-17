@@ -1,0 +1,678 @@
+import type { Matrix4 } from '../matrix/Matrix4';
+import { clamp } from '../utils/clamp';
+import type { PointData3D } from '../vector/PointData3D';
+
+/**
+ * Interface for objects with `(x, y, z, w)` quaternion components
+ *
+ * Implemented by {@link Quaternion} and {@link ObservableQuaternion} and accepted as a lightweight
+ * read/write shape across the math API.
+ * @category maths
+ * @standard
+ */
+export interface QuaternionData {
+  /** The x component */
+  x: number;
+  /** The y component */
+  y: number;
+  /** The z component */
+  z: number;
+  /** The w component */
+  w: number;
+}
+
+/**
+ * The `Quaternion` object represents a rotation in 3D space using `(x, y, z, w)`
+ *
+ * Quaternions avoid gimbal lock and interpolate smoothly via {@link Quaternion#slerp}. Most
+ * methods assume a unit-length quaternion; call {@link Quaternion#normalize} after operations that
+ * may drift.
+ *
+ * Math operations follow the unified mutating-default pattern: `a.multiply(b)` mutates `a`;
+ * `a.multiply(b, out)` writes the result into `out` without mutating `a`.
+ * @example
+ * ```ts
+ * const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2);
+ *
+ * // Compose with another rotation
+ * q.multiply(other);
+ *
+ * // Smooth interpolation
+ * q.slerp(target, 0.25);
+ * ```
+ * @see {@link QuaternionData} For the basic `(x, y, z, w)` interface
+ * @see {@link ObservableQuaternion} For the observable counterpart
+ * @see {@link Vector3#applyQuaternion} For applying a quaternion rotation to a point
+ * @category maths
+ * @standard
+ */
+export class Quaternion implements QuaternionData {
+  /** The x component of this quaternion */
+  public x: number;
+  /** The y component of this quaternion */
+  public y: number;
+  /** The z component of this quaternion */
+  public z: number;
+  /** The w component of this quaternion */
+  public w: number;
+
+  /**
+   * A static `Quaternion` reset to identity `(0, 0, 0, 1)` on every access
+   *
+   * > [!IMPORTANT] This quaternion is shared and temporary. Do not store references to it.
+   */
+  static get shared(): Quaternion {
+    _shared.x = 0;
+    _shared.y = 0;
+    _shared.z = 0;
+    _shared.w = 1;
+
+    return _shared;
+  }
+
+  /**
+   * SLERPs two flat quaternion arrays into `dst`
+   *
+   * Used by animation tracks to avoid `Quaternion` allocations on every keyframe.
+   * @param dst - The array to write the result into
+   * @param dstOffset - The offset into `dst` to write at
+   * @param src0 - The array holding the start quaternion
+   * @param srcOffset0 - The offset into `src0` to read from
+   * @param src1 - The array holding the end quaternion
+   * @param srcOffset1 - The offset into `src1` to read from
+   * @param t - The interpolation factor in `[0, 1]`
+   */
+  public static slerpFlat(
+    dst: number[],
+    dstOffset: number,
+    src0: number[],
+    srcOffset0: number,
+    src1: number[],
+    srcOffset1: number,
+    t: number,
+  ): void {
+    let x0 = src0[srcOffset0 + 0];
+    let y0 = src0[srcOffset0 + 1];
+    let z0 = src0[srcOffset0 + 2];
+    let w0 = src0[srcOffset0 + 3];
+
+    let x1 = src1[srcOffset1 + 0];
+    let y1 = src1[srcOffset1 + 1];
+    let z1 = src1[srcOffset1 + 2];
+    let w1 = src1[srcOffset1 + 3];
+
+    if (w0 !== w1 || x0 !== x1 || y0 !== y1 || z0 !== z1) {
+      let dot = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1;
+
+      if (dot < 0) {
+        x1 = -x1;
+        y1 = -y1;
+        z1 = -z1;
+        w1 = -w1;
+        dot = -dot;
+      }
+
+      let s = 1 - t;
+
+      if (dot < 0.9995) {
+        const theta = Math.acos(dot);
+        const sin = Math.sin(theta);
+
+        s = Math.sin(s * theta) / sin;
+        t = Math.sin(t * theta) / sin;
+
+        x0 = x0 * s + x1 * t;
+        y0 = y0 * s + y1 * t;
+        z0 = z0 * s + z1 * t;
+        w0 = w0 * s + w1 * t;
+      } else {
+        x0 = x0 * s + x1 * t;
+        y0 = y0 * s + y1 * t;
+        z0 = z0 * s + z1 * t;
+        w0 = w0 * s + w1 * t;
+
+        const f = 1 / Math.sqrt(x0 * x0 + y0 * y0 + z0 * z0 + w0 * w0);
+        x0 *= f;
+        y0 *= f;
+        z0 *= f;
+        w0 *= f;
+      }
+    }
+
+    dst[dstOffset] = x0;
+    dst[dstOffset + 1] = y0;
+    dst[dstOffset + 2] = z0;
+    dst[dstOffset + 3] = w0;
+  }
+
+  /**
+   * Creates a new `Quaternion`, defaulting to identity `(0, 0, 0, 1)`
+   * @param x - The x component
+   * @param y - The y component
+   * @param z - The z component
+   * @param w - The w component
+   */
+  constructor(x = 0, y = 0, z = 0, w = 1) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    this.w = w;
+  }
+
+  /**
+   * Sets the components of this quaternion
+   * @param x - The x component
+   * @param y - The y component
+   * @param z - The z component
+   * @param w - The w component
+   * @returns This quaternion for chaining
+   */
+  public set(x: number, y: number, z: number, w: number): this {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    this.w = w;
+
+    return this;
+  }
+
+  /**
+   * Copies `q` into this quaternion
+   * @param q - The quaternion to copy from
+   * @returns This quaternion for chaining
+   */
+  public copyFrom(q: QuaternionData): this {
+    this.x = q.x;
+    this.y = q.y;
+    this.z = q.z;
+    this.w = q.w;
+
+    return this;
+  }
+
+  /**
+   * Copies this quaternion into `target` and returns it
+   * @param target - The quaternion to copy into
+   * @returns The given `target`
+   */
+  public copyTo<T extends QuaternionData>(target: T): T {
+    target.x = this.x;
+    target.y = this.y;
+    target.z = this.z;
+    target.w = this.w;
+
+    return target;
+  }
+
+  /**
+   * Creates a new `Quaternion` with the same values
+   * @returns The new quaternion
+   */
+  public clone(): Quaternion {
+    return new Quaternion(this.x, this.y, this.z, this.w);
+  }
+
+  /**
+   * Resets this quaternion to identity `(0, 0, 0, 1)`
+   * @returns This quaternion for chaining
+   */
+  public identity(): this {
+    this.x = 0;
+    this.y = 0;
+    this.z = 0;
+    this.w = 1;
+
+    return this;
+  }
+
+  /**
+   * Returns true when `x`, `y`, `z` and `w` match `q` exactly (no epsilon tolerance)
+   * @param q - The quaternion to compare with
+   * @returns Whether all components match
+   */
+  public equals(q: QuaternionData): boolean {
+    return q.x === this.x && q.y === this.y && q.z === this.z && q.w === this.w;
+  }
+
+  /**
+   * Sets this quaternion from Euler angles in XYZ order (radians)
+   * @param rotation - The Euler angles as `(x, y, z)` radians
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public setFromEuler(rotation: PointData3D, out: QuaternionData = this): this {
+    const halfX = rotation.x * 0.5;
+    const halfY = rotation.y * 0.5;
+    const halfZ = rotation.z * 0.5;
+    const c1 = Math.cos(halfX);
+    const c2 = Math.cos(halfY);
+    const c3 = Math.cos(halfZ);
+    const s1 = Math.sin(halfX);
+    const s2 = Math.sin(halfY);
+    const s3 = Math.sin(halfZ);
+
+    out.x = s1 * c2 * c3 + c1 * s2 * s3;
+    out.y = c1 * s2 * c3 - s1 * c2 * s3;
+    out.z = c1 * c2 * s3 + s1 * s2 * c3;
+    out.w = c1 * c2 * c3 - s1 * s2 * s3;
+
+    return out as this;
+  }
+
+  /**
+   * Sets this quaternion from a unit-length `axis` and `angle` in radians
+   * @param axis - The unit-length rotation axis
+   * @param angle - The rotation angle in radians
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public setFromAxisAngle(axis: PointData3D, angle: number, out: QuaternionData = this): this {
+    const halfAngle = angle / 2;
+    const s = Math.sin(halfAngle);
+
+    out.x = axis.x * s;
+    out.y = axis.y * s;
+    out.z = axis.z * s;
+    out.w = Math.cos(halfAngle);
+
+    return out as this;
+  }
+
+  /**
+   * Sets this quaternion from rotation matrix `m`
+   *
+   * Assumes the upper-left 3x3 of `m` is a pure rotation (unscaled). Use
+   * {@link Quaternion#setFromScaledRotationMatrix} for matrices with scale.
+   * @param m - The rotation matrix to extract from
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public setFromRotationMatrix(m: Matrix4, out: QuaternionData = this): this {
+    const te = m.elements;
+
+    _setFromOrthonormalElements(out, te[0], te[4], te[8], te[1], te[5], te[9], te[2], te[6], te[10]);
+
+    return out as this;
+  }
+
+  /**
+   * Sets this quaternion from a TRS-composed matrix that may carry per-axis scale
+   *
+   * Strips column scales inline before extraction.
+   * @param m - The TRS matrix to extract from
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public setFromScaledRotationMatrix(m: Matrix4, out: QuaternionData = this): this {
+    const te = m.elements;
+
+    let m11 = te[0];
+    let m21 = te[1];
+    let m31 = te[2];
+    let m12 = te[4];
+    let m22 = te[5];
+    let m32 = te[6];
+    let m13 = te[8];
+    let m23 = te[9];
+    let m33 = te[10];
+
+    const invSx = 1 / Math.sqrt(m11 * m11 + m21 * m21 + m31 * m31);
+    const invSy = 1 / Math.sqrt(m12 * m12 + m22 * m22 + m32 * m32);
+    const invSz = 1 / Math.sqrt(m13 * m13 + m23 * m23 + m33 * m33);
+
+    m11 *= invSx;
+    m21 *= invSx;
+    m31 *= invSx;
+    m12 *= invSy;
+    m22 *= invSy;
+    m32 *= invSy;
+    m13 *= invSz;
+    m23 *= invSz;
+    m33 *= invSz;
+
+    _setFromOrthonormalElements(out, m11, m12, m13, m21, m22, m23, m31, m32, m33);
+
+    return out as this;
+  }
+
+  /**
+   * Sets this quaternion to the rotation that takes unit-length `vFrom` to unit-length `vTo`
+   *
+   * Antiparallel inputs (where `vFrom = -vTo`) pick an arbitrary perpendicular axis.
+   * @param vFrom - The unit-length start direction
+   * @param vTo - The unit-length end direction
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public setFromUnitVectors(vFrom: PointData3D, vTo: PointData3D, out: QuaternionData = this): this {
+    const EPS = 0.000001;
+    let r = vFrom.x * vTo.x + vFrom.y * vTo.y + vFrom.z * vTo.z + 1;
+
+    if (r < EPS) {
+      r = 0;
+      if (Math.abs(vFrom.x) > Math.abs(vFrom.z)) {
+        out.x = -vFrom.y;
+        out.y = vFrom.x;
+        out.z = 0;
+      } else {
+        out.x = 0;
+        out.y = -vFrom.z;
+        out.z = vFrom.y;
+      }
+    } else {
+      out.x = vFrom.y * vTo.z - vFrom.z * vTo.y;
+      out.y = vFrom.z * vTo.x - vFrom.x * vTo.z;
+      out.z = vFrom.x * vTo.y - vFrom.y * vTo.x;
+    }
+    out.w = r;
+
+    return _normalize(out) as this;
+  }
+
+  /**
+   * Returns the dot product of this quaternion and `q`
+   * @param q - The other quaternion
+   * @returns The dot product
+   */
+  public dot(q: QuaternionData): number {
+    return this.x * q.x + this.y * q.y + this.z * q.z + this.w * q.w;
+  }
+
+  /**
+   * Returns the angle in radians between this quaternion and `q`
+   *
+   * Both quaternions are assumed unit-length.
+   * @param q - The other quaternion
+   * @returns The angle in radians
+   */
+  public angleTo(q: QuaternionData): number {
+    return 2 * Math.acos(Math.abs(clamp(this.dot(q), -1, 1)));
+  }
+
+  /**
+   * Returns the magnitude (length) of this quaternion as a 4D vector
+   * @returns The magnitude
+   */
+  public magnitude(): number {
+    return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w);
+  }
+
+  /**
+   * Returns the squared magnitude of this quaternion
+   *
+   * Cheaper than {@link Quaternion#magnitude} for comparisons.
+   * @returns The squared magnitude
+   */
+  public magnitudeSquared(): number {
+    return this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w;
+  }
+
+  /**
+   * Normalizes this quaternion to unit length
+   *
+   * Zero-magnitude quaternions become identity.
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public normalize(out: QuaternionData = this): this {
+    const len = Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w);
+    if (len === 0) {
+      out.x = 0;
+      out.y = 0;
+      out.z = 0;
+      out.w = 1;
+    } else {
+      const inv = 1 / len;
+      out.x = this.x * inv;
+      out.y = this.y * inv;
+      out.z = this.z * inv;
+      out.w = this.w * inv;
+    }
+
+    return out as this;
+  }
+
+  /**
+   * Inverts this quaternion
+   *
+   * Equivalent to {@link Quaternion#conjugate} for unit-length quaternions, which this method
+   * assumes.
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public inverse(out: QuaternionData = this): this {
+    return this.conjugate(out);
+  }
+
+  /**
+   * Sets this quaternion to its conjugate (negates the imaginary part)
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public conjugate(out: QuaternionData = this): this {
+    out.x = -this.x;
+    out.y = -this.y;
+    out.z = -this.z;
+    out.w = this.w;
+
+    return out as this;
+  }
+
+  /**
+   * Multiplies this quaternion by `q` (`this = this * q`)
+   * @param q - The quaternion to multiply by
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public multiply(q: QuaternionData, out: QuaternionData = this): this {
+    return multiplyQuaternionData(this, q, out) as this;
+  }
+
+  /**
+   * Pre-multiplies this quaternion by `q` (`this = q * this`)
+   * @param q - The quaternion to pre-multiply by
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public premultiply(q: QuaternionData, out: QuaternionData = this): this {
+    return multiplyQuaternionData(q, this, out) as this;
+  }
+
+  /**
+   * Spherically interpolates between this quaternion and `qb` by `t` in `[0, 1]`
+   *
+   * Always picks the shorter arc.
+   * @param qb - The quaternion to interpolate towards
+   * @param t - The interpolation factor in `[0, 1]`
+   * @param out - Target to write the result into instead of mutating this quaternion
+   * @returns The result quaternion for chaining
+   */
+  public slerp(qb: QuaternionData, t: number, out: QuaternionData = this): this {
+    if (t === 0) {
+      if (out !== this) {
+        out.x = this.x;
+        out.y = this.y;
+        out.z = this.z;
+        out.w = this.w;
+      }
+
+      return out as this;
+    }
+    if (t === 1) {
+      out.x = qb.x;
+      out.y = qb.y;
+      out.z = qb.z;
+      out.w = qb.w;
+
+      return out as this;
+    }
+
+    const x0 = this.x;
+    const y0 = this.y;
+    const z0 = this.z;
+    const w0 = this.w;
+    let qbx = qb.x;
+    let qby = qb.y;
+    let qbz = qb.z;
+    let qbw = qb.w;
+    let dot = x0 * qbx + y0 * qby + z0 * qbz + w0 * qbw;
+
+    if (dot < 0) {
+      qbx = -qbx;
+      qby = -qby;
+      qbz = -qbz;
+      qbw = -qbw;
+      dot = -dot;
+    }
+
+    let s = 1 - t;
+    if (dot < 0.9995) {
+      const theta = Math.acos(dot);
+      const sin = Math.sin(theta);
+
+      s = Math.sin(s * theta) / sin;
+      t = Math.sin(t * theta) / sin;
+
+      out.x = x0 * s + qbx * t;
+      out.y = y0 * s + qby * t;
+      out.z = z0 * s + qbz * t;
+      out.w = w0 * s + qbw * t;
+
+      return out as this;
+    }
+
+    out.x = x0 * s + qbx * t;
+    out.y = y0 * s + qby * t;
+    out.z = z0 * s + qbz * t;
+    out.w = w0 * s + qbw * t;
+
+    return _normalize(out) as this;
+  }
+
+  /**
+   * Reads `x`, `y`, `z`, `w` from `array` starting at `offset`
+   * @param array - The array to read from
+   * @param offset - The offset into `array` to read at
+   * @returns This quaternion for chaining
+   */
+  public fromArray(array: number[] | Float32Array, offset = 0): this {
+    this.x = array[offset];
+    this.y = array[offset + 1];
+    this.z = array[offset + 2];
+    this.w = array[offset + 3];
+
+    return this;
+  }
+
+  /**
+   * Writes this quaternion's values into `array` starting at `offset`
+   *
+   * Allocates a new array when one is not supplied.
+   * @param array - The array to write into; a new array when omitted
+   * @param offset - The offset into `array` to write at
+   * @returns The written array
+   */
+  public toArray<T extends number[] | Float32Array = number[]>(array: T = [] as unknown as T, offset = 0): T {
+    array[offset] = this.x;
+    array[offset + 1] = this.y;
+    array[offset + 2] = this.z;
+    array[offset + 3] = this.w;
+
+    return array;
+  }
+
+  /**
+   * Returns a string representation of this quaternion
+   * @returns A string in the form `[pixi-3d/math:Quaternion x=0 y=0 z=0 w=1]`
+   */
+  public toString(): string {
+    return `[pixi-3d/math:Quaternion x=${this.x} y=${this.y} z=${this.z} w=${this.w}]`;
+  }
+}
+
+function _setFromOrthonormalElements(
+  q: QuaternionData,
+  m11: number,
+  m12: number,
+  m13: number,
+  m21: number,
+  m22: number,
+  m23: number,
+  m31: number,
+  m32: number,
+  m33: number,
+): void {
+  const trace = m11 + m22 + m33;
+  let s;
+
+  if (trace > 0) {
+    s = 0.5 / Math.sqrt(trace + 1.0);
+    q.w = 0.25 / s;
+    q.x = (m32 - m23) * s;
+    q.y = (m13 - m31) * s;
+    q.z = (m21 - m12) * s;
+  } else if (m11 > m22 && m11 > m33) {
+    s = 2.0 * Math.sqrt(1.0 + m11 - m22 - m33);
+    q.w = (m32 - m23) / s;
+    q.x = 0.25 * s;
+    q.y = (m12 + m21) / s;
+    q.z = (m13 + m31) / s;
+  } else if (m22 > m33) {
+    s = 2.0 * Math.sqrt(1.0 + m22 - m11 - m33);
+    q.w = (m13 - m31) / s;
+    q.x = (m12 + m21) / s;
+    q.y = 0.25 * s;
+    q.z = (m23 + m32) / s;
+  } else {
+    s = 2.0 * Math.sqrt(1.0 + m33 - m11 - m22);
+    q.w = (m21 - m12) / s;
+    q.x = (m13 + m31) / s;
+    q.y = (m23 + m32) / s;
+    q.z = 0.25 * s;
+  }
+}
+
+/**
+ * Multiplies quaternion `a` by `b` (`a * b`) into `target`
+ * @param a - Left operand
+ * @param b - Right operand
+ * @param target - Receives the product; may be `a` or `b`
+ * @internal
+ */
+export function multiplyQuaternionData(a: QuaternionData, b: QuaternionData, target: QuaternionData): QuaternionData {
+  const qax = a.x;
+  const qay = a.y;
+  const qaz = a.z;
+  const qaw = a.w;
+  const qbx = b.x;
+  const qby = b.y;
+  const qbz = b.z;
+  const qbw = b.w;
+
+  target.x = qax * qbw + qaw * qbx + qay * qbz - qaz * qby;
+  target.y = qay * qbw + qaw * qby + qaz * qbx - qax * qbz;
+  target.z = qaz * qbw + qaw * qbz + qax * qby - qay * qbx;
+  target.w = qaw * qbw - qax * qbx - qay * qby - qaz * qbz;
+
+  return target;
+}
+
+function _normalize(q: QuaternionData): QuaternionData {
+  const len = Math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+  if (len === 0) {
+    q.x = 0;
+    q.y = 0;
+    q.z = 0;
+    q.w = 1;
+  } else {
+    const inv = 1 / len;
+    q.x *= inv;
+    q.y *= inv;
+    q.z *= inv;
+    q.w *= inv;
+  }
+
+  return q;
+}
+
+const _shared = new Quaternion();

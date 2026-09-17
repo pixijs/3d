@@ -1,0 +1,80 @@
+import type { TestScene } from '@test-utils';
+import { Graphics } from 'pixi.js';
+
+import { CubeGeometry } from '~/geometry/CubeGeometry';
+import { Material3D } from '~/materials/pbr/Material3D';
+import { AmbientLight } from '~/scene/lights/AmbientLight';
+import { DirectionalLight } from '~/scene/lights/DirectionalLight';
+import { Mesh3D } from '~/scene/Mesh3D';
+import { View3D } from '~/scene/View3D';
+
+/**
+ * Deterministic repro of the case the WebGPU bundle-rebuild fix targets: a cached
+ * render bundle baking a *stale* opaque-copy texture instance after the pooled
+ * transient swaps instances across a power-of-two bucket boundary (the same thing
+ * the pulse-scaled views-in-2d card does, made single-shot).
+ *
+ * A transmissive cube's View3D renders a few frames at size 200 (→ 256 bucket,
+ * instance X) — recording its WebGPU transmission bundle against X — then jumps
+ * to size 300 (→ 512 bucket, instance Y) while the 2D backdrop shifts. With the
+ * rebuild fix the bundle re-records against Y and refracts the *current* (shifted)
+ * backdrop; without it the bundle keeps sampling X (prior, unshifted content at
+ * the wrong scale). Invisible on WebGL (rebinds live every draw); visible on WebGPU.
+ *
+ * 600px canvas so 200 and 300 land in different buckets (256 vs 512); at 256px
+ * both cap to 256 and no swap occurs.
+ */
+export const scene: TestScene = {
+  app: { width: 600, height: 600, backgroundColor: 0x10202a, useBackBuffer: true },
+  delay: 250,
+  create: async (app) => {
+    // Two-tone + grid backdrop so a stale (unshifted) refraction is obvious.
+    const backdrop = new Graphics();
+    backdrop.rect(0, 0, 300, 600).fill(0xff5566);
+    backdrop.rect(300, 0, 300, 600).fill(0x3a7ca5);
+    for (let x = 0; x <= 600; x += 24) backdrop.moveTo(x, 0).lineTo(x, 600);
+    for (let y = 0; y <= 600; y += 24) backdrop.moveTo(0, y).lineTo(600, y);
+    backdrop.stroke({ color: 0xffffff, width: 2, alpha: 0.8 });
+    app.stage.addChild(backdrop);
+
+    const view3d = new View3D({ width: 200, height: 200, anchor: 0.5 });
+    view3d.position.set(300, 300);
+    app.stage.addChild(view3d);
+
+    view3d.camera.fov = 35;
+    view3d.camera.position.set(2.2, 1.8, 3.2);
+    view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
+
+    view3d.root.addChild(new AmbientLight({ color: 0xc8d8ff, intensity: 0.4 }));
+    const key = new DirectionalLight({ color: 0xfff4e0, intensity: 3 });
+    key.position.set(4, 5, 6);
+    key.lookAt({ x: 0, y: 0, z: 0 });
+    view3d.root.addChild(key);
+
+    const cube = new Mesh3D({
+      geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
+      material: new Material3D({
+        baseColor: 0xffffff,
+        metallic: 0,
+        roughness: 0.05,
+        transmission: { factor: 1, thickness: 0.5 },
+        ior: 1.5,
+      }),
+      castShadow: false,
+      receiveShadow: false,
+    });
+    cube.rotation.set(-0.5, 0.7, 0.0);
+    view3d.root.addChild(cube);
+
+    // Frames 0–2 at size 200 (bucket 256) record the bundle against instance X;
+    // frame 3 jumps to size 300 (bucket 512, instance Y) and shifts the backdrop.
+    let frame = 0;
+    app.ticker.add(() => {
+      frame++;
+      if (frame === 3) {
+        view3d.setSize(300, 300);
+        backdrop.x = -150;
+      }
+    });
+  },
+};

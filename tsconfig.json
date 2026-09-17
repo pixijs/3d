@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "lib": ["ESNext"],
+    "moduleDetection": "force",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "types": ["node", "@types/web", "vite/client"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "~/*": ["./src/*"],
+      "@test-utils": ["./tests/test-utils.ts"],
+      "@pixi/3d": ["./src/index.ts"],
+      "@pixi/3d/extras": ["./src/extras/index.ts"],
+      "@pixi/3d/webgl": ["./src/core/gl/init.ts"],
+      "@pixi/3d/webgpu": ["./src/core/gpu/init.ts"]
+    }
+  },
+  "include": ["src", "tests", "scripts"],
+  "exclude": ["node_modules", "dist", "src/**/*.worker.ts"],
+  "references": [
+    {
+      "path": "./tsconfig.worker.json"
+    }
+  ]
+}
