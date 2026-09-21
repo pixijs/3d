@@ -56,7 +56,7 @@ export type ShadowFilter = 'hard' | 'pcf' | 'pcf-high';
  * Per-cascade shadow state shared by both backends
  *
  * A cascade is a camera — light-space view, ortho or perspective box — plus the metadata packed
- * into the shadow data buffer. Identical on both backends; WebGPU hangs its per-light cull
+ * into the `uShadowData` uniform. Identical on both backends; WebGPU hangs its per-light cull
  * results off the light's `ShadowData` rather than the slot.
  * @internal
  */
@@ -161,7 +161,7 @@ export const MAX_SHADOW_SLOTS = MAX_SHADOW_LIGHTS * MAX_CASCADES;
  *
  * The configured cascade count (clamped to `1..MAX_CASCADES`) for a cascaded directional light,
  * `1` for a fixed-box directional, and `1` for spot lights. The single source of truth shared by
- * the shadow passes, both lighting systems, and the light buffer's shader cascade count, so
+ * the shadow passes, both lighting systems, and the packed light list's cascade count, so
  * allocation, upload, and selection always agree.
  * @param light - The light to count cascade slots for
  * @internal
@@ -169,34 +169,6 @@ export const MAX_SHADOW_SLOTS = MAX_SHADOW_LIGHTS * MAX_CASCADES;
 export function cascadeCountFor(light: Light): number {
   if (light.type !== 'directional' || light.shadow.cascades === undefined) return 1;
   return Math.min(Math.max(light.shadow.cascades, 1), MAX_CASCADES);
-}
-
-/**
- * Packs one cascade slot into a shadow-data buffer at `offset` (stride 24 floats)
- *
- * Layout: `[0..15]` VP matrix, `[16]` bias, `[17]` normalBias, `[18]` mapSize, `[19]`
- * cascadeCount, `[20..23]` view-space split planes. Unused split slots use a large sentinel
- * (not 0) so the branchless `step(splits, viewDepth)` cascade select never counts them as
- * crossed. The single source of truth for the layout — shared by the WebGPU storage buffer
- * (`CascadeSlot` copier) and the WebGL `uShadowData` uniform.
- * @param slot - The populated cascade slot
- * @param buffer - The shadow-data buffer to write into
- * @param offset - Float offset of the slot's 24-float entry
- * @internal
- */
-export function writeCascadeSlot(slot: CascadeSlot, buffer: Float32Array, offset: number): void {
-  buffer.set(slot.cameraData.viewProjection.elements, offset);
-
-  buffer[offset + 16] = slot.bias;
-  buffer[offset + 17] = slot.normalBias;
-  buffer[offset + 18] = slot.mapSize;
-  buffer[offset + 19] = slot.cascadeCount;
-
-  const splits = slot.splits;
-  buffer[offset + 20] = splits?.[0] ?? 1e30;
-  buffer[offset + 21] = splits?.[1] ?? 1e30;
-  buffer[offset + 22] = splits?.[2] ?? 1e30;
-  buffer[offset + 23] = splits?.[3] ?? 1e30;
 }
 
 /**

@@ -66,4 +66,9 @@ export class AmbientLight extends Light {
   constructor(options: AmbientLightOptions = {}) {
     super({ label: 'AmbientLight', ...AmbientLight.defaultOptions, ...definedProps(options) });
   }
+
+  /** Ambient light has no direction to cast along */
+  override get canCastShadow(): boolean {
+    return false;
+  }
 }

@@ -1,6 +1,6 @@
 import { CASCADE_BLEND_FRACTION } from '../../render-passes/shadow/csmUtils';
+import { MAX_SHADOW_SLOTS } from '../../render-passes/shadow/shadowPassUtils';
 import type { ShadowFilter } from '../../render-passes/shadow/shadowPassUtils';
-import { ShadowDataStructGpu } from '../../shader/bits/shaderStructs';
 import { SHADOW_TAPS } from '../../shader/bits/shadowTaps';
 import type { ShadowTap } from '../../shader/bits/shadowTaps';
 import type { ShaderBit } from '../../shader/ShaderBit';
@@ -51,14 +51,11 @@ function pcfBody(taps: readonly ShadowTap[]): string {
 function createShadowBitGpu(filter: ShadowFilter): ShaderBit {
   return {
     name: `shadow:${filter}`,
-    structs: {
-      ShadowData: ShadowDataStructGpu,
-    },
     bindings: {
       global: {
         uShadowMap: 'texture_depth_2d_array',
         uShadowSampler: 'sampler_comparison',
-        uShadowStorage: 'storage<ShadowData>',
+        uShadowData: `array<vec4<f32>, ${MAX_SHADOW_SLOTS * 6}>`,
       },
     },
     gpu: {
@@ -69,15 +66,22 @@ function createShadowBitGpu(filter: ShadowFilter): ShaderBit {
       normal: vec3<f32>,
       NdotL: f32,
     ) -> f32 {
-      let sd = uShadowStorage[idx];
-      let sp = sd.shadowParams;
+      // Six vec4 per slot in the global uniforms (layout on ShadowDataList).
+      let slot = idx * 6;
+      let lightSpaceMatrix = mat4x4<f32>(
+        global.uShadowData[slot],
+        global.uShadowData[slot + 1],
+        global.uShadowData[slot + 2],
+        global.uShadowData[slot + 3],
+      );
+      let sp = global.uShadowData[slot + 4];
 
       // Normal offset, tapered by how obliquely the light strikes the surface.
       // Depth error across one shadow texel grows as the surface turns away from
       // the light, so a face-on surface needs almost none — and taking none is
       // what stops the offset eating short shadows.
       let biasedPos = worldPos + normal * (sp.y * (1.0 - NdotL));
-      let lsp = sd.lightSpaceMatrix * vec4<f32>(biasedPos, 1.0);
+      let lsp = lightSpaceMatrix * vec4<f32>(biasedPos, 1.0);
       let proj = lsp.xyz / lsp.w;
 
       let uv = proj.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
@@ -91,19 +95,23 @@ function createShadowBitGpu(filter: ShadowFilter): ShaderBit {
 ${pcfBody(SHADOW_TAPS[filter])}
     }
 
+    // Takes the light's two shadow fields, not the Light struct. Some mobile
+    // drivers misread a storage-buffer struct passed into a function by value,
+    // so a light with no shadow would miss the early return below.
     fn calculateShadow(
-      light: Light,
+      shadowDataIndex: f32,
+      cascadeCount: f32,
       worldPos: vec3<f32>,
       normal: vec3<f32>,
       NdotL: f32
     ) -> f32 {
-      let baseIndex = i32(light.shadowDataIndex);
+      let baseIndex = i32(shadowDataIndex);
 
       if (baseIndex == -1) {
         return 1.0;
       }
 
-      let last = i32(light.cascadeCount) - 1;
+      let last = i32(cascadeCount) - 1;
 
       // Not cascaded: one map, sampled directly.
       if (last < 1) {
@@ -111,7 +119,7 @@ ${pcfBody(SHADOW_TAPS[filter])}
       }
 
       let viewDepth = -(camera.uViewMatrix * vec4<f32>(worldPos, 1.0)).z;
-      let splits = uShadowStorage[baseIndex].cascadeSplits.xyz;
+      let splits = global.uShadowData[baseIndex * 6 + 5].xyz;
 
       // Splits are sorted ascending, so the cascade is the number of split
       // planes viewDepth is past, clamped to the light's cascade count.

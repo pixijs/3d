@@ -43,17 +43,7 @@ import { texturesPluginGl } from './texturesPluginGl';
 /** Reusable descriptor — avoids allocating a new one each ensureMaterial call */
 const scratchDescriptor = new ShaderDescriptor({});
 
-// Both stages declare every sampler and int highp. GLSL ES defaults `sampler2D` / `samplerCube`
-// to lowp and fragment ints to mediump, and mobile drivers such as Mali honour that: store
-// fetches come back at half-float precision and packed uint lanes lose bits.
-
 const glVertexTemplate = `#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-precision highp samplerCube;
-precision highp sampler2DArray;
-precision highp sampler2DArrayShadow;
 
 {{header}}
 {{textureGetters}}
@@ -116,12 +106,6 @@ void main() {
 }`;
 
 const glFragmentTemplate = `#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-precision highp samplerCube;
-precision highp sampler2DArray;
-precision highp sampler2DArrayShadow;
 
 {{header}}
 
@@ -495,10 +479,12 @@ export class MaterialSystemGl {
 
     // Shadow sampling. Gated on `lit` — unlit shaders have no light loop
     // calling `calculateShadow()`, so both the sampler bit and its no-op
-    // stub would be dead code. Within lit materials, the choice between
-    // the real sampler and the stub depends on whether the mesh receives
-    // shadows.
-    if (lit) bitsGl.push(mesh.receiveShadow ? shadowBitsGl[view3d.shadowFilter] : noShadowBit);
+    // stub would be dead code. Within lit materials, a mesh gets the real
+    // sampler when it receives shadows and the view has had a light casting
+    // them (`view3d._hasShadows`); otherwise the stub.
+    if (lit) {
+      bitsGl.push(mesh.receiveShadow && view3d._hasShadows ? shadowBitsGl[view3d.shadowFilter] : noShadowBit);
+    }
 
     const descriptor = scratchDescriptor.update({
       bitsGl,

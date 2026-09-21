@@ -132,12 +132,12 @@ describe('lobe composition (via stage slots + recursive fillTemplateSlots)', () 
   });
 
   describe('GLSL', () => {
-    it('produces exactly one for-loop regardless of lobe count', () => {
+    it('produces exactly one light loop regardless of lobe count', () => {
       const out = compileGlslSource({
         bits: [lambertHost, makeLobeBit('clearcoat', 'cc'), makeLobeBit('sheen', 'sh')],
         template: glslTemplate,
       });
-      const loopMatches = out.fragment.match(/for \(int i = 0;/g) ?? [];
+      const loopMatches = out.fragment.match(/while \(lightMask != 0u\)/g) ?? [];
       expect(loopMatches.length).toBe(1);
     });
 
@@ -150,7 +150,7 @@ describe('lobe composition (via stage slots + recursive fillTemplateSlots)', () 
       const preIdx = out.fragment.indexOf('cc_pre');
       const perIdx = out.fragment.indexOf('cc_per');
       const postIdx = out.fragment.indexOf('cc_post');
-      const loopOpenIdx = out.fragment.indexOf('for (int i = 0;');
+      const loopOpenIdx = out.fragment.indexOf('while (lightMask != 0u)');
       const loopCloseIdx = out.fragment.indexOf('}', perIdx);
 
       expect(preIdx).toBeLessThan(loopOpenIdx);

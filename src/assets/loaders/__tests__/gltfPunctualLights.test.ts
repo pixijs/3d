@@ -4,7 +4,7 @@ import type { GltfFormat } from '~/assets/loaders/gltf/GltfFormat';
 import { processLights } from '~/assets/loaders/gltf/process/processLights';
 import { processNodes } from '~/assets/loaders/gltf/process/processNodes';
 import type { Scene3DDescriptor } from '~/assets/Scene3DDescriptor';
-import { copyLights } from '~/core/buffers/LightDataListBuffer';
+import { writeLight } from '~/core/LightDataList';
 import { srgbToLinear } from '~/materials/BaseMaterial3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 
@@ -124,7 +124,7 @@ describe('light colour upload', () => {
     light.updateLocalTransform();
 
     const buffer = new Float32Array(16);
-    copyLights(light, buffer, 0);
+    writeLight(light, buffer, 0);
 
     expect(buffer[4]).toBeCloseTo(srgbToLinear(1) * 2, 5);
     expect(buffer[5]).toBeCloseTo(srgbToLinear(0xf4 / 255) * 2, 5);
@@ -139,7 +139,7 @@ describe('light colour upload', () => {
     light.updateLocalTransform();
 
     const buffer = new Float32Array(16);
-    copyLights(light, buffer, 0);
+    writeLight(light, buffer, 0);
 
     // Spec colour [1, 0.5, 0.25] × intensity 2 — not double-converted, not 8-bit quantized.
     expect(buffer[4]).toBeCloseTo(2, 5);

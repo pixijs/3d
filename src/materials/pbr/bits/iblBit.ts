@@ -75,13 +75,15 @@ export const iblBit: ShaderBit = {
 
     // Single scattering, with roughness-aware grazing Fresnel.
     let Fr = max(vec3<f32>(1.0 - roughness), fresnelF0) - fresnelF0;
-    let k_S = fresnelF0 + Fr * pow(1.0 - NdotV_ibl, 5.0);
+    // Use the Spherical Gaussian Schlick approximation from pbrLightingBit.ts.
+    let k_S = fresnelF0 + Fr * exp2((-5.55473 * NdotV_ibl - 6.98316) * NdotV_ibl);
     let FssEss = k_S * f_ab.x + f90 * f_ab.y;
 
     // Multiple scattering: add back the energy the single-scatter LUT dropped.
     let Ems = 1.0 - (f_ab.x + f_ab.y);
     let F_avg = fresnelF0 + (1.0 - fresnelF0) / 21.0;
-    let Fms = FssEss * F_avg / (1.0 - F_avg * Ems);
+    // The epsilon prevents a zero denominator when F_avg and Ems both approach 1.
+    let Fms = FssEss * F_avg / (1.0 - F_avg * Ems + 1e-5);
     let FmsEms = Fms * Ems;
 
     // Diffuse takes the leftover energy; metals contribute none.
@@ -108,13 +110,15 @@ export const iblBit: ShaderBit = {
 
     // Single scattering, with roughness-aware grazing Fresnel.
     vec3 Fr = max(vec3(1.0 - roughness), fresnelF0) - fresnelF0;
-    vec3 k_S = fresnelF0 + Fr * pow(1.0 - NdotV_ibl, 5.0);
+    // Use the Spherical Gaussian Schlick approximation from pbrLightingBit.ts.
+    vec3 k_S = fresnelF0 + Fr * exp2((-5.55473 * NdotV_ibl - 6.98316) * NdotV_ibl);
     vec3 FssEss = k_S * f_ab.x + f90 * f_ab.y;
 
     // Multiple scattering: add back the energy the single-scatter LUT dropped.
     float Ems = 1.0 - (f_ab.x + f_ab.y);
     vec3 F_avg = fresnelF0 + (1.0 - fresnelF0) / 21.0;
-    vec3 Fms = FssEss * F_avg / (1.0 - F_avg * Ems);
+    // The epsilon prevents a zero denominator when F_avg and Ems both approach 1.
+    vec3 Fms = FssEss * F_avg / (1.0 - F_avg * Ems + 1e-5);
     vec3 FmsEms = Fms * Ems;
 
     // Diffuse takes the leftover energy; metals contribute none.

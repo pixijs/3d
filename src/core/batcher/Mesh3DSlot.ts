@@ -3,7 +3,7 @@ import type { BaseMaterial3D } from '../../materials/BaseMaterial3D';
 import { Sphere } from '../../math/shapes/Sphere';
 import type { BillboardMode } from '../../scene/Mesh3D';
 import { MESH3D_STORE_STRIDE } from '../buffers/Mesh3DDataStoreBuffer';
-import type { Mesh3DDataStoreBuffer } from '../buffers/Mesh3DDataStoreBuffer';
+import type { Mesh3DBatch } from './Mesh3DBatch';
 import type { Mesh3DData, MeshPassCache } from './Mesh3DData';
 
 /**
@@ -39,20 +39,24 @@ export class Mesh3DSlot implements Mesh3DData {
   /** Slots are always visible — per-slot show/hide is a membership change via `setItemActive` */
   public readonly _worldVisible = 1;
 
-  /** The store this slot's matrix `L` lives in — read by `boundingSphere` */
-  private readonly _store: Mesh3DDataStoreBuffer;
+  /** The owning batch whose store holds this slot's matrix `L` for `boundingSphere` */
+  private readonly _batch: Mesh3DBatch;
   /** Cached batch-local bounding sphere (`L × geometry sphere`); lazily built, CPU culling only */
   private _boundingSphere: Sphere | null = null;
   /**
-   * True when the cached bounding sphere is stale — set on a matrix or geometry change
+   * The `Mesh3DBatch._matricesId` the cached bounding sphere was built against
+   *
+   * The sphere is stale whenever the two differ. A whole-batch matrix write bumps the batch id,
+   * which marks every slot stale at once; a change to this slot alone (its matrix or its
+   * geometry) sets this to `-1`, which no batch id ever equals.
    * @internal
    */
-  public _boundsCacheDirty = true;
+  public _boundsCacheId = -1;
 
-  constructor(uid: number, storeIndex: number, store: Mesh3DDataStoreBuffer) {
+  constructor(uid: number, storeIndex: number, batch: Mesh3DBatch) {
     this.uid = uid;
     this._storeIndex = storeIndex;
-    this._store = store;
+    this._batch = batch;
   }
 
   /**
@@ -66,15 +70,17 @@ export class Mesh3DSlot implements Mesh3DData {
    * not mutate it; `clone()` if you need a snapshot.
    */
   public get boundingSphere(): Sphere {
+    const batch = this._batch;
     const sphere = (this._boundingSphere ||= new Sphere());
-    if (this._boundsCacheDirty) {
-      this._boundsCacheDirty = false;
+    const matricesId = batch._matricesId;
+    if (this._boundsCacheId !== matricesId) {
+      this._boundsCacheId = matricesId;
       const geometry = this.geometry;
       if (geometry.dynamic) {
         sphere.makeEmpty();
       } else {
         // L × geometry sphere, read straight from the store (column-major).
-        const f32 = this._store.data;
+        const f32 = batch.storeBuffer.data;
         const base = this._storeIndex * MESH3D_STORE_STRIDE;
         const { center, radius } = geometry.boundsSphere;
         const cx = center.x;
@@ -101,5 +107,13 @@ export class Mesh3DSlot implements Mesh3DData {
       }
     }
     return sphere;
+  }
+
+  /**
+   * Releases the owning batch reference
+   * @internal
+   */
+  public destroy(): void {
+    (this._batch as Mesh3DBatch | null) = null;
   }
 }

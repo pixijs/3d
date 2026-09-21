@@ -4,9 +4,9 @@ import type { ShaderCompilerContext, ShaderCompilerPlugin } from './ShaderCompil
 /**
  * Compiles a shader template by running plugins through three phases
  *
- * 1. `collectData`  — plugins populate `context.data` with structured objects
- * 2. `preCompile`   — plugins modify `context.data` (e.g. struct padding)
- * 3. `injectCode`   — plugins read `context.data` and return slot code strings
+ * 1. `collectData` lets plugins populate `context.data` with structured objects
+ * 2. `preCompile` lets plugins modify `context.data` (e.g. struct padding) or `context.templateString`
+ * 3. `injectCode` lets plugins read `context.data` and return slot code strings
  *
  * After all phases, slot code is assembled into the final source via template substitution.
  * @param context - The compilation context (bits, template, data, stage)

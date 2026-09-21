@@ -3,7 +3,6 @@ import type { RenderBundle, WebGPURenderer } from 'pixi.js';
 
 import { stateFor3D } from '../../materials/BaseMaterial3D';
 import type { ShadowData } from '../../scene/lights/Light';
-import type { View3D } from '../../scene/View3D';
 import { EMPTY_BUFFER_RESOURCE } from '../buffers/emptyBufferResource';
 import { resolveCullProducer, transformFrustumToBatch } from '../cull';
 import type { DepthHandle } from '../render-graph/ResourceHandle';
@@ -12,7 +11,6 @@ import { RenderPassBit } from '../render-passes/RenderPass';
 import type { RenderSession } from '../render-passes/RenderSession';
 import { MAX_CASCADES } from '../render-passes/shadow/csmUtils';
 import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/shadowPassUtils';
-import type { CascadeSlot } from '../render-passes/shadow/shadowPassUtils';
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
 import { produceCpuCompaction } from './cull';
@@ -163,16 +161,6 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
 
   /** WebGPU remaps shadow depth to the [0,1] range */
   protected override readonly _applyZRangeFix = true;
-
-  /**
-   * Appends the slot to the per-frame shadow storage buffer (sequential — `slotIndex` is implicit in add order)
-   * @param slot - The populated cascade slot
-   * @param _slotIndex - Unused; add order sets the slot's position
-   * @param view3d - The view whose shadow storage buffer receives the slot
-   */
-  protected override _uploadSlot(slot: CascadeSlot, _slotIndex: number, view3d: View3D): void {
-    view3d._shadowDataBuffer.add(slot);
-  }
 
   /**
    * Prepare phase — runs in the graph pre-sweep with no render target bound, so the cull

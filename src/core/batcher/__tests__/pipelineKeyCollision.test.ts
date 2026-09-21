@@ -19,7 +19,7 @@ describe('batch key with many distinct pipelines', () => {
     const item = {
       _sortKey: 0,
       geometry: { uid: 4242, _geometryAtlasAllocation: null },
-      material: { textureCacheKey: 0, _textures: { length: 1 } },
+      material: { textureCacheKey: 0, _textures: { length: 1 }, alphaMode: 'opaque' as const },
     };
     const cache = { batchKey: 0 };
     const seen = new Set<number>();

@@ -1,3 +1,5 @@
+import type { AlphaMode } from '../../materials/BaseMaterial3D';
+
 /**
  * A mesh carries two keys per pass, and they follow deliberately different rules
  *
@@ -9,13 +11,24 @@
  *   `pipelineId * 2^32 + geometry.uid`
  *
  * **`_sortKey` is locality.** It only decides draw order, so lossy fields are fine here —
- * a collision costs adjacency, never correctness. 52 bits, packed to stay an exact Float64:
+ * a collision costs adjacency, never correctness. 53 bits, packed to stay an exact Float64:
  *
- *   TextureLayoutId (4)  |  Pipeline (16)  |  Geometry (16)  |  Texture (16)
- *   bits 48-51              bits 32-47         bits 16-31        bits 0-15
+ *   Cutout (1)  |  TextureLayoutId (4)  |  Pipeline (16)  |  Geometry (16)  |  Texture (16)
+ *   bit 52         bits 48-51              bits 32-47         bits 16-31        bits 0-15
  *
- * Highest bits = textureLayoutId (== `_textures.length`) so items group by texture count
- * first. Pipeline and geometry group within that, which is what lands same-draw meshes
+ * Cutout (`alphaMode: 'mask'`) is the top bit, so alpha-tested meshes draw after the opaque
+ * ones in the same batch. Their fragment shader can `discard`, so the GPU cannot write depth
+ * before shading them. When they draw first, the GPU shades every layer of foliage in full,
+ * including what the walls drawn later hide. When they draw last, the depth test rejects those
+ * fragments before shading. The bit is part of the mesh's single sort key, so every key-sorted
+ * pass gets the order, including the depth-only shadow pass, where nothing discards and the
+ * order gains nothing.
+ *
+ * Then textureLayoutId (`_textures.length`, clamped to the field's 15) so items group by
+ * texture count. Without the clamp a 16-texture opaque material would set the cutout bit, and
+ * a 17-texture one would carry into it.
+ *
+ * Pipeline and geometry group within that, which is what lands same-draw meshes
  * adjacent for the batcher to fuse. Texture is lowest — a soft hint keeping same-albedo
  * items together to maximise texture-slot reuse. Atlased geometry sorts by its atlas
  * first so draws sharing the merged buffers stay contiguous and skip re-binding it.
@@ -26,6 +39,9 @@ const GEOM_MASK = 0xffff;
 const TEX_MASK = 0xffff;
 const PIPE_MASK = 0xffff;
 const LAYOUT_OFFSET = GEOM_OFFSET * GEOM_OFFSET * GEOM_OFFSET; // 2^48
+/** Largest texture count the 4-bit layout field holds; larger counts share its group */
+const LAYOUT_MAX = 15;
+const CUTOUT_OFFSET = LAYOUT_OFFSET * (LAYOUT_MAX + 1); // 2^52
 /** Bits of the atlas uid packed above the geometry uid in the sort key's geometry field */
 const ATLAS_SHIFT = 12;
 
@@ -63,7 +79,7 @@ function getOrAllocatePipelineId(key: number): number {
 interface KeyedMesh {
   _sortKey: number;
   geometry: { uid: number; _geometryAtlasAllocation: { atlas: { uid: number } } | null };
-  material: { textureCacheKey: number; _textures: { length: number } };
+  material: { textureCacheKey: number; _textures: { length: number }; alphaMode: AlphaMode };
 }
 
 /**
@@ -74,8 +90,9 @@ interface KeyedMesh {
  * mesh instead of twice.
  *
  * - `batchKey` = pipeline+geometry — used for batch break detection.
- * - `_sortKey` = textureLayoutId+pipeline+geometry+texture — used for sort ordering,
- *   with textureLayoutId in the top 4 bits so items group by texture layout first.
+ * - `_sortKey` = cutout+textureLayoutId+pipeline+geometry+texture — used for sort ordering,
+ *   with cutout materials last within a batch and textureLayoutId next so items group by
+ *   texture layout.
  * @param renderable - The mesh whose `_sortKey` is written
  * @param cache - The pass-cache entry whose `batchKey` is written
  * @param cache.batchKey - Receives the pipeline+geometry batch key
@@ -92,7 +109,8 @@ export function updateMesh3DKeys(renderable: KeyedMesh, cache: { batchKey: numbe
   const geomLocality = alloc ? (alloc.atlas.uid << ATLAS_SHIFT) | (geometry.uid & 0xfff) : geometry.uid;
 
   renderable._sortKey =
-    renderable.material._textures.length * LAYOUT_OFFSET +
+    (renderable.material.alphaMode === 'mask' ? CUTOUT_OFFSET : 0) +
+    Math.min(renderable.material._textures.length, LAYOUT_MAX) * LAYOUT_OFFSET +
     (pipelineId & PIPE_MASK) * PIPELINE_OFFSET +
     (geomLocality & GEOM_MASK) * GEOM_OFFSET +
     (renderable.material.textureCacheKey & TEX_MASK);

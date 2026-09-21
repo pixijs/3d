@@ -2,11 +2,10 @@ import { BindGroup, Texture, UniformGroup } from 'pixi.js';
 import type { WebGLRenderer } from 'pixi.js';
 
 import { Matrix4 } from '../../../math/matrix/Matrix4';
-import { MAX_LIGHTS, FLOATS_PER_LIGHT } from '../../../scene/View3D';
+import { MAX_LIGHTS } from '../../../scene/View3D';
 import type { View3D } from '../../../scene/View3D';
 import { View3DGlobalData } from '../../../scene/View3DGlobalData';
-import { MAX_CASCADES } from '../../render-passes/shadow/csmUtils';
-import { MAX_SHADOW_LIGHTS } from '../../render-passes/shadow/shadowPassUtils';
+import { MAX_SHADOW_SLOTS } from '../../render-passes/shadow/shadowPassUtils';
 import { LightStructGl, ShadowDataStructGl } from '../../shader/bits/shaderStructs';
 import type { ShaderBit } from '../../shader/ShaderBit';
 import { CUBETEXTURE_EMPTY, DEPTH_EMPTY } from '../../textures/DefaultTextures';
@@ -14,8 +13,9 @@ import { CUBETEXTURE_EMPTY, DEPTH_EMPTY } from '../../textures/DefaultTextures';
 /**
  * WebGL-specific ShaderBit that defines the global uniform struct and bindings for the 3D scene
  *
- * Unlike WebGPU, which uses storage buffers, WebGL relies on flat uniform arrays for light and
- * shadow data, while still exposing the same shared `uTime` global for custom shader animation.
+ * Light and shadow data sit in flat uniform arrays, `uLightData` and `uShadowData`, with the same
+ * layout and the same view-owned arrays behind them as on WebGPU. The per-object stores WebGPU
+ * binds as storage buffers are data textures here.
  * @internal
  */
 export const globalBitGl: ShaderBit = {
@@ -38,12 +38,12 @@ export const globalBitGl: ShaderBit = {
       uHemisphereSky: 'vec3<f32>',
       uHemisphereGround: 'vec3<f32>',
       uHemisphereUp: 'vec3<f32>',
-      // WebGL-only light list (4 vec4 per light, matches LightDataListBuffer stride=16 floats).
+      // The packed light list, 4 vec4 per light (layout on `LightDataList`).
       uLightData: `array<vec4<f32>, ${MAX_LIGHTS * 4}>`,
-      // Shadow data for WebGL: 6 vec4 per cascade entry (4 matrix + 1 params + 1
-      // splits), matching the WebGPU ShadowData 24-float layout. One entry per
-      // (light, cascade) slot.
-      uShadowData: `array<vec4<f32>, ${MAX_SHADOW_LIGHTS * MAX_CASCADES * 6}>`,
+      // One shadow slot per (light, cascade), 6 vec4 each: 4 for the light-space
+      // matrix, 1 for the params, 1 for the cascade splits. WebGPU reads the same
+      // array (layout on `ShadowDataList`).
+      uShadowData: `array<vec4<f32>, ${MAX_SHADOW_SLOTS * 6}>`,
 
       // Mip count of the bound env cubemap (GLSL ES 3.00 lacks
       // textureQueryLevels()). Set by View3DGlPipe when an env cubemap is
@@ -69,7 +69,7 @@ export const globalBitGl: ShaderBit = {
   gl: {
     // Named constants for the numeric `light.type` enum. Live on globalBitGl
     // so they're declared once per shader regardless of how many bits read
-    // `Light.type`. Values match the encoding in `LightDataListBuffer`.
+    // `Light.type`. Values match the encoding in `LightDataList`.
     header: /*glsl*/ `
 const float LIGHT_DIRECTIONAL = 0.0;
 const float LIGHT_POINT = 1.0;
@@ -109,16 +109,18 @@ export function getGlobalGlData(view3d: View3D, renderer: WebGLRenderer): View3D
         value: new Matrix4(),
         type: 'mat4x4<f32>',
       },
+      // The view's packed light list itself, so packing a light is writing the uniform.
       uLightData: {
-        value: new Float32Array(MAX_LIGHTS * FLOATS_PER_LIGHT),
+        value: view3d._lightDataList.data,
         type: 'vec4<f32>',
         size: MAX_LIGHTS * 4,
       },
       uEnvironmentMaxMipLevel: { value: 0, type: 'f32' },
+      // The view's packed shadow list itself, so adding a slot is writing the uniform.
       uShadowData: {
-        value: new Float32Array(MAX_SHADOW_LIGHTS * MAX_CASCADES * 6 * 4),
+        value: view3d._shadowDataList.data,
         type: 'vec4<f32>',
-        size: MAX_SHADOW_LIGHTS * MAX_CASCADES * 6,
+        size: MAX_SHADOW_SLOTS * 6,
       },
     });
 

@@ -54,6 +54,27 @@ export async function getApp<T extends Renderer>(options: GetAppOptions): Promis
   return app;
 }
 
+/**
+ * RGBA bytes of the canvas as it was last presented, taken through a 2D copy so it works on
+ * both backends. `renderer.extract.pixels` renders the scene again, which hides anything that
+ * only reaches the GPU a frame late; this returns the frame the tested render actually drew.
+ * Reads the whole canvas unless a region is given.
+ */
+export function readCanvasPixels(
+  canvas: HTMLCanvasElement,
+  x = 0,
+  y = 0,
+  width = canvas.width,
+  height = canvas.height,
+): Uint8ClampedArray {
+  const copy = document.createElement('canvas');
+  copy.width = canvas.width;
+  copy.height = canvas.height;
+  const context = copy.getContext('2d')!;
+  context.drawImage(canvas, 0, 0);
+  return context.getImageData(x, y, width, height).data;
+}
+
 async function compareScreenshot(
   data: Pick<TestScene, 'pixelMatch' | 'delay'> & { path: string; id: string; rendererType: string },
 ) {

@@ -800,13 +800,20 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     if (descriptor) return descriptor;
 
     // envBit declares `sampleEnvironment` consumed by iblBit, clearcoatBit
-    // and sheenBit. iblBit is the substrate's split-sum consumer and is
-    // always present so the PBR ambient term flows through the env-source
-    // contract regardless of which source the view picks. iblBit reflects the
-    // specular env sample off `specularNormal` (pbrMaterialBit defaults it to the
-    // normal; anisotropyBit overrides it with a bent normal) — no IBL variant.
-    const bitsGpu = [pbrMaterialBit, envBit, iblBit];
-    const bitsGl = [pbrMaterialBit, envBit, iblBit];
+    // and sheenBit. iblBit is the substrate's split-sum consumer, so the PBR
+    // ambient term flows through the env-source contract whichever source the
+    // view picks. iblBit reflects the specular env sample off `specularNormal`
+    // (pbrMaterialBit defaults it to the normal; anisotropyBit overrides it with
+    // a bent normal) — no IBL variant.
+    const bitsGpu = [pbrMaterialBit, envBit];
+    const bitsGl = [pbrMaterialBit, envBit];
+
+    // Skip IBL when `sampleEnvironment` always returns zero. Compilers are not required to eliminate
+    // the BRDF lookup, Fresnel, and multiscatter work through `x * 0.0` because x may be NaN or infinite.
+    if (view.environment !== null) {
+      bitsGpu.push(iblBit);
+      bitsGl.push(iblBit);
+    }
 
     bitsGpu.push(pbrLightingBit);
     bitsGl.push(pbrLightingBit);

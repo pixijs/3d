@@ -13,7 +13,6 @@ import { View3D } from '~/scene/View3D';
 /** The bits of the shadow pass this file reaches for, without pulling in a backend type. */
 interface ShadowPassProbe {
   renderTarget: { depthStencilTexture: { source: { arrayLayerCount: number } } };
-  shadowCount: number;
   targetVersion: number;
 }
 
@@ -78,7 +77,7 @@ describe('shadow atlas sizing', () => {
     await settle();
     await settle();
 
-    expect(probe().shadowCount).toBe(3);
+    expect(view3d._shadowDataList.count).toBe(3);
     expect(layers()).toBe(3);
   });
 
@@ -95,7 +94,7 @@ describe('shadow atlas sizing', () => {
     view3d.root.addChild(sun(4));
     await settle();
 
-    expect(probe().shadowCount).toBe(8);
+    expect(view3d._shadowDataList.count).toBe(8);
     expect(layers()).toBe(8);
   });
 
@@ -105,7 +104,7 @@ describe('shadow atlas sizing', () => {
     view3d.root.removeChild(lights[lights.length - 1]);
     await settle();
 
-    expect(probe().shadowCount).toBe(4);
+    expect(view3d._shadowDataList.count).toBe(4);
     expect(layers()).toBe(8);
     expect(probe().targetVersion).toBe(before);
   });

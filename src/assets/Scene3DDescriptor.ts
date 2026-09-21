@@ -4,7 +4,7 @@ import type { ColorSource } from 'pixi.js';
  * Parsed hierarchy descriptor produced by the asset loaders
  *
  * Internal to the loading pipeline; consumed by the {@link Model3D} constructor to walk the scene graph and
- * instantiate `Container3D` / `Mesh3D` / `Light` nodes.
+ * instantiate `Container3D` / `Mesh3D` / `Light` / `Camera3D` nodes.
  *
  * Fields are arrays of plain data referenced by index from sibling fields (a node references a
  * geometry by `geometry: 1`, a material by `materials: [3]`, a light by `light: 0`, etc.). The
@@ -95,16 +95,17 @@ export interface Scene3DNode {
 }
 
 /**
- * Camera preset
- *
- * Currently unused at instantiation time; reserved for future support.
+ * Camera preset, instantiated by {@link Model3D} as a `Camera3D` at the node that references it
  * @internal
  */
 export interface Scene3DCamera {
+  /** Vertical field of view in radians */
   fov: number;
   near: number;
+  /** Omitted for an infinite projection */
   far?: number;
   aspectRatio?: number;
+  /** `0` = perspective */
   mode: number;
 }
 

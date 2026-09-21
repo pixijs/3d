@@ -296,13 +296,24 @@ export abstract class Light extends Container3D {
   /**
    * Whether this light writes into the shadow pass
    *
-   * Toggling at runtime is free — the next frame's shadow pass picks up the
-   * new value.
+   * Runtime changes take effect on the next frame. When a rendered light first casts a shadow, the
+   * view compiles shadow sampling into its lit material shaders. Later toggles keep that sampler in
+   * the shaders.
    * @default false
    * @see {@link Light.shadow} For per-light shadow tuning.
    * @see {@link View3DOptions} For `shadowQuality`, which sets the shadow-map resolution.
    */
   public castShadow = false;
+
+  /**
+   * Whether this light casts a shadow: {@link Light.castShadow | castShadow} is on and its kind
+   * can cast
+   *
+   * Point and ambient lights never do, whatever `castShadow` says.
+   */
+  get canCastShadow(): boolean {
+    return this.castShadow;
+  }
 
   /**
    * Per-light shadow tuning
@@ -328,7 +339,7 @@ export abstract class Light extends Container3D {
   public _gpuShadowData: ShadowData | null = null;
 
   /**
-   * Slot index into the global shadow data buffer for the current frame, or
+   * Slot index into the `uShadowData` uniform for the current frame, or
    * `-1` when this light isn't writing a shadow this frame.
    * @internal
    */

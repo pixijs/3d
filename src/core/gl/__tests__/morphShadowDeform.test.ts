@@ -1,4 +1,4 @@
-import { getApp } from '@test-utils';
+import { getApp, readCanvasPixels } from '@test-utils';
 import { describe, expect, it } from 'vitest';
 
 import { Geometry3D } from '~/geometry/Geometry3D';
@@ -19,25 +19,7 @@ import { View3D } from '~/scene/View3D';
  * shadow stays put at both weights, so it contributes nothing extra.
  */
 
-function readFrame(app: { renderer: unknown; canvas: HTMLCanvasElement }, gpu: boolean): Uint8Array {
-  if (gpu) {
-    const c = document.createElement('canvas');
-    c.width = app.canvas.width;
-    c.height = app.canvas.height;
-    const ctx = c.getContext('2d')!;
-    ctx.drawImage(app.canvas, 0, 0);
-    return new Uint8Array(ctx.getImageData(0, 0, app.canvas.width, app.canvas.height).data.buffer);
-  }
-  const gl = (app.renderer as { gl: WebGL2RenderingContext }).gl;
-  const w = gl.drawingBufferWidth;
-  const h = gl.drawingBufferHeight;
-  const out = new Uint8Array(w * h * 4);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, out);
-  return out;
-}
-
-function diffPixels(a: Uint8Array, b: Uint8Array): number {
+function diffPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
     if (Math.abs(a[i] - b[i]) > 8 || Math.abs(a[i + 1] - b[i + 1]) > 8 || Math.abs(a[i + 2] - b[i + 2]) > 8) n++;
@@ -92,12 +74,12 @@ async function diffOverMorph(preference: 'webgl' | 'webgpu', casts: boolean): Pr
     caster.weights![0] = 0;
     app.render();
     app.render();
-    const f0 = readFrame(app as never, preference === 'webgpu');
+    const f0 = readCanvasPixels(app.canvas);
 
     caster.weights![0] = 1;
     app.render();
     app.render();
-    const f1 = readFrame(app as never, preference === 'webgpu');
+    const f1 = readCanvasPixels(app.canvas);
 
     return diffPixels(f0, f1);
   } finally {

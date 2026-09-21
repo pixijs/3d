@@ -9,8 +9,12 @@
 > npm install ./pixi-3d-0.0.0.tgz
 > ```
 >
-> Please don't share the code or the builds. Bug reports and feedback go in
-> [Issues](../../issues) — they're very welcome.
+> **Show us what you make.** Screenshots, clips, half-finished experiments: post them in
+> the [PixiJS Discord](https://discord.gg/mZQrcp9BRh) or on X with
+> [@pixijs](https://x.com/pixijs). We'd love to share the best of it when 3D launches.
+>
+> Please keep the code and the builds themselves inside the beta. Bug reports and
+> feedback go in [Issues](../../issues); both are very welcome.
 
 <p align="center">
   <a href="https://pixijs.com" target="_blank" rel="noopener noreferrer">
@@ -47,16 +51,10 @@ const app = new Application();
 await app.init({ preference: 'webgpu', resizeTo: window });
 document.body.appendChild(app.canvas);
 
-// A View3D is a 2D container that renders a 3D scene into its rectangle
-const view3d = new View3D({
-  width: app.screen.width,
-  height: app.screen.height,
-  environment: { skyColor: 0xdde8ff, groundColor: 0x443322 },
-});
+// A View3D is a 2D container that renders a 3D scene into its rectangle;
+// autoResize makes it fill the canvas and follow resizes
+const view3d = new View3D({ autoResize: true, environment: { skyColor: 0xdde8ff, groundColor: 0x443322 } });
 app.stage.addChild(view3d);
-app.renderer.on('resize', (width, height) => {
-  view3d.setSize(width, height);
-});
 
 const sun = new DirectionalLight({ intensity: 3 });
 sun.rotation.set(-Math.PI / 4, Math.PI / 6, 0);
@@ -69,6 +67,13 @@ view3d.root.addChild(new Model3D(source));
 
 view3d.camera.position.set(0, 0, 3);
 new OrbitCamera({ view: view3d, enableDamping: true });
+```
+
+Without `autoResize` a View keeps the size you give it, an inset you can place anywhere on the stage:
+
+```ts
+const inset = new View3D({ width: 320, height: 240 });
+inset.position.set(24, 24);
 ```
 
 Importing `@pixi/3d` registers the asset loaders and a loader hook for each renderer backend. When `Application.init` picks WebGL or WebGPU, the renderer pulls in that backend's systems and pipes as a separate chunk, so a page only downloads the backend it uses.

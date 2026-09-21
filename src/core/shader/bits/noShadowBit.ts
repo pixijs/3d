@@ -12,8 +12,9 @@ export const noShadowBit: ShaderBit = {
   gpu: {
     header: /*wgsl*/ `
     fn calculateShadow(
-      light: Light,
-      worldPos: vec3<f32>, 
+      shadowDataIndex: f32,
+      cascadeCount: f32,
+      worldPos: vec3<f32>,
       normal: vec3<f32>,
       NdotL: f32
     ) -> f32 {

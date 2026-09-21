@@ -4,17 +4,14 @@ import type { WebGLRenderer } from 'pixi.js';
 import { stateFor3D } from '../../materials/BaseMaterial3D';
 import { Matrix4 } from '../../math/matrix/Matrix4';
 import type { ShadowData } from '../../scene/lights/Light';
-import type { View3D } from '../../scene/View3D';
 import { resolveCullProducer } from '../cull';
 import type { DepthHandle } from '../render-graph/ResourceHandle';
 import { RenderPassBit } from '../render-passes/RenderPass';
 import type { RenderSession } from '../render-passes/RenderSession';
-import { cascadeCountFor, castsShadowThisFrame, writeCascadeSlot } from '../render-passes/shadow/shadowPassUtils';
-import type { CascadeSlot } from '../render-passes/shadow/shadowPassUtils';
+import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/shadowPassUtils';
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import { instanceFetchBitGl } from '../shader/bits/instanceFetchBitGl';
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
-import { getGlobalGlData } from './shader/globalBitGl';
 import { shadowGlobalBitGl } from './shader/shadowGlobalBitGl';
 import type { View3DPipeGl } from './View3DPipeGl';
 
@@ -36,8 +33,6 @@ interface ShadowRenderPassGlOptions {
 }
 
 const shadowGlVertexTemplate = `#version 300 es
-precision highp float;
-precision highp sampler2D;
 
 {{header}}
 
@@ -58,8 +53,6 @@ void main() {
 }`;
 
 const shadowGlFragmentTemplate = `#version 300 es
-precision highp float;
-precision highp sampler2D;
 out vec4 fragColor;
 
 {{header}}
@@ -149,18 +142,6 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
   protected override readonly _applyZRangeFix = false;
 
   /**
-   * Packs the slot into the `uShadowData` uniform (24-float stride) the forward shader samples
-   * @param slot - The populated cascade slot
-   * @param slotIndex - Entry index in `uShadowData`, in 24-float strides
-   * @param view3d - The view whose global uniforms receive the slot
-   */
-  protected override _uploadSlot(slot: CascadeSlot, slotIndex: number, view3d: View3D): void {
-    const uShadowData = getGlobalGlData(view3d, this.pipe.renderer).globalUniformGroup.uniforms
-      .uShadowData as unknown as Float32Array;
-    writeCascadeSlot(slot, uShadowData, slotIndex * 24);
-  }
-
-  /**
    * Renders shadows in two sweeps, mirroring the WebGPU pass
    *
    * Sweep 1 rebuilds each batch's cached DrawCommandList on structural change (draw version /
@@ -173,7 +154,7 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
   public render(session: RenderSession): void {
     const { view3d, lights } = session;
 
-    if (!lights.find((light) => light.castShadow)) return;
+    if (!lights.find((light) => light.canCastShadow)) return;
 
     this._bindShadowSource(view3d, this.renderTarget.depthStencilTexture!);
 

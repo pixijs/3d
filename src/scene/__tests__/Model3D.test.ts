@@ -6,6 +6,7 @@ import { Scene3DSource } from '~/assets/Scene3DSource';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { Material3D } from '~/materials/pbr/Material3D';
 import type { Box } from '~/math/shapes/Box';
+import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Container3D } from '~/scene/Container3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { Model3D } from '~/scene/Model3D';
@@ -356,5 +357,45 @@ describe('new Model3D', () => {
 
     expect(model.parent).toBe(parent);
     expect(seen).toEqual({ children: 1, hasPlayer: true });
+  });
+});
+
+describe('Model3D cameras', () => {
+  /** A source whose only scene holds one camera node, parented at z = 5 */
+  function createCameraSource(far?: number): Scene3DSource {
+    return new Scene3DSource({
+      scenes: [{ children: [0] }],
+      nodes: [{ label: 'Rig', children: [], camera: 0, position: new Float32Array([0, 0, 5]) }],
+      cameras: [{ fov: Math.PI / 2, near: 0.5, far, mode: 0 }],
+    });
+  }
+
+  it('instantiates a camera node as a Camera3D in degrees, at its node transform', () => {
+    const model = new Model3D(createCameraSource(50));
+    const camera = model.children[0] as Camera3D;
+
+    expect(camera).toBeInstanceOf(Camera3D);
+    expect(camera.label).toBe('Rig');
+    expect(camera.fov).toBeCloseTo(90);
+    expect(camera.near).toBe(0.5);
+    expect(camera.far).toBe(50);
+    expect(camera.position.z).toBe(5);
+    expect(model.cameras).toEqual([camera]);
+  });
+
+  it('falls back to the default far plane when the file leaves it out', () => {
+    const model = new Model3D(createCameraSource());
+
+    expect(model.cameras[0].far).toBe(Camera3D.defaultOptions.far);
+  });
+
+  it('releases its camera index on destroy', () => {
+    const model = new Model3D(createCameraSource(50));
+    const camera = model.cameras[0];
+
+    model.destroy({ children: true });
+
+    expect(model.cameras).toHaveLength(0);
+    expect(camera.destroyed).toBe(true);
   });
 });

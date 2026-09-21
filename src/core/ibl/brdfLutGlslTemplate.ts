@@ -11,7 +11,6 @@ export const brdfLutGlslTemplate: ShaderBitTemplate = {
   bindGroups: ['local'],
   gl: {
     vertex: /* glsl */ `#version 300 es
-      precision highp float;
       {{header}}
       void main() {
           gl_Position = vec4(aPosition, 0.0, 1.0);
@@ -19,8 +18,6 @@ export const brdfLutGlslTemplate: ShaderBitTemplate = {
       }
     `,
     fragment: /* glsl */ `#version 300 es
-      precision highp float;
-      precision highp int;
       {{header}}
 
       // Geometry function (Smith GGX) for a single direction

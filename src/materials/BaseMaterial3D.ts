@@ -390,8 +390,9 @@ export class BaseMaterial3D<
   /**
    * Flat array of all textures used by this material, in pack order
    *
-   * The batcher iterates it generically for texture extraction and slot packing; its length feeds
-   * the sort key (top 4 bits) to group materials by texture count, reducing batcher switches.
+   * The batcher iterates it generically for texture extraction and slot packing; its length,
+   * clamped to 15, feeds the sort key's texture-layout field to group materials by texture count,
+   * reducing batcher switches.
    *
    * Derived — never hand-ordered. `_deriveLayoutFromBits` walks the material's texture-bearing
    * bits and pushes one slot per declared name, the same walk `texturesPluginGpu/Gl` use to

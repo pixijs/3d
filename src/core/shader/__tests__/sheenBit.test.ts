@@ -230,7 +230,7 @@ describe('sheenBit', () => {
     const src = out.fragment;
 
     it('produces exactly one light loop (single shadow-sample path)', () => {
-      const matches = src.match(/for \(int i = 0;/g) ?? [];
+      const matches = src.match(/while \(lightMask != 0u\)/g) ?? [];
       expect(matches.length).toBe(1);
     });
 
@@ -238,7 +238,7 @@ describe('sheenBit', () => {
       const setupIdx = src.indexOf('vec3 sheenLight = vec3(0.0);');
       const perLightIdx = src.indexOf('sheenLight += sheenColor');
       const compositeIdx = src.indexOf('finalColor = finalColor * sheenAlbedoScale');
-      const loopOpenIdx = src.indexOf('for (int i = 0;');
+      const loopOpenIdx = src.indexOf('while (lightMask != 0u)');
       // See WGSL counterpart: brace-match to find the real loop close.
       const loopOpenBraceIdx = src.indexOf('{', loopOpenIdx);
       const loopCloseIdx = findMatchingClose(src, loopOpenBraceIdx);

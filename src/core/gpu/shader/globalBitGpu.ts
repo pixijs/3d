@@ -1,16 +1,17 @@
 import { BindGroup, Texture, TextureStyle, UniformGroup } from 'pixi.js';
 import type { WebGPURenderer } from 'pixi.js';
 
+import { MAX_LIGHTS } from '../../../scene/View3D';
 import type { View3D } from '../../../scene/View3D';
 import { View3DGlobalData } from '../../../scene/View3DGlobalData';
 import { EMPTY_BUFFER_RESOURCE } from '../../buffers/emptyBufferResource';
+import { MAX_SHADOW_SLOTS } from '../../render-passes/shadow/shadowPassUtils';
 import {
   RenderableStruct,
   RenderableInstanceStruct,
   BoneMatrixStruct,
   GeometryDataStruct,
   LightStructGpu,
-  ShadowDataStructGpu,
 } from '../../shader/bits/shaderStructs';
 import type { ShaderBit } from '../../shader/ShaderBit';
 import { CUBETEXTURE_EMPTY, DEPTH_EMPTY, DEPTH_VIEW_PLACEHOLDER } from '../../textures/DefaultTextures';
@@ -28,7 +29,7 @@ import { CUBETEXTURE_EMPTY, DEPTH_EMPTY, DEPTH_VIEW_PLACEHOLDER } from '../../te
  *
  * | Binding | Name                            | Type                      |
  * |---------|---------------------------------|---------------------------|
- * | 0       | uniform struct                  | fog, light params, time   |
+ * | 0       | uniform struct                  | fog, light params, time, packed light list, shadow slots |
  * | 1       | uSampler                        | sampler                   |
  * | 2       | uEnvironmentTexture             | texture_cube<f32>         |
  * | 3       | uBrdfLutTexture                 | texture_2d<f32>           |
@@ -37,25 +38,24 @@ import { CUBETEXTURE_EMPTY, DEPTH_EMPTY, DEPTH_VIEW_PLACEHOLDER } from '../../te
  * | 6       | uShadowSampler                  | sampler_comparison        |
  * | 7       | uOpaqueDepthTexture             | texture_depth_2d          |
  * | 8       | uOpaqueColorTexture             | texture_2d<f32>           |
- * | 9       | uLightStorage                   | storage<Light>            |
- * | 10      | uShadowStorage                  | storage<ShadowData>       |
- * | 11      | uRenderableStorage              | storage<Renderable>       |
- * | 12      | uRenderableInstanceStorage      | storage<RenderableInstance> (id + packed texture slots) |
- * | 13      | uBonePitStorage                 | storage<BoneMatrix>       |
- * | 14      | uMorphStorage                   | storage<f32>       (shared morph deltas + weights)   |
- * | 15      | uGeometryStorage                | storage<GeometryData> (per-geometry sphere + morph facts) |
- * | 16      | uMaterialStorage                | storage<Material>  (from materialStorageBindingBit) |
+ * | 9       | uRenderableStorage              | storage<Renderable>       |
+ * | 10      | uRenderableInstanceStorage      | storage<RenderableInstance> (id + packed texture slots) |
+ * | 11      | uBonePitStorage                 | storage<BoneMatrix>       |
+ * | 12      | uMorphStorage                   | storage<f32>       (shared morph deltas + weights)   |
+ * | 13      | uGeometryStorage                | storage<GeometryData> (per-geometry sphere + morph facts) |
+ * | 14      | uMaterialStorage                | storage<Material>  (from materialStorageBindingBit) |
  *
- * Group 0 holds eight storage buffers (9–16). WebGPU caps
- * `maxStorageBuffersPerShaderStage` at 8, so leaving every binding
- * `VERTEX | FRAGMENT` would sit exactly at the ceiling in *both* stages. Each
- * storage buffer is instead tagged (in the `bindings` block below) with the
- * stage that reads it, splitting that shared ceiling into two budgets:
- * **vertex 6** {11 renderable, 12 instance, 13 bones, 14 morph, 15 geometry,
- * 16 material} · **fragment 3** {9 lights, 10 shadows, 16 material}. Material is
- * the only both-stage buffer. That leaves room to add buffers per stage.
- * Morph deltas and weights deliberately share `uMorphStorage` rather than
- * taking two slots.
+ * Group 0 holds six storage buffers (9–14). WebGPU caps
+ * `maxStorageBuffersPerShaderStage` at 8. Each storage buffer is tagged (in
+ * the `bindings` block below) with the stage that reads it, so it counts
+ * against that stage's budget only: **vertex 6** {9 renderable, 10 instance,
+ * 11 bones, 12 morph, 13 geometry, 14 material} · **fragment 1** {14 material}.
+ * Material is the only both-stage buffer. Morph deltas and weights
+ * deliberately share `uMorphStorage` rather than taking two slots.
+ *
+ * The light list and the shadow slots live in the uniform struct as `uLightData`
+ * and `uShadowData`, the same place and layout WebGL reads them from, because
+ * each is small, capped and read-only.
  *
  * **uOpaqueDepthTexture (binding 7)** — A copy of the opaque pass's depth
  * buffer, produced by `CopyDepthPass`. Bound by the graph's auto-bind path
@@ -77,7 +77,6 @@ export const globalBitGpu: ShaderBit = {
     BoneMatrix: BoneMatrixStruct,
     GeometryData: GeometryDataStruct,
     Light: LightStructGpu,
-    ShadowData: ShadowDataStructGpu,
   },
   bindings: {
     global: {
@@ -92,6 +91,11 @@ export const globalBitGpu: ShaderBit = {
       uHemisphereSky: 'vec3<f32>',
       uHemisphereGround: 'vec3<f32>',
       uHemisphereUp: 'vec3<f32>',
+      // The packed light list, 4 vec4 per light (layout on `LightDataList`). Entries at and
+      // above the light count are stale; the tile mask never selects them.
+      uLightData: `array<vec4<f32>, ${MAX_LIGHTS * 4}>`,
+      // One shadow slot per (light, cascade), 6 vec4 each (layout on `ShadowDataList`).
+      uShadowData: `array<vec4<f32>, ${MAX_SHADOW_SLOTS * 6}>`,
       // --- textures & samplers (bindings 1–8) ---
       uSampler: 'sampler',
       uEnvironmentTexture: 'texture_cube<f32>',
@@ -102,15 +106,13 @@ export const globalBitGpu: ShaderBit = {
       uOpaqueDepthTexture: 'texture_depth_2d',
       uOpaqueColorTexture: 'texture_2d<f32>',
 
-      // --- storage buffers (bindings 9–15; material at 16 via materialStorageBindingBit) ---
+      // --- storage buffers (bindings 9–13; material at 14 via materialStorageBindingBit) ---
       // Per-stage visibility narrows each buffer to the stage(s) that read it, so
       // it counts against only that stage's maxStorageBuffersPerShaderStage budget
-      // (see the header table). Lighting/shadowing are fragment; the renderable +
-      // instance rows, bones, morph, and geometry facts are read only in the
-      // vertex transform. uMaterialStorage (16) is read in BOTH stages, so it
-      // keeps the default 'both' (declared by materialStorageBindingBit).
-      uLightStorage: { type: `storage<Light>`, visibility: 'fragment' },
-      uShadowStorage: { type: `storage<ShadowData>`, visibility: 'fragment' },
+      // (see the header table). The renderable + instance rows, bones, morph, and
+      // geometry facts are read only in the vertex transform. uMaterialStorage (14)
+      // is read in BOTH stages, so it keeps the default 'both' (declared by
+      // materialStorageBindingBit).
       uRenderableStorage: { type: `storage<Renderable>`, visibility: 'vertex' },
       uRenderableInstanceStorage: { type: `storage<RenderableInstance>`, visibility: 'vertex' },
       uBonePitStorage: { type: `storage<BoneMatrix>`, visibility: 'vertex' },
@@ -122,7 +124,7 @@ export const globalBitGpu: ShaderBit = {
     // Named constants for the numeric `light.kind` enum. Live on globalBitGpu so
     // they're declared once per shader regardless of how many bits read
     // `Light.kind` (factory-produced lighting bits, user-written effect bits,
-    // debug overlays, etc.). Values match the encoding in `LightDataListBuffer`.
+    // debug overlays, etc.). Values match the encoding in `LightDataList`.
     header: /*wgsl*/ `
 const LIGHT_DIRECTIONAL: f32 = 0.0;
 const LIGHT_POINT: f32 = 1.0;
@@ -160,6 +162,14 @@ export function getGlobalGpuData(view3d: View3D, renderer: WebGPURenderer): View
       uHemisphereSky: { value: new Float32Array([0, 0, 0]), type: 'vec3<f32>' },
       uHemisphereGround: { value: new Float32Array([0, 0, 0]), type: 'vec3<f32>' },
       uHemisphereUp: { value: new Float32Array([0, 1, 0]), type: 'vec3<f32>' },
+      // These two arrays stay the last members of the group. The WGSL array sync pixi
+      // generates (`generateArraySyncWGSL`) writes past the end of a `vec4` array, so only
+      // a following array or the end of the buffer can take those extra writes.
+      //
+      // The view's packed light list itself, so packing a light is writing the uniform.
+      uLightData: { value: view3d._lightDataList.data, type: 'vec4<f32>', size: MAX_LIGHTS * 4 },
+      // The view's packed shadow list itself, so adding a slot is writing the uniform.
+      uShadowData: { value: view3d._shadowDataList.data, type: 'vec4<f32>', size: MAX_SHADOW_SLOTS * 6 },
     });
 
     globalUniformGroup.isStatic = true;
@@ -190,14 +200,12 @@ export function getGlobalGpuData(view3d: View3D, renderer: WebGPURenderer): View
       6: shadowStyle, // uShadowSampler
       7: DEPTH_VIEW_PLACEHOLDER, // uOpaqueDepthTexture (placeholder)
       8: Texture.EMPTY.source, // uOpaqueColorTexture (placeholder)
-      9: view3d._lightDataBuffer.bufferResource, // uLightStorage
-      10: view3d._shadowDataBuffer.bufferResource, // uShadowStorage
-      11: EMPTY_BUFFER_RESOURCE, // uRenderableStorage (set per batch)
-      12: EMPTY_BUFFER_RESOURCE, // uRenderableInstanceStorage (set per batch)
-      13: view3d._bonePit.bufferResource, // uBonePitStorage
-      14: EMPTY_BUFFER_RESOURCE, // uMorphStorage (shared morph store, set per frame)
-      15: EMPTY_BUFFER_RESOURCE, // uGeometryStorage (shared geometry data store, set per frame)
-      16: EMPTY_BUFFER_RESOURCE, // uMaterialStorage (set per frame)
+      9: EMPTY_BUFFER_RESOURCE, // uRenderableStorage (set per batch)
+      10: EMPTY_BUFFER_RESOURCE, // uRenderableInstanceStorage (set per batch)
+      11: view3d._bonePit.bufferResource, // uBonePitStorage
+      12: EMPTY_BUFFER_RESOURCE, // uMorphStorage (shared morph store, set per frame)
+      13: EMPTY_BUFFER_RESOURCE, // uGeometryStorage (shared geometry data store, set per frame)
+      14: EMPTY_BUFFER_RESOURCE, // uMaterialStorage (set per frame)
     });
 
     data = new View3DGlobalData(globalUniformGroup, globalBindGroup);

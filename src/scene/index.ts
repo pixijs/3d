@@ -30,6 +30,7 @@ export * from './particles/utils/particleValues';
 export * from './Skeleton';
 export * from './Sprite3D';
 export * from './utils/createDefaultGraph3D';
+export * from './utils/frameCamera';
 export * from './utils/getLocalBounds3D';
 export * from './utils/updateTransformBackwards3D';
 export * from './utils/updateView3DScene';

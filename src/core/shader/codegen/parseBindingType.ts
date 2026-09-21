@@ -10,7 +10,7 @@ import type { BindingSpec, BindingVisibility } from '../ShaderBit';
 /**
  * Normalises a {@link BindingSpec} to its WGSL type string
  *
- * A binding may be authored as the bare type (`'storage<Light>'`) or as `{ type, visibility }`;
+ * A binding may be authored as the bare type (`'storage<Renderable>'`) or as `{ type, visibility }`;
  * every codegen consumer reads the type through here so the object form is transparent to
  * WGSL/GLSL emission.
  * @param spec - The binding spec to normalise
@@ -69,7 +69,7 @@ export function isStorageType(type: string): boolean {
  * Parses a storage buffer binding type and returns the referenced struct name
  * @example
  * ```ts
- * parseStorageType("storage<Light>") // "Light"
+ * parseStorageType("storage<Renderable>") // "Renderable"
  * parseStorageType("vec4<f32>") // null
  * ```
  * @param type - The binding type string to parse

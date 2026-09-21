@@ -38,7 +38,7 @@ jobs:
           sha=$(git log -1 --pretty=%s | sed -n 's/.*sync pixi-3d@\([0-9a-f]\{7,\}\).*/\1/p')
           sha=${sha:-${GITHUB_SHA::7}}
           echo "file=$file" >> "$GITHUB_OUTPUT"
-          echo "tag=beta-$version-$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
@@ -50,10 +50,11 @@ jobs:
           VERSION: ${{ steps.pack.outputs.version }}
           SHA: ${{ steps.pack.outputs.sha }}
         run: |
-          # Re-running the workflow on the same commit replaces the draft.
+          # One draft per version: a sync between bumps rebuilds it in place
+          # rather than leaving a trail of drafts to clean up.
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           cat > notes.md <<EOF
-          Closed beta build of \`@pixi/3d\` from commit \`$SHA\`.
+          Closed beta build of \`@pixi/3d\`, from commit [\`$SHA\`](https://github.com/pixijs/pixi-3d/commit/$SHA).
 
           Download \`$FILE\`, then install it next to PixiJS:
 
@@ -69,7 +70,14 @@ jobs:
           import { OrbitCamera } from '@pixi/3d/extras';
           \`\`\`
           EOF
+          # RELEASE_NOTES.md carries what changed in this version; it is written
+          # in the pixi-3d repo and mirrored here with the rest of the tree.
+          if [ -f RELEASE_NOTES.md ]; then
+            printf '\n---\n\n' >> notes.md
+            cat RELEASE_NOTES.md >> notes.md
+          fi
           gh release create "$TAG" "$FILE" \
             --draft \
-            --title "Beta $VERSION ($SHA)" \
+            --prerelease \
+            --title "v$VERSION" \
             --notes-file notes.md

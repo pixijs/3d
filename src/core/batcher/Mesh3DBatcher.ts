@@ -80,11 +80,11 @@ if (NORMAL_MAP.source.uid !== 2) {
  *
  * ## How it works
  *
- * The render passes (opaque / transparent) pre-sort renderables by `_sortKey`
- * which encodes `textureLayoutId | pipeline | geometry | texture` in
- * descending priority. This batcher walks the sorted list and groups
- * consecutive items that share the same `_batchKey` (pipeline+geometry) into
- * instanced draw commands, packing texture sources into a fixed-size slot
+ * The render passes (opaque / transparent) pre-sort renderables by `_sortKey`,
+ * which puts meshes sharing a pipeline and geometry next to each other (see
+ * `updateMesh3DKeys` for its fields). This batcher walks the sorted list and
+ * groups consecutive items that share the same `_batchKey` (pipeline+geometry)
+ * into instanced draw commands, packing texture sources into a fixed-size slot
  * array (up to `MAX_BATCH_TEXTURES`).
  *
  * Draw command boundaries and texture bind group boundaries are **decoupled**:

@@ -86,4 +86,9 @@ export class PointLight extends Light {
       warn('PointLight does not cast shadows; `castShadow` has no effect.');
     }
   }
+
+  /** Point lights never cast */
+  override get canCastShadow(): boolean {
+    return false;
+  }
 }

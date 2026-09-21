@@ -81,8 +81,8 @@ export const BoneMatrixStruct = {
 // ── WebGPU structs ──────────────────────────────────────────────────
 
 /**
- * Per-light element of the WebGPU light storage buffer (see
- * `LightDataListBuffer` for the CPU-side writer)
+ * One light as the WebGPU light loop sees it, unpacked from `uLightData` (see
+ * `LightDataList` for the CPU-side writer)
  * @internal
  */
 export const LightStructGpu = {
@@ -96,17 +96,6 @@ export const LightStructGpu = {
   shadowDataIndex: 'f32', // index into uShadowData array (-1 if none)
   cascadeCount: 'f32', // number of CSM cascades (0 = standard shadow)
   _pad: 'f32',
-} as const;
-
-/**
- * Per-shadow-map element of the WebGPU shadow data buffer, indexed by
- * `shadowDataIndex` on the light
- * @internal
- */
-export const ShadowDataStructGpu = {
-  lightSpaceMatrix: 'mat4x4<f32>',
-  shadowParams: 'vec4<f32>', // [bias, normalBias, mapSize, reserved]
-  cascadeSplits: 'vec4<f32>', // view-space split depths (CSM only)
 } as const;
 
 // ── WebGL structs ───────────────────────────────────────────────────

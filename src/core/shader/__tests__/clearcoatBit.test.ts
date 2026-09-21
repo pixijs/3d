@@ -62,7 +62,7 @@ const glSource = (bit: ShaderBit): string =>
 
 /** Assertions that must hold for both variants (the shared lobe contract). */
 function expectSharedLobeContract(src: string, lang: 'wgsl' | 'glsl'): void {
-  const loopRe = lang === 'wgsl' ? /for \(var i: i32 = 0;/g : /for \(int i = 0;/g;
+  const loopRe = lang === 'wgsl' ? /for \(var i: i32 = 0;/g : /while \(lightMask != 0u\)/g;
   expect((src.match(loopRe) ?? []).length).toBe(1);
 
   // setup before loop, GGX inside, composite after.
@@ -71,7 +71,7 @@ function expectSharedLobeContract(src: string, lang: 'wgsl' | 'glsl'): void {
   );
   const perLight = src.indexOf('clearcoatLight += ccD * ccF * ccVis');
   const composite = src.indexOf('finalColor = finalColor * ccAttenuation');
-  const loopOpen = src.indexOf(lang === 'wgsl' ? 'for (var i: i32 = 0;' : 'for (int i = 0;');
+  const loopOpen = src.indexOf(lang === 'wgsl' ? 'for (var i: i32 = 0;' : 'while (lightMask != 0u)');
   const loopClose = src.indexOf('}', perLight);
   expect(setup).toBeLessThan(loopOpen);
   expect(perLight).toBeGreaterThan(loopOpen);

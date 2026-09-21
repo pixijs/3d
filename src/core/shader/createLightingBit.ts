@@ -1,10 +1,10 @@
 import { MAX_LIGHTS } from '../../scene/View3D';
+import { LIGHT_DEPTH_BINS, LIGHT_TILE_COUNT, LIGHT_TILES_X, LIGHT_TILES_Y } from '../LightTiles';
 import type { ShaderBit } from './ShaderBit';
 
 // GLSL helper that unpacks one light from the flat `uLightData` uniform array
-// into a `Light` struct. WebGL has no storage buffers, so lights are uploaded
-// as 4 vec4s per light (see `LightDataListBuffer` for the layout). WebGPU
-// reads `uLightStorage[i]` directly in the loop, so no equivalent is needed.
+// into a `Light` struct. Both backends upload lights as 4 vec4s per light (see
+// `LightDataList` for the layout); the WGSL loop unpacks them inline.
 //
 // Wrapped in an include-guard macro so multiple factory-produced lighting
 // bits in the same shader (unusual but possible) don't re-declare it.
@@ -43,11 +43,14 @@ Light getLight(int index) {
  * Only the shading math in the middle differs. This factory owns the shared
  * light-loop boilerplate — you supply just the math.
  *
+ * Each fragment reads its camera's light-tile mask and skips lights that cannot
+ * reach that tile before reading their data. The per-fragment attenuation checks stay.
+ *
  * Roughly, the generated fragment `lighting` slot looks like this:
  *
  * ```text
  *   {{preLighting}}                 // your init code (accumulators, hoisted math)
- *   for (i in 0..lightCount) {
+ *   for (i in lights set in this fragment's tile mask) {
  *     // factory resolves the light:
  *     //   light, lightDir, attenuation   (attenuation > 0 or continue)
  *     //   nDotL                          (nDotL > 0 or continue)
@@ -66,7 +69,7 @@ Light getLight(int index) {
  *
  * 2. In `perLight`, read the contract variables the factory already set up
  *    (see table below) and accumulate this light's contribution. This code
- *    runs *inside* a for-loop, so:
+ *    runs *inside* a loop, so:
  *       - you can declare local `let` / `float` vars freely — each iteration
  *         gets a fresh scope,
  *       - `continue;` is fine if you want to bail on a specific light,
@@ -145,11 +148,15 @@ Light getLight(int index) {
  *
  * ## Prerequisites
  *
- * Consuming descriptor must include the global bit (every 3D descriptor
- * does). The global bit provides the `Light` struct and the light storage:
- *   - WebGPU: `uLightStorage: storage<Light>` (read in the loop)
- *   - WebGL:  `uLightData: array<vec4, MAX_LIGHTS*4>` (unpacked by the
- *     `getLight(int)` helper this factory emits into the GL fragment header)
+ * Consuming descriptors need the backend's global bit and `cameraBit`.
+ * {@link ShaderDescriptor} includes both by default. Keep
+ * {@link ShaderDescriptorOptions#includeCamera} enabled: the light loop reads
+ * `uViewport` and `uLightTiles` from the camera group.
+ *
+ * The global bit provides the `Light` struct and the packed light
+ * list, `uLightData: array<vec4, MAX_LIGHTS*4>` in the global uniforms on both
+ * backends. The WGSL loop unpacks a light inline; GLSL goes through the
+ * `getLight(int)` helper this factory emits into the GL fragment header.
  * @category rendering
  * @advanced
  */
@@ -294,18 +301,38 @@ export function createLightingBit(opts: CreateLightingBitOptions): ShaderBit {
 ${opts.preLighting?.gpu ?? ''}
 {{fragmentLobePreLighting}}
 
-  let lightCountI = i32(global.uGlobalLightParams.w);
+  // Pixel rows run down the WebGPU viewport; tile rows run up from NDC -1.
+  let lightTileUV = (input.position.xy - camera.uViewport.xy) / camera.uViewport.zw;
+  let lightTile = clamp(
+    vec2<i32>(vec2<f32>(lightTileUV.x, 1.0 - lightTileUV.y) * vec2<f32>(${LIGHT_TILES_X}.0, ${LIGHT_TILES_Y}.0)),
+    vec2<i32>(0),
+    vec2<i32>(${LIGHT_TILES_X - 1}, ${LIGHT_TILES_Y - 1})
+  );
+  let lightTileIndex = lightTile.y * ${LIGHT_TILES_X} + lightTile.x;
+  let lightDepthIndex = ${LIGHT_TILE_COUNT} + i32(clamp(
+    dot(camera.uLightDepthPlane, vec4<f32>(input.vPosition, 1.0)), 0.0, ${LIGHT_DEPTH_BINS - 1}.0
+  ));
+  let lightMask = u32(camera.uLightTiles[lightTileIndex >> 2][lightTileIndex & 3]) &
+    u32(camera.uLightTiles[lightDepthIndex >> 2][lightDepthIndex & 3]);
 
   for (var i: i32 = 0; i < ${MAX_LIGHTS}; i++) {
-    if (i >= lightCountI) { break; }
+    let lightsLeft = lightMask >> u32(i);
+    if (lightsLeft == 0u) { break; }
+    if ((lightsLeft & 1u) == 0u) { continue; }
 
-    let light = uLightStorage[i];
+    // Four vec4 per light in the global uniforms (layout on LightDataList).
+    let lightOffset = i * 4;
+    let light0 = global.uLightData[lightOffset];
+    let light1 = global.uLightData[lightOffset + 1];
+    let light2 = global.uLightData[lightOffset + 2];
+    let light3 = global.uLightData[lightOffset + 3];
+    let light = Light(light0.xyz, light0.w, light1.xyz, light1.w, light2.xyz, light2.w, light3.x, light3.y, light3.z, light3.w);
 
     var lightDir: vec3<f32>;
     var attenuation: f32 = 1.0;
 
     if (light.kind == LIGHT_DIRECTIONAL) {
-      // light.direction is pre-normalized on the CPU side (LightDataListBuffer).
+      // light.direction is pre-normalized on the CPU side (LightDataList).
       lightDir = -light.direction;
     } else {
       let toLight = light.position - input.vPosition;
@@ -328,7 +355,7 @@ ${opts.preLighting?.gpu ?? ''}
       lightDir = toLight * inverseSqrt(distanceSq);
 
       if (light.kind == LIGHT_SPOT) {
-        // light.direction is pre-normalized on the CPU side (LightDataListBuffer).
+        // light.direction is pre-normalized on the CPU side (LightDataList).
         // coneCos = outer edge (light vanishes), innerConeCos = full-intensity edge.
         // max() guards the penumbra=0 case where the two collapse (hard edge).
         let spotCos = dot(-lightDir, light.direction);
@@ -342,7 +369,7 @@ ${opts.preLighting?.gpu ?? ''}
     let nDotL = max(dot(normal, lightDir), 0.0);
     if (nDotL <= 0.0) { continue; }
 
-    let shadow = calculateShadow(light, input.vPosition, normal, nDotL);
+    let shadow = calculateShadow(light.shadowDataIndex, light.cascadeCount, input.vPosition, normal, nDotL);
 
 ${opts.perLight.gpu ?? ''}
 {{fragmentLobePerLight}}
@@ -358,10 +385,24 @@ ${opts.postLighting?.gpu ?? ''}
 ${opts.preLighting?.gl ?? ''}
 {{lobePreLighting}}
 
-  int lightCountI = int(uGlobalLightParams.w);
+  ivec2 lightTile = clamp(
+    ivec2((gl_FragCoord.xy - uViewport.xy) / uViewport.zw * vec2(${LIGHT_TILES_X}.0, ${LIGHT_TILES_Y}.0)),
+    ivec2(0),
+    ivec2(${LIGHT_TILES_X - 1}, ${LIGHT_TILES_Y - 1})
+  );
+  int lightTileIndex = lightTile.y * ${LIGHT_TILES_X} + lightTile.x;
+  int lightDepthIndex = ${LIGHT_TILE_COUNT} + int(clamp(
+    dot(uLightDepthPlane, vec4(vPosition, 1.0)), 0.0, ${LIGHT_DEPTH_BINS - 1}.0
+  ));
+  uint lightMask = uint(uLightTiles[lightTileIndex >> 2][lightTileIndex & 3]) &
+    uint(uLightTiles[lightDepthIndex >> 2][lightDepthIndex & 3]);
 
-  for (int i = 0; i < ${MAX_LIGHTS}; i++) {
-    if (i >= lightCountI) break;
+  while (lightMask != 0u) {
+    // The isolated bit is an exact power of two, so its float exponent gives
+    // the light index without scanning empty bits (including bit 31).
+    uint lowestBit = lightMask & (0u - lightMask);
+    int i = int(floatBitsToUint(float(lowestBit)) >> 23u) - 127;
+    lightMask &= lightMask - 1u;
 
     Light light = getLight(i);
 
@@ -369,7 +410,7 @@ ${opts.preLighting?.gl ?? ''}
     float attenuation = 1.0;
 
     if (light.type == LIGHT_DIRECTIONAL) {
-      // light.direction is pre-normalized on the CPU side (LightDataListBuffer).
+      // light.direction is pre-normalized on the CPU side (LightDataList).
       lightDir = -light.direction;
     } else {
       vec3 toLight = light.position - vPosition;
@@ -392,7 +433,7 @@ ${opts.preLighting?.gl ?? ''}
       lightDir = toLight * inversesqrt(distanceSq);
 
       if (light.type == LIGHT_SPOT) {
-        // light.direction is pre-normalized on the CPU side (LightDataListBuffer).
+        // light.direction is pre-normalized on the CPU side (LightDataList).
         // coneCos = outer edge (light vanishes), innerConeCos = full-intensity edge.
         // max() guards the penumbra=0 case where the two collapse (hard edge).
         float spotCos = dot(-lightDir, light.direction);

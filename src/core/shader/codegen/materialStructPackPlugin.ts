@@ -13,7 +13,7 @@ import { mergeMaterialStruct } from './materialStruct';
  * Scoped to the struct named `Material` only: it is the one struct whose CPU-side writes are
  * generated from the same layout (`createMaterialSyncFunction` → `createStructLayout`). `Light`,
  * `ShadowData` and `Renderable` are hand-packed CPU-side at fixed float offsets
- * (`LightDataListBuffer`, `ShadowDataListBuffer`, `Mesh3DDataStoreBuffer`) — repacking those
+ * (`LightDataList`, `ShadowDataList`, `Mesh3DDataStoreBuffer`) — repacking those
  * would silently corrupt them, so they keep declaration order.
  *
  * Runs in `preCompile`. On the GPU path it must be registered before

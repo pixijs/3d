@@ -38,6 +38,8 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
   const frame = getCameraData(view3d.camera).frame;
   if (frame.width <= 0 || frame.height <= 0) return false;
 
+  view3d._syncShadowSampling();
+
   view3d._bonePit.clear();
   const skinnedMeshes = view3d._skinnedMeshes.items;
   for (let i = 0; i < view3d._skinnedMeshes.items.length; i++) {

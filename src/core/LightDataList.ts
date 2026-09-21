@@ -1,13 +1,12 @@
 import { DEG_TO_RAD } from 'pixi.js';
 
-import { writeLinearRgb } from '../../materials/BaseMaterial3D';
-import type { TypedFixedArray } from '../../math/utils/misc';
-import type { Light } from '../../scene/lights/Light';
-import type { PointLight } from '../../scene/lights/PointLight';
-import type { SpotLight } from '../../scene/lights/SpotLight';
-import { MAX_LIGHTS } from '../../scene/View3D';
-import { cascadeCountFor } from '../render-passes/shadow/shadowPassUtils';
-import { DataListBuffer } from './DataListBuffer';
+import { writeLinearRgb } from '../materials/BaseMaterial3D';
+import type { TypedFixedArray } from '../math/utils/misc';
+import type { Light } from '../scene/lights/Light';
+import type { PointLight } from '../scene/lights/PointLight';
+import type { SpotLight } from '../scene/lights/SpotLight';
+import { FLOATS_PER_LIGHT, MAX_LIGHTS } from '../scene/View3D';
+import { cascadeCountFor } from './render-passes/shadow/shadowPassUtils';
 
 /**
  * Writes the light's normalized forward direction (the -Z basis vector of its
@@ -32,7 +31,7 @@ const writeNormalizedDirection = (buffer: Float32Array, offset: number, elements
 };
 
 /**
- * Packs one light into the list at `offset` (layout on `LightDataListBuffer`)
+ * Packs one light into the list at `offset` (layout on `LightDataList`)
  *
  * Exposed for the colour-space round-trip test.
  * @param light - The light to pack
@@ -40,7 +39,7 @@ const writeNormalizedDirection = (buffer: Float32Array, offset: number, elements
  * @param offset - Float offset of the light's entry
  * @internal
  */
-export const copyLights = (light: Light, buffer: Float32Array, offset: number) => {
+export const writeLight = (light: Light, buffer: Float32Array, offset: number) => {
   const worldTransform = light.worldTransform;
   const elements = worldTransform.elements;
 
@@ -86,10 +85,15 @@ export const copyLights = (light: Light, buffer: Float32Array, offset: number) =
 };
 
 /**
- * GPU storage buffer for *non-ambient* lights
+ * The view's packed list of *non-ambient* lights, rebuilt every frame
  *
- * This is a sequential list because the shader iterates lights as `uLightStorage[i]`
- * for `i in [0..lightCount)`. We rebuild the list each frame in `View3DPipe.updateLights()`.
+ * `data` is the value of the `uLightData` uniform on both backends, so a packed light is already
+ * in the uniforms: the light loop walks it for `i in [0..lightCount)`, and the tile binner reads
+ * the same array.
+ * The capacity is fixed. The lighting systems stop at `MAX_LIGHTS`, and `add` does not
+ * bounds-check. The array is never reallocated, so each backend's uniform group can hold it by
+ * reference. Writing here does not mark that group dirty; the pipe's per-frame
+ * `globalUniformGroup.update()` does the upload.
  *
  * Layout (stride = 16 floats):
  * - [0..2]   world position (x,y,z)
@@ -103,17 +107,31 @@ export const copyLights = (light: Light, buffer: Float32Array, offset: number) =
  * - [14]     cascadeCount (1 = single map, 2-4 = CSM)
  * - [15]     reserved / future expansion
  *
- * Note: `shadowDataIndex` must correspond to the index written into `ShadowDataListBuffer`
+ * Note: `shadowDataIndex` must correspond to the slot the shadow pass wrote into `uShadowData`
  * for the same frame.
  * @internal
  */
-export class LightDataListBuffer extends DataListBuffer {
-  constructor() {
-    super({
-      stride: 16,
-      initialSize: MAX_LIGHTS,
-      copier: copyLights,
-      label: 'LightDataList',
-    });
+export class LightDataList {
+  /** Packed lights, `FLOATS_PER_LIGHT` floats each; entries at and above `count` are stale */
+  public readonly data = new Float32Array(MAX_LIGHTS * FLOATS_PER_LIGHT);
+  private _count = 0;
+
+  /** Lights added since the last `reset` */
+  get count(): number {
+    return this._count;
+  }
+
+  /** Clears the list for the next frame (does not clear memory) */
+  public reset(): void {
+    this._count = 0;
+  }
+
+  /**
+   * Appends one light to the list
+   * @param light - The light to pack
+   */
+  public add(light: Light): void {
+    writeLight(light, this.data, this._count * FLOATS_PER_LIGHT);
+    this._count++;
   }
 }

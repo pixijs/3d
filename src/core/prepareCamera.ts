@@ -5,7 +5,7 @@ import { Matrix4 } from '../math/matrix/Matrix4';
 import type { Camera3D } from '../scene/cameras/Camera3D';
 import type { View3D } from '../scene/View3D';
 import { getCameraData } from './CameraData';
-import { frameToPhysicalViewport } from './render-graph/frameToPhysicalViewport';
+import { cameraFrameToPhysicalViewport, frameToPhysicalViewport } from './render-graph/frameToPhysicalViewport';
 import type { RenderSession } from './render-passes/RenderSession';
 
 const _tempMatrix = new Matrix4();
@@ -210,7 +210,8 @@ export function updateCameraProjectionForTarget(
 /**
  * Builds a camera's lanes and bind group for this frame
  *
- * Every camera a frame draws from comes through here once (`CameraData._currentSession`):
+ * CPU side only: `uploadCamera` finishes the lanes and puts them on the GPU once the lights
+ * are packed. Every camera a frame draws from comes through here once (`CameraData._currentSession`):
  * the scene update builds the view camera straight after the transform walk, then
  * `RenderGraph.prepareCameras` builds every `pass.camera` that survived `resolve` — all before
  * any render target is bound, so all read the same winding off the same binding. A camera
@@ -242,6 +243,7 @@ export function prepareCamera(camera: Camera3D, session: RenderSession): void {
     );
   }
 
+  const isWebGPU = renderer.type === RendererType.WEBGPU;
   const texture = camera.renderTexture;
 
   if (texture) {
@@ -249,12 +251,11 @@ export function prepareCamera(camera: Camera3D, session: RenderSession): void {
     // is a frame of a larger source — so the projection is built in the frame's texels. The
     // graph binds the whole target, so screen-space UV covers all of it.
     const { frame, source } = texture;
-    updateCameraProjectionForTarget(
-      camera,
-      Math.round(frame.width * source.resolution),
-      Math.round(frame.height * source.resolution),
-    );
+    const targetWidth = Math.round(frame.width * source.resolution);
+    const targetHeight = Math.round(frame.height * source.resolution);
+    updateCameraProjectionForTarget(camera, targetWidth, targetHeight);
     cameraData.setViewportUvScale(1, 1);
+    _targetBounds.set(0, 0, targetWidth, targetHeight);
   } else {
     _screenBounds.x = 0;
     _screenBounds.y = 0;
@@ -277,20 +278,45 @@ export function prepareCamera(camera: Camera3D, session: RenderSession): void {
     cameraData.setViewportUvScale(_uvScale.x, _uvScale.y);
   }
 
+  // WebGPU uploads the viewport lane with the rest of the camera; WebGL copies the live viewport at each forward draw.
+  if (isWebGPU) {
+    const bounds = texture ? _targetBounds : view3d._graph.sceneViewport(session, _targetBounds);
+    const viewport = camera === view3d.camera ? bounds : cameraFrameToPhysicalViewport(camera, session, bounds);
+    if (viewport) cameraData.setViewport(viewport);
+  }
+
   // The executor binds a camera's target with the outer binding's `flipY`; which way that leaves
   // the front face is pixi's to say, asked here for the target the camera will draw into before it
   // is bound. Matching that winding on the bound copy is what keeps front faces front-facing; the
   // camera's own matrices and frustum stay as built.
   const target = texture ? renderer.renderTarget.getRenderTarget(texture) : session.defaultTarget;
   const frontFaceInverted = renderer.renderTarget.isFrontFaceInverted(target, session.defaultTarget.flipY);
-  const isWebGPU = renderer.type === RendererType.WEBGPU;
 
   // WebGPU clips z to [0, w] where GL clips to [-w, w]; the bound copy is remapped to match.
   cameraData.syncFromCamera(camera, frontFaceInverted, isWebGPU);
+}
 
-  // WebGPU render bundles replay without pixi's bind-group sync, so the lanes have to be on the
-  // GPU before any pass records against them.
-  if (isWebGPU) {
+/**
+ * Finishes a prepared camera's lanes once a frame, and on WebGPU uploads them
+ *
+ * The last lane is the light tile masks, which bin the view's packed lights through this
+ * camera. The scene update builds the view camera before the view packs its lights — shadow
+ * fitting needs the camera — so this is its own step: `RenderGraph.prepareCameras` runs it for
+ * every camera once the lights are settled and before any pass draws.
+ *
+ * WebGL syncs a dirty uniform group at the next draw. WebGPU render bundles replay without
+ * pixi's bind-group sync, so on WebGPU this writes the lanes to the GPU before any pass
+ * records against them.
+ * @param camera - A camera `prepareCamera` has built this frame.
+ * @param session - The frame's render session, with the view's lights packed.
+ * @internal
+ */
+export function uploadCamera(camera: Camera3D, session: RenderSession): void {
+  const cameraData = getCameraData(camera);
+  cameraData.prepareLightTiles(session);
+
+  const { renderer } = session;
+  if (renderer.type === RendererType.WEBGPU) {
     (renderer as WebGPURenderer).ubo.updateUniformGroup(cameraData.uniformGroup);
   }
 }

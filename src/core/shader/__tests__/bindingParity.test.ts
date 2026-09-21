@@ -1,3 +1,4 @@
+import { captureWarnings } from '@test-utils';
 import { describe, expect, it } from 'vitest';
 
 import { compileGlslSource } from '~/core/gl/codegen/compileGlslSource';
@@ -5,7 +6,7 @@ import { texturesPluginGl } from '~/core/gl/shader/texturesPluginGl';
 import { compileWgslSource } from '~/core/gpu/codegen/compileWgslSource';
 import { materialStoragePaddingPlugin } from '~/core/gpu/codegen/materialStoragePaddingPlugin';
 import { buildWgslBindingMap, collectBindings, emitBindingsWgsl } from '~/core/gpu/codegen/wgslBindingsPlugin';
-import { texturesPluginGpu } from '~/core/gpu/shader/texturesPluginGpu';
+import { createTexturesPluginGpu } from '~/core/gpu/shader/texturesPluginGpu';
 import { generateGroupMap } from '~/core/shader/codegen/generateGroupMap';
 import { materialStructPackPlugin } from '~/core/shader/codegen/materialStructPackPlugin';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
@@ -30,6 +31,9 @@ import { View3D } from '~/scene/View3D';
  */
 
 // --- Binding-assignment lockstep (synthetic bits, both groups + all kinds) ---
+
+/** The binding layout is the same whichever sampler a renderer picks, so these checks use the portable one */
+const texturesPluginGpu = createTexturesPluginGpu('branch');
 
 const parityTemplate: ShaderBitTemplate = {
   bindGroups: ['global', 'batch'],
@@ -81,6 +85,21 @@ describe('GL ↔ WGSL binding assignment lockstep', () => {
       const wgslNames = entries.map((e) => e.name);
       expect(glGroupNames(gl, groupIndex), `group '${groupName}'`).toEqual(wgslNames);
     }
+  });
+
+  it('skips a group the template does not bind, without warning', () => {
+    const bits: ShaderBit[] = [
+      ...parityBits,
+      {
+        name: 'parityMaterial',
+        bindings: { material: { baseColor: 'vec4<f32>', uBaseColorTexture: 'texture_2d<f32>' } },
+      },
+    ];
+
+    const warnings = captureWarnings(() => {
+      expect(generateGroupMap(bits, parityTemplate)).toEqual(generateGroupMap(parityBits, parityTemplate));
+    });
+    expect(warnings).toEqual([]);
   });
 
   it('emits WGSL @group/@binding lines exactly matching the map', () => {

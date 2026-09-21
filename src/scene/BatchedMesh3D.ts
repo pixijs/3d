@@ -1,5 +1,6 @@
 import { definedProps } from 'pixi.js';
 
+import type { BatchMatrices } from '../core/batcher/BatchMatrices';
 import { Mesh3DBatch } from '../core/batcher/Mesh3DBatch';
 import type { Mesh3DData } from '../core/batcher/Mesh3DData';
 import type { Geometry3D } from '../geometry/Geometry3D';
@@ -132,6 +133,29 @@ export class BatchedMesh3D extends Container3D {
    */
   public setMatrixAt(index: number, matrix: Matrix4): void {
     this.batch.setMatrixAt(index, matrix);
+  }
+
+  /**
+   * The slot matrices as interleaved data, for rewriting many slots a frame
+   *
+   * Compute transforms straight into the batch's own data without copying them. See
+   * {@link BatchMatrices} for the rules:
+   *
+   * ```ts
+   * const { data, stride, offset } = batched.matrices;
+   *
+   * for (let i = 0, o = offset; i < batched.size; i++, o += stride) {
+   *   data[o + 13] = heights[i]; // translation Y
+   * }
+   *
+   * batched.matrices.update();
+   * ```
+   *
+   * The first read creates the object. Later reads return the same object.
+   * @advanced
+   */
+  public get matrices(): BatchMatrices {
+    return this.batch.matrices;
   }
 
   /**

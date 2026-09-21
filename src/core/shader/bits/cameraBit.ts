@@ -1,3 +1,4 @@
+import { LIGHT_TILE_LANES } from '../../LightTiles';
 import type { ShaderBit } from '../ShaderBit';
 
 /**
@@ -10,7 +11,9 @@ import type { ShaderBit } from '../ShaderBit';
  * transform and its projection the cascade's ortho box. Declared once here for both backends; on
  * WebGL the lanes are plain uniforms with these names, on WebGPU they are the `camera` uniform
  * struct. `uViewportUVScale` rides along because it is a fact about the camera's target: two
- * passes drawing one list into different textures need different values for it.
+ * passes drawing one list into different textures need different values for it. `uViewport` maps
+ * fragment positions to the camera's image. Screen position selects a light tile; a world-position
+ * dot product selects its camera-depth interval. See `binLightTiles`.
  * The group behind it is a `CameraData`.
  * @internal
  */
@@ -23,6 +26,9 @@ export const cameraBit: ShaderBit = {
       uProjectionMatrix: 'mat4x4<f32>',
       uViewProjectionMatrix: 'mat4x4<f32>',
       uViewportUVScale: 'vec2<f32>',
+      uViewport: 'vec4<f32>', // the GPU viewport in pixels: xy = origin, zw = size
+      uLightTiles: `array<vec4<i32>, ${LIGHT_TILE_LANES}>`, // screen-tile masks followed by depth masks
+      uLightDepthPlane: 'vec4<f32>',
     },
   },
 };

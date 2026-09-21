@@ -1,6 +1,7 @@
 import type { TypedArray } from 'pixi.js';
 
 import type { Geometry3DOptions } from '../../../../geometry/Geometry3D';
+import { warnOnce } from '../../../../utils/warnOnce';
 import type { GltfFormat, KHRDracoMeshCompression, MeshPrimitive } from '../GltfFormat';
 import { GLTF_SEMANTIC_TO_ATTRIBUTE } from '../utils/gltfAttributeMap';
 import { widenColorToRgba } from '../utils/widenColorToRgba';
@@ -64,8 +65,7 @@ export async function decodeDracoPrimitive(
           ? widenColorToRgba(data, gltfRaw.accessors![primitiveRaw.attributes[semantic]].type === 'VEC3' ? 3 : 4)
           : data;
     } else {
-      // oxlint-disable-next-line no-console
-      console.warn(`[gb-model-tools] custom attribute ${semantic} skipped`);
+      warnOnce(`pixi3d-custom-attribute-${semantic}`, `[pixi-3d] custom attribute ${semantic} skipped`);
     }
   }
 

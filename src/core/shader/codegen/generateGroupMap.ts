@@ -1,5 +1,3 @@
-import { warn } from 'pixi.js';
-
 import type { ShaderBit } from '../ShaderBit';
 import type { ShaderBitTemplate } from '../ShaderBitTemplate';
 import { bindingType, isStorageType, RESOURCE_TYPES } from './parseBindingType';
@@ -38,15 +36,9 @@ export function generateGroupMap(
     if (!bit.bindings) continue;
 
     for (const [groupName, bindings] of Object.entries(bit.bindings)) {
+      // A group the template doesn't bind (`material`) only contributes a struct; it has no slots.
       const group = groupData[groupName];
-
-      if (!group) {
-        warn(
-          `[generateGroupMap] Bit "${bit.name}" uses bind group "${groupName}" which is not in template.bindGroups. ` +
-            `Valid groups: [${template.bindGroups.join(', ')}]. Bindings for this group will be ignored.`,
-        );
-        continue;
-      }
+      if (!group) continue;
 
       for (const [name, spec] of Object.entries(bindings!)) {
         const type = bindingType(spec);

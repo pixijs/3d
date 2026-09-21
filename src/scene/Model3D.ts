@@ -1,4 +1,4 @@
-import { definedProps } from 'pixi.js';
+import { definedProps, RAD_TO_DEG } from 'pixi.js';
 
 import { AnimationPlayer } from '../animation/AnimationPlayer';
 import type { AnimationTarget } from '../animation/AnimationPlayer';
@@ -9,6 +9,7 @@ import type { BaseMaterial3D } from '../materials/BaseMaterial3D';
 import { Material3D } from '../materials/pbr/Material3D';
 import type { Destroy3DOptions } from '../utils/Destroy3DOptions';
 import { BatchedMesh3D } from './BatchedMesh3D';
+import { Camera3D } from './cameras/Camera3D';
 import { Container3D } from './Container3D';
 import type { Container3DOptions } from './Container3D';
 import { DirectionalLight } from './lights/DirectionalLight';
@@ -94,8 +95,8 @@ export interface Model3DOptions extends Container3DOptions {
 /**
  * The `Model3D` object is a `Container3D` instantiated from a shared {@link Scene3DSource}
  *
- * It owns the scene-graph nodes (meshes, lights, empties) produced by walking the source's
- * hierarchy descriptor, plus the `AnimationPlayer` and `Skeleton`s needed to drive them.
+ * It owns the scene-graph nodes (meshes, lights, cameras, empties) produced by walking the
+ * source's hierarchy descriptor, plus the `AnimationPlayer` and `Skeleton`s needed to drive them.
  *
  * `Model3D` instances are cheap; the heavy data (geometries, materials, textures) lives on the
  * shared source. Spawn many models from one source for crowds, props, or repeated assets.
@@ -167,11 +168,20 @@ export class Model3D extends Container3D {
   public skeletons: Skeleton[] = [];
 
   /**
+   * Cameras created from the source's camera nodes, in the order the scene graph was built
+   *
+   * Each one sits in this model's scene graph at its authored transform. Install one with
+   * `view.camera = model.cameras[0]`; {@link View3D.from} does that for you. Empty when the file
+   * has no cameras.
+   */
+  public cameras: Camera3D[] = [];
+
+  /**
    * Builds the model's scene graph from a shared source
    *
    * Walks the source's hierarchy descriptor, instantiates the scene graph (meshes, lights,
-   * empties), constructs one `Skeleton` per skin, and attaches an `AnimationPlayer` when the
-   * source has animations.
+   * cameras, empties), constructs one `Skeleton` per skin, and attaches an `AnimationPlayer`
+   * when the source has animations.
    *
    * Joint nodes are not materialized as `Container3D`s; their transforms live on the `Skeleton`
    * and are applied during skinning. Their non-joint descendants are hoisted to the nearest
@@ -321,6 +331,20 @@ export class Model3D extends Container3D {
       return new Container3D();
     };
 
+    const createCamera = (nodeData: Scene3DNode): Container3D => {
+      const cameraData = descriptor.cameras?.[nodeData.camera!];
+
+      if (!cameraData) return new Container3D();
+
+      // glTF stores the vertical field of view in radians and leaves `far` out for an infinite
+      // projection; Camera3D takes degrees and falls back to its default far plane.
+      const camera = new Camera3D({ fov: cameraData.fov * RAD_TO_DEG, near: cameraData.near, far: cameraData.far });
+
+      this.cameras.push(camera);
+
+      return camera;
+    };
+
     const createNode = (index: number): Container3D[] => {
       const nodeData = descriptor.nodes?.[index];
 
@@ -339,6 +363,8 @@ export class Model3D extends Container3D {
         container = createMesh(nodeData);
       } else if (nodeData.light !== undefined) {
         container = createLight(nodeData);
+      } else if (nodeData.camera !== undefined) {
+        container = createCamera(nodeData);
       } else {
         container = new Container3D();
       }
@@ -508,6 +534,8 @@ export class Model3D extends Container3D {
     // detached-but-retained skinned mesh does not use-after-free here.
     for (const skeleton of this.skeletons) skeleton.destroy();
     this.skeletons.length = 0;
+    // The cameras are destroyed by the subtree walk below; only the index is released here.
+    this.cameras.length = 0;
 
     super.destroy(options);
   }

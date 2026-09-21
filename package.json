@@ -102,6 +102,7 @@
     "test:dts": "node scripts/build/check-dts.mts",
     "lint": "oxlint --fix && oxfmt --write",
     "release": "node scripts/release.mts",
+    "sync:beta": "node scripts/beta/sync.mts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

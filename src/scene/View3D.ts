@@ -3,6 +3,7 @@ import type {
   ContainerChild,
   Optional,
   PointData,
+  Renderer,
   Size,
   ViewContainerOptions,
   WebGLRenderer,
@@ -10,11 +11,11 @@ import type {
 } from 'pixi.js';
 import { CubeTexture, definedProps, Matrix, ObservablePoint, Point, ViewContainer } from 'pixi.js';
 
+import type { Scene3DSource } from '../assets/Scene3DSource';
 import { Mesh3DBatch } from '../core/batcher/Mesh3DBatch';
 import type { Mesh3DData } from '../core/batcher/Mesh3DData';
 import { BonePit } from '../core/buffers/BonePit';
-import { LightDataListBuffer } from '../core/buffers/LightDataListBuffer';
-import { ShadowDataListBuffer } from '../core/buffers/ShadowDataListBuffer';
+import { LightDataList } from '../core/LightDataList';
 import type { RenderGraph } from '../core/render-graph/RenderGraph';
 import { RenderPassBit } from '../core/render-passes/RenderPass';
 import type { RenderPass } from '../core/render-passes/RenderPass';
@@ -30,6 +31,7 @@ import { reinhardToneMappingBit } from '../core/shader/bits/tonemapping/reinhard
 import { srgbEncodeBit } from '../core/shader/bits/tonemapping/srgbEncodeBit';
 import { uncharted2ToneMappingBit } from '../core/shader/bits/tonemapping/uncharted2ToneMappingBit';
 import type { ShaderBit } from '../core/shader/ShaderBit';
+import { ShadowDataList } from '../core/ShadowDataList';
 import { EventBoundary3D } from '../events/EventBoundary3D';
 import type { AncestorPickState } from '../events/FederatedEventTarget3D';
 import { getAncestorPickState, PICK_BLOCKED, PICK_COVERED } from '../events/FederatedEventTarget3D';
@@ -47,11 +49,15 @@ import { warnOnce } from '../utils/warnOnce';
 import { BatchedMesh3D } from './BatchedMesh3D';
 import { Camera3D } from './cameras/Camera3D';
 import { Container3D } from './Container3D';
+import { DirectionalLight } from './lights/DirectionalLight';
 import type { Hemisphere } from './lights/environment/Hemisphere';
 import { Light } from './lights/Light';
 import { Mesh3D } from './Mesh3D';
+import { Model3D } from './Model3D';
+import type { Model3DOptions } from './Model3D';
 import { createDefaultGraph3D } from './utils/createDefaultGraph3D';
 import type { DefaultGraph3DOptions } from './utils/createDefaultGraph3D';
+import { frameCamera } from './utils/frameCamera';
 import type { View3DGlobalData } from './View3DGlobalData';
 
 declare global {
@@ -73,14 +79,14 @@ declare global {
 }
 
 /**
- * Maximum number of {@link Light}s the global per-frame light buffer can hold
+ * Maximum number of {@link Light}s the per-frame light list can hold
  * @category scene
  * @advanced
  */
 export const MAX_LIGHTS = 32;
 
 /**
- * Floats per light slot in `LightDataListBuffer` — 4 × `vec4` (16 floats)
+ * Floats per light slot in `LightDataList` — 4 × `vec4` (16 floats)
  * @internal
  */
 export const FLOATS_PER_LIGHT = 16;
@@ -259,16 +265,18 @@ export interface Fog {
  * });
  * ```
  * @see {@link View3D} For the constructed scene root and runtime accessors.
+ * @typeParam TRoot - Type of the {@link View3DOptions#root | root} container, carried through to
+ * {@link View3D#root}. Inferred from the `root` you pass.
  * @category scene
  * @standard
  */
-export interface View3DOptions
+export interface View3DOptions<TRoot extends Container3D = Container3D>
   extends PixiMixins.View3DOptions, Omit<ViewContainerOptions, 'children' | 'isRenderGroup'> {
   /**
    * Root 3D container
    * @default new Container3D()
    */
-  root?: Container3D;
+  root?: TRoot;
   /**
    * Camera for the scene, added to {@link View3DOptions#root | root} when it isn't in the graph yet
    * @default new Camera3D()
@@ -276,14 +284,25 @@ export interface View3DOptions
   camera?: Camera3D;
   /**
    * Width of the 3D viewport in pixels
+   *
+   * With {@link View3DOptions#autoResize | autoResize} on, this is only the size reported
+   * before the first render.
    * @default 256
    */
   width?: number;
   /**
-   * Height of the 3D viewport in pixels
+   * Height of the 3D viewport in pixels; see {@link View3DOptions#width | width}
    * @default 256
    */
   height?: number;
+  /**
+   * Match the renderer's screen size on every render, following it when the canvas resizes
+   *
+   * The size is only known once the View has rendered; before that it reports `width` /
+   * `height`.
+   * @default false
+   */
+  autoResize?: boolean;
   /**
    * Anchor point for positioning
    * @default 0
@@ -384,10 +403,42 @@ export interface View3DOptions
   graph?: (renderer: WebGLRenderer | WebGPURenderer, options: DefaultGraph3DOptions) => RenderGraph;
 }
 
+/**
+ * Options for {@link View3D.from}: every {@link View3DOptions} field except `root` (the model
+ * built from the source is the root), the per-instance {@link Model3DOptions} fields, and the
+ * default-light switch
+ * @example
+ * ```ts
+ * const view = View3D.from(source, {
+ *   width: 800,
+ *   height: 600,
+ *   toneMapping: 'reinhard',
+ *   scene: 'Showroom',
+ *   autoPlay: true,
+ * });
+ * ```
+ * @see {@link View3D.from} For what the camera and light defaults do.
+ * @category scene
+ * @standard
+ */
+export interface View3DFromOptions
+  extends
+    Omit<View3DOptions, 'root'>,
+    Pick<Model3DOptions, 'scene' | 'castShadow' | 'receiveShadow' | 'autoUpdate' | 'autoPlay'> {
+  /**
+   * Add a white {@link DirectionalLight} under the camera when the file brings no lights of its own
+   *
+   * Set to `false` to light the scene yourself.
+   * @default true
+   */
+  light?: boolean;
+}
+
 // Merges the PixiMixins hook into the class type so members applied with
-// `extensions.mixin` surface on every View3D.
-// oxlint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging, pixi3d/require-export-jsdoc, pixi3d/require-member-api-doc
-export interface View3D extends PixiMixins.View3D {}
+// `extensions.mixin` surface on every View3D. The type parameter list has to match
+// the class's for the merge to be legal.
+// oxlint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging, pixi3d/require-export-jsdoc, pixi3d/require-member-api-doc, no-unused-vars
+export interface View3D<TRoot extends Container3D = Container3D> extends PixiMixins.View3D {}
 
 /**
  * Root of a 3D scene and the bridge between pixi.js's 2D display list and the 3D renderer
@@ -397,7 +448,7 @@ export interface View3D extends PixiMixins.View3D {}
  * container.
  *
  * A View owns the scene {@link Camera3D | camera}, the per-frame light and
- * shadow buffers, and the View-wide shading settings (tone mapping, exposure,
+ * shadow data, and the View-wide shading settings (tone mapping, exposure,
  * fog, environment fill, background skybox). Add lights and meshes by
  * parenting them under `root` (or any descendant) — the View tracks them
  * automatically as the scene graph changes.
@@ -422,12 +473,8 @@ export interface View3D extends PixiMixins.View3D {}
  * const app = new Application();
  * await app.init({ resizeTo: window });
  *
- * const view = new View3D({
- *   width: app.screen.width,
- *   height: app.screen.height,
- *   shadowQuality: 'high',
- *   toneMapping: 'aces',
- * });
+ * // autoResize: the View fills the screen and follows canvas resizes.
+ * const view = new View3D({ autoResize: true, shadowQuality: 'high', toneMapping: 'aces' });
  * app.stage.addChild(view); // a View3D is a pixi.js display object
  *
  * view.camera.position.set(0, 2.5, 7);
@@ -436,10 +483,8 @@ export interface View3D extends PixiMixins.View3D {}
  * view.root.addChild(light);
  * view.root.addChild(mesh); // any Mesh3D
  *
- * // Keep the View matched to the canvas on resize:
- * window.addEventListener('resize', () => {
- *   view.setSize(app.screen.width, app.screen.height);
- * });
+ * // The default: a fixed size, here an inset.
+ * const inset = new View3D({ width: 320, height: 240 });
  * ```
  * @see {@link Container3D} For the scene-graph node type used by `root`.
  * @see {@link Camera3D} For the scene camera.
@@ -447,10 +492,13 @@ export interface View3D extends PixiMixins.View3D {}
  * @see {@link Fog} For distance-fog configuration.
  * @see {@link View3DOptions} For all constructor options.
  * @see {@link View3D#events} For the pointer-interaction boundary.
+ * @typeParam TRoot - Type of {@link View3D#root}, inferred from the `root` passed to the
+ * constructor: `new View3D({ root: model })` is a `View3D<Model3D>`, so `view.root` keeps the
+ * model's own API. Defaults to {@link Container3D}.
  * @category scene
  * @standard
  */
-export class View3D extends ViewContainer<View3DGlobalData> {
+export class View3D<TRoot extends Container3D = Container3D> extends ViewContainer<View3DGlobalData> {
   /**
    * Default {@link View3DOptions} merged under every constructor call
    *
@@ -473,6 +521,7 @@ export class View3D extends ViewContainer<View3DGlobalData> {
     shadowFilter: 'pcf',
     toneMapping: 'aces',
     exposure: 1.0,
+    autoResize: false,
   };
 
   /** Always `false` — 3D content parents under {@link View3D#root | root}, not a pixi child list */
@@ -494,13 +543,19 @@ export class View3D extends ViewContainer<View3DGlobalData> {
    *
    * Parent lights, meshes, and cameras under this container (or any descendant) and the
    * View indexes them automatically. Created for you when not supplied via options.
+   *
+   * Typed as whatever you passed as `root`, so a View built around a {@link Model3D} keeps
+   * the model's API here.
    * @example
    * ```ts
    * view.root.addChild(mesh);
    * view.root.addChild(light);
+   *
+   * const modelView = new View3D({ root: new Model3D(source) });
+   * modelView.root.player?.play('Wave'); // root is a Model3D
    * ```
    */
-  public root: Container3D;
+  public root: TRoot;
 
   /**
    * The 3D event boundary owning this View's interaction state
@@ -523,6 +578,52 @@ export class View3D extends ViewContainer<View3DGlobalData> {
   private readonly _anchor: ObservablePoint = new ObservablePoint(this, 0, 0);
   private _width: number;
   private _height: number;
+  /**
+   * Whether the View matches the renderer's screen size on every render
+   *
+   * Off by default. Setting {@link View3D#width | width}, {@link View3D#height | height} or
+   * {@link View3D#setSize | setSize} turns it off: an explicit size is yours to keep. The
+   * screen size is read at the start of each render, before the frame's bounds and
+   * instructions are built, so a View that has not rendered yet still reports its `width` /
+   * `height`.
+   * @example
+   * ```ts
+   * const view = new View3D({ autoResize: true }); // fills the screen
+   * view.setSize(320, 240); // now an inset; autoResize is false
+   * view.autoResize = true; // back to following the screen on the next render
+   * ```
+   * @default false
+   */
+  public autoResize: boolean;
+  /** Set by {@link View3D.from} on an auto-sized View: frame the model once the real aspect is known */
+  private _frameOnResize = false;
+  private _userOnRender: ((renderer: Renderer) => void) | null = null;
+
+  /**
+   * The per-frame hook pixi runs before a frame's transforms, bounds, and instructions are built
+   *
+   * The screen size is adopted here so 2D consumers of the View's rect (filters, culling,
+   * hit-testing) see the new size in the same frame.
+   * @param renderer - Renderer drawing this frame.
+   * @internal
+   */
+  public override readonly _onRender = (renderer: Renderer): void => {
+    if (this.autoResize) this._resize(renderer.screen.width, renderer.screen.height);
+    this._userOnRender?.(renderer);
+  };
+
+  /** Callback run at the start of every render this View takes part in; `null` removes it */
+  override get onRender(): ((renderer: Renderer) => void) | null {
+    return this._userOnRender;
+  }
+
+  /**
+   * Sets the per-render callback
+   * @param func - Callback run at the start of every render; `null` removes it.
+   */
+  override set onRender(func: ((renderer: Renderer) => void) | null) {
+    this._userOnRender = func ?? null;
+  }
 
   /**
    * Every {@link Light} currently in the scene, kept in sync as lights are added to /
@@ -701,15 +802,25 @@ export class View3D extends ViewContainer<View3DGlobalData> {
   private _passesEnabledKey = 0;
 
   /**
-   * Per-frame packed light data uploaded to the global light buffer
+   * Per-frame packed light list; its array is the value of the `uLightData` uniform
    * @internal
    */
-  public _lightDataBuffer = new LightDataListBuffer();
+  public readonly _lightDataList = new LightDataList();
   /**
-   * Per-frame packed shadow matrices + params consumed by the shadow pass
+   * Per-frame packed shadow slots; its array is the value of the `uShadowData` uniform
    * @internal
    */
-  public _shadowDataBuffer = new ShadowDataListBuffer();
+  public readonly _shadowDataList = new ShadowDataList();
+  /**
+   * Whether this view has packed a light casting shadows, so its lit shaders compile the shadow
+   * sampler
+   *
+   * Off until a packed light first casts, so a view that never has shadows never carries the
+   * sampling code. It never turns back off: a light that toggles its shadow would otherwise
+   * recompile every lit shader on each toggle. Set by `_syncShadowSampling`.
+   * @internal
+   */
+  public _hasShadows = false;
   /**
    * Scene-wide bone-matrix arena for skinned meshes
    * @internal
@@ -764,7 +875,7 @@ export class View3D extends ViewContainer<View3DGlobalData> {
    * ```
    * @param options - construction options; see {@link View3DOptions}
    */
-  constructor(options: View3DOptions = {}) {
+  constructor(options: View3DOptions<TRoot> = {}) {
     super({});
 
     const {
@@ -785,6 +896,7 @@ export class View3D extends ViewContainer<View3DGlobalData> {
       graph,
       passes,
       parent,
+      autoResize,
       ...rest
     } = { ...View3D.defaultOptions, ...definedProps(options) };
 
@@ -808,8 +920,11 @@ export class View3D extends ViewContainer<View3DGlobalData> {
     this.anchor = anchor!;
     this._width = width!;
     this._height = height!;
+    this.autoResize = autoResize!;
 
-    this.root = root ?? new Container3D();
+    // No root given means TRoot resolved to its `Container3D` default, which the compiler
+    // can't see from inside the generic body.
+    this.root = (root ?? new Container3D()) as TRoot;
     this._attach(this.root);
 
     this.cull = cull ?? 'auto';
@@ -821,6 +936,43 @@ export class View3D extends ViewContainer<View3DGlobalData> {
     // documented way to turn the View's interaction off (see View3DEvents).
     Object.assign(this, rest);
     parent?.addChild(this);
+  }
+
+  /**
+   * Builds a View whose root is a {@link Model3D} of `source`, with a camera and light ready to
+   * render it
+   *
+   * The camera is, in order: `options.camera` as given; the file's first camera node
+   * ({@link Model3D#cameras}); or a default {@link Camera3D} placed on the +Z side of the
+   * model, facing it, at the closest distance where the model's bounds fit the viewport. An
+   * auto-sized View ({@link View3DOptions#autoResize | autoResize}) places that camera on its
+   * first render, once the real aspect is known. A file with no lights of its own gets a
+   * {@link DirectionalLight} parented under the camera, so it lights whatever the camera looks
+   * at; pass `light: false` to skip it.
+   * @example
+   * ```ts
+   * const view = View3D.from(await Assets.load('robot.glb'), { autoResize: true, environment });
+   * app.stage.addChild(view);
+   * view.root.player?.play('Wave');
+   * ```
+   * @param source - The loaded glTF / GLB to build the scene from.
+   * @param options - View options plus the per-instance model options; see {@link View3DFromOptions}.
+   * @returns The View, with `root` typed as the model it holds
+   */
+  public static from(source: Scene3DSource, options: View3DFromOptions = {}): View3D<Model3D> {
+    const { scene, castShadow, receiveShadow, autoUpdate, autoPlay, light, ...viewOptions } = options;
+    const root = new Model3D({ source, scene, castShadow, receiveShadow, autoUpdate, autoPlay });
+    const camera = viewOptions.camera ?? root.cameras[0];
+    const view = new View3D({ ...viewOptions, root, camera });
+
+    // An auto-sized View only learns its aspect on the first render, so its framing waits for it.
+    if (!camera) {
+      if (view.autoResize) view._frameOnResize = true;
+      else frameCamera(view.camera, root, view.width / view.height);
+    }
+    if (light !== false && !view.lights.length) view.camera.addChild(new DirectionalLight());
+
+    return view;
   }
 
   /**
@@ -901,7 +1053,7 @@ export class View3D extends ViewContainer<View3DGlobalData> {
    * the View, the same as `TilingSprite.width`.
    * @example
    * ```ts
-   * view.width = app.screen.width;
+   * view.width = 320;
    * ```
    * @see {@link View3D#setSize} For setting width and height in one update.
    */
@@ -910,14 +1062,11 @@ export class View3D extends ViewContainer<View3DGlobalData> {
   }
 
   /**
-   * Resizes the viewport's width and marks the 2D bounds dirty
+   * Resizes the viewport's width and turns {@link View3D#autoResize | autoResize} off
    * @param value - Width in pixels.
    */
   override set width(value: number) {
-    if (value === this._width) return;
-
-    this._width = value;
-    this.onViewUpdate();
+    this.setSize(value, this._height);
   }
 
   /**
@@ -927,7 +1076,7 @@ export class View3D extends ViewContainer<View3DGlobalData> {
    * the View, the same as `TilingSprite.height`.
    * @example
    * ```ts
-   * view.height = app.screen.height;
+   * view.height = 240;
    * ```
    * @see {@link View3D#setSize} For setting width and height in one update.
    */
@@ -936,23 +1085,17 @@ export class View3D extends ViewContainer<View3DGlobalData> {
   }
 
   /**
-   * Resizes the viewport's height and marks the 2D bounds dirty
+   * Resizes the viewport's height and turns {@link View3D#autoResize | autoResize} off
    * @param value - Height in pixels.
    */
   override set height(value: number) {
-    if (value === this._height) return;
-
-    this._height = value;
-    this.onViewUpdate();
+    this.setSize(this._width, value);
   }
 
   /**
-   * Resizes the 3D viewport in one update
-   *
-   * Call it on canvas resize to keep the viewport matched to the drawing surface.
+   * Resizes the 3D viewport in one update and turns {@link View3D#autoResize | autoResize} off
    * @example
    * ```ts
-   * view.setSize(app.screen.width, app.screen.height);
    * view.setSize(512); // 512 × 512
    * view.setSize({ width: 800, height: 600 });
    * ```
@@ -960,19 +1103,28 @@ export class View3D extends ViewContainer<View3DGlobalData> {
    * @param height - Height in pixels; defaults to the width.
    */
   public override setSize(value: number | Optional<Size, 'height'>, height?: number): void {
+    this.autoResize = false;
+
     if (typeof value === 'object') {
       height = value.height ?? value.width;
       value = value.width;
     }
 
-    height ??= value;
+    this._resize(value, height ?? value);
+  }
 
-    if (value === this._width && height === this._height) return;
+  private _resize(width: number, height: number): void {
+    if (width === this._width && height === this._height) return;
 
-    this._width = value;
+    this._width = width;
     this._height = height;
 
     this.onViewUpdate();
+
+    if (this._frameOnResize) {
+      this._frameOnResize = false;
+      frameCamera(this._camera, this.root, width / height);
+    }
   }
 
   /**
@@ -1353,7 +1505,8 @@ export class View3D extends ViewContainer<View3DGlobalData> {
    *
    *   - `CubeTexture` — IBL prefiltered specular + diffuse irradiance.
    *   - {@link Hemisphere} — sky/ground gradient fill (cheap, no textures).
-   *   - `null` — no environmental fill.
+   *   - `null` — no environmental fill. PBR materials compile without their environment
+   *     block, and rendering the view does not trigger BRDF lookup or prefiltered-cube generation.
    *
    * Mutually exclusive — only one env-source variant is compiled into each
    * material shader. Swapping between kinds (e.g. hemisphere → cube once
@@ -1386,6 +1539,33 @@ export class View3D extends ViewContainer<View3DGlobalData> {
     if (nextBit !== this._envBit) {
       this._envBit = nextBit;
       this._invalidateMaterialShaders();
+    }
+  }
+
+  /**
+   * Enables shadow sampling after the first packed light starts casting
+   * @internal
+   */
+  public _syncShadowSampling(): void {
+    if (this._hasShadows) return;
+
+    const lights = this.lights;
+    let packedLightCount = 0;
+
+    for (let i = 0; i < lights.length; i++) {
+      const light = lights[i];
+
+      if (!light._worldVisible || light.type === 'ambient') continue;
+      if (packedLightCount >= MAX_LIGHTS) return;
+
+      packedLightCount++;
+
+      if (!light.canCastShadow) continue;
+
+      this._hasShadows = true;
+      this._invalidateMaterialShaders();
+
+      return;
     }
   }
 
@@ -1874,8 +2054,6 @@ export class View3D extends ViewContainer<View3DGlobalData> {
     // slot at the empty depth texture while the global bind group is still alive.
     if (this._passesInitialized) this._graph.unload();
 
-    this._lightDataBuffer.unload();
-    this._shadowDataBuffer.unload();
     this._bonePit.unload();
 
     // pixi's half: emits `unload`, which each renderer's GC hash answers by destroying the
@@ -1890,9 +2068,9 @@ export class View3D extends ViewContainer<View3DGlobalData> {
    *
    * 3D-owned GPU resources are always released regardless of `options`: the
    * global bind groups, the render graph (its render-target cache and owned
-   * passes), the per-frame light/shadow buffers, the bone-matrix arena, and
-   * the scene batch (`meshBatches[0]`). User batches (`meshBatches[1..]`) are
-   * owned by their {@link BatchedMesh3D} and are not destroyed here.
+   * passes), the bone-matrix arena, and the scene batch (`meshBatches[0]`).
+   * User batches (`meshBatches[1..]`) are owned by their {@link BatchedMesh3D}
+   * and are not destroyed here.
    *
    * The 3D scene under {@link View3D#root | root} is not a pixi child, so
    * pixi's `Container.destroy` never reaches it. It is destroyed only when the
@@ -1935,8 +2113,6 @@ export class View3D extends ViewContainer<View3DGlobalData> {
     // The graph is built lazily on first render; only present once initialised.
     if (this._passesInitialized && this._graph) this._graph.destroy();
 
-    this._lightDataBuffer.destroy();
-    this._shadowDataBuffer.destroy();
     this._bonePit.destroy();
 
     // The morph store outlives this view (it's renderer-shared), so weight

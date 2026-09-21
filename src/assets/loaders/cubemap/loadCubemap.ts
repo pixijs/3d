@@ -43,6 +43,7 @@ export const loadCubemap = {
     type: ExtensionType.LoadParser,
     name: 'loadCubemap',
   },
+  name: 'loadCubemap',
   id: 'cubemap',
 
   test(url: string) {

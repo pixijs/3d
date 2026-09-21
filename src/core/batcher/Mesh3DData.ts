@@ -104,10 +104,10 @@ export interface Mesh3DData {
   uid: number;
 
   /**
-   * 52-bit sort key packed as a Float64 for radix-friendly sorting
-   * Layout (MSB → LSB): textureLayoutId (4 bits) | pipeline (16 bits) |
-   * geometry (16 bits) | textureCacheKey (16 bits).
-   * Computed by `updateMesh3DKeys` during the dirty hook.
+   * Draw-order key for the pass being keyed, packed as one exact Float64
+   *
+   * Computed by `updateMesh3DKeys` during the dirty hook; that function owns the
+   * field layout and documents it.
    */
   _sortKey: number;
 

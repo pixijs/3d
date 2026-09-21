@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import type { AlphaMode } from '~/materials/BaseMaterial3D';
+
 import { updateMesh3DKeys } from '../updateMesh3DKeys';
 
 // The batcher starts a new draw command the moment `batchKey` changes, so two meshes
@@ -14,11 +16,11 @@ function geometry(uid: number, atlasUid?: number) {
 
 type FakeGeometry = ReturnType<typeof geometry>;
 
-function renderable(geom: FakeGeometry, textureCount = 1, textureCacheKey = 0) {
+function renderable(geom: FakeGeometry, textureCount = 1, textureCacheKey = 0, alphaMode: AlphaMode = 'opaque') {
   return {
     _sortKey: 0,
     geometry: geom,
-    material: { textureCacheKey, _textures: { length: textureCount } },
+    material: { textureCacheKey, _textures: { length: textureCount }, alphaMode },
   };
 }
 
@@ -29,8 +31,8 @@ function batchKeyFor(pipelineKey: number, geom: FakeGeometry): number {
   return cache.batchKey;
 }
 
-function sortKeyFor(pipelineKey: number, geom: FakeGeometry, textureCount = 1, textureCacheKey = 0): number {
-  const item = renderable(geom, textureCount, textureCacheKey);
+function sortKeyFor(pipelineKey: number, ...args: Parameters<typeof renderable>): number {
+  const item = renderable(...args);
   updateMesh3DKeys(item, { batchKey: 0 }, pipelineKey);
 
   return item._sortKey;
@@ -99,5 +101,54 @@ describe('updateMesh3DKeys sort key', () => {
 
     // Atlas wins over the geometry uid, so draws sharing the merged buffers stay contiguous.
     expect(sortKeyFor(pipelineKey, geometry(5, 1))).toBeLessThan(sortKeyFor(pipelineKey, geometry(4, 2)));
+  });
+});
+
+describe('updateMesh3DKeys cutout ordering', () => {
+  it('sorts alpha-masked meshes after every opaque one, whatever their layout or pipeline', () => {
+    const geom = geometry(5);
+    // The opaque mesh takes the largest values for the two fields a call sets directly: the
+    // texture count the layout field holds, and the texture cache key. The pipeline argument is
+    // a key mapped to a small counted id, so that field is nowhere near its own maximum here.
+    const opaque = sortKeyFor(0xffff, geom, 15, 0xffff);
+    const cutout = sortKeyFor(1, geom, 1, 0, 'mask');
+
+    expect(cutout).toBeGreaterThan(opaque);
+  });
+
+  it('keeps a material out of the cutout group when it has more textures than the layout field holds', () => {
+    const geom = geometry(5);
+    const cutout = sortKeyFor(1, geom, 1, 0, 'mask');
+
+    // 16 sets the cutout bit by itself and 17 is the first count that carries into it. The
+    // texture cache key takes its largest value too, so the rest of the key is as large as a
+    // call can make it.
+    for (const textureCount of [16, 17, 40]) {
+      const opaque = sortKeyFor(0xffff, geom, textureCount, 0xffff);
+
+      expect(opaque).toBeLessThan(cutout);
+      expect(Number.isSafeInteger(opaque)).toBe(true);
+    }
+
+    // A cutout with that many textures still lands in the cutout group, and its key stays an
+    // exact integer.
+    const bigCutout = sortKeyFor(0xffff, geom, 40, 0xffff, 'mask');
+    expect(bigCutout).toBeGreaterThan(cutout);
+    expect(Number.isSafeInteger(bigCutout)).toBe(true);
+  });
+
+  it('groups every count past the field with 15 rather than wrapping round to 0', () => {
+    const geom = geometry(5);
+
+    expect(sortKeyFor(1, geom, 16)).toBe(sortKeyFor(1, geom, 15));
+    expect(sortKeyFor(1, geom, 40)).toBe(sortKeyFor(1, geom, 15));
+  });
+
+  it('keeps the pipeline grouping within the cutout group', () => {
+    const geom = geometry(5);
+    const a = sortKeyFor(1, geom, 1, 0, 'mask');
+    const b = sortKeyFor(2, geom, 1, 0, 'mask');
+
+    expect(b - a).toBe(sortKeyFor(2, geom) - sortKeyFor(1, geom));
   });
 });

@@ -130,9 +130,6 @@ export abstract class ShadowRenderPassBase<
   /** Frame counter driving the every-Nth-frame `update` cadence */
   protected _frameCount = 0;
 
-  /** Shadow-atlas slots claimed so far this frame; reset by {@link ShadowRenderPassBase.beginFrame} */
-  protected _shadowCount = 0;
-
   /** World-space caster AABB for the auto-fit box, recomputed once per frame */
   private readonly _sceneCasterBounds = new Box();
 
@@ -228,11 +225,6 @@ export abstract class ShadowRenderPassBase<
     return this._quality;
   }
 
-  /** Shadow slots claimed this frame; read by the lighting system after its light loop */
-  get shadowCount(): number {
-    return this._shadowCount;
-  }
-
   /**
    * Start-of-frame shadow bookkeeping
    *
@@ -251,7 +243,7 @@ export abstract class ShadowRenderPassBase<
     this.quality = view3d.shadowQuality;
 
     this._frameCount++;
-    this._shadowCount = 0;
+    view3d._shadowDataList.reset();
   }
 
   /**
@@ -338,7 +330,7 @@ export abstract class ShadowRenderPassBase<
     let hasCaster = false;
 
     for (let i = 0; i < lights.length; i++) {
-      if (lights[i].castShadow) {
+      if (lights[i].canCastShadow) {
         hasCaster = true;
         break;
       }
@@ -430,12 +422,9 @@ export abstract class ShadowRenderPassBase<
     cameraData.frustum.setFromProjectionMatrix(cameraData.viewProjection);
   }
 
-  /** Serializes one populated cascade slot into the frame's shadow-data buffer at `slotIndex` */
-  protected abstract _uploadSlot(slot: CascadeSlot, slotIndex: number, view3d: View3D): void;
-
   /**
    * Updates a light's shadow matrices and fills its cascade slot(s) with everything the
-   * shadow data buffer needs — shared by both backends
+   * `uShadowData` uniform needs — shared by both backends
    *
    * Spot lights fill slot 0 with a single perspective map. Directional lights
    * take one of two placements: with `shadow.cascades` set, camera-following
@@ -451,7 +440,7 @@ export abstract class ShadowRenderPassBase<
    * @param view3d - The view whose camera and casters place the shadow volume
    */
   public updateLightShadowData(light: Light, view3d: View3D): void {
-    if (!light.castShadow) return;
+    if (!light.canCastShadow) return;
 
     const camera = view3d.camera;
     const shadowData = this.getShadowGPUData(light);
@@ -696,8 +685,8 @@ export abstract class ShadowRenderPassBase<
 
   /**
    * Prepares one light's shadow for the frame: claims its atlas slots (marking
-   * non-casters unshadowed), computes its matrices, and uploads each slot into the
-   * frame's shadow-data buffer, advancing the pass's own {@link ShadowRenderPassBase#shadowCount}
+   * non-casters unshadowed), computes its matrices, and adds each slot to the view's
+   * shadow list, whose array is the `uShadowData` uniform
    *
    * The single per-light entry point the lighting systems call — the whole slot
    * protocol (claim → update → upload → count) stays inside the shadow pass, so
@@ -707,18 +696,15 @@ export abstract class ShadowRenderPassBase<
    * @param view3d - The view being rendered
    */
   public prepareShadow(light: Light, view3d: View3D): void {
-    const slots = this._claimShadowSlots(light);
+    const list = view3d._shadowDataList;
+    const slots = this._claimShadowSlots(light, list.count);
     if (slots === 0) return;
 
-    this._growAtlas(this._shadowCount + slots);
+    this._growAtlas(list.count + slots);
     this.updateLightShadowData(light, view3d);
 
     const cascades = this.getShadowGPUData(light).cascades!;
-    for (let c = 0; c < slots; c++) {
-      this._uploadSlot(cascades[c], this._shadowCount + c, view3d);
-    }
-
-    this._shadowCount += slots;
+    for (let c = 0; c < slots; c++) list.add(cascades[c]);
   }
 
   /**
@@ -730,13 +716,14 @@ export abstract class ShadowRenderPassBase<
    * is full; over-budget casters are marked unshadowed (`_shadowDataIndex = -1`) with a
    * one-time dev warning.
    * @param light - The light claiming slots
+   * @param claimed - Slots already claimed this frame; the light's base slot if it fits
    */
-  private _claimShadowSlots(light: Light): number {
-    const castsShadow = light.castShadow && light.type !== 'point';
+  private _claimShadowSlots(light: Light, claimed: number): number {
+    const castsShadow = light.canCastShadow;
     const cascadeCount = cascadeCountFor(light);
 
-    if (castsShadow && this._shadowCount + cascadeCount <= MAX_SHADOW_SLOTS) {
-      light._shadowDataIndex = this._shadowCount;
+    if (castsShadow && claimed + cascadeCount <= MAX_SHADOW_SLOTS) {
+      light._shadowDataIndex = claimed;
       return cascadeCount;
     }
 

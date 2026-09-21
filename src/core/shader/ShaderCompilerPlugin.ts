@@ -81,9 +81,9 @@ export interface ShaderCompilerContext {
 /**
  * A plugin that participates in the three-phase shader compilation pipeline
  *
- * 1. `collectData` — build structured data on `context.data`
- * 2. `preCompile`  — modify `context.data` (e.g. padding, field reordering)
- * 3. `injectCode`  — read from `context.data`, return slot code strings
+ * 1. `collectData` builds structured data on `context.data`
+ * 2. `preCompile` modifies `context.data` (e.g. padding, field reordering) or `context.templateString`
+ * 3. `injectCode` reads from `context.data` and returns slot code strings
  * @category rendering
  * @advanced
  */
@@ -95,7 +95,7 @@ export interface ShaderCompilerPlugin {
   collectData?(context: ShaderCompilerContext): void;
 
   /**
-   * Phase 2: Modify `context.data` before source generation
+   * Phase 2: Modify `context.data` or `context.templateString` before source generation
    * @param {ShaderCompilerContext} context - The compilation context to modify
    */
   preCompile?(context: ShaderCompilerContext): void;

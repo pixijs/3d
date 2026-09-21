@@ -51,10 +51,6 @@ fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
 `,
   gl: {
     vertex: /* glsl */ `#version 300 es
-precision highp float;
-precision highp sampler2D;
-precision highp sampler2DArray;
-precision highp sampler2DArrayShadow;
 
 {{header}}
 
@@ -75,10 +71,6 @@ void main() {
   {{end}}
 }`,
     fragment: /* glsl */ `#version 300 es
-precision highp float;
-precision highp sampler2D;
-precision highp sampler2DArray;
-precision highp sampler2DArrayShadow;
 out vec4 fragColor;
 
 {{header}}

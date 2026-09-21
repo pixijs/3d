@@ -36,6 +36,7 @@ export const loadGlb = {
     type: ExtensionType.LoadParser,
     name: 'loadGlb',
   },
+  name: 'loadGlb',
   id: 'glb',
   test(url: string) {
     return checkDataUrl(url, 'model/gltf-binary') || checkExtension(url, '.glb');

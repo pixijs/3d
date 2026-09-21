@@ -8,6 +8,7 @@ import {
   Mesh3DDataStoreBuffer,
 } from '../buffers/Mesh3DDataStoreBuffer';
 import { DrawList } from '../render-passes/DrawList';
+import { BatchMatrices } from './BatchMatrices';
 import type { Mesh3DData } from './Mesh3DData';
 import { Mesh3DSlot } from './Mesh3DSlot';
 
@@ -141,7 +142,17 @@ export class Mesh3DBatch {
    */
   public _lastStoreBufferVersion = 0;
 
+  /**
+   * Bumped by a whole-batch matrix write through {@link Mesh3DBatch.matrices}
+   *
+   * Each `Mesh3DSlot` caches its bounding sphere against this id, so one increment marks every
+   * slot's sphere stale without touching the slots.
+   * @internal
+   */
+  public _matricesId = 0;
+
   private readonly _baseIndex: number;
+  private _matrices: BatchMatrices | null = null;
 
   constructor(options: Mesh3DBatchOptions) {
     this.renderData = options.renderData ?? SCENE_BATCH_RENDER_DATA;
@@ -166,7 +177,7 @@ export class Mesh3DBatch {
       const dirtyIndices = new Uint32Array(size);
       const u32 = this.storeBuffer.u32Data;
       for (let i = 0; i < size; i++) {
-        items.push(new Mesh3DSlot(i, this._baseIndex + i, this.storeBuffer));
+        items.push(new Mesh3DSlot(i, this._baseIndex + i, this));
         dirtyIndices[i] = i;
         // Default every instance to visible. Nothing ever rewrites this lane for user-batch slots
         // (slot show/hide is a membership change via `setItemActive`, and the freshly-allocated
@@ -241,7 +252,16 @@ export class Mesh3DBatch {
     this.storeBuffer.markDirtyRange(storeIndex, storeIndex);
 
     // matrix changed → cached bounding sphere is stale
-    (this.items[index] as Mesh3DSlot)._boundsCacheDirty = true;
+    (this.items[index] as Mesh3DSlot)._boundsCacheId = -1;
+  }
+
+  /**
+   * The slot matrices as interleaved data for bulk writes
+   *
+   * User batches only. Created on first read. See {@link BatchMatrices}.
+   */
+  public get matrices(): BatchMatrices {
+    return (this._matrices ??= new BatchMatrices(this, this._baseIndex));
   }
 
   /**
@@ -256,7 +276,7 @@ export class Mesh3DBatch {
   public setGeometryAt(index: number, geometry: Geometry3D): void {
     const item = this.items[index] as Mesh3DSlot;
     item.geometry = geometry;
-    item._boundsCacheDirty = true; // new geometry → new local sphere
+    item._boundsCacheId = -1; // new geometry → new local sphere
     if (!item._batchDirty) {
       item._batchDirty = true;
       this._dirtyIndices![this._dirtyCount++] = index;
@@ -397,6 +417,12 @@ export class Mesh3DBatch {
       delete this.drawLists[bit];
     }
 
+    if (this.isUserBatch) {
+      for (const item of this.items) (item as Mesh3DSlot).destroy();
+    }
+
     this._dirtyIndices = null;
+    this._matrices?.destroy();
+    this._matrices = null;
   }
 }

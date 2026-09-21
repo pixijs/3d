@@ -1,7 +1,9 @@
+import { Rectangle } from 'pixi.js';
 import type { BindableTexture } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { RenderGraph } from '~/core/render-graph/RenderGraph';
+import type { RenderGraphOptions } from '~/core/render-graph/RenderGraph';
 import type { ResourceDescriptor, ResourceHandle } from '~/core/render-graph/ResourceHandle';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
 
@@ -21,7 +23,8 @@ const SESSION = {
   },
 } as unknown as RenderSession;
 
-const makeGraph = (): RenderGraph => new RenderGraph({ defaultColor: noTexture, defaultDepth: noTexture });
+const makeGraph = (options?: Partial<RenderGraphOptions>): RenderGraph =>
+  new RenderGraph({ defaultColor: noTexture, defaultDepth: noTexture, ...options });
 
 /** The per-frame descriptor a handle's transient expands to, evaluated against `SESSION` */
 function describeOf(graph: RenderGraph, handle: ResourceHandle): ResourceDescriptor {
@@ -79,13 +82,33 @@ describe('TransientTextureOptions shorthand', () => {
   });
 
   it('the scene targets accept the shorthand too', () => {
-    const g = new RenderGraph({
-      defaultColor: noTexture,
-      defaultDepth: noTexture,
+    const g = makeGraph({
       sceneColor: { autoGenerateMipmaps: true, label: 'sceneColor' },
       sceneDepth: { label: 'sceneDepth' },
     });
     expect(describeOf(g, g.sceneColor).autoGenerateMipmaps).toBe(true);
     expect(describeOf(g, g.sceneDepth).format).toBe('depth24plus-stencil8');
+  });
+});
+
+describe('RenderGraph.sceneViewport', () => {
+  // The view sits off the target's origin, which is what tells the two modes apart.
+  const session = { ...SESSION, viewport: { x: 60, y: 40, width: 400, height: 300 } } as unknown as RenderSession;
+
+  it("is the view's place on its target when the scene draws straight to it", () => {
+    const rect = makeGraph().sceneViewport(session, new Rectangle());
+
+    expect([rect.x, rect.y, rect.width, rect.height]).toEqual([60, 40, 400, 300]);
+  });
+
+  it("starts at the transient's origin, with the transient's own size, in composite mode", () => {
+    const g = makeGraph({
+      sceneColor: { label: 'sceneColor', resolution: 1 },
+      sceneDepth: { label: 'sceneDepth', resolution: 1 },
+    });
+    const rect = g.sceneViewport(session, new Rectangle());
+
+    // 400x300 physical on a DPR-2 target is 200x150 logical, and one texel per logical pixel.
+    expect([rect.x, rect.y, rect.width, rect.height]).toEqual([0, 0, 200, 150]);
   });
 });

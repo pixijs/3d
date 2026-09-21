@@ -19,7 +19,7 @@ export default async function () {
   model.scale.set(10, 10, 10);
   model.position.set(0, -0.21, 0);
 
-  const view3d = new View3D({ width: app.screen.width, height: app.screen.height, shadowQuality: 'high' });
+  const view3d = new View3D({ autoResize: true, shadowQuality: 'high' });
 
   app.stage.addChild(view3d);
   view3d.root.addChild(model);

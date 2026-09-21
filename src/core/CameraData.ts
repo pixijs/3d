@@ -4,7 +4,8 @@ import { Matrix4 } from '../math/matrix/Matrix4';
 import { Frustum } from '../math/misc/Frustum';
 import { Vector3 } from '../math/vector/Vector3';
 import type { Camera3D } from '../scene/cameras/Camera3D';
-import type { RenderSession } from './render-passes/RenderSession';
+import { LIGHT_TILE_LANES, LightTiles } from './LightTiles';
+import type { ReadonlyRect, RenderSession } from './render-passes/RenderSession';
 
 /** Eye extracted from a camera's world transform; never escapes this module */
 const scratchCameraPosition = new Vector3();
@@ -84,6 +85,17 @@ export class CameraData {
    */
   public readonly viewportUvScale = new Point(1, 1);
   /**
+   * The GPU viewport in the target's physical pixels, stored in `uViewport`
+   *
+   * `xy` holds the origin and `zw` holds the size. The shader maps a fragment's pixel position
+   * to image coordinates with `(position.xy - xy) / zw`. Each WebGL forward draw copies the live
+   * pass viewport after the graph binds the target and applies the camera's frame. WebGPU writes
+   * the camera target's viewport during preparation, before uploading the uniform buffer.
+   */
+  public readonly viewport = new Rectangle(0, 0, 1, 1);
+  /** Screen-tile and depth masks, uploaded with this camera's uniforms */
+  public readonly lightTiles = new LightTiles();
+  /**
    * The volume to cull against, written by this camera data's owner
    *
    * Deliberately not derived from `CameraData.viewProjection`, which may carry the bound
@@ -125,6 +137,9 @@ export class CameraData {
       uProjectionMatrix: { value: this.projection, type: 'mat4x4<f32>' },
       uViewProjectionMatrix: { value: this.viewProjection, type: 'mat4x4<f32>' },
       uViewportUVScale: { value: this.viewportUvScale, type: 'vec2<f32>' },
+      uViewport: { value: this.viewport, type: 'vec4<f32>' },
+      uLightTiles: { value: this.lightTiles.masks, type: 'vec4<i32>', size: LIGHT_TILE_LANES },
+      uLightDepthPlane: { value: this.lightTiles.depthPlane, type: 'vec4<f32>' },
     });
     this.uniformGroup.isStatic = true;
     this.uniformGroup.ubo = false;
@@ -153,6 +168,7 @@ export class CameraData {
     if (flipY) flipProjectionY(this.projection);
     if (zeroToOneDepth) remapProjectionZeroToOne(this.projection);
     this.viewProjection.multiplyMatrices(this.projection, view);
+    this.lightTiles.invalidate();
     this.uniformGroup.update();
 
     return this;
@@ -169,6 +185,36 @@ export class CameraData {
     this.uniformGroup.update();
 
     return this;
+  }
+
+  /**
+   * Copies the GPU viewport and marks it for upload when its origin or size changes
+   * @param rect - The live GPU viewport, in the target's physical pixels.
+   * @returns This camera data, for chaining.
+   */
+  public setViewport(rect: ReadonlyRect): this {
+    const viewport = this.viewport;
+    const { x, y, width, height } = rect;
+
+    if (viewport.x !== x || viewport.y !== y || viewport.width !== width || viewport.height !== height) {
+      viewport.x = x;
+      viewport.y = y;
+      viewport.width = width;
+      viewport.height = height;
+      this.uniformGroup.update();
+    }
+
+    return this;
+  }
+
+  /**
+   * Prepares this camera's light tile masks and marks them for upload after binning
+   *
+   * See `LightTiles.prepare` for the binning and caching rules.
+   * @param session - The frame's render session, with the view's lights packed.
+   */
+  public prepareLightTiles(session: RenderSession): void {
+    if (this.lightTiles.prepare(session, this.viewProjection, this.view)) this.uniformGroup.update();
   }
 
   /**
@@ -196,6 +242,8 @@ export class CameraData {
    * Called when the owner dies: a camera's `destroy`, a light's cascade release.
    */
   public destroy(): void {
+    this.lightTiles.destroy();
+    this._currentSession = null;
     this.bindGroup.destroy();
     this.uniformGroup.buffer?.destroy();
   }

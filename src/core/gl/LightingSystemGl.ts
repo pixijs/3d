@@ -4,11 +4,11 @@ import type { WebGLRenderer } from 'pixi.js';
 import { addLinearRgb, writeLinearRgb } from '../../materials/BaseMaterial3D';
 import { HEMISPHERE_DEFAULT_UP } from '../../scene/lights/environment/Hemisphere';
 import type { Light } from '../../scene/lights/Light';
-import { FLOATS_PER_LIGHT, MAX_LIGHTS } from '../../scene/View3D';
+import { MAX_LIGHTS } from '../../scene/View3D';
 import type { View3D } from '../../scene/View3D';
 import { RenderPassBit } from '../render-passes/RenderPass';
+import type { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import { getGlobalGlData } from './shader/globalBitGl';
-import type { ShadowRenderPassGl } from './ShadowRenderPassGl';
 
 // Shared scratch for per-frame color parsing.
 const scratchColor = new Color();
@@ -16,11 +16,11 @@ const scratchColor = new Color();
 /**
  * WebGL counterpart to `LightingSystemGpu`
  *
- * Packs light data into flat uniforms (rather than storage buffers) and coordinates with the
- * shadow pass to compute shadow matrices.
+ * Packs light data into the global uniforms and coordinates with the shadow pass to compute
+ * shadow matrices.
  *
  * Per-frame, packs into the global uniform group:
- *   - Per-light data (directional / point / spot) into `view3d.lightDataBuffer`.
+ *   - Per-light data (directional / point / spot) into `view3d._lightDataList`, whose array is the `uLightData` uniform.
  *   - Ambient summed from any `AmbientLight` instances.
  *   - Hemisphere uniforms when `view3d.environment` is a hemisphere.
  *
@@ -46,7 +46,7 @@ export class LightingSystemGl {
    * @param lights - The frame's visible-scene light list
    */
   public update(view3d: View3D, lights: Light[]): void {
-    const shadowPass = view3d.passByBit[RenderPassBit.SHADOW] as ShadowRenderPassGl;
+    const shadowPass = view3d.passByBit[RenderPassBit.SHADOW] as ShadowRenderPassBase | undefined;
 
     // Start the pass's shadow frame (advance the cadence clock + reset the slot
     // cursor) before the light loop. Runs every frame even when the pass is
@@ -83,9 +83,9 @@ export class LightingSystemGl {
       hemisphereUp[2] = up.z * invLen;
     }
 
-    view3d._lightDataBuffer.reset();
+    const lightDataList = view3d._lightDataList;
 
-    let lightCount = 0;
+    lightDataList.reset();
 
     for (let i = 0; i < lights.length; i++) {
       const light = lights[i];
@@ -97,20 +97,16 @@ export class LightingSystemGl {
         continue;
       }
 
-      if (lightCount >= MAX_LIGHTS) continue;
+      if (lightDataList.count >= MAX_LIGHTS) continue;
 
       // Claim, update, and upload this light's shadow — a no-op for non-casters
-      // (which it also marks unshadowed). The pass owns the slot count.
+      // (which it also marks unshadowed). The slots land in the view's shadow list.
       shadowPass?.prepareShadow(light, view3d);
 
-      view3d._lightDataBuffer.add(light);
-      lightCount++;
+      lightDataList.add(light);
     }
 
-    globalLightParams[3] = lightCount;
-
-    const uLightData = globalUniforms.uLightData as Float32Array;
-    uLightData.set(view3d._lightDataBuffer.data.subarray(0, lightCount * FLOATS_PER_LIGHT), 0);
+    globalLightParams[3] = lightDataList.count;
   }
 }
 

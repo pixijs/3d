@@ -68,10 +68,10 @@ describe('generateGlslStorageAccessor', () => {
   });
 
   it('should use correct texture name based on struct name', () => {
-    const result = generateGlslStorageAccessor('Light', { color: 'vec3<f32>' }, 4);
+    const result = generateGlslStorageAccessor('Renderable', { color: 'vec3<f32>' }, 4);
 
-    expect(result).toContain('Light getLight(uint index)');
-    expect(result).toContain('texelFetch(uLightStorage');
+    expect(result).toContain('Renderable getRenderable(uint index)');
+    expect(result).toContain('texelFetch(uRenderableStorage');
   });
 
   it('should embed the stride in the generated code', () => {

@@ -8,17 +8,17 @@ import type { Light } from '../../scene/lights/Light';
 import { MAX_LIGHTS } from '../../scene/View3D';
 import type { View3D } from '../../scene/View3D';
 import { RenderPassBit } from '../render-passes/RenderPass';
+import type { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import { getGlobalGpuData } from './shader/globalBitGpu';
-import type { ShadowRenderPassGpu } from './ShadowRenderPassGpu';
 
 /**
  * Manages lights, uploads their data to the GPU, and coordinates with the shadow pass to
  * compute shadow matrices
  *
- * Handles both single-layer and cascaded shadow maps via `ShadowRenderPassGpu`.
+ * Handles both single-layer and cascaded shadow maps via the view's shadow pass.
  *
  * Per frame, packs into the global uniform group:
- *   - Per-light data (directional / point / spot) into `view3d.lightDataBuffer`.
+ *   - Per-light data (directional / point / spot) into `view3d._lightDataList`, whose array is the `uLightData` uniform.
  *   - Ambient summed from any `AmbientLight` instances.
  *   - Hemisphere uniforms when `view3d.environment` is a hemisphere.
  *
@@ -39,23 +39,21 @@ export class LightingSystemGpu {
   }
 
   /**
-   * Pack this frame's light + shadow data into the view's global uniforms and storage buffers
-   * @param view3d - The view whose light/shadow buffers are being filled.
+   * Pack this frame's light + shadow data into the view's global uniforms
+   * @param view3d - The view whose global uniforms receive the packed data.
    * @param lights - The view's collected lights, in render order.
    */
   public update(view3d: View3D, lights: Light[]): void {
-    const shadowPass = view3d.passByBit[RenderPassBit.SHADOW] as ShadowRenderPassGpu;
-    let lightCount = 0;
+    const shadowPass = view3d.passByBit[RenderPassBit.SHADOW] as ShadowRenderPassBase | undefined;
 
     // Start the pass's shadow frame (advance the cadence clock + reset the slot
     // cursor) before the light loop. Runs every frame even when the pass is
     // culled, so the cadence tracks real frames.
     shadowPass?.beginFrame(view3d);
 
-    const { _lightDataBuffer: lightDataBuffer, _shadowDataBuffer: shadowDataBuffer, environment } = view3d;
+    const { _lightDataList: lightDataList, environment } = view3d;
 
-    lightDataBuffer.reset();
-    shadowDataBuffer.reset();
+    lightDataList.reset();
 
     const gpuData = getGlobalGpuData(view3d, this._renderer);
     const globalUniforms = gpuData.globalUniformGroup.uniforms;
@@ -102,23 +100,16 @@ export class LightingSystemGpu {
         continue;
       }
 
-      if (lightCount >= MAX_LIGHTS) continue;
+      if (lightDataList.count >= MAX_LIGHTS) continue;
 
       // Claim, update, and upload this light's shadow — a no-op for non-casters
-      // (which it also marks unshadowed). The pass owns the slot count.
+      // (which it also marks unshadowed). The slots land in the view's shadow list.
       shadowPass?.prepareShadow(light, view3d);
 
-      lightDataBuffer.add(light);
-
-      lightCount++;
+      lightDataList.add(light);
     }
 
-    globalLightParams[3] = lightCount;
-
-    if (lightCount > 0) {
-      lightDataBuffer.update();
-      if ((shadowPass?.shadowCount ?? 0) > 0) shadowDataBuffer.update();
-    }
+    globalLightParams[3] = lightDataList.count;
   }
 }
 

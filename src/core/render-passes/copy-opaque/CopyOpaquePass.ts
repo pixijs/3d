@@ -1,7 +1,8 @@
-import { RendererType, warn } from 'pixi.js';
+import { RendererType } from 'pixi.js';
 import type { WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
 import type { Camera3D } from '../../../scene/cameras/Camera3D';
+import { warnOnce } from '../../../utils/warnOnce';
 import type { PassBuilder } from '../../render-graph/PassBuilder';
 import type { ColorHandle } from '../../render-graph/ResourceHandle';
 import { RenderPass, RenderPassBit } from '../RenderPass';
@@ -57,6 +58,9 @@ export class CopyOpaquePass extends RenderPass {
   /** Colour texture the copy lands in, as given in {@link CopyOpaquePassOptions#opaqueColorHandle} */
   public readonly opaqueColorHandle: ColorHandle;
 
+  /** Skips the per-frame back-buffer check once its warning is out */
+  private _backBufferWarned = false;
+
   constructor(options: CopyOpaquePassOptions) {
     super({
       renderer: options.renderer,
@@ -92,10 +96,12 @@ export class CopyOpaquePass extends RenderPass {
     // active". Without the back buffer the copy can't include 2D content drawn behind the
     // View3D, so refraction of the page behind it silently fails. (Glass that only refracts
     // other 3D inside the view works either way, so this can over-warn for that case.)
-    if (!this.camera) {
+    if (!this.camera && !this._backBufferWarned) {
+      this._backBufferWarned = true;
       const renderer = this.pipe.renderer;
       if (renderer.type === RendererType.WEBGL && !(renderer as WebGLRenderer).backBuffer.useBackBuffer) {
-        warn(
+        warnOnce(
+          `pixi3d-copy-opaque-backbuffer-${renderer.uid}`,
           '[pixi-3d] A transmissive (glass) material is rendering with useBackBuffer off — ' +
             "refraction can't sample 2D content drawn behind the View3D (only the view's own 3D). " +
             'If your glass refracts the page behind it, enable useBackBuffer in Application/renderer init.',

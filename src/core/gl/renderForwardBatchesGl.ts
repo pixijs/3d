@@ -74,6 +74,9 @@ export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): 
   const cameraData = getCameraData(camera);
   const cullFrustum = camera.cullFrustum;
 
+  // The graph binds the target and applies the camera's frame before a forward pass draws.
+  cameraData.setViewport(session.activeViewport);
+
   for (const batch of view3d._meshBatches) {
     if (!batch.renderData._worldVisible) continue;
     const list = batch.drawLists[bit];

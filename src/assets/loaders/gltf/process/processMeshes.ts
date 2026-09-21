@@ -5,6 +5,7 @@ import { Geometry3D } from '../../../../geometry/Geometry3D';
 import type { Geometry3DOptions } from '../../../../geometry/Geometry3D';
 import { Box } from '../../../../math/shapes/Box';
 import { Vector3 } from '../../../../math/vector/Vector3';
+import { warnOnce } from '../../../../utils/warnOnce';
 import type { Scene3DSource } from '../../../Scene3DSource';
 import { decodeDracoPrimitive } from '../draco/decodeDracoPrimitive';
 import type { GltfFormat, MeshPrimitive } from '../GltfFormat';
@@ -81,8 +82,7 @@ async function processPrimitive(
       } else {
         // Custom attribute - strictly we could support this by adding to options.attributes
         // But for now we'll warn as Geometry3D expects standard attributes for interleaving
-        // oxlint-disable-next-line no-console
-        console.warn(`[gb-model-tools] custom attribute ${i} skipped`);
+        warnOnce(`pixi3d-custom-attribute-${i}`, `[pixi-3d] custom attribute ${i} skipped`);
       }
     }
 

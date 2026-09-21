@@ -282,30 +282,33 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
 
     this._managedViews.track(view3d);
 
-    this._brdfLutTexture ||= generateBrdfLut({
-      renderer: this.renderer,
-      size: 512,
-    });
-    glData.globalBindGroup.setResource(this._brdfLutTexture!.source, 2);
-
-    // IBL only applies to cubemap environments; a Hemisphere fill contributes
-    // through its own env-source bit, not the prefiltered specular cubemap.
     const env = view3d.environment;
-    const ibl = env instanceof CubeTexture ? env : null;
-    if (ibl) {
-      const sourceId = ibl.source.uid;
-      if (!this._iblEnvironmentMap[sourceId]) {
-        this._iblEnvironmentMap[sourceId] = generateIblSpecialCubemap({
-          renderer: this.renderer,
-          sourceTexture: ibl,
-          size: 256,
-          sampleCount: 1024,
-        });
+
+    // The BRDF lookup is shared by the renderer and created on its first environment use.
+    // A view's binding slots start with placeholders that are safe for zero-radiance sampling.
+    if (env) {
+      this._brdfLutTexture ||= generateBrdfLut({
+        renderer: this.renderer,
+        size: 512,
+      });
+      glData.globalBindGroup.setResource(this._brdfLutTexture.source, 2);
+
+      // A hemisphere needs only the lookup. Each cubemap source gets one prefiltered cube.
+      if (env instanceof CubeTexture) {
+        const sourceId = env.source.uid;
+        if (!this._iblEnvironmentMap[sourceId]) {
+          this._iblEnvironmentMap[sourceId] = generateIblSpecialCubemap({
+            renderer: this.renderer,
+            sourceTexture: env,
+            size: 256,
+            sampleCount: 1024,
+          });
+        }
+        glData.globalBindGroup.setResource(this._iblEnvironmentMap[sourceId].source, 1);
+        // WebGPU uses (mipLevelCount - 1) for the max mip index; match that here.
+        glData.globalUniformGroup.uniforms.uEnvironmentMaxMipLevel =
+          this._iblEnvironmentMap[sourceId].source.mipLevelCount - 1;
       }
-      glData.globalBindGroup.setResource(this._iblEnvironmentMap[sourceId].source, 1);
-      // WebGPU uses (mipLevelCount - 1) for the max mip index; match that here.
-      glData.globalUniformGroup.uniforms.uEnvironmentMaxMipLevel =
-        this._iblEnvironmentMap[sourceId].source.mipLevelCount - 1;
     }
 
     const lights = view3d.lights;

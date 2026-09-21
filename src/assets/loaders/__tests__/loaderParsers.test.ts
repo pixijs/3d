@@ -1,3 +1,4 @@
+import { captureWarnings } from '@test-utils';
 import { Loader } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
@@ -9,6 +10,14 @@ import { Scene3DSource } from '~/assets/Scene3DSource';
 describe('3D loader parsers', () => {
   it('each has an id to force it with', () => {
     expect([loadGltf.id, loadGlb.id, loadCubemap.id]).toEqual(['gltf', 'glb', 'cubemap']);
+  });
+
+  it("pass the loader's parser validation together", () => {
+    const loader = new Loader();
+    loader.parsers.push(loadGltf, loadGlb, loadCubemap);
+
+    const warnings = captureWarnings(() => (loader as unknown as { _validateParsers(): void })._validateParsers());
+    expect(warnings).toEqual([]);
   });
 
   it('match their extension regardless of case or query string', () => {

@@ -55,7 +55,7 @@ export default async function () {
   await app.init({ resizeTo: window, preference: rendererPreference, backgroundColor: 0x1d1d22 });
   document.body.appendChild(app.canvas);
 
-  const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
+  const view3d = new View3D({ autoResize: true });
   app.stage.addChild(view3d);
 
   // Spinning cube — the moving target.

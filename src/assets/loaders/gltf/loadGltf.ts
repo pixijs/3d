@@ -33,6 +33,7 @@ export const loadGltf = {
     type: ExtensionType.LoadParser,
     name: 'loadGltf',
   },
+  name: 'loadGltf',
   id: 'gltf',
   test(url: string) {
     return checkDataUrl(url, 'model/gltf+json') || checkExtension(url, '.gltf');

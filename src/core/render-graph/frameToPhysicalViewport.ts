@@ -28,7 +28,7 @@ function roundLikePixi(value: number): number {
  * Places a logical rect as a GPU viewport inside `bounds`
  *
  * Shared by both callers below, which differ only in what they measure against: a whole render
- * target, or the sub-rect of one that a pass is already bound to. The rect is scaled into
+ * target, or the content rect a camera's image is placed inside. The rect is scaled into
  * physical pixels, shifted so `origin` becomes zero, rounded, then trimmed to fit — a viewport
  * running past its bounds is clamped rather than dropped, and never shrinks below one pixel.
  * @param frame - The rect to place, in logical pixels.
@@ -116,7 +116,7 @@ export function frameToPhysicalViewport(
 }
 
 /**
- * The GPU viewport of a pass drawing from `camera`, inside the target already bound
+ * The GPU viewport of a pass drawing from `camera`, inside the target's content rect
  *
  * A texture camera's frame is already in its texture's pixels. A view-space camera's is in
  * the view's screen space, so it is shifted by the view frame's origin and scaled to the
@@ -125,11 +125,16 @@ export function frameToPhysicalViewport(
  * a view-space rect flips within the frame — the same flip `frameToPhysicalViewport`
  * applies. A texture camera's image is never bottom-up.
  * @param camera - The pass's camera.
- * @param session - The frame's render session, with the target bound.
+ * @param session - The frame's render session.
+ * @param bounds - The target content the camera's image is placed inside, in physical pixels.
  * @returns The viewport, or `null` when the camera lands nowhere.
  * @internal
  */
-export function cameraFrameToPhysicalViewport(camera: Camera3D, session: RenderSession): Rectangle | null {
+export function cameraFrameToPhysicalViewport(
+  camera: Camera3D,
+  session: RenderSession,
+  bounds: ReadonlyRect,
+): Rectangle | null {
   const frame = getCameraData(camera).frame;
   if (frame.width <= 0 || frame.height <= 0) return null;
 
@@ -140,5 +145,5 @@ export function cameraFrameToPhysicalViewport(camera: Camera3D, session: RenderS
   const originY = inTexture ? 0 : viewFrame.y;
   const flipY = !inTexture && session.renderer.type === RendererType.WEBGL && session.defaultTarget.isRoot;
 
-  return placeViewport(frame, scale, originX, originY, session.activeViewport, flipY, _tempRect);
+  return placeViewport(frame, scale, originX, originY, bounds, flipY, _tempRect);
 }

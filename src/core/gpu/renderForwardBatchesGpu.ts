@@ -204,12 +204,12 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
  *
  * For bundled passes the draw data was already built by `prepareForwardBatchesGpu` in the graph
  * pre-sweep (a bundled pass MUST call it from `prepare()`) and this pass's survivors filled in
- * the compute phase; here we bind slots 11/12 and (re)record the result's bundle — now that
+ * the compute phase; here we bind slots 9/10 and (re)record the result's bundle — now that
  * the graph has bound this pass's sampled textures, so the bundle captures the right bind-group
  * state — then execute it. Immediate-replay passes (transparent) have no prepare phase and
  * build, sync and compact inline.
  *
- * Slot bindings: 11 = store, 12 = instances [id + texSlots] — always this pass's survivors for
+ * Slot bindings: 9 = store, 10 = instances [id + texSlots] — always this pass's survivors for
  * the batch: bundled passes were filled by a producer in the pre-sweep, immediate passes run
  * the same compaction inline right after their per-frame build. Draw-data rebuilds are prepared
  * from the batch/pass dirty versions. Bundle recording is separately gated by the list's
@@ -222,7 +222,7 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
  *
  * Invariant: `useBundles === false` requires `alwaysRebuild === true` — an
  * immediate replay that skipped rebuild would replay against the previous
- * batch's slot-11/12 bindings. Bundles capture their bindings at record time.
+ * batch's slot-9/10 bindings. Bundles capture their bindings at record time.
  * @param options - The pass's pipe, bit, session, cull results, and draw-cache policy
  * @internal
  */
@@ -288,8 +288,8 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
         // compute phase synced and filled this result. Bundles always bind the result's survivors
         // — every producer fills them ('off' via the visibility-only walk) — so a producer change
         // never invalidates a recorded bundle.
-        session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 11);
-        session.globalBindGroup.setResource(result.survivors.bufferResource, 12);
+        session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 9);
+        session.globalBindGroup.setResource(result.survivors.bufferResource, 10);
         encoder.beginBundle(`view3d pass ${bit} batch ${batch.uid}`);
         list.commandList.replay(encoder, pipe.renderer.buffer, result.indirectDrawData, cameraData);
         result.bundle = encoder.endBundle();
@@ -319,12 +319,12 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
       // BufferResource identity is stable and re-keys bind groups).
       result.sync(list);
 
-      session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 11);
-      session.globalBindGroup.setResource(result.survivors.bufferResource, 12);
+      session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 9);
+      session.globalBindGroup.setResource(result.survivors.bufferResource, 10);
 
       // Same compaction as the bundled passes, run right after the per-frame build —
       // visibility always, frustum above the auto gate. The replay binds the survivors
-      // (slot 12 above), so hidden/culled instances just shrink the counts.
+      // (slot 10 above), so hidden/culled instances just shrink the counts.
       const producer = resolveCullProducer(view3d.cull, true, renderables.count);
       list._cullProducer = producer;
       if (producer === 'gpu') {

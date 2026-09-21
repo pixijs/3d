@@ -213,7 +213,7 @@ describe('anisotropyBit', () => {
     const src = out.fragment;
 
     it('produces exactly one light loop (single shadow-sample path)', () => {
-      const matches = src.match(/for \(int i = 0;/g) ?? [];
+      const matches = src.match(/while \(lightMask != 0u\)/g) ?? [];
       expect(matches.length).toBe(1);
     });
 

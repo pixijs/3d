@@ -16,8 +16,6 @@ import { View3D } from '~/scene/View3D';
  */
 interface View3DInternals {
   _bonePit: { buffer: Buffer };
-  _lightDataBuffer: { bufferResource: { destroyed: boolean } };
-  _shadowDataBuffer: { bufferResource: { destroyed: boolean } };
 }
 
 const RENDERERS = ['webgl', 'webgpu'] as const;
@@ -68,7 +66,7 @@ for (const preference of RENDERERS) {
       app = undefined;
     });
 
-    it('destroys without throwing and flips destroyed + owned GPU buffers', async () => {
+    it('destroys without throwing and flips destroyed + the owned GPU buffer', async () => {
       app = await getApp({ id: `view3d-destroy-${preference}`, appOptions: { preference } });
       const { view } = buildScene(app);
 
@@ -77,8 +75,6 @@ for (const preference of RENDERERS) {
       // `buffer` ref on teardown, so the destroyed flag must be read off a
       // pre-captured reference.
       const bonePitBuffer = internals._bonePit.buffer;
-      const lightResource = internals._lightDataBuffer.bufferResource;
-      const shadowResource = internals._shadowDataBuffer.bufferResource;
 
       expect(bonePitBuffer.destroyed).toBe(false);
 
@@ -87,9 +83,6 @@ for (const preference of RENDERERS) {
       expect(view.destroyed).toBe(true);
       // The bone pit's underlying pixi Buffer is exclusively owned and always freed.
       expect(bonePitBuffer.destroyed).toBe(true);
-      // Per-frame light/shadow buffer resources are owned and detached on destroy.
-      expect(lightResource.destroyed).toBe(true);
-      expect(shadowResource.destroyed).toBe(true);
     });
 
     it('leaves shared geometry intact on a plain destroy (children defaults off)', async () => {

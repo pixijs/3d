@@ -81,8 +81,9 @@ export interface Mesh3DOptions extends Container3DOptions {
   /**
    * Whether this mesh samples the shadow map
    *
-   * Drives the shader variant selection for the lit pass; turning it off skips the shadow
-   * lookup entirely.
+   * Lit shaders omit the shadow lookup when this is `false`. When it is `true`, the view still
+   * omits the lookup until a rendered light first casts a shadow. The view keeps shadow sampling
+   * enabled after that.
    * @default true
    */
   receiveShadow?: boolean;
@@ -191,7 +192,8 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   /**
    * Whether this mesh samples the shadow map
    *
-   * Participates in the shader cache key — toggling it forces a shader rebuild on the next frame.
+   * Lit shaders omit the shadow lookup when this is `false`. After changing this field at runtime,
+   * call {@link Mesh3D.invalidate} so the mesh rebuilds its shader variant on the next frame.
    */
   public receiveShadow: boolean;
 

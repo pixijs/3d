@@ -1,5 +1,5 @@
-import { CASCADE_BLEND_FRACTION, MAX_CASCADES } from '../../render-passes/shadow/csmUtils';
-import { MAX_SHADOW_LIGHTS } from '../../render-passes/shadow/shadowPassUtils';
+import { CASCADE_BLEND_FRACTION } from '../../render-passes/shadow/csmUtils';
+import { MAX_SHADOW_SLOTS } from '../../render-passes/shadow/shadowPassUtils';
 import type { ShadowFilter } from '../../render-passes/shadow/shadowPassUtils';
 import { ShadowDataStructGl } from '../../shader/bits/shaderStructs';
 import { SHADOW_TAPS } from '../../shader/bits/shadowTaps';
@@ -47,8 +47,8 @@ function pcfBody(taps: readonly ShadowTap[]): string {
  * (light space matrices, biases, etc.). The PCF kernel comes from
  * `SHADOW_TAPS` for the requested {@link ShadowFilter}.
  *
- * Layout (stride = 6 vec4s = 24 floats per cascade entry, matching the WebGPU
- * ShadowData layout):
+ * Layout (stride = 6 vec4s = 24 floats per cascade entry, packed by `ShadowDataList`; WebGPU
+ * reads the same array):
  * - [0..3]  lightSpaceMatrix (mat4 as 4 vec4s)
  * - [4]     shadowParams (bias, normalBias, mapSize, cascadeCount)
  * - [5]     cascadeSplits (view-space split depths, cascade 0 only)
@@ -66,7 +66,7 @@ function createShadowBitGl(filter: ShadowFilter): ShaderBit {
     bindings: {
       global: {
         uShadowMap: 'texture_depth_2d_array',
-        uShadowData: `array<vec4<f32>, ${MAX_SHADOW_LIGHTS * MAX_CASCADES * 6}>`,
+        uShadowData: `array<vec4<f32>, ${MAX_SHADOW_SLOTS * 6}>`,
       },
     },
     gl: {

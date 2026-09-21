@@ -10,6 +10,7 @@ import { glslGroupMapPlugin } from './glslGroupMapPlugin';
 import { glslHeadersPlugin } from './glslHeadersPlugin';
 import { glslInterStagePlugin } from './glslInterStagePlugin';
 import { glslOverridesPlugin } from './glslOverridesPlugin';
+import { glslPrecisionPlugin } from './glslPrecisionPlugin';
 import { glslStageSlotsPlugin } from './glslStageSlotsPlugin';
 import { glslStorageAccessPlugin } from './glslStorageAccessPlugin';
 
@@ -87,6 +88,7 @@ interface CompileGlslOptions extends CompileGlslSourceOptions {
 export function compileGlslSource(options: CompileGlslOptions): CompileGlslResult {
   const { bits, template, extraPlugins, ...glslOptions } = options;
   const defaultPlugins = [
+    glslPrecisionPlugin,
     glslGroupMapPlugin,
     glslOverridesPlugin,
     glslBindingsPlugin,

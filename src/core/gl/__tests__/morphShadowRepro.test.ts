@@ -1,4 +1,4 @@
-import { getApp } from '@test-utils';
+import { getApp, readCanvasPixels } from '@test-utils';
 import { describe, expect, it } from 'vitest';
 
 import { Geometry3D } from '~/geometry/Geometry3D';
@@ -16,24 +16,6 @@ import { View3D } from '~/scene/View3D';
  * rendered dark/magenta. This guards that a morphed shadow caster stays lit.
  * ({@link morphShadowDeform} covers that the shadow actually tracks the morph.)
  */
-
-/** Reads the centre pixel — GL backbuffer, or a 2D copy of the WebGPU canvas. */
-function readCenter(app: { renderer: unknown; canvas: HTMLCanvasElement }, gpu: boolean): [number, number, number] {
-  if (gpu) {
-    const c = document.createElement('canvas');
-    c.width = app.canvas.width;
-    c.height = app.canvas.height;
-    const ctx = c.getContext('2d')!;
-    ctx.drawImage(app.canvas, 0, 0);
-    const d = ctx.getImageData(app.canvas.width / 2, app.canvas.height / 2, 1, 1).data;
-    return [d[0], d[1], d[2]];
-  }
-  const gl = (app.renderer as { gl: WebGL2RenderingContext }).gl;
-  const out = new Uint8Array(4);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.readPixels(gl.drawingBufferWidth / 2, gl.drawingBufferHeight / 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
-  return [out[0], out[1], out[2]];
-}
 
 async function run(preference: 'webgl' | 'webgpu'): Promise<[number, number, number]> {
   const app = await getApp({
@@ -65,7 +47,10 @@ async function run(preference: 'webgl' | 'webgpu'): Promise<[number, number, num
 
     app.render();
     app.render();
-    return readCenter(app as never, preference === 'webgpu');
+
+    const { width, height } = app.canvas;
+    const centre = readCanvasPixels(app.canvas, width / 2, height / 2, 1, 1);
+    return [centre[0], centre[1], centre[2]];
   } finally {
     app.destroy();
   }

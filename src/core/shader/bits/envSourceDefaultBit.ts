@@ -6,11 +6,13 @@ import type { ShaderBit } from '../ShaderBit';
  * Provides `sampleEnvironment(dir, roughness)` as a constant `vec3(0.0)`.
  * Selected automatically when `view3d.environment` is `null` or omitted.
  *
- * Substrate IBL diffuse and specular, clearcoat IBL, and sheen IBL all
- * collapse to zero, so materials are lit purely by direct lights and
- * emissive. The constant return is constant-folded through every consumer,
- * so downstream texture reads (BRDF LUT etc.) are dead code and eliminated
- * — no bindings, no texture reads, no ALU.
+ * Every environment term a material adds comes out as zero, so materials are
+ * lit purely by direct lights and emissive. The zero keeps a caller correct,
+ * not free: a shader compiler is not required to drop `x * 0.0` (it is not
+ * zero when `x` is NaN or infinite), so whatever a caller fetches and
+ * computes on the way to that product may still run. A material whose
+ * environment block is expensive leaves it out of the shader instead, as
+ * `Material3D` does with `iblBit`.
  *
  * For a soft uniform ambient instead, assign a {@link Hemisphere} with
  * matching sky and ground colors.

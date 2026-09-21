@@ -1,5 +1,5 @@
 import type { ShaderGroups, WebGPURenderer } from 'pixi.js';
-import { ExtensionType, Shader } from 'pixi.js';
+import { DOMAdapter, ExtensionType, Shader } from 'pixi.js';
 
 import {
   validateMaterialStruct,
@@ -35,7 +35,7 @@ import { skinningBitGpu } from '../bits/skinningBitGpu';
 import { compileWgslSource } from '../codegen/compileWgslSource';
 import { materialStoragePaddingPlugin } from '../codegen/materialStoragePaddingPlugin';
 import { globalBitGpu } from './globalBitGpu';
-import { texturesPluginGpu } from './texturesPluginGpu';
+import { createTexturesPluginGpu, prefersSelectSampler } from './texturesPluginGpu';
 
 /** Reusable descriptor — avoids allocating a new one each ensureMaterial call */
 const scratchDescriptor = new ShaderDescriptor({});
@@ -222,6 +222,8 @@ export class MaterialSystemGpu {
   private readonly _renderer: WebGPURenderer;
   /** Flat cache: string key → compiled Shader */
   public _shaderCache = new Map<string, Shader>();
+  /** Material compiler plugins, chosen for this renderer's GPU; built on first use, once the adapter exists */
+  private _materialPlugins: ShaderCompilerPlugin[] | null = null;
 
   constructor(renderer: WebGPURenderer) {
     this._renderer = renderer;
@@ -472,10 +474,12 @@ export class MaterialSystemGpu {
 
     // Shadow sampling. Gated on `lit` — unlit shaders have no light loop
     // calling `calculateShadow()`, so both the sampler bit and its no-op
-    // stub would be dead code. Within lit materials, the choice between
-    // the real sampler and the stub depends on whether the mesh receives
-    // shadows.
-    if (lit) bitsGpu.push(mesh.receiveShadow ? shadowBitsGpu[view3d.shadowFilter] : noShadowBit);
+    // stub would be dead code. Within lit materials, a mesh gets the real
+    // sampler when it receives shadows and the view has had a light casting
+    // them (`view3d._hasShadows`); otherwise the stub.
+    if (lit) {
+      bitsGpu.push(mesh.receiveShadow && view3d._hasShadows ? shadowBitsGpu[view3d.shadowFilter] : noShadowBit);
+    }
 
     const descriptor = scratchDescriptor.update({
       bitsGpu,
@@ -489,14 +493,7 @@ export class MaterialSystemGpu {
       includeGlobal: false,
     });
 
-    // Pack must precede padding (preCompile runs in array order) so `_pad`
-    // is computed from the packed layout and stays last.
-    const shader = this.compileShader(
-      descriptor,
-      mesh,
-      [materialStructPackPlugin, materialStoragePaddingPlugin, texturesPluginGpu],
-      true,
-    );
+    const shader = this.compileShader(descriptor, mesh, this._getMaterialPlugins(), true);
 
     const state = (pd && pd.state) || material.state;
     const topology = (pd && pd.topology) || material.topology || geometry.topology;
@@ -510,6 +507,26 @@ export class MaterialSystemGpu {
     }
 
     return shader;
+  }
+
+  private _getMaterialPlugins(): ShaderCompilerPlugin[] {
+    if (!this._materialPlugins) {
+      const preferSelect = prefersSelectSampler({
+        adapter: this._renderer.gpu.adapter.info,
+        antialias: this._renderer.view.texture.source.antialias,
+        userAgent: DOMAdapter.get().getNavigator().userAgent,
+      });
+
+      // Pack must precede padding (preCompile runs in array order) so `_pad`
+      // is computed from the packed layout and stays last.
+      this._materialPlugins = [
+        materialStructPackPlugin,
+        materialStoragePaddingPlugin,
+        createTexturesPluginGpu(preferSelect ? 'select' : 'branch'),
+      ];
+    }
+
+    return this._materialPlugins;
   }
 
   /**
@@ -526,6 +543,7 @@ export class MaterialSystemGpu {
 
     for (const shader of this._shaderCache.values()) shader.destroy();
     this._shaderCache.clear();
+    this._materialPlugins = null;
   }
 }
 

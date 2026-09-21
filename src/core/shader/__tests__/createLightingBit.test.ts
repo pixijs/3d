@@ -28,7 +28,8 @@ describe('createLightingBit', () => {
 
     it('emits the light loop with dispatch, attenuation, shadow, and nDotL', () => {
       expect(wgsl).toContain('for (var i: i32 = 0;');
-      expect(wgsl).toContain('let light = uLightStorage[i];');
+      expect(wgsl).toContain('let light0 = global.uLightData[lightOffset];');
+      expect(wgsl).not.toContain('uLightStorage');
       expect(wgsl).toContain('if (light.kind == LIGHT_DIRECTIONAL)');
       expect(wgsl).toContain('if (light.kind == LIGHT_SPOT)');
       expect(wgsl).toContain('if (attenuation <= 0.0)');
@@ -51,7 +52,7 @@ describe('createLightingBit', () => {
     const glslHeader = bit.gl?.header ?? '';
 
     it('emits the light loop with dispatch, attenuation, shadow, and nDotL', () => {
-      expect(glsl).toContain('for (int i = 0;');
+      expect(glsl).toContain('while (lightMask != 0u)');
       expect(glsl).toContain('Light light = getLight(i);');
       expect(glsl).toContain('if (light.type == LIGHT_DIRECTIONAL)');
       expect(glsl).toContain('if (light.type == LIGHT_SPOT)');

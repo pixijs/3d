@@ -72,7 +72,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
 
   // Shared morph storage (centralized for all View3D instances): the static
   // delta arena plus every morphed mesh's fixed weight slot, in the one buffer
-  // bound at global slot 14. Its presence also flags the GPU pipe so the shared
+  // bound at global slot 12. Its presence also flags the GPU pipe so the shared
   // scene update runs the (GPU-only) morph prepare pass — see updateView3DScene.
   public _morphStoreBuffer = new MorphStoreBuffer();
 
@@ -363,27 +363,30 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
 
     this._managedViews.track(view3d);
 
-    this._brdfLutTexture ||= generateBrdfLut({
-      renderer: this.renderer,
-      size: 512,
-    });
-    gpuData.globalBindGroup.setResource(this._brdfLutTexture!.source, 3);
-
-    // IBL only applies to cubemap environments; a Hemisphere fill contributes
-    // through its own env-source bit, not the prefiltered specular cubemap.
     const env = view3d.environment;
-    const ibl = env instanceof CubeTexture ? env : null;
-    if (ibl) {
-      const sourceId = ibl.source.uid;
-      if (!this._iblEnvironmentMap[sourceId]) {
-        this._iblEnvironmentMap[sourceId] = generateIblSpecialCubemap({
-          renderer: this.renderer,
-          sourceTexture: ibl,
-          size: 256,
-          sampleCount: 1024,
-        });
+
+    // The BRDF lookup is shared by the renderer and created on its first environment use.
+    // A view's binding slots start with placeholders that are safe for zero-radiance sampling.
+    if (env) {
+      this._brdfLutTexture ||= generateBrdfLut({
+        renderer: this.renderer,
+        size: 512,
+      });
+      gpuData.globalBindGroup.setResource(this._brdfLutTexture.source, 3);
+
+      // A hemisphere needs only the lookup. Each cubemap source gets one prefiltered cube.
+      if (env instanceof CubeTexture) {
+        const sourceId = env.source.uid;
+        if (!this._iblEnvironmentMap[sourceId]) {
+          this._iblEnvironmentMap[sourceId] = generateIblSpecialCubemap({
+            renderer: this.renderer,
+            sourceTexture: env,
+            size: 256,
+            sampleCount: 1024,
+          });
+        }
+        gpuData.globalBindGroup.setResource(this._iblEnvironmentMap[sourceId].source, 2);
       }
-      gpuData.globalBindGroup.setResource(this._iblEnvironmentMap[sourceId].source, 2);
     }
 
     const lights = view3d.lights;
@@ -406,10 +409,10 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     // Bind bonePit + morph store + material store buffer after the scene update has finalised them,
     // then upload the material store (its version is read below to detect a rewrite this frame).
     // Re-binding the pits each frame captures any buffer reallocation from this frame's growth.
-    gpuData.globalBindGroup.setResource(view3d._bonePit.bufferResource, 13);
-    gpuData.globalBindGroup.setResource(this._morphStoreBuffer.bufferResource, 14);
-    gpuData.globalBindGroup.setResource(this.geometryDataStoreBuffer.bufferResource, 15);
-    gpuData.globalBindGroup.setResource(this.materialStoreBuffer.bufferResource, 16);
+    gpuData.globalBindGroup.setResource(view3d._bonePit.bufferResource, 11);
+    gpuData.globalBindGroup.setResource(this._morphStoreBuffer.bufferResource, 12);
+    gpuData.globalBindGroup.setResource(this.geometryDataStoreBuffer.bufferResource, 13);
+    gpuData.globalBindGroup.setResource(this.materialStoreBuffer.bufferResource, 14);
     this.materialStoreBuffer.update();
     this.geometryDataStoreBuffer.update();
     this.atlasPool.update();

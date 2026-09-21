@@ -12,7 +12,7 @@ import type {
 
 import type { Camera3D } from '../../scene/cameras/Camera3D';
 import { getCameraData } from '../CameraData';
-import { prepareCamera } from '../prepareCamera';
+import { prepareCamera, uploadCamera } from '../prepareCamera';
 import type { RenderSession } from '../render-passes/RenderSession';
 import { DEPTH_VIEW_PLACEHOLDER } from '../textures/DefaultTextures';
 import { cameraFrameToPhysicalViewport } from './frameToPhysicalViewport';
@@ -33,15 +33,43 @@ import type {
 /** Format of every depth buffer the graph allocates */
 const DEPTH_FORMAT = 'depth24plus-stencil8';
 
+/** Reused destination for {@link transientContentSize} on the descriptor path */
+const _contentSize = { width: 0, height: 0 };
+
 /**
- * Expand transient options into the per-frame descriptor the pool consumes
+ * The content size transient options ask for this frame, in texels
  *
  * Pixi's rule: texels = logical size × resolution. The logical size defaults to the view's
  * viewport (physical viewport over the target's resolution) and the resolution to the target's
  * own, so `{}` is the physical viewport and `resolution: 1` is one texel per logical pixel. The
- * size asked for here is the content size; the pool decides the texture it sits in, and the
- * resulting `frame` is what consumers map through. Fields left unset fall back to what the
- * view's target uses.
+ * size is the content size; the pool decides the texture it sits in, and the resulting `frame`
+ * is what consumers map through. The single formula — the descriptor the executor acquires with
+ * and {@link RenderGraph#sceneViewport} both come through here, so they cannot disagree.
+ * @param options - The caller's transient texture options
+ * @param s - The frame's render session
+ * @param out - Receives the size; nothing else on it is touched
+ * @returns `out`, for inline use
+ */
+function transientContentSize<T extends { width: number; height: number }>(
+  options: TransientTextureOptions,
+  s: RenderSession,
+  out: T,
+): T {
+  const targetResolution = s.defaultTarget.colorTexture.source.resolution;
+  const resolution =
+    options.resolution === undefined || options.resolution === 'inherit' ? targetResolution : options.resolution;
+  const width = options.width ?? s.viewport.width / targetResolution;
+  const height = options.height ?? s.viewport.height / targetResolution;
+  out.width = Math.max(1, Math.round(width * resolution));
+  out.height = Math.max(1, Math.round(height * resolution));
+  return out;
+}
+
+/**
+ * Expand transient options into the per-frame descriptor the pool consumes
+ *
+ * Size comes from {@link transientContentSize}; fields left unset fall back to what the view's
+ * target uses.
  * @param type - Colour or depth; picks the default format, label and sampling
  * @param options - The caller's transient texture options
  */
@@ -50,14 +78,10 @@ function toDescribe(type: ResourceKind, options: TransientTextureOptions): (s: R
   const scaleMode = options.scaleMode ?? (depth ? 'nearest' : undefined);
   return (s: RenderSession) => {
     const source = s.defaultTarget.colorTexture.source;
-    const targetResolution = source.resolution;
-    const resolution =
-      options.resolution === undefined || options.resolution === 'inherit' ? targetResolution : options.resolution;
-    const width = options.width ?? s.viewport.width / targetResolution;
-    const height = options.height ?? s.viewport.height / targetResolution;
+    const size = transientContentSize(options, s, _contentSize);
     const descriptor: ResourceDescriptor = {
-      width: Math.max(1, Math.round(width * resolution)),
-      height: Math.max(1, Math.round(height * resolution)),
+      width: size.width,
+      height: size.height,
       format: options.format ?? (depth ? DEPTH_FORMAT : (source.format ?? 'bgra8unorm')),
       autoGenerateMipmaps: options.autoGenerateMipmaps ?? false,
       label: options.label ?? (depth ? 'depthTransient' : 'colorTransient'),
@@ -311,6 +335,13 @@ export class RenderGraph {
   public readonly sceneColor: ColorHandle;
   /** Depth target paired with {@link RenderGraph#sceneColor} */
   public readonly sceneDepth: DepthHandle;
+  /**
+   * Options {@link RenderGraph#sceneColor} was created from, or `null` in direct mode
+   *
+   * Kept so {@link RenderGraph#sceneViewport} can size the scene target without running the
+   * entry's `describe`, which allocates a descriptor per call.
+   */
+  private readonly _sceneColorOptions: TransientTextureOptions | null;
   /** The View's default (screen) colour attachment — its final output */
   public readonly defaultColor: ColorHandle;
   /** Depth attachment paired with {@link RenderGraph#defaultColor} */
@@ -375,6 +406,7 @@ export class RenderGraph {
     // the scene targets are the default (screen) targets. Fixed at construction.
     this.sceneColor = opts.sceneColor ? this.createColor(opts.sceneColor) : this.defaultColor;
     this.sceneDepth = opts.sceneDepth ? this.createDepth(opts.sceneDepth) : this.defaultDepth;
+    this._sceneColorOptions = opts.sceneColor ?? null;
     this._builder = new PassBuilder(this);
   }
 
@@ -498,6 +530,26 @@ export class RenderGraph {
     const size = TexturePool.getOptimalSize(pixelWidth, pixelHeight);
     out.x = pixelWidth / size.width;
     out.y = pixelHeight / size.height;
+  }
+
+  /**
+   * The scene target's content rect, in physical pixels, available before any target is bound
+   *
+   * Direct rendering uses the view's place on the target. Composite rendering uses a transient
+   * whose content starts at the origin.
+   * @param session - The frame's render session, with `viewport` filled.
+   * @param out - Receives the rect.
+   * @returns `out`, for inline use.
+   */
+  public sceneViewport(session: RenderSession, out: Rectangle): Rectangle {
+    const options = this._sceneColorOptions;
+
+    if (!options) return out.copyFrom(session.viewport);
+
+    out.x = 0;
+    out.y = 0;
+    transientContentSize(options, session, out);
+    return out;
   }
 
   /**
@@ -838,18 +890,24 @@ export class RenderGraph {
   /**
    * Build the camera of every pass that survived {@link RenderGraph#resolve}
    *
-   * Only pass cameras: the view's own is the pipe's, built before `resolve` so a pass's
-   * `condition` can ask about this frame. `prepareCamera` stamps the session, so a camera
-   * two passes name is built once and the view camera's entry here is a no-op.
+   * Only pass cameras are built here: the view's own is the pipe's, built before `resolve` so a
+   * pass's `condition` can ask about this frame. `prepareCamera` stamps the session, so a camera
+   * two passes name is built once. `uploadCamera` then finishes and uploads every camera, the
+   * view's included: by now the view has packed its lights, which the light tiles need.
    *
    * Runs before any render target is bound, so every camera reads the same winding off the same
    * binding. Call after {@link RenderGraph#resolve}, before {@link RenderGraph#execute}.
    * @param session - The frame's render session.
    */
   public prepareCameras(session: RenderSession): void {
+    uploadCamera(session.view3d.camera, session);
+
     for (let i = 0; i < this._activePasses.length; i++) {
       const camera = this._activePasses[i].pass.camera;
-      if (camera) prepareCamera(camera, session);
+      if (!camera) continue;
+
+      prepareCamera(camera, session);
+      uploadCamera(camera, session);
     }
   }
 
@@ -1014,7 +1072,7 @@ export class RenderGraph {
       // self-managing pass (a copy on a texture camera) owns its GPU work and may close the pass
       // the viewport would be restored on.
       const passCamera = target !== null && pass.camera && pass.camera !== session.view3d.camera ? pass.camera : null;
-      const passViewport = passCamera && cameraFrameToPhysicalViewport(passCamera, session);
+      const passViewport = passCamera && cameraFrameToPhysicalViewport(passCamera, session, session.activeViewport);
 
       if (passCamera === null) {
         pass.render(session);
