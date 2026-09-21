@@ -6,7 +6,7 @@
 >
 > ```sh
 > npm install pixi.js
-> npm install ./pixi-3d-0.0.0.tgz
+> npm install ./pixi-3d-0.1.0-beta.1.tgz
 > ```
 >
 > **Show us what you make.** Screenshots, clips, half-finished experiments: post them in

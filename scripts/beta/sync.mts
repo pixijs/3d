@@ -31,9 +31,14 @@ const flag = (name: string, fallback: string): string => {
 };
 
 function main(): void {
-  const ref = flag('ref', 'main');
   const remote = flag('remote', BETA_REMOTE);
   const dryRun = process.argv.includes('--dry-run');
+  // Default to the fetched remote branch: a local `main` left behind in a
+  // worktree would otherwise mirror a tree nobody is working from.
+  const ref = flag('ref', 'origin/main');
+
+  if (ref === 'origin/main') run('git', ['fetch', 'origin', 'main', '--quiet']);
+
   const sha = run('git', ['rev-parse', ref]);
   const short = sha.slice(0, 7);
   const subject = run('git', ['log', '-1', '--format=%s', sha]);
@@ -63,7 +68,10 @@ function main(): void {
     const readme = path.join(work, 'README.md');
 
     if (existsSync(banner) && existsSync(readme)) {
-      writeFileSync(readme, `${readFileSync(banner, 'utf-8').trim()}\n\n${readFileSync(readme, 'utf-8')}`);
+      const version = JSON.parse(readFileSync(path.join(work, 'package.json'), 'utf-8')).version as string;
+      const text = readFileSync(banner, 'utf-8').trim().replaceAll('{{version}}', version);
+
+      writeFileSync(readme, `${text}\n\n${readFileSync(readme, 'utf-8')}`);
     }
 
     cpSync(overlay, work, { recursive: true });
