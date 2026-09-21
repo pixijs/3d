@@ -54,7 +54,7 @@ jobs:
           # rather than leaving a trail of drafts to clean up.
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           cat > notes.md <<EOF
-          Closed beta build of \`@pixi/3d\`, from commit [\`$SHA\`](https://github.com/pixijs/pixi-3d/commit/$SHA).
+          Closed beta build of \`@pixi/3d\`, from commit \`$SHA\`.
 
           Download \`$FILE\`, then install it next to PixiJS:
 
