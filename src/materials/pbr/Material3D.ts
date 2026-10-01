@@ -28,189 +28,390 @@ import { specularBit } from './bits/specularBit';
 import { transmissionBit } from './bits/transmissionBit';
 
 /**
- * KHR_materials_specular — dielectric F0 strength and tint
+ * Options for a {@link Material3D}'s `specular` group (`KHR_materials_specular`): the strength and
+ * tint of the reflection on non-metal surfaces
  *
- * The spec defines `specularTexture` (A = factor) and `specularColorTexture`
- * (RGB = tint, sRGB) as separate bindings, but authored assets pack them into
- * one RGBA image. pixi-3d uses a single texture slot; when both are supplied
- * the colour texture wins (its alpha drives the factor). The glTF loader
- * warns on genuinely distinct textures.
+ * Metals are unaffected. The material has one texture slot for the spec's two textures, tint in
+ * RGB and strength in alpha, which is how assets pack them. Pass that image as `colorTexture`; when
+ * both are given, `colorTexture` wins. The glTF loader warns when an asset uses two different
+ * images.
+ * @example
+ * ```ts
+ * const varnish = new Material3D({ roughness: 0.3, specular: { factor: 0.6, color: 0xfff2dd } });
+ * ```
  * @category materials
  * @standard
  */
 export interface SpecularOptions {
   /**
-   * Dielectric lobe strength
+   * Strength of the non-metal reflection, from 0 (none) to 1 (standard PBR)
    * @default 1
+   * @example
+   * ```ts
+   * const matte = new Material3D({ specular: { factor: 0 } });
+   * ```
    */
   factor?: number;
   /**
-   * F0 tint (RGB)
+   * Tint of the non-metal reflection
    * @default 0xffffff
+   * @example
+   * ```ts
+   * const warm = new Material3D({ specular: { color: 0xffd0a0 } });
+   * ```
    */
   color?: ColorSource;
-  /** A = factor mask */
+  /**
+   * Strength map, read from alpha; used only when there is no `colorTexture`
+   *
+   * The two share a slot, so its colour channels tint the reflection too: keep them white.
+   * @example
+   * ```ts
+   * const worn = new Material3D({ specular: { texture: wearMask } });
+   * ```
+   */
   texture?: Texture;
-  /** RGB = tint (sRGB); preferred for the packed slot */
+  /**
+   * Tint in RGB and strength in alpha, the packed image; used over `texture` when both are given
+   * @example
+   * ```ts
+   * const packed = new Material3D({ specular: { colorTexture: specularMap } });
+   * ```
+   */
   colorTexture?: Texture;
 }
 
 /**
- * KHR_materials_iridescence — thin-film interference
+ * Options for a {@link Material3D}'s `iridescence` group (`KHR_materials_iridescence`): a thin film
+ * whose colour shifts with the viewing angle, like a soap bubble or an oil slick
  *
- * The spec defines `iridescenceTexture` (R = factor) and
- * `iridescenceThicknessTexture` (G = thickness) as separate bindings, but
- * they are authored as a single packed RG image in every Khronos sample
- * asset. pixi-3d packs both into one slot (R = factor, G = thickness lerp
- * between min/max); when both are supplied the factor texture wins. The glTF
- * loader warns on genuinely distinct textures.
+ * The material has one texture slot for the spec's two textures, factor in red and thickness in
+ * green, which is how assets pack them. Pass that image as `texture`; when both are given,
+ * `texture` wins. The glTF loader warns when an asset uses two different images.
+ * @example
+ * ```ts
+ * const beetle = new Material3D({ metallic: 1, roughness: 0.2, iridescence: { thicknessMaximum: 500 } });
+ * ```
  * @category materials
  * @standard
  */
 export interface IridescenceOptions {
   /**
-   * Thin-film strength
+   * Strength of the effect, from 0 (none) to 1
    * @default 1
+   * @example
+   * ```ts
+   * const hint = new Material3D({ iridescence: { factor: 0.3 } });
+   * ```
    */
   factor?: number;
   /**
-   * Thin-film IOR
+   * Index of refraction of the film
    * @default 1.3
+   * @example
+   * ```ts
+   * const oily = new Material3D({ iridescence: { ior: 1.5 } });
+   * ```
    */
   ior?: number;
   /**
-   * Thickness lerp endpoint at texture G = 0, in nm
+   * Film thickness in nanometres where the texture's green channel is 0
    *
-   * Defaults to 0 (no hue shift baseline); the glTF loader passes the spec default 100.
+   * The default 0 means a thickness map that reads 0 adds no colour shift. glTF's default is 100,
+   * which the glTF loader passes.
+   * @default 0
+   * @example
+   * ```ts
+   * const bubble = new Material3D({ iridescence: { thicknessMinimum: 100, thicknessTexture: filmMap } });
+   * ```
    */
   thicknessMinimum?: number;
   /**
-   * Thickness lerp endpoint at texture G = 1, in nm
+   * Film thickness in nanometres where the texture's green channel is 1, and so the thickness
+   * everywhere when there is no texture
    * @default 400
+   * @example
+   * ```ts
+   * const thickFilm = new Material3D({ iridescence: { thicknessMaximum: 800 } });
+   * ```
    */
   thicknessMaximum?: number;
-  /** R = factor mask; preferred for the packed slot */
+  /**
+   * Factor in red and thickness in green, the packed image; used over `thicknessTexture` when both
+   * are given
+   * @example
+   * ```ts
+   * const packed = new Material3D({ iridescence: { texture: iridescenceMap } });
+   * ```
+   */
   texture?: Texture;
-  /** G = thickness */
+  /**
+   * Thickness map, read from green; used only when there is no `texture`
+   *
+   * The two share a slot, so its red channel scales the factor too: keep it white.
+   * @example
+   * ```ts
+   * const swirl = new Material3D({ iridescence: { thicknessTexture: swirlMap } });
+   * ```
+   */
   thicknessTexture?: Texture;
 }
 
 /**
- * KHR_materials_transmission + KHR_materials_volume (pixi-3d fuses the pair)
+ * Options for a {@link Material3D}'s `transmission` group (`KHR_materials_transmission` with
+ * `KHR_materials_volume`): glass and other surfaces you see through
+ *
+ * Light passing through bends by the material's `ior` and takes on `attenuationColor` over
+ * distance. A transmissive mesh draws in its own pass, after the opaque meshes, and shows what
+ * they drew; other transmissive meshes and blended ones don't show through it.
+ * @example
+ * ```ts
+ * const glass = new Material3D({ roughness: 0.05, transmission: { thickness: 0.5 } });
+ * ```
  * @category materials
  * @standard
  */
 export interface TransmissionOptions {
   /**
-   * Transmitted fraction (0 = opaque substrate, 1 = clear glass)
+   * How much light passes through, from 0 (opaque surface) to 1 (clear glass)
    * @default 1
+   * @example
+   * ```ts
+   * const frosted = new Material3D({ roughness: 0.6, transmission: { factor: 0.9 } });
+   * ```
    */
   factor?: number;
-  /** R = transmitted-fraction mask */
+  /**
+   * Map whose red channel scales `factor`
+   * @example
+   * ```ts
+   * const stainedGlass = new Material3D({ transmission: { texture: leadingMask } });
+   * ```
+   */
   texture?: Texture;
   /**
-   * Volume thickness in world units (0 = thin-walled)
+   * Thickness of the volume in the mesh's own units, scaled with the mesh
+   *
+   * 0 makes a thin wall: light doesn't bend and isn't absorbed.
    * @default 0
+   * @example
+   * ```ts
+   * const block = new Material3D({ transmission: { thickness: 1 } });
+   * ```
    */
   thickness?: number;
-  /** G = thickness mask */
+  /**
+   * Map whose green channel scales `thickness`
+   * @example
+   * ```ts
+   * const bottle = new Material3D({ transmission: { thickness: 0.3, thicknessTexture: wallThickness } });
+   * ```
+   */
   thicknessTexture?: Texture;
-  /** Beer–Lambert attenuation distance; defaults to effectively infinite */
+  /**
+   * Distance light travels through the volume before it takes on `attenuationColor`
+   *
+   * Left out, light isn't absorbed. Absorption also needs `thickness` above 0.
+   * @example
+   * ```ts
+   * const wine = new Material3D({
+   *   transmission: { thickness: 1, attenuationDistance: 0.2, attenuationColor: 0x7a0f1e },
+   * });
+   * ```
+   */
   attenuationDistance?: number;
   /**
-   * Attenuation tint
+   * Colour white light turns after travelling `attenuationDistance` through the volume
    * @default 0xffffff
+   * @example
+   * ```ts
+   * const bottleGreen = new Material3D({
+   *   transmission: { thickness: 0.5, attenuationDistance: 1, attenuationColor: 0x2e8b57 },
+   * });
+   * ```
    */
   attenuationColor?: ColorSource;
 }
 
 /**
- * KHR_materials_clearcoat — transparent lacquer layer with its own GGX lobe
+ * Options for a {@link Material3D}'s `clearcoat` group (`KHR_materials_clearcoat`): a clear lacquer
+ * layer on top, as on car paint or varnished wood
+ *
+ * The coat has its own highlight, roughness and, optionally, normal map, and reflects the view's
+ * environment.
+ * @example
+ * ```ts
+ * const carPaint = new Material3D({ baseColor: 0x8c1c13, roughness: 0.5, clearcoat: { roughness: 0.03 } });
+ * ```
  * @category materials
  * @standard
  */
 export interface ClearcoatOptions {
   /**
-   * Lacquer strength
+   * Strength of the coat, from 0 (none) to 1
    * @default 1
+   * @example
+   * ```ts
+   * const satinVarnish = new Material3D({ clearcoat: { factor: 0.5 } });
+   * ```
    */
   factor?: number;
   /**
-   * Coat roughness, independent of base roughness
+   * Roughness of the coat, independent of the surface underneath
    * @default 0
+   * @example
+   * ```ts
+   * const hazyCoat = new Material3D({ clearcoat: { roughness: 0.4 } });
+   * ```
    */
   roughness?: number;
   /**
-   * Scale applied to the coat normal map's tangent-space xy
+   * Strength of the coat normal map's bumps
    * @default 1
+   * @example
+   * ```ts
+   * const orangePeel = new Material3D({ clearcoat: { normalTexture: peelNormals, normalScale: 0.3 } });
+   * ```
    */
   normalScale?: number;
-  /** R = coat factor mask */
+  /**
+   * Map whose red channel scales `factor`
+   * @example
+   * ```ts
+   * const chipped = new Material3D({ clearcoat: { texture: chipMask } });
+   * ```
+   */
   texture?: Texture;
-  /** G = coat roughness mask */
+  /**
+   * Map whose green channel scales `roughness`
+   * @example
+   * ```ts
+   * const smudged = new Material3D({ clearcoat: { roughness: 1, roughnessTexture: smudgeMap } });
+   * ```
+   */
   roughnessTexture?: Texture;
-  /** Coat normal map; its presence selects the coat-normal shader variant, fixed at construction */
+  /**
+   * Normal map for the coat alone
+   *
+   * Pass it here to have one; it can't be added later. Without it the coat follows the geometry's
+   * normals and skips the extra cost.
+   * @example
+   * ```ts
+   * const dimpled = new Material3D({ clearcoat: { normalTexture: dimpleNormals } });
+   * ```
+   */
   normalTexture?: Texture;
 }
 
 /**
- * KHR_materials_sheen — grazing-angle fabric lobe
+ * Options for a {@link Material3D}'s `sheen` group (`KHR_materials_sheen`): the soft glow at grazing
+ * angles on velvet, satin and other cloth
  *
- * The spec defines `sheenColorTexture` (RGB) and `sheenRoughnessTexture` (A)
- * as separate bindings, packed into one RGBA slot here; the colour texture
- * wins when both are supplied. The glTF loader warns on genuinely distinct
- * textures.
+ * The material has one texture slot for the spec's two textures, colour in RGB and roughness in
+ * alpha, which is how assets pack them. Pass that image as `texture`; when both are given, `texture`
+ * wins. The glTF loader warns when an asset uses two different images.
+ * @example
+ * ```ts
+ * const velvet = new Material3D({ baseColor: 0x3b0a45, roughness: 0.9, sheen: { color: 0xd8a0ff } });
+ * ```
  * @category materials
  * @standard
  */
 export interface SheenOptions {
   /**
-   * Sheen tint — the whole lobe is multiplied by it
+   * Colour of the sheen; black turns it off
    * @default 0xffffff
+   * @example
+   * ```ts
+   * const silk = new Material3D({ sheen: { color: 0xfff0e0 } });
+   * ```
    */
   color?: ColorSource;
   /**
-   * Sheen roughness
+   * Roughness of the sheen, from 0 to 1
    * @default 0
+   * @example
+   * ```ts
+   * const felt = new Material3D({ sheen: { roughness: 0.8 } });
+   * ```
    */
   roughness?: number;
-  /** RGB = colour, A = roughness; preferred for the packed slot */
+  /**
+   * Colour in RGB and roughness in alpha, the packed image; used over `roughnessTexture` when both
+   * are given
+   * @example
+   * ```ts
+   * const fabric = new Material3D({ sheen: { texture: sheenMap } });
+   * ```
+   */
   texture?: Texture;
-  /** A = roughness */
+  /**
+   * Roughness map, read from alpha; used only when there is no `texture`
+   *
+   * The two share a slot, so its colour channels tint the sheen too: keep them white.
+   * @example
+   * ```ts
+   * const worn = new Material3D({ sheen: { roughnessTexture: wearMap } });
+   * ```
+   */
   roughnessTexture?: Texture;
 }
 
 /**
- * KHR_materials_anisotropy — directional roughness for brushed-metal / carbon-fibre looks
- *
- * The optional `texture` packs the per-texel direction in RG (a [-1,1] vector
- * encoded to [0,1]) and the strength in B. Its presence selects the sampling
- * shader variant, so the texture is fixed at construction.
+ * Options for a {@link Material3D}'s `anisotropy` group (`KHR_materials_anisotropy`): highlights
+ * stretched along one direction, as on brushed metal, vinyl records or carbon fibre
+ * @example
+ * ```ts
+ * const brushed = new Material3D({ metallic: 1, roughness: 0.4, anisotropy: { strength: 0.8 } });
+ * ```
  * @category materials
  * @standard
  */
 export interface AnisotropyOptions {
   /**
-   * Anisotropy strength [0,1]
+   * How strongly highlights stretch, from 0 to 1
    * @default 1
+   * @example
+   * ```ts
+   * const lightlyBrushed = new Material3D({ anisotropy: { strength: 0.3 } });
+   * ```
    */
   strength?: number;
   /**
-   * Rotation of the anisotropy direction, in radians
+   * Rotation of the stretch direction in radians, starting from the surface's tangent
    * @default 0
+   * @example
+   * ```ts
+   * const crossGrain = new Material3D({ anisotropy: { rotation: Math.PI / 2 } });
+   * ```
    */
   rotation?: number;
-  /** RG = direction, B = strength */
+  /**
+   * Per-texel direction in RG (a -1 to 1 vector stored as 0 to 1) and strength in B
+   *
+   * Pass it here to have one; it can't be added later. Without it the direction is the tangent,
+   * turned by `rotation`, everywhere.
+   * @example
+   * ```ts
+   * const carbonFibre = new Material3D({ anisotropy: { texture: weaveDirections } });
+   * ```
+   */
   texture?: Texture;
 }
 
 /**
  * Options for {@link Material3D}
  *
- * Core PBR fields are flat; extension features are per-feature option groups whose **presence
- * enables the feature** — `clearcoat: {}` opts in with defaults, absence leaves the material
- * paying nothing for it. Feature group defaults are "visibly on" (factor 1 / white): presence
- * signals intent. The glTF loader passes spec values explicitly, so file defaults are unaffected.
+ * The core PBR values are plain fields. Each extension (`emissive`, `specular`, `iridescence`,
+ * `transmission`, `clearcoat`, `sheen`, `anisotropy`) is a group that turns the feature on when
+ * passed, even empty: `clearcoat: {}` adds a full-strength coat, and a material without the group
+ * pays nothing for it. Defaults inside a group are full strength, because passing the group shows
+ * intent. The glTF loader passes each extension's own defaults, so loaded assets match the spec.
+ * @example
+ * ```ts
+ * const options: Material3DOptions = { baseColor: 0x8c1c13, roughness: 0.4, clearcoat: {} };
+ * const carPaint = new Material3D(options);
+ * ```
  * @category materials
  * @standard
  */
@@ -218,188 +419,448 @@ export interface Material3DOptions extends Omit<BaseMaterial3DOptions, 'textures
   /**
    * Tangent-space normal map
    *
-   * Defaults to a flat map encoding `(0, 0, 1)`, which makes the unconditional TBN sample a no-op.
+   * Needs UVs on the geometry, and uses its tangents when it has them. Can also be assigned later
+   * through `material.textures.normal`; until there is one, no normal mapping is compiled in.
+   * @example
+   * ```ts
+   * const bricks = new Material3D({ baseColorTexture: brickColour, normalTexture: brickNormals });
+   * ```
    */
   normalTexture?: Texture;
   /**
-   * Scalar bump-strength multiplier for the normal map
+   * Strength of the normal map's bumps
    * @default 1
+   * @example
+   * ```ts
+   * const shallow = new Material3D({ normalTexture: brickNormals, normalScale: 0.5 });
+   * ```
    */
   normalScale?: number;
 
   /**
-   * Perceptual roughness (0 = mirror, 1 = fully diffuse)
+   * Perceptual roughness, from 0 (mirror-like) to 1 (fully rough)
    * @default 1
+   * @example
+   * ```ts
+   * const polished = new Material3D({ roughness: 0.1 });
+   * ```
    */
   roughness?: number;
   /**
-   * Metalness (0 = dielectric, 1 = metal)
+   * Metalness, from 0 (non-metal) to 1 (metal)
    * @default 0
+   * @example
+   * ```ts
+   * const gold = new Material3D({ baseColor: 0xffc356, metallic: 1, roughness: 0.25 });
+   * ```
    */
   metallic?: number;
-  /** Packed metallic-roughness map (glTF layout: G = roughness, B = metallic) */
+  /**
+   * Map with roughness in green and metalness in blue, as in glTF; scales `roughness` and
+   * `metallic`
+   * @example
+   * ```ts
+   * const rusty = new Material3D({ metallic: 1, metallicRoughnessTexture: rustMap });
+   * ```
+   */
   metallicRoughnessTexture?: Texture;
 
-  /** R = ambient occlusion */
+  /**
+   * Ambient occlusion map, read from red; it darkens ambient and environment light only
+   * @example
+   * ```ts
+   * const crate = new Material3D({ baseColorTexture: crateColour, occlusionTexture: crateOcclusion });
+   * ```
+   */
   occlusionTexture?: Texture;
   /**
-   * Occlusion map strength
+   * Multiplier on the occlusion, see {@link Material3D#occlusionStrength}
    * @default 1
+   * @example
+   * ```ts
+   * const softer = new Material3D({ occlusionTexture: crateOcclusion, occlusionStrength: 0.8 });
+   * ```
    */
   occlusionStrength?: number;
 
   /**
-   * Index of refraction of the dielectric substrate (KHR_materials_ior) — a core scalar, not a
-   * gated feature
+   * Index of refraction (`KHR_materials_ior`), a plain field rather than a group
+   *
+   * It sets how strongly non-metals reflect, and how far transmission bends light.
    * @default 1.5
+   * @example
+   * ```ts
+   * const water = new Material3D({ ior: 1.33, transmission: {} });
+   * ```
    */
   ior?: number;
 
-  /** Emissive glow group; presence enables the feature */
+  /**
+   * The material's own glow; passing the group turns it on
+   * @example
+   * ```ts
+   * const lava = new Material3D({ emissive: { texture: lavaGlow, strength: 4 } });
+   * ```
+   */
   emissive?: EmissiveOptions;
-  /** KHR_materials_specular group; presence enables the feature */
+  /**
+   * Strength and tint of non-metal reflections; passing the group turns it on
+   * @example
+   * ```ts
+   * const lacquer = new Material3D({ specular: { color: 0xfff4e0 } });
+   * ```
+   */
   specular?: SpecularOptions;
-  /** KHR_materials_iridescence group; presence enables the feature */
+  /**
+   * Thin-film colour shift; passing the group turns it on
+   * @example
+   * ```ts
+   * const soapBubble = new Material3D({ iridescence: {}, transmission: {} });
+   * ```
+   */
   iridescence?: IridescenceOptions;
   /**
-   * KHR_materials_transmission / volume group; presence enables the feature
+   * Glass and other see-through surfaces; passing the group turns it on
    *
-   * Also routes meshes using the material to the transmission pass.
+   * Also moves meshes using the material into the transmission pass.
+   * @example
+   * ```ts
+   * const pane = new Material3D({ roughness: 0, transmission: {} });
+   * ```
    */
   transmission?: TransmissionOptions;
-  /** KHR_materials_clearcoat group; presence enables the feature */
+  /**
+   * Clear lacquer layer on top; passing the group turns it on
+   * @example
+   * ```ts
+   * const pianoBlack = new Material3D({ baseColor: 0x050505, clearcoat: {} });
+   * ```
+   */
   clearcoat?: ClearcoatOptions;
-  /** KHR_materials_sheen group; presence enables the feature */
+  /**
+   * Cloth sheen; passing the group turns it on
+   * @example
+   * ```ts
+   * const cushion = new Material3D({ sheen: { color: 0xffffff, roughness: 0.5 } });
+   * ```
+   */
   sheen?: SheenOptions;
-  /** KHR_materials_anisotropy group; presence enables the feature */
+  /**
+   * Highlights stretched along one direction; passing the group turns it on
+   * @example
+   * ```ts
+   * const pan = new Material3D({ metallic: 1, anisotropy: {} });
+   * ```
+   */
   anisotropy?: AnisotropyOptions;
 }
 
-// --- Runtime feature props ---
-// Each option group above has a runtime mirror: the constructor creates the
-// props object only when the group was passed, so `material.clearcoat ===
-// undefined` *is* the feature lock — there is nothing to mutate on a feature
-// that wasn't compiled in. Value writes are free data syncs; colour props
-// follow the `Container.tint` convention — set any display-space
-// `ColorSource` (sRGB-decoded at write), get back the canonical hex
-// number. The linear channel values live in `material.data`.
-
 /**
- * Runtime specular props; present iff constructed with a `specular` group
+ * Runtime controls for a material's `specular` group, as `material.specular`
+ *
+ * Present only when the material was built with the group. Changes never recompile the shader.
+ * @example
+ * ```ts
+ * const material = new Material3D({ specular: {} });
+ * material.specular!.factor = 0.25;
+ * ```
  * @category materials
  * @standard
  */
 export interface SpecularProps {
   /**
-   * Dielectric lobe strength
-   *
-   * 1 matches standard PBR; 0 removes the dielectric reflection entirely. Metals are unaffected
-   * — only the dielectric half of the Fresnel term is attenuated.
+   * Strength of the non-metal reflection, from 0 (none) to 1 (standard PBR); metals are unaffected
+   * @example
+   * ```ts
+   * material.specular!.factor = 0;
+   * ```
    */
   factor: number;
-  /** F0 tint — set any display-space `ColorSource`, read back the canonical hex number */
+  /**
+   * Tint of the non-metal reflection; takes any `ColorSource` and reads back a hex number, like
+   * `Container.tint`
+   * @example
+   * ```ts
+   * material.specular!.color = 0xffe0c0;
+   * ```
+   */
   get color(): number;
-  /** Sets the F0 tint from any display-space `ColorSource` */
+  /** Sets the tint from any `ColorSource` */
   set color(value: ColorSource);
-  /** Packed slot (RGB = tint, A = factor mask); see `specularBit.ts` */
+  /**
+   * The packed map, tint in RGB and strength in alpha
+   * @example
+   * ```ts
+   * material.specular!.texture = await Assets.load('specular.png');
+   * ```
+   */
   texture: Texture;
 }
 
 /**
- * Runtime iridescence props; present iff constructed with an `iridescence` group
+ * Runtime controls for a material's `iridescence` group, as `material.iridescence`
+ *
+ * Present only when the material was built with the group. Changes never recompile the shader.
+ * @example
+ * ```ts
+ * const material = new Material3D({ iridescence: {} });
+ * material.iridescence!.thicknessMaximum = 600;
+ * ```
  * @category materials
  * @standard
  */
 export interface IridescenceProps {
-  /** Thin-film strength (0 = off, 1 = full effect) */
+  /**
+   * Strength of the effect, from 0 (none) to 1
+   * @example
+   * ```ts
+   * material.iridescence!.factor = 0.5;
+   * ```
+   */
   factor: number;
-  /** Thin-film IOR */
+  /**
+   * Index of refraction of the film
+   * @example
+   * ```ts
+   * material.iridescence!.ior = 1.4;
+   * ```
+   */
   ior: number;
-  /** Thickness lerp endpoint at texture G = 0, in nm */
+  /**
+   * Film thickness in nanometres where the texture's green channel is 0
+   * @example
+   * ```ts
+   * material.iridescence!.thicknessMinimum = 100;
+   * ```
+   */
   thicknessMinimum: number;
-  /** Thickness lerp endpoint at texture G = 1, in nm */
+  /**
+   * Film thickness in nanometres where the texture's green channel is 1
+   * @example
+   * ```ts
+   * material.iridescence!.thicknessMaximum = 500;
+   * ```
+   */
   thicknessMaximum: number;
-  /** Packed slot (R = factor mask, G = thickness lerp); see `iridescenceBit.ts` */
+  /**
+   * The packed map, factor in red and thickness in green
+   * @example
+   * ```ts
+   * material.iridescence!.texture = await Assets.load('film.png');
+   * ```
+   */
   texture: Texture;
 }
 
 /**
- * Runtime transmission + volume props; present iff constructed with a `transmission` group
+ * Runtime controls for a material's `transmission` group, as `material.transmission`
+ *
+ * Present only when the material was built with the group. Changes never recompile the shader.
+ * @example
+ * ```ts
+ * const material = new Material3D({ transmission: {} });
+ * material.transmission!.thickness = 0.4;
+ * ```
  * @category materials
  * @standard
  */
 export interface TransmissionProps {
-  /** Transmitted fraction (0 = opaque substrate, 1 = clear glass) */
+  /**
+   * How much light passes through, from 0 (opaque surface) to 1 (clear glass)
+   * @example
+   * ```ts
+   * material.transmission!.factor = 0.5;
+   * ```
+   */
   factor: number;
-  /** Volume thickness in world units (0 = thin-walled) */
+  /**
+   * Thickness of the volume in the mesh's own units; 0 makes a thin wall
+   * @example
+   * ```ts
+   * material.transmission!.thickness = 2;
+   * ```
+   */
   thickness: number;
-  /** Beer–Lambert attenuation distance */
+  /**
+   * Distance light travels through the volume before it takes on `attenuationColor`
+   *
+   * 1e9 or more turns absorption off.
+   * @example
+   * ```ts
+   * material.transmission!.attenuationDistance = 0.5;
+   * ```
+   */
   attenuationDistance: number;
-  /** Attenuation tint — set any display-space `ColorSource`, read back the canonical hex number */
+  /**
+   * Colour white light turns after travelling `attenuationDistance`; takes any `ColorSource` and
+   * reads back a hex number, like `Container.tint`
+   * @example
+   * ```ts
+   * material.transmission!.attenuationColor = 'teal';
+   * ```
+   */
   get attenuationColor(): number;
-  /** Sets the attenuation tint from any display-space `ColorSource` */
+  /** Sets the attenuation colour from any `ColorSource` */
   set attenuationColor(value: ColorSource);
-  /** R = transmitted-fraction mask */
+  /**
+   * Map whose red channel scales `factor`
+   * @example
+   * ```ts
+   * material.transmission!.texture = await Assets.load('frost-mask.png');
+   * ```
+   */
   texture: Texture;
-  /** G = thickness mask */
+  /**
+   * Map whose green channel scales `thickness`
+   * @example
+   * ```ts
+   * material.transmission!.thicknessTexture = await Assets.load('thickness.png');
+   * ```
+   */
   thicknessTexture: Texture;
 }
 
 /**
- * Runtime clearcoat props; present iff constructed with a `clearcoat` group
+ * Runtime controls for a material's `clearcoat` group, as `material.clearcoat`
+ *
+ * Present only when the material was built with the group. Changes never recompile the shader.
+ * @example
+ * ```ts
+ * const material = new Material3D({ clearcoat: {} });
+ * material.clearcoat!.roughness = 0.2;
+ * ```
  * @category materials
  * @standard
  */
 export interface ClearcoatProps {
-  /** Lacquer strength (0 = none, 1 = full) */
+  /**
+   * Strength of the coat, from 0 (none) to 1
+   * @example
+   * ```ts
+   * material.clearcoat!.factor = 0.7;
+   * ```
+   */
   factor: number;
-  /** Coat roughness, independent of base roughness */
+  /**
+   * Roughness of the coat, independent of the surface underneath
+   * @example
+   * ```ts
+   * material.clearcoat!.roughness = 0.1;
+   * ```
+   */
   roughness: number;
-  /** Scale applied to the coat normal map's tangent-space xy (no-op without a coat map) */
+  /**
+   * Strength of the coat normal map's bumps; no effect without a coat normal map
+   * @example
+   * ```ts
+   * material.clearcoat!.normalScale = 0.5;
+   * ```
+   */
   normalScale: number;
-  /** R = coat factor mask */
+  /**
+   * Map whose red channel scales `factor`
+   * @example
+   * ```ts
+   * material.clearcoat!.texture = await Assets.load('coat-mask.png');
+   * ```
+   */
   texture: Texture;
-  /** G = coat roughness mask */
+  /**
+   * Map whose green channel scales `roughness`
+   * @example
+   * ```ts
+   * material.clearcoat!.roughnessTexture = await Assets.load('coat-roughness.png');
+   * ```
+   */
   roughnessTexture: Texture;
   /**
-   * The coat normal map, or `undefined` when built without one
+   * The coat normal map, or `undefined` when the material was built without one
    *
-   * Fixed at construction — its presence selects the coat shader variant (no coat map skips the
-   * TBN + sample) — so it is read-only; to add or change it, construct a new material.
+   * Read-only because the shader is built with or without it. To add one, build a new material;
+   * to swap it, assign `material.textures.clearcoatNormal`.
+   * @advanced
    */
   readonly normalTexture?: Texture;
 }
 
 /**
- * Runtime sheen props; present iff constructed with a `sheen` group
+ * Runtime controls for a material's `sheen` group, as `material.sheen`
+ *
+ * Present only when the material was built with the group. Changes never recompile the shader.
+ * @example
+ * ```ts
+ * const material = new Material3D({ sheen: {} });
+ * material.sheen!.color = 0xffd0e0;
+ * ```
  * @category materials
  * @standard
  */
 export interface SheenProps {
-  /** Sheen tint — set any display-space `ColorSource`, read back the canonical hex number */
+  /**
+   * Colour of the sheen; takes any `ColorSource` and reads back a hex number, like
+   * `Container.tint`
+   * @example
+   * ```ts
+   * material.sheen!.color = 'pink';
+   * ```
+   */
   get color(): number;
-  /** Sets the sheen tint from any display-space `ColorSource` */
+  /** Sets the sheen colour from any `ColorSource` */
   set color(value: ColorSource);
-  /** Sheen roughness */
+  /**
+   * Roughness of the sheen, from 0 to 1
+   * @example
+   * ```ts
+   * material.sheen!.roughness = 0.6;
+   * ```
+   */
   roughness: number;
-  /** Packed slot (RGB = colour, A = roughness); see `sheenBit.ts` */
+  /**
+   * The packed map, colour in RGB and roughness in alpha
+   * @example
+   * ```ts
+   * material.sheen!.texture = await Assets.load('sheen.png');
+   * ```
+   */
   texture: Texture;
 }
 
 /**
- * Runtime anisotropy props; present iff constructed with an `anisotropy` group
+ * Runtime controls for a material's `anisotropy` group, as `material.anisotropy`
+ *
+ * Present only when the material was built with the group. Changes never recompile the shader.
+ * @example
+ * ```ts
+ * const material = new Material3D({ metallic: 1, anisotropy: {} });
+ * material.anisotropy!.rotation = Math.PI / 4;
+ * ```
  * @category materials
  * @standard
  */
 export interface AnisotropyProps {
-  /** Anisotropy strength [0,1] */
+  /**
+   * How strongly highlights stretch, from 0 to 1
+   * @example
+   * ```ts
+   * material.anisotropy!.strength = 0.5;
+   * ```
+   */
   strength: number;
-  /** Rotation of the anisotropy direction, in radians */
+  /**
+   * Rotation of the stretch direction in radians, starting from the surface's tangent
+   * @example
+   * ```ts
+   * material.anisotropy!.rotation += 0.01;
+   * ```
+   */
   rotation: number;
   /**
-   * The direction/strength map (RG = direction, B = strength), or `undefined` when built without one
+   * The direction map (direction in RG, strength in B), or `undefined` when the material was built
+   * without one
    *
-   * Its presence selects the sampling shader variant, so it is fixed at construction — read-only.
+   * Read-only because the shader is built with or without it. To add one, build a new material;
+   * to swap it, assign `material.textures.anisotropy`.
+   * @advanced
    */
   readonly texture?: Texture;
 }
@@ -410,8 +871,6 @@ const SpecularPropsClass = createFeaturePropsClass<SpecularProps>({
   texture: { kind: 'texture', slot: 'specular' },
 });
 
-// Iridescence rides shared vec4s: its factor packs into transmissionVolume.w
-// and its IOR into attenuationColorIrid.w (both always present in the struct).
 const IridescencePropsClass = createFeaturePropsClass<IridescenceProps>({
   factor: { kind: 'lane', field: 'transmissionVolume', lane: 3 },
   ior: { kind: 'lane', field: 'attenuationColorIrid', lane: 3 },
@@ -435,8 +894,6 @@ const ClearcoatPropsClass = createFeaturePropsClass<ClearcoatProps>({
   normalScale: { kind: 'lane', field: 'clearcoatParams', lane: 2 },
   texture: { kind: 'texture', slot: 'clearcoat' },
   roughnessTexture: { kind: 'texture', slot: 'clearcoatRoughness' },
-  // Read-only: the slot exists only on the coat-normal-map variant, and its
-  // presence is fixed at construction (it selects the shader bit).
   normalTexture: { kind: 'texture', slot: 'clearcoatNormal', readonly: true },
 });
 
@@ -449,153 +906,283 @@ const SheenPropsClass = createFeaturePropsClass<SheenProps>({
 const AnisotropyPropsClass = createFeaturePropsClass<AnisotropyProps>({
   strength: { kind: 'lane', field: 'anisotropyParams', lane: 0 },
   rotation: { kind: 'lane', field: 'anisotropyParams', lane: 1 },
-  // Read-only: the slot exists only on the texture variant, and its presence is
-  // fixed at construction (it selects the shader bit).
   texture: { kind: 'texture', slot: 'anisotropy', readonly: true },
 });
 
 /**
- * The texture slots Material3D's derivation walk produces
+ * The texture slots of a {@link Material3D}, as `material.textures`
  *
- * Same presence pattern as the feature props: core PBR slots always exist, extension slots iff
- * their group was constructed in. The optional slots' single-slot packing rules live on the
- * matching feature props docs.
+ * The four core slots always exist. The others exist only when the material was built with the
+ * matching group, and `clearcoatNormal` and `anisotropy` only when that group had its texture. Each
+ * option group says how its slot is packed.
+ * @example
+ * ```ts
+ * const material = new Material3D({ baseColorTexture: bricks });
+ * material.textures.baseColor = mossyBricks;
+ * ```
  * @category materials
  * @standard
  */
 export interface Material3DTextures extends MaterialTextures {
-  /** Base colour (albedo) map */
+  /**
+   * Base colour map
+   * @example
+   * ```ts
+   * material.textures.baseColor = await Assets.load('albedo.png');
+   * ```
+   */
   baseColor: Texture;
-  /** G = roughness, B = metallic */
+  /**
+   * Roughness in green, metalness in blue
+   * @example
+   * ```ts
+   * material.textures.metallicRoughness = await Assets.load('metal-rough.png');
+   * ```
+   */
   metallicRoughness: Texture;
-  /** R = ambient occlusion */
+  /**
+   * Ambient occlusion in red
+   * @example
+   * ```ts
+   * material.textures.occlusion = await Assets.load('occlusion.png');
+   * ```
+   */
   occlusion: Texture;
-  /** Tangent-space normal map */
+  /**
+   * Tangent-space normal map; holds a flat map until you assign one
+   * @example
+   * ```ts
+   * material.textures.normal = await Assets.load('normal.png');
+   * ```
+   */
   normal: Texture;
-  /** Emissive map */
+  /**
+   * Glow map
+   * @example
+   * ```ts
+   * material.textures.emissive = await Assets.load('glow.png');
+   * ```
+   */
   emissive?: Texture;
-  /** RGB = tint, A = factor */
+  /**
+   * Specular tint in RGB, strength in alpha
+   * @example
+   * ```ts
+   * material.textures.specular = await Assets.load('specular.png');
+   * ```
+   */
   specular?: Texture;
-  /** R = factor, G = thickness */
+  /**
+   * Iridescence factor in red, film thickness in green
+   * @example
+   * ```ts
+   * material.textures.iridescence = await Assets.load('film.png');
+   * ```
+   */
   iridescence?: Texture;
-  /** R = transmitted fraction */
+  /**
+   * Transmission factor in red
+   * @example
+   * ```ts
+   * material.textures.transmission = await Assets.load('frost-mask.png');
+   * ```
+   */
   transmission?: Texture;
-  /** G = thickness */
+  /**
+   * Volume thickness in green
+   * @example
+   * ```ts
+   * material.textures.thickness = await Assets.load('thickness.png');
+   * ```
+   */
   thickness?: Texture;
-  /** R = coat factor */
+  /**
+   * Clearcoat factor in red
+   * @example
+   * ```ts
+   * material.textures.clearcoat = await Assets.load('coat-mask.png');
+   * ```
+   */
   clearcoat?: Texture;
-  /** G = coat roughness */
+  /**
+   * Clearcoat roughness in green
+   * @example
+   * ```ts
+   * material.textures.clearcoatRoughness = await Assets.load('coat-roughness.png');
+   * ```
+   */
   clearcoatRoughness?: Texture;
-  /** Coat normal map */
+  /**
+   * Clearcoat normal map
+   * @example
+   * ```ts
+   * material.textures.clearcoatNormal = await Assets.load('coat-normal.png');
+   * ```
+   */
   clearcoatNormal?: Texture;
-  /** RGB = colour, A = roughness */
+  /**
+   * Sheen colour in RGB, roughness in alpha
+   * @example
+   * ```ts
+   * material.textures.sheen = await Assets.load('sheen.png');
+   * ```
+   */
   sheen?: Texture;
-  /** RG = direction, B = strength */
+  /**
+   * Anisotropy direction in RG, strength in B
+   * @example
+   * ```ts
+   * material.textures.anisotropy = await Assets.load('brush-direction.png');
+   * ```
+   */
   anisotropy?: Texture;
 }
 
 /**
- * The packed data shape Material3D's construction-determined struct produces
+ * The fields of {@link Material3D#data}
  *
- * Core PBR fields are always present (pbrMaterialBit declares them); extension fields exist iff
- * their feature group was constructed in. Typing `data` with it lets accessors and seeding read
- * fields without casts.
+ * The core fields always exist; the others only when the material was built with the matching
+ * group. Typing `data` this way lets the material's accessors read fields without casts.
  * @category materials
  * @advanced
  */
 export interface Material3DData extends MaterialData {
-  /** Linear rgb, alpha in the last lane */
+  /** Base colour in linear light, alpha in the last lane */
   baseColor: Float32Array;
   /** Lanes: metallic, roughness, occlusionStrength, ior */
   pbrParams: Float32Array;
-  /** Bump-strength multiplier for the normal map */
+  /** Strength of the normal map's bumps */
   normalScale: number;
   /** Lanes: transmission factor, thickness, attenuationDistance, iridescence factor */
   transmissionVolume: Float32Array;
-  /** Lanes: attenuationColor rgb, iridescence IOR */
+  /** Lanes: attenuationColor in linear light, iridescence IOR */
   attenuationColorIrid: Float32Array;
-  /** Linear emissive rgb */
+  /** Glow colour in linear light */
   emissive?: Float32Array;
-  /** Emissive intensity multiplier */
+  /** Multiplier on the glow */
   emissiveStrength?: number;
-  /** Thickness lerp endpoint at texture G = 1, in nm */
+  /** Iridescence film thickness in nanometres where the texture's green channel is 1 */
   iridescenceThickness?: number;
-  /** Thickness lerp endpoint at texture G = 0, in nm */
+  /** Iridescence film thickness in nanometres where the texture's green channel is 0 */
   iridescenceThicknessMinimum?: number;
-  /** Lanes: F0 tint rgb, factor */
+  /** Lanes: specular tint in linear light, factor */
   specularParams?: Float32Array;
   /** Lanes: factor, roughness, normalScale, unused */
   clearcoatParams?: Float32Array;
-  /** Lanes: sheen colour rgb, roughness */
+  /** Lanes: sheen colour in linear light, roughness */
   sheenParams?: Float32Array;
   /** Lanes: strength, rotation, unused, unused */
   anisotropyParams?: Float32Array;
 }
 
 /**
- * A standard Physically Based Rendering (PBR) material
+ * The standard physically based (PBR) material
  *
- * Supports base color, metallic/roughness, emissive, normal, and occlusion maps,
- * as well as advanced PBR extensions like transmission, volume, and iridescence.
+ * Base colour, metalness and roughness, with normal, occlusion and emissive maps, plus the glTF
+ * extensions for specular, iridescence, transmission and volume, clearcoat, sheen and anisotropy.
+ * glTF models load into it.
  *
- * Material properties live in {@link BaseMaterial3D#data} — the packed,
- * generated object mirroring the GPU `Material` struct. Core PBR scalars
- * (`metallic`, `roughness`, …) are flat accessors into it; each extension
- * feature exposes a runtime props object mirroring its option group
- * (`material.clearcoat.roughness`). Writes are free data syncs staged for
- * the next upload.
+ * Core values such as `metallic` and `roughness` are properties of the material. Each extension is
+ * an option group, and passing one gives the material a runtime object of the same shape:
+ * `new Material3D({ clearcoat: { roughness: 0.2 } })` gives `material.clearcoat.roughness`. Writing
+ * a value is a cheap data update for the next upload, never a shader recompile.
  *
- * ## Feature set is fixed at construction
+ * ## The feature set is fixed at construction
  *
- * Extension features (emissive, specular, iridescence, transmission,
- * clearcoat, sheen) are locked in by the constructor options: each one
- * allocates its texture slots, struct fields, and shader bit up front, and
- * keeps them for the material's lifetime. Runtime writes to feature values
- * (`transmission.factor`, `iridescence.factor`, `clearcoat.factor`, …) are
- * free data syncs — never a shader recompile — and setting a value to 0
- * simply makes the feature contribute nothing. To add a feature a material
- * wasn't constructed with, create a new `Material3D` and assign it to the
- * mesh.
+ * The groups passed to the constructor decide which features the shader has, and that never
+ * changes: each group adds its texture slots, data fields and shader code up front, and a group
+ * left out costs nothing. A feature's runtime object is `undefined` when the material was built
+ * without it. Setting a feature's strength to 0 turns its effect off but keeps its cost. To add a
+ * feature later, build a new `Material3D` and assign it to the mesh.
  *
- * Custom surface extensions compose via `extraBits` (see
- * {@link BaseMaterial3DOptions#extraBits}). They slot after the feature bits and before the
- * cutout test, so `material`-slot code sees the post-baseColor `albedo` / `alpha` and any
- * alpha it writes still reaches the cutout.
+ * Custom shader code goes in `extraBits` ({@link BaseMaterial3DOptions#extraBits}). It runs after
+ * the features and before the `'mask'` cutoff, so it sees the final `albedo` and `alpha`, and any
+ * alpha it writes still reaches the cutoff.
+ * @example
+ * ```ts
+ * const paint = new Material3D({
+ *   baseColor: 0x8c1c13,
+ *   metallic: 0.2,
+ *   roughness: 0.5,
+ *   clearcoat: { roughness: 0.05 },
+ * });
+ * paint.clearcoat!.factor = 0.8;
+ * ```
  * @category materials
  * @standard
  */
 export class Material3D extends BaseMaterial3D<Material3DData, Material3DTextures> {
-  // --- Runtime feature props, mirroring the construction option groups ---
-  // Created only for the groups passed to the constructor; `undefined` is the
-  // feature lock. Option shape = runtime shape:
-  // `new Material3D({ clearcoat: { roughness: 0.2 } })` →
-  // `material.clearcoat.roughness = 0.3`.
-  /** Runtime emissive props; present iff constructed with an `emissive` group */
+  /**
+   * Runtime glow controls; present only when the material was built with an `emissive` group
+   * @example
+   * ```ts
+   * if (material.emissive) material.emissive.strength = 2;
+   * ```
+   */
   public readonly emissive?: EmissiveProps;
-  /** Runtime specular props; present iff constructed with a `specular` group */
+  /**
+   * Runtime specular controls; present only when the material was built with a `specular` group
+   * @example
+   * ```ts
+   * if (material.specular) material.specular.factor = 0.5;
+   * ```
+   */
   public readonly specular?: SpecularProps;
-  /** Runtime iridescence props; present iff constructed with an `iridescence` group */
+  /**
+   * Runtime iridescence controls; present only when the material was built with an `iridescence`
+   * group
+   * @example
+   * ```ts
+   * if (material.iridescence) material.iridescence.factor = 1;
+   * ```
+   */
   public readonly iridescence?: IridescenceProps;
-  /** Runtime transmission + volume props; present iff constructed with a `transmission` group */
+  /**
+   * Runtime transmission controls; present only when the material was built with a `transmission`
+   * group
+   * @example
+   * ```ts
+   * if (material.transmission) material.transmission.factor = 0.9;
+   * ```
+   */
   public readonly transmission?: TransmissionProps;
-  /** Runtime clearcoat props; present iff constructed with a `clearcoat` group */
+  /**
+   * Runtime clearcoat controls; present only when the material was built with a `clearcoat` group
+   * @example
+   * ```ts
+   * if (material.clearcoat) material.clearcoat.roughness = 0.1;
+   * ```
+   */
   public readonly clearcoat?: ClearcoatProps;
-  /** Runtime sheen props; present iff constructed with a `sheen` group */
+  /**
+   * Runtime sheen controls; present only when the material was built with a `sheen` group
+   * @example
+   * ```ts
+   * if (material.sheen) material.sheen.roughness = 0.4;
+   * ```
+   */
   public readonly sheen?: SheenProps;
-  /** Runtime anisotropy props; present iff constructed with an `anisotropy` group */
+  /**
+   * Runtime anisotropy controls; present only when the material was built with an `anisotropy`
+   * group
+   * @example
+   * ```ts
+   * if (material.anisotropy) material.anisotropy.rotation = Math.PI / 2;
+   * ```
+   */
   public readonly anisotropy?: AnisotropyProps;
 
   /**
-   * Texture-bearing extension bits this material opted into at construction, in composition order
+   * The feature bits this material was built with, in the order they compose
    *
-   * The single ordering source: the constructor derives texture slots by walking
-   * `[pbrMaterialBit, ...this._featureBits]` and {@link Material3D#getPrimaryDescriptor} splices
-   * the same list into the shader bit list, so derived slots and compiled sample indices can't
-   * disagree.
+   * The constructor derives the texture slots and struct from `pbrMaterialBit`, `uvTransformBit`,
+   * these and `extraBits`, and {@link Material3D#getPrimaryDescriptor} compiles the same list, so
+   * the slots and the shader's sample indices can't disagree.
    *
-   * Order is still semantic for the shader: specularBit must precede iridescenceBit (it rewrites
-   * fresnelF0/f90, which iridescence reads as its baseF0 — the Khronos composition rule when
-   * both extensions are present), and lobe bits execute in declaration order.
+   * Order matters in the shader. `emissiveBit` assigns `emissive` and `transmissionBit` adds to
+   * it. `specularBit` rewrites `fresnelF0` and `f90`, which `iridescenceBit` takes as its base F0,
+   * the composition the Khronos specs define for the pair. The clearcoat and sheen lobes run in
+   * this order too, each adjusting the `finalColor` the one before left.
    */
   private readonly _featureBits: ShaderBit[] = [];
 
@@ -612,11 +1199,6 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
       this._passBit = RenderPassBit.TRANSMISSION;
     }
 
-    // Textures keyed by the names the bits declare in their `textures`
-    // arrays; each enabled feature fills its own slots below. Unfilled names
-    // fall back to WHITE (the identity multiplier) in `_deriveLayoutFromBits`;
-    // normal-map slots default to the flat NORMAL_MAP (encodes (0,0,1)) so
-    // the unconditional TBN sample is a no-op without an authored map.
     const textures: Record<string, Texture | undefined> = {
       baseColor: options.baseColorTexture,
       metallicRoughness: options.metallicRoughnessTexture,
@@ -624,24 +1206,17 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
       normal: options.normalTexture ?? NORMAL_MAP,
     };
 
-    // Presence of a feature group is the gate: each block fills its texture
-    // slots and registers its bit — and the set never changes for the
-    // material's lifetime. Group defaults are "visibly on" (factor 1 /
-    // white) — opening the group signals intent; the glTF loader passes
-    // spec values explicitly so file defaults are unaffected.
     if (emissive) {
       textures.emissive = emissive.texture;
       this._featureBits.push(emissiveBit);
     }
 
     if (specular) {
-      // Single packed slot (RGB = tint, A = factor) — the colour texture wins.
       textures.specular = specular.colorTexture ?? specular.texture;
       this._featureBits.push(specularBit);
     }
 
     if (iridescence) {
-      // Single packed slot (R = factor, G = thickness) — the factor texture wins.
       textures.iridescence = iridescence.texture ?? iridescence.thicknessTexture;
       this._featureBits.push(iridescenceBit);
     }
@@ -655,9 +1230,6 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     if (clearcoat) {
       textures.clearcoat = clearcoat.texture;
       textures.clearcoatRoughness = clearcoat.roughnessTexture;
-      // Coat normal mapping is opt-in: only the with-normal-map variant samples
-      // the coat normal + builds a TBN (and allocates the slot). Without it the
-      // coat frame is the geometric normal — no TBN and no extra texture fetch.
       if (clearcoat.normalTexture) {
         textures.clearcoatNormal = clearcoat.normalTexture;
         this._featureBits.push(clearcoatNormalMapBit);
@@ -667,14 +1239,11 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     }
 
     if (sheen) {
-      // Single packed slot (RGB = colour, A = roughness) — the colour texture wins.
       textures.sheen = sheen.texture ?? sheen.roughnessTexture;
       this._featureBits.push(sheenBit);
     }
 
     if (anisotropy) {
-      // The direction/strength map is opt-in: only the texture variant samples it
-      // (and allocates the slot). Without it the direction is a uniform (1,0).
       if (anisotropy.texture) {
         textures.anisotropy = anisotropy.texture;
         this._featureBits.push(anisotropyTextureBit);
@@ -683,43 +1252,21 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
       }
     }
 
-    // Slot layout derives from the bits' own `textures` declarations — the
-    // same walk texturesPluginGpu/Gl use to assign the shader's sample
-    // indices, so the array and the compiled shader can't disagree. The map
-    // above only supplies content for the names that walk produces.
-    // uvTransformBit declares no textures but does declare struct fields —
-    // it's unconditional, so the struct snapshot taken here always covers
-    // everything the descriptor will compile.
     this._deriveLayoutFromBits([pbrMaterialBit, uvTransformBit, ...this._featureBits, ...this._extraBits], textures);
 
-    // --- Seed the packed state ---
-    // Derivation created `data` laid out as this material's struct; writes
-    // land straight in upload memory, and `data` starts dirty so the seeds
-    // reach the first frame without ceremony.
     const data = this.data;
 
-    // Dielectric/plastic by default — the conventional engine baseline,
-    // and what pbrMaterialBit also initialises its local `metallic` to.
     data.pbrParams[0] = options.metallic ?? 0;
     data.pbrParams[1] = options.roughness ?? 1;
     data.pbrParams[2] = options.occlusionStrength ?? 1;
     data.pbrParams[3] = options.ior ?? 1.5;
     data.normalScale = options.normalScale ?? 1;
 
-    // Feature-off baselines for the always-present shared vecs. The lanes
-    // are only read behind their feature's shader gate, but the upload
-    // carries them regardless, so keep them deterministic (the zero-filled
-    // buffer covers every other lane).
     data.transmissionVolume[2] = 1e10;
     const attenuationColorIrid = data.attenuationColorIrid;
     writeLinearRgb(attenuationColorIrid, 0, Color.shared.setValue(0xffffff));
     attenuationColorIrid[3] = 1.3;
 
-    // Each present group gets its runtime props object, and seeds flow
-    // through the same accessors runtime writes use. Group defaults are
-    // "visibly on" (factor 1 / white) — opening the group signals intent;
-    // the glTF loader passes spec values explicitly so file defaults are
-    // unaffected. Texture slots were already filled by the derivation walk.
     if (emissive) {
       const props = (this.emissive = new EmissivePropsClass(this));
       props.color = emissive.color ?? 0xffffff;
@@ -737,9 +1284,6 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
       props.factor = iridescence.factor ?? 1;
       props.ior = iridescence.ior ?? 1.3;
       props.thicknessMaximum = iridescence.thicknessMaximum ?? 400;
-      // Spec default is 100 nm, but the presence default is a zero baseline
-      // so a thickness texture sampling G=0 gives no hue shift. The glTF
-      // loader passes 100 explicitly per spec.
       props.thicknessMinimum = iridescence.thicknessMinimum ?? 0;
     }
 
@@ -772,20 +1316,21 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
   }
 
   /**
-   * Descriptors cached per env-source bit name
-   *
-   * One entry per env kind (cube / hemisphere / default) seen across the views that render this
-   * material — typically 1–3 entries. Reset whenever `_variantDirty` flips.
-   *
-   * Keying on the env-bit name (a structural signature) means multiple views sharing the same
-   * env kind share one descriptor, and entries never leak per view.
+   * Descriptors keyed by the name of the view's environment bit, so views with the same kind of
+   * environment share one; at most three entries, cleared when the variant goes stale
    */
   private _descriptorByEnvKey: Record<string, ShaderDescriptor> = Object.create(null);
 
   /**
-   * Builds the PBR shader descriptor for `view`, cached per env-source kind
-   * @param view - The rendering view; its env-source bit keys the descriptor cache.
-   * @returns The shader descriptor for the material's primary pass under the view's environment.
+   * The shader descriptor for a view, cached per kind of environment
+   *
+   * The view's environment bit supplies `sampleEnvironment` to `iblBit` and the clearcoat and sheen
+   * lobes. `iblBit` joins only when the view has an environment. Without one `sampleEnvironment`
+   * returns zero, but the compiler may still run the work multiplied by it, since `x * 0` isn't
+   * zero for NaN or infinity. `screenSpaceFuncsBit` is always in the list. None of these declare a
+   * struct field or texture, so every kind of environment fits the layout derived at construction.
+   * @param view - View whose environment picks the descriptor
+   * @advanced
    */
   public override getPrimaryDescriptor(view: View3D): ShaderDescriptor {
     if (this._variantDirty) {
@@ -799,17 +1344,9 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     let descriptor = this._descriptorByEnvKey[envKey];
     if (descriptor) return descriptor;
 
-    // envBit declares `sampleEnvironment` consumed by iblBit, clearcoatBit
-    // and sheenBit. iblBit is the substrate's split-sum consumer, so the PBR
-    // ambient term flows through the env-source contract whichever source the
-    // view picks. iblBit reflects the specular env sample off `specularNormal`
-    // (pbrMaterialBit defaults it to the normal; anisotropyBit overrides it with
-    // a bent normal) — no IBL variant.
     const bitsGpu = [pbrMaterialBit, envBit];
     const bitsGl = [pbrMaterialBit, envBit];
 
-    // Skip IBL when `sampleEnvironment` always returns zero. Compilers are not required to eliminate
-    // the BRDF lookup, Fresnel, and multiscatter work through `x * 0.0` because x may be NaN or infinite.
     if (view.environment !== null) {
       bitsGpu.push(iblBit);
       bitsGl.push(iblBit);
@@ -818,27 +1355,13 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     bitsGpu.push(pbrLightingBit);
     bitsGl.push(pbrLightingBit);
 
-    // screenSpaceFuncsBit is always present: it's a binding-less header-only
-    // helper (`screenUVFromWorld`) with zero resource/layout footprint, and an
-    // uncalled function is dead-code-eliminated. Including it unconditionally
-    // means any feature that samples the opaque colour/depth copies (transmission
-    // today, refraction/water/etc. tomorrow) can just call it — no need to gate
-    // it per-feature, and no risk of the no-dedup duplicate-definition error.
     bitsGpu.push(screenSpaceFuncsBit);
     bitsGl.push(screenSpaceFuncsBit);
 
     bitsGpu.push(uvTransformBit);
     bitsGl.push(uvTransformBit);
-    // The extension features locked at construction, spliced as one block so
-    // the texture-bearing bit order always equals the constructor's slot
-    // derivation (see `_featureBits` for the within-block ordering rule).
-    // Each bit stays for the material's lifetime: a runtime
-    // `emissive.color = 0x000000` or `transmission.factor = 0` just syncs
-    // the value (shader contribution → 0, no recompile, no slot shift).
     bitsGpu.push(...this._featureBits);
     bitsGl.push(...this._featureBits);
-    // User extension bits, after the features and before the cutout test —
-    // mirroring the constructor's slot derivation order.
     bitsGpu.push(...this._extraBits);
     bitsGl.push(...this._extraBits);
     if (this._alphaMode === 'mask') {
@@ -852,18 +1375,19 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     return descriptor;
   }
 
-  // --- Convenience getters/setters into struct backing arrays ---
-  // `pbrParams` is float32, so the setters compare against the rounded value; a raw 0.3 never matches.
-
   /**
-   * Metalness (0 = dielectric, 1 = metal)
+   * Metalness, from 0 (non-metal) to 1 (metal)
    * @default 0
+   * @example
+   * ```ts
+   * material.metallic = 1;
+   * ```
    */
   public get metallic(): number {
     return this.data.pbrParams[0];
   }
   /**
-   * Sets the metalness, syncing the packed PBR params
+   * Sets the metalness
    * @param value - Metalness from 0 (dielectric) to 1 (metal)
    */
   public set metallic(value: number) {
@@ -873,14 +1397,18 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
   }
 
   /**
-   * Perceptual roughness (0 = mirror, 1 = fully diffuse)
+   * Perceptual roughness, from 0 (mirror-like) to 1 (fully rough)
    * @default 1
+   * @example
+   * ```ts
+   * material.roughness = 0.2;
+   * ```
    */
   public get roughness(): number {
     return this.data.pbrParams[1];
   }
   /**
-   * Sets the perceptual roughness, syncing the packed PBR params
+   * Sets the perceptual roughness
    * @param value - Roughness from 0 (mirror) to 1 (fully diffuse)
    */
   public set roughness(value: number) {
@@ -890,14 +1418,21 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
   }
 
   /**
-   * Occlusion map strength
+   * Multiplier on the occlusion
+   *
+   * Ambient and environment light are scaled by the sampled occlusion times this value, so values
+   * below 1 darken that light even where the map is white, and values above 1 brighten it.
    * @default 1
+   * @example
+   * ```ts
+   * material.occlusionStrength = 0.8;
+   * ```
    */
   public get occlusionStrength(): number {
     return this.data.pbrParams[2];
   }
   /**
-   * Sets the occlusion map strength, syncing the packed PBR params
+   * Sets the multiplier on the occlusion
    * @param value - Multiplier on the sampled occlusion that darkens ambient light
    */
   public set occlusionStrength(value: number) {
@@ -907,14 +1442,19 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
   }
 
   /**
-   * Index of refraction of the dielectric substrate (KHR_materials_ior)
+   * Index of refraction (`KHR_materials_ior`); sets how strongly non-metals reflect, and how far
+   * transmission bends light
    * @default 1.5
+   * @example
+   * ```ts
+   * material.ior = 1.33;
+   * ```
    */
   public get ior(): number {
     return this.data.pbrParams[3];
   }
   /**
-   * Sets the substrate index of refraction, syncing the packed PBR params
+   * Sets the index of refraction
    * @param value - Refractive index; 1.5 suits most glass and plastic
    */
   public set ior(value: number) {
@@ -924,16 +1464,21 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
   }
 
   /**
-   * Scalar bump-strength multiplier for the substrate normal map
+   * Strength of the normal map's bumps
    *
-   * Mirrors glTF's `normalTextureInfo.scale`; 1 is a no-op.
+   * Matches glTF's `normalTextureInfo.scale`. 1 leaves the map as authored, and no value has an
+   * effect without a map.
    * @default 1
+   * @example
+   * ```ts
+   * material.normalScale = 2;
+   * ```
    */
   public get normalScale(): number {
     return this.data.normalScale;
   }
   /**
-   * Sets the bump-strength multiplier for the substrate normal map (1 is a no-op)
+   * Sets the strength of the normal map's bumps
    * @param value - Multiplier on the normal map's tangent-space xy
    */
   public set normalScale(value: number) {
@@ -941,11 +1486,14 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
   }
 
   /**
-   * Releases this material's owned CPU state, then the PBR-specific extras
+   * Frees the material for good
    *
-   * The extras are the per-env descriptor cache, the construction feature-bit list, and the
-   * runtime feature-prop objects. Idempotent — `super.destroy` guards re-entry.
-   * @param options - Teardown flags forwarded to {@link BaseMaterial3D#destroy}.
+   * Its textures stay alive unless `options` asks for them. Calling it again does nothing.
+   * @param options - Whether to destroy the textures too, as {@link BaseMaterial3D#destroy} takes them
+   * @example
+   * ```ts
+   * mesh.material.destroy();
+   * ```
    */
   public override destroy(options?: TypeOrBool<TextureDestroyOptions>): void {
     if (this.destroyed) return;

@@ -10,15 +10,9 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Step 2 of GPU culling plumbs per-geometry bounds with no consumer yet: a minted
-// `_geometryDataIndex`, a bounding sphere staged in the pipe's GeometryDataStoreBuffer,
-// and that index written into the mesh's store entry at MESH3D_LANE_GEOMETRY. We read
-// the CPU-staged buffers back directly to prove the wiring — index round-trips, sphere
-// matches bounds3D, and a geometry swap refreshes the lane (set-geometry _storeDirty).
-
 const getPipe = (app: Application<WebGPURenderer>): View3DPipeGpu => app.renderer.renderPipes.view3d;
 
-describe('geometry-data plumbing (bounds sphere + geometry lane)', () => {
+describe('geometry-data plumbing the GPU cull reads (bounds sphere + geometry lane), checked in the CPU-staged buffers', () => {
   it('mints an index, stages the sphere from bounds3D, and writes it into the geometry lane', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'geom-data',
@@ -37,14 +31,12 @@ describe('geometry-data plumbing (bounds sphere + geometry lane)', () => {
 
       const pipe = getPipe(app);
 
-      // Index minted (>= 0) and echoed into the store entry's geometry lane.
       expect(geometry._geometryDataIndex).toBeGreaterThanOrEqual(0);
       const storeIndex = mesh._storeIndex;
       expect(view3d._sceneBatch.storeBuffer.u32Data[storeIndex * MESH3D_STORE_STRIDE + MESH3D_LANE_GEOMETRY]).toBe(
         geometry._geometryDataIndex,
       );
 
-      // Staged sphere = center + radius derived from the geometry's own bounds3D.
       const b = geometry.bounds3D;
       const cx = (b.min.x + b.max.x) / 2;
       const cy = (b.min.y + b.max.y) / 2;
@@ -62,7 +54,7 @@ describe('geometry-data plumbing (bounds sphere + geometry lane)', () => {
     }
   });
 
-  it('refreshes the geometry lane when the mesh geometry is swapped', async () => {
+  it('rewrites the geometry lane with the new index when the mesh geometry is swapped', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'geom-data-swap',
       appOptions: { preference: 'webgpu', width: 128, height: 128 },
@@ -82,7 +74,6 @@ describe('geometry-data plumbing (bounds sphere + geometry lane)', () => {
         view3d._sceneBatch.storeBuffer.u32Data[mesh._storeIndex * MESH3D_STORE_STRIDE + MESH3D_LANE_GEOMETRY],
       ).toBe(geomA._geometryDataIndex);
 
-      // Swapping geometry must flip _storeDirty so copyMeshData rewrites the lane with the new index.
       mesh.geometry = geomB;
       app.render();
 

@@ -5,22 +5,18 @@ import type { Sphere } from '../shapes/Sphere';
 import type { PointData3D } from '../vector/PointData3D';
 
 /**
- * The `Frustum` object represents the convex volume bounded by six inward-facing clipping planes
+ * A volume bounded by six planes that face inward, most often the volume a camera sees
  *
- * Frusta are typically built from a camera's view-projection matrix and used for visibility tests
- * — meshes that fail every `intersects*` call can be skipped during rendering.
+ * Every {@link Camera3D} keeps one as {@link Camera3D#frustum}, rebuilt each frame, and by default
+ * the engine culls meshes against it. Test against it yourself to skip work for things no camera
+ * can see, or build your own from a matrix or from planes to cull against another volume.
  *
- * Planes face inward, so a point is "inside" when it produces a non-negative signed distance
- * against every plane. Internally the six planes are packed as 24 floats (`[nx, ny, nz, c]`) to
- * keep intersection tests in tight scalar loops without per-plane allocations.
+ * A point is inside when it lies on the inner side of all six planes, boundary included.
  * @example
  * ```ts
- * // Build from a camera's view-projection matrix.
- * const frustum = new Frustum().setFromProjectionMatrix(camera.viewProjection);
- *
- * frustum.containsPoint({ x: 0, y: 0, z: -10 });
- * frustum.intersectsSphere(sphere);
- * frustum.intersectsBox(box);
+ * const onScreen = enemies.filter((enemy: Mesh3D) =>
+ *   camera.frustum.intersectsSphere(enemy.boundingSphere),
+ * );
  * ```
  * @see {@link Plane} For the half-spaces enclosing the frustum
  * @see {@link Box} For axis-aligned bounding box intersections
@@ -29,17 +25,18 @@ import type { PointData3D } from '../vector/PointData3D';
  * @standard
  */
 export class Frustum {
-  // Six planes packed as `[nx, ny, nz, c]` each (24 floats). Storing the planes inline avoids
-  // allocating six `Plane` objects per frustum and keeps the hot-path intersection tests on a
-  // single contiguous buffer.
+  /**
+   * Backing store for {@link Frustum#planesData}
+   *
+   * One flat array rather than six `Plane` objects, so a frustum allocates once and the
+   * intersection tests loop over contiguous floats.
+   */
   private readonly _planes: Float32Array;
 
   /**
    * Creates a new `Frustum`
    *
-   * Defaults to six planes with normal `(1, 0, 0)` and constant `0`, matching the default of
-   * `new Plane()`. Use {@link Frustum#setFromProjectionMatrix} to populate from a camera's
-   * view-projection matrix.
+   * A plane left out defaults to `new Plane()`: normal `(1, 0, 0)`, constant `0`.
    * @param p0 - The first plane
    * @param p1 - The second plane
    * @param p2 - The third plane
@@ -60,9 +57,15 @@ export class Frustum {
   }
 
   /**
-   * The six planes packed as 24 floats — `[nx, ny, nz, c]` × 6, inward-facing and normalized
+   * The six planes as 24 floats, `[nx, ny, nz, c]` per plane in {@link Frustum#getPlane} order
    *
-   * This is the backing store, not a copy; the GPU cull compute uploads it directly.
+   * This is the frustum's own storage, not a copy: writing to it changes the frustum. The engine's
+   * culling reads it directly. Pass it to your own shader to cull on the GPU.
+   * @example
+   * ```ts
+   * device.queue.writeBuffer(frustumBuffer, 0, camera.frustum.planesData);
+   * ```
+   * @advanced
    */
   public get planesData(): Float32Array {
     return this._planes;
@@ -70,6 +73,19 @@ export class Frustum {
 
   /**
    * Sets the six planes of this frustum
+   *
+   * Each plane's normal must be unit length and point into the volume.
+   * @example
+   * ```ts
+   * camera.cullFrustum = new Frustum().set(
+   *   new Plane(new Vector3(1, 0, 0), 20),
+   *   new Plane(new Vector3(-1, 0, 0), 20),
+   *   new Plane(new Vector3(0, 1, 0), 0),
+   *   new Plane(new Vector3(0, -1, 0), 10),
+   *   new Plane(new Vector3(0, 0, 1), 20),
+   *   new Plane(new Vector3(0, 0, -1), 20),
+   * );
+   * ```
    * @param p0 - The first plane
    * @param p1 - The second plane
    * @param p2 - The third plane
@@ -90,10 +106,17 @@ export class Frustum {
   }
 
   /**
-   * Extracts the six clipping planes from `matrix` (typically a view-projection matrix)
+   * Sets the six planes to the volume that `matrix` maps onto the screen
    *
-   * Planes are normalized so signed distances returned by intersection tests are in world units.
-   * Plane order is right, left, top, bottom, far, near. All planes face inward.
+   * The planes come out in the space the matrix maps from: world space for a view-projection
+   * matrix, view space for a projection matrix alone. They are normalized, so distances to them are
+   * in that space's units. The matrix must map depth to `[-1, 1]`, as
+   * {@link Matrix4#makePerspective} and {@link Matrix4#makeOrthographic} do.
+   * @example
+   * ```ts
+   * const spotlightView = new Frustum().setFromProjectionMatrix(securityCamera.viewProjection);
+   * const spotted = spotlightView.containsPoint(player.position);
+   * ```
    * @param matrix - The matrix to extract clipping planes from
    * @returns This frustum for chaining
    */
@@ -129,6 +152,11 @@ export class Frustum {
 
   /**
    * Copies `frustum` into this frustum
+   * @example
+   * ```ts
+   * frozenFrustum.copyFrom(camera.frustum);
+   * camera.cullFrustum = frozenFrustum;
+   * ```
    * @param frustum - The frustum to copy from
    * @returns This frustum for chaining
    */
@@ -140,6 +168,10 @@ export class Frustum {
 
   /**
    * Copies this frustum into `target` and returns it
+   * @example
+   * ```ts
+   * camera.frustum.copyTo(debugFrustum);
+   * ```
    * @param target - The frustum to copy into
    * @returns The given `target`
    */
@@ -151,6 +183,10 @@ export class Frustum {
 
   /**
    * Creates a new `Frustum` with the same planes
+   * @example
+   * ```ts
+   * camera.cullFrustum = camera.frustum.clone();
+   * ```
    * @returns The new frustum
    */
   public clone(): Frustum {
@@ -159,6 +195,13 @@ export class Frustum {
 
   /**
    * Returns true when all six planes match `frustum` exactly (no epsilon tolerance)
+   * @example
+   * ```ts
+   * if (!camera.frustum.equals(lastFrustum)) {
+   *   lastFrustum.copyFrom(camera.frustum);
+   *   refreshVisibleList();
+   * }
+   * ```
    * @param frustum - The frustum to compare with
    * @returns Whether all six planes match
    */
@@ -175,8 +218,13 @@ export class Frustum {
   /**
    * Writes plane `index` into `out` (or a new `Plane`) and returns it
    *
-   * After {@link Frustum#setFromProjectionMatrix} the planes are ordered right, left, top, bottom,
+   * After {@link Frustum#setFromProjectionMatrix} the planes are ordered right, left, bottom, top,
    * far, near.
+   * @example
+   * ```ts
+   * const near = camera.frustum.getPlane(5, new Plane());
+   * const distanceInFront = near.distanceToPoint(pickup.position);
+   * ```
    * @param index - The plane index, `0` to `5`
    * @param out - Optional plane to write into; a new `Plane` when omitted
    * @returns The written plane
@@ -192,6 +240,10 @@ export class Frustum {
 
   /**
    * Returns true when `point` lies inside this frustum (boundary is inclusive)
+   * @example
+   * ```ts
+   * marker.visible = !camera.frustum.containsPoint(objective.position);
+   * ```
    * @param point - The point to test
    * @returns Whether the point is inside this frustum
    */
@@ -212,6 +264,14 @@ export class Frustum {
 
   /**
    * Returns true when `box` and this frustum overlap
+   *
+   * Like most culling tests it errs towards true: a box just outside a corner of the frustum can
+   * pass, but a box that overlaps it never fails.
+   * @example
+   * ```ts
+   * building.getLocalBounds(bounds).applyMatrix4(building.worldTransform);
+   * if (camera.frustum.intersectsBox(bounds)) updateWindowLights(building);
+   * ```
    * @param box - The box to test
    * @returns Whether the box and this frustum overlap
    */
@@ -241,7 +301,12 @@ export class Frustum {
   /**
    * Returns true when `sphere` and this frustum overlap
    *
-   * Empty spheres (`radius < 0`) never intersect.
+   * Like {@link Frustum#intersectsBox} it errs towards true near the frustum's corners. Empty
+   * spheres (`radius < 0`) never intersect.
+   * @example
+   * ```ts
+   * if (camera.frustum.intersectsSphere(enemy.boundingSphere)) enemy.updateAnimation(dt);
+   * ```
    * @param sphere - The sphere to test
    * @returns Whether the sphere and this frustum overlap
    */
@@ -264,6 +329,10 @@ export class Frustum {
 
   /**
    * Returns a string representation of this frustum
+   * @example
+   * ```ts
+   * console.log(`${camera.frustum}`);
+   * ```
    * @returns The string `[pixi-3d/math:Frustum]`
    */
   public toString(): string {

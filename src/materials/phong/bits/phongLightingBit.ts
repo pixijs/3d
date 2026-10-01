@@ -1,35 +1,26 @@
 import { createLightingBit } from '../../../core/shader/createLightingBit';
 
 /**
- * Normalized Blinn-Phong direct lighting
+ * Blinn-Phong lighting, normalized to read at the same brightness as `pbrLightingBit`
  *
- * Built via {@link createLightingBit} — only the shading math lives here; the
- * light-loop boilerplate (dispatch / attenuation / shadows) is shared.
+ * Built with {@link createLightingBit}, which owns the light loop, attenuation and shadows; this bit
+ * supplies only the shading.
  *
- * Model:
- *   - Diffuse: PI-normalized Lambert (`albedo / PI`).
- *   - Specular: half-vector Blinn-Phong, energy-normalized by
- *     `(shininess/2 + 1) / PI` (keeps highlight energy ~constant as shininess
- *     changes), with a Fresnel-Schlick term on the specular tint and the
- *     standard implicit geometry factor 0.25.
- *   - Both lobes scaled by irradiance `= light.color * N·L * attenuation * shadow`.
- *   - Ambient `= uGlobalLightParams.xyz * albedo / PI` (the same PI convention
- *     `pbrLightingBit` uses) plus the view environment's irradiance
- *     `sampleEnvironment(normal, 1.0) * albedo` — the consumption shape
- *     `iblBit`'s substrate diffuse uses, so Phong and PBR match brightness
- *     under one rig, hemisphere and cubemap included. There is no specular
- *     env response: classic Phong highlights come from direct lights only.
+ * - Diffuse is Lambert, `albedo / PI`.
+ * - Specular is `pow(N·H, shininess)` around the half vector, scaled by `(shininess / 2 + 1) / PI`
+ *   to keep the highlight's energy roughly steady as shininess changes, by 0.25 for the implicit
+ *   geometry term, and by `specularStrength`. Those three fold into `specScale` once per fragment.
+ *   Fresnel-Schlick tints it from `specularColor`, in the spherical-Gaussian form `pbrLightingBit`
+ *   documents.
+ * - Both lobes take `light.color * N·L * attenuation * shadow`.
+ * - Ambient is the ambient lights' sum times `albedo / PI`, plus the view environment's
+ *   `sampleEnvironment(normal, 1.0) * albedo`, the form `iblBit` uses for diffuse, so Phong and PBR
+ *   match under one environment. There is no environment specular.
  *
- * Expects (set by phongMaterialBit + the optional map bits):
- *   - `normal`, `viewDir`, `albedo`, `specularColor`, `shininess`,
- *     `specularStrength`, `emissive`
- *   - `sampleEnvironment(dir, roughness)` from the view's env-source bit —
- *     the material's descriptor must include `view._envBit` (the default
- *     no-env source returns vec3(0) and the term folds away)
- *
- * Writes:
- *   - `finalColor` = ambient + direct (diffuse + specular, one fused
- *     accumulator) + emissive
+ * Reads the surface `normal`, `sampleEnvironment` from the view's environment bit (which the
+ * descriptor must include; with no environment it returns zero), and `viewDir`, `albedo`,
+ * `specularColor`, `shininess`, `specularStrength` and `emissive` from `phongMaterialBit`. Writes
+ * `finalColor` as ambient plus direct light plus emissive.
  * @internal
  */
 export const phongLightingBit = createLightingBit({
@@ -49,8 +40,6 @@ const float INV_PI = 0.31830988618;
   var directLight = vec3<f32>(0.0);
 
   let albedoOverPI = albedo * INV_PI;
-  // Loop-invariant specular scale: (shininess/2 + 1)/PI energy normalization
-  // × 0.25 implicit geometry factor × the scalar/texture specular strength.
   let specScale = (shininess * 0.5 + 1.0) * INV_PI * 0.25 * specularStrength;
 `,
     gl: /*glsl*/ `
@@ -67,9 +56,6 @@ const float INV_PI = 0.31830988618;
     let nDotH = max(dot(normal, halfVector), 0.0);
     let vDotH = max(dot(viewDir, halfVector), 0.0);
 
-    // Fresnel-Schlick on the specular tint — spherical-gaussian approximation of
-    // the Schlick pow5 (Karis, "Real Shading in UE4"): one exp2 in place of a
-    // pow, ~0.0003 max error. Mirrors pbrLightingBit.
     let fc5 = exp2((-5.55473 * vDotH - 6.98316) * vDotH);
     let fresnel = specularColor + (vec3<f32>(1.0) - specularColor) * fc5;
     let specular = fresnel * (specScale * pow(nDotH, shininess));
@@ -93,9 +79,6 @@ const float INV_PI = 0.31830988618;
 
   postLighting: {
     gpu: /*wgsl*/ `
-  // Flat AmbientLight sum (PI-normalized) + env irradiance consumed as
-  // albedo * irradiance — iblBit's substrate-diffuse convention, so Phong and
-  // PBR read at matching brightness under one environment.
   let ambient = global.uGlobalLightParams.xyz * albedoOverPI + sampleEnvironment(normal, 1.0) * albedo;
   finalColor = ambient + directLight + emissive;
 `,

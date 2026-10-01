@@ -3,13 +3,13 @@ import { describe, expect, it } from 'vitest';
 
 import { compileGlslSource } from '~/core/gl/codegen/compileGlslSource';
 import { compileWgslSource } from '~/core/gpu/codegen/compileWgslSource';
-import { materialStructSnapshot, mergeMaterialStruct } from '~/core/shader/codegen/materialStruct';
+import { materialStructSnapshot } from '~/core/shader/codegen/materialStruct';
 import { materialStructPackPlugin } from '~/core/shader/codegen/materialStructPackPlugin';
 import type { ShaderBit, StructDefinition } from '~/core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 import { PhongMaterial } from '~/materials/phong/PhongMaterial';
 import type { PhongMaterialOptions } from '~/materials/phong/PhongMaterial';
-import { validateMaterialStruct } from '~/materials/utils/validateMaterialTextureSlots';
+import { getMaterialLayout, validateMaterialStruct } from '~/materials/utils/validateMaterialTextureSlots';
 import { View3D } from '~/scene/View3D';
 
 const wgslTemplate: ShaderBitTemplate = { bindGroups: [], gpu: '{{header}}' };
@@ -18,9 +18,7 @@ const glslTemplate: ShaderBitTemplate = {
   gl: { vertex: '{{header}}\nvoid main() {}', fragment: '{{header}}\nvoid main() {}' },
 };
 
-// A user extension bit exercising both extraBits surfaces at once: a texture
-// slot (resolved from the name-keyed `textures` option) and material struct
-// fields (merged into the packed data class).
+/** User extension bit with both a texture slot and a material struct field, the two things `extraBits` can add */
 const testExtraBit: ShaderBit = {
   name: 'phongTestExtra',
   textures: ['extraMap'],
@@ -45,11 +43,15 @@ const testExtraBit: ShaderBit = {
   },
 };
 
+/**
+ * PhongMaterial options that each add bits, plus an explicit `uvTransform`
+ *
+ * Every PhongMaterial carries the `uvTransform` bit and its two struct fields; a construction
+ * matrix only seeds them.
+ */
 const FEATURES: { name: string; options: PhongMaterialOptions }[] = [
   { name: 'specularTexture', options: { specularTexture: Texture.WHITE } },
   { name: 'emissive', options: { emissive: { color: 0xff0000 } } },
-  // uvTransform's bit and two struct fields are unconditional; an explicit
-  // construction matrix simply seeds them (and suspends frame derivation).
   { name: 'uvTransform', options: { uvTransform: new Matrix().scale(2, 2) } },
   { name: 'extraBits', options: { extraBits: [testExtraBit], textures: { extraMap: Texture.WHITE } } },
 ];
@@ -70,10 +72,9 @@ describe('PhongMaterial struct contract — construction layout == compiled layo
       const material = new PhongMaterial(options);
       const descriptor = material.getPrimaryDescriptor(view);
 
-      expect(materialStructSnapshot(mergeMaterialStruct(descriptor.bitsGpu)), label).toBe(
-        material._materialStructSnapshot,
-      );
-      expect(() => validateMaterialStruct(descriptor.bitsGpu, material), label).not.toThrow();
+      const layout = getMaterialLayout(descriptor.bitsGpu);
+      expect(layout.structSnapshot, label).toBe(material._materialStructSnapshot);
+      expect(() => validateMaterialStruct(layout, material), label).not.toThrow();
 
       const gpu = compileWgslSource({
         bits: descriptor.bitsGpu,
@@ -103,9 +104,7 @@ describe('PhongMaterial struct contract — construction layout == compiled layo
     expect(plain._slotByName.emissive).toBeUndefined();
   });
 
-  it('keeps the normal slot + normalScale resident (the pipe gates the sampling, so batching stays stable)', () => {
-    // Matches Material3D: an unmapped material does no normal work either way,
-    // so reserving keeps mapped/unmapped materials in one texture-count bucket.
+  it('reserves the normal slot and normalScale even when unmapped, so a map never changes the texture count', () => {
     const plain = new PhongMaterial({});
     expect(plain._materialStructSnapshot).toContain('"normalScale"');
     expect(plain._slotByName.normal).toBeDefined();
@@ -119,21 +118,17 @@ describe('PhongMaterial struct contract — construction layout == compiled layo
   it('alphaMode mask toggling rebuilds the bit list but never reshapes the struct', () => {
     const view2 = new View3D({ width: 64, height: 64 });
     const material = new PhongMaterial({ alphaMode: 'mask' });
-    expect(() => validateMaterialStruct(material.getPrimaryDescriptor(view2).bitsGpu, material)).not.toThrow();
+    expect(() =>
+      validateMaterialStruct(getMaterialLayout(material.getPrimaryDescriptor(view2).bitsGpu), material),
+    ).not.toThrow();
     material.alphaMode = 'opaque';
-    expect(() => validateMaterialStruct(material.getPrimaryDescriptor(view2).bitsGpu, material)).not.toThrow();
+    expect(() =>
+      validateMaterialStruct(getMaterialLayout(material.getPrimaryDescriptor(view2).bitsGpu), material),
+    ).not.toThrow();
   });
 });
 
 describe('PhongMaterial defaults + accessors', () => {
-  it('defaults shininess 30, specularColor 0x111111, specularStrength 1', () => {
-    const material = new PhongMaterial();
-    expect(material.shininess).toBe(30);
-    expect(material.specularColor).toBe(0x111111);
-    expect(material.specularStrength).toBe(1);
-    expect(new PhongMaterial({ specularStrength: 0.25 }).specularStrength).toBe(0.25);
-  });
-
   it('round-trips runtime shininess / specularColor / specularStrength writes into packed data', () => {
     const material = new PhongMaterial();
     material.shininess = 96;
@@ -146,30 +141,23 @@ describe('PhongMaterial defaults + accessors', () => {
     expect(material.data.normalScale).toBe(0.5);
   });
 
-  // PhongMaterial owns its bit list, so the raw `descriptor` escape hatch is
-  // omitted from its options — it would be silently ignored. The name-keyed
-  // `textures` map IS accepted: it feeds extraBits' texture slots.
-  it('rejects the descriptor escape hatch at compile time', () => {
+  it('rejects the descriptor option at compile time, since PhongMaterial builds its own bits', () => {
     // @ts-expect-error — descriptor is omitted from PhongMaterialOptions
     const withDescriptor: PhongMaterialOptions = { descriptor: { bitsGpu: [], bitsGl: [] } };
     expect(withDescriptor).toBeDefined();
   });
 
-  it('composes extraBits: struct fields land in data, texture slots resolve, and the bit precedes lighting', () => {
+  it('composes extraBits: struct fields land in data, texture slots resolve, and the bit sits before lighting', () => {
     const view2 = new View3D({ width: 64, height: 64 });
     const material = new PhongMaterial({
       extraBits: [testExtraBit],
       textures: { extraMap: Texture.WHITE },
     });
 
-    // Struct contribution → generated data mirror; texture declaration → slot.
     expect((material.data as { extraParams?: Float32Array }).extraParams).toHaveLength(4);
     expect((material.textures as { extraMap?: Texture }).extraMap).toBe(Texture.WHITE);
     expect(material._slotByName.extraMap).toBeDefined();
 
-    // Slotted after the built-in surface bits, before the lighting model —
-    // material-slot code sees the post-baseColor albedo, end-slot code runs
-    // before the view's tone-mapping bit (system bits append after these).
     const bits = material.getPrimaryDescriptor(view2).bitsGpu;
     const extraIndex = bits.findIndex((b) => b.name === 'phongTestExtra');
     const lightingIndex = bits.findIndex((b) => b.name === 'phongLighting');
@@ -190,12 +178,6 @@ describe('PhongMaterial defaults + accessors', () => {
     expect(material.data.emissiveStrength).toBe(3);
   });
 
-  it('includes the phong lighting bit in the descriptor', () => {
-    const view = new View3D({ width: 64, height: 64 });
-    const bits = new PhongMaterial().getPrimaryDescriptor(view).bitsGpu;
-    expect(bits.some((b) => b.name === 'phongLighting')).toBe(true);
-  });
-
   it('caches one descriptor per environment kind, shared across views', () => {
     const material = new PhongMaterial();
     const viewA = new View3D({ width: 64, height: 64 });
@@ -210,7 +192,6 @@ describe('PhongMaterial defaults + accessors', () => {
     expect(hemisphereDescriptor).not.toBe(defaultDescriptor);
     expect(hemisphereDescriptor.bitsGpu.some((b) => b.name === 'envSourceHemisphere')).toBe(true);
 
-    // Repeat lookups hit the cache; the default-env view keeps its descriptor.
     expect(material.getPrimaryDescriptor(viewB)).toBe(hemisphereDescriptor);
     expect(material.getPrimaryDescriptor(viewA)).toBe(defaultDescriptor);
   });

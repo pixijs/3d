@@ -6,18 +6,27 @@ import { createTexturesPluginGpu, prefersSelectSampler } from '~/core/gpu/shader
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 
+import { compilationErrors } from './compilationErrors';
+
 /**
  * A module WebGPU can compile on its own
  *
- * It declares the plugin's batch textures, a sampler for them to use, and a fragment entry point
- * that calls both generated getters. The engine's own sampler lives in the global group, which this
- * template does not declare. `sampleBaseColor` takes derivatives, which are only legal in a
- * function a fragment entry point can reach.
+ * It declares the plugin's batch textures, a sampler for them to use, a fragment entry point that
+ * calls both generated getters, and a vertex entry point that calls the `Direct` one. The engine
+ * ships one source for both stages, so the module has to be legal for both. `sampleBaseColor`
+ * takes derivatives, which only a fragment entry point may reach, and `sampleBaseColorDirect` must
+ * take none. The engine's own sampler lives in the global group, which this template does not
+ * declare.
  */
 const template: ShaderBitTemplate = {
   bindGroups: ['batch'],
   gpu: `{{header}}
 {{textureGetters}}
+
+@vertex
+fn mainVertex(@location(0) uv: vec2<f32>) -> @builtin(position) vec4<f32> {
+  return vec4<f32>(uv + sampleBaseColorDirect(uv).xy, 0.0, 1.0);
+}
 
 @fragment
 fn mainFragment(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
@@ -26,45 +35,92 @@ fn mainFragment(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 };
 
 const bits: readonly ShaderBit[] = [
-  { name: 'test', textures: ['baseColor'] },
+  { name: 'test', textures: ['baseColor', 'normal'] },
   { name: 'testSampler', bindings: { batch: { uSampler: 'sampler' } } },
 ];
 
-// The plugin adds its bindings bit to the bit array it gets, and skips an array that already has
-// one. So each compile needs its own copy. Otherwise the second mode inherits the first mode's
-// header.
+/**
+ * Compiles the test bits with the plugin in `select` mode, from a fresh copy of `bits`: the plugin
+ * adds its bindings bit to the array in place and skips an array that has one, so a shared array
+ * would hand the second mode the first mode's sampler
+ * @param select - How the generated sampler picks its slot
+ */
 const compile = (select: 'branch' | 'select') =>
   compileWgslSource({ bits: [...bits], template, extraPlugins: [createTexturesPluginGpu(select)] }).fragment.source;
 
-/** The generated `sampleBatchSlotGrad`, the one function the two modes write differently */
-function samplerBody(source: string): string {
-  const start = source.indexOf('fn sampleBatchSlotGrad');
-  const end = source.indexOf('fn sampleBatchTexture');
+/** What every compiled module starts with */
+const DIRECTIVE = 'diagnostic(off, derivative_uniformity);';
 
-  // Without both markers the slice is meaningless, and a check that something is absent from it
-  // would pass for the wrong reason.
+/** What the reserved slots return: 13 EMPTY, 14 WHITE, 15 NORMAL_MAP, the ones Mesh3DBatcher hands out as `13 + uid` */
+const RESERVED_VALUES: readonly [slot: number, value: string][] = [
+  [13, 'vec4<f32>(0.0)'],
+  [14, 'vec4<f32>(1.0)'],
+  [15, 'vec4<f32>(0.5, 0.5, 1.0, 1.0)'],
+];
+
+/** The same three values as the branch samplers compute them, before the switch fetches anything */
+const RESERVED_BRANCH = `if (slot >= 13u) {
+    let value = select(1.0, 0.0, slot == 13u);
+    let xy = value * select(1.0, 0.5, slot == 15u);
+    return vec4<f32>(xy, xy, value, value);
+  }`;
+
+/**
+ * The source between two generated functions, both of which must be there: without them the
+ * slice is meaningless, and a check that something is absent from it would pass for the wrong
+ * reason
+ */
+function between(source: string, from: string, to: string): string {
+  const start = source.indexOf(from);
+  const end = source.indexOf(to);
+
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
 
   return source.slice(start, end);
 }
 
-/** Every error WebGPU reports for `code`, as `line:column message` */
-async function compilationErrors(device: GPUDevice, code: string): Promise<string[]> {
-  device.pushErrorScope('validation');
-  const module = device.createShaderModule({ code });
-  const info = await module.getCompilationInfo();
-  const scoped = await device.popErrorScope();
+/** The generated `sampleBatchSlotGrad`, the sampler the `Direct` getters call */
+const gradSamplerBody = (source: string) => between(source, 'fn sampleBatchSlotGrad', 'fn sampleBatchSlot(');
 
-  const errors = info.messages.filter((m) => m.type === 'error').map((m) => `${m.lineNum}:${m.linePos} ${m.message}`);
+/** The generated `sampleBatchSlot`, the sampler the fragment getters call */
+const fragmentSamplerBody = (source: string) => between(source, 'fn sampleBatchSlot(', 'fn sampleBaseColorDirect(');
 
-  if (scoped) errors.push(scoped.message);
+/** Every call of `sample` in `body`, so a count can prove one per slot */
+const fetches = (body: string, sample: string) => body.match(new RegExp(`${sample}\\(`, 'g'));
 
-  return errors;
+/**
+ * The switch form: the reserved slots return before the switch fetches anything, then one arm per
+ * slot plus `default:` fetches with `sample`, and nothing fetches outside them
+ */
+function expectBranchSwitch(body: string, sample: string): void {
+  expect(body).toContain('switch (slot)');
+  expect(body).toContain(RESERVED_BRANCH);
+  expect(body.indexOf(RESERVED_BRANCH)).toBeLessThan(body.indexOf('switch (slot)'));
+  expect(fetches(body, sample)).toHaveLength(MAX_BATCH_TEXTURES + 1);
+  expect(body).not.toMatch(/dpdx|dpdy/);
+}
+
+/**
+ * The select form: every slot is fetched with `sample` and no control flow surrounds the fetches.
+ * Slots past the last texture have no `select` of their own, so they keep the seed value. The seed
+ * is the last slot, the same texture branch mode's `default:` arm returns for them. The reserved
+ * slots pick a constant over the fetched result.
+ */
+function expectSelectChain(body: string, sample: string): void {
+  expect(body).not.toMatch(/switch|if \(|dpdx|dpdy/);
+  expect(fetches(body, sample)).toHaveLength(MAX_BATCH_TEXTURES);
+  expect(body).toContain(`var result = ${sample}(uBatchTexture${MAX_BATCH_TEXTURES - 1}, uSampler, uv`);
+  for (let slot = 0; slot < MAX_BATCH_TEXTURES; slot++) {
+    expect(body).toContain(`${sample}(uBatchTexture${slot}, uSampler, uv`);
+  }
+  for (const [slot, value] of RESERVED_VALUES) {
+    expect(body).toContain(`result = select(result, ${value}, slot == ${slot}u);`);
+  }
 }
 
 describe('texturesPluginGpu', () => {
-  it('generates WGSL a real device accepts, whichever sampler it picks', async () => {
+  it('generates WGSL a real device accepts in both stages, whichever sampler it picks, and only under the directive', async () => {
     const gpu = navigator.gpu;
     expect(gpu).toBeTruthy();
     const adapter = await gpu.requestAdapter();
@@ -72,40 +128,54 @@ describe('texturesPluginGpu', () => {
     const device = await adapter!.requestDevice();
 
     try {
-      expect(await compilationErrors(device, compile('branch'))).toEqual([]);
+      const branch = compile('branch');
+
+      expect(await compilationErrors(device, branch), 'the Direct getter reaches no fragment-only builtin').toEqual([]);
       expect(await compilationErrors(device, compile('select'))).toEqual([]);
+
+      expect(branch.startsWith(DIRECTIVE)).toBe(true);
+      const errors = await compilationErrors(device, branch.replace(DIRECTIVE, ''));
+      expect(
+        errors.some((e) => e.includes('uniform')),
+        'without the directive, the device refuses a sample inside a switch on a varying',
+      ).toBe(true);
     } finally {
       device.destroy();
     }
   });
 
-  it('branch mode reaches one slot through a switch, past the reserved slots', () => {
-    const body = samplerBody(compile('branch'));
+  it('branch mode reaches one slot through a switch, past the reserved slots, in both samplers', () => {
+    const source = compile('branch');
 
-    expect(body).toContain('switch (slot)');
-    // The switch has one arm per slot plus a `default:` arm, and nothing fetches outside them.
-    expect(body.match(/textureSampleGrad\(/g)).toHaveLength(MAX_BATCH_TEXTURES + 1);
+    expectBranchSwitch(gradSamplerBody(source), 'textureSampleGrad');
 
-    // The reserved slots are constants, so they return before the switch fetches anything.
-    expect(body).toContain('if (slot >= 13u)');
-    expect(body.indexOf('if (slot >= 13u)')).toBeLessThan(body.indexOf('switch (slot)'));
+    const fragment = fragmentSamplerBody(source);
+    expectBranchSwitch(fragment, 'textureSample');
+    expect(fragment).not.toContain('textureSampleGrad(');
   });
 
-  it('select mode fetches every slot with no control flow', () => {
-    const body = samplerBody(compile('select'));
+  it('select mode fetches every slot with no control flow, in both samplers', () => {
+    const source = compile('select');
 
-    expect(body).not.toMatch(/switch|if \(/);
-    expect(body.match(/textureSampleGrad\(/g)).toHaveLength(MAX_BATCH_TEXTURES);
-    for (let slot = 0; slot < MAX_BATCH_TEXTURES; slot++) expect(body).toContain(`uBatchTexture${slot},`);
+    expectSelectChain(gradSamplerBody(source), 'textureSampleGrad');
 
-    // Slots past the last texture have no `select` of their own, so they keep the seed value. That
-    // is the last slot, the same texture branch mode's `default:` arm returns for them.
-    expect(body).toMatch(new RegExp(`var result = textureSampleGrad\\(uBatchTexture${MAX_BATCH_TEXTURES - 1},`));
+    const fragment = fragmentSamplerBody(source);
+    expectSelectChain(fragment, 'textureSample');
+    expect(fragment).not.toContain('textureSampleGrad(');
+  });
 
-    // Slots 13 EMPTY, 14 WHITE and 15 NORMAL_MAP pick a constant over the fetched result.
-    for (const slot of [13, 14, 15]) {
-      expect(body).toMatch(new RegExp(`select\\(result, vec4<f32>\\([^)]*\\), slot == ${slot}u\\)`));
-    }
+  it('the fragment getter takes the implicit path, the Direct getter keeps the zero gradients the vertex stage needs, and each texture shifts four bits', () => {
+    const source = compile('branch');
+
+    expect(source).toContain('return sampleBatchSlot((_textureSlots >> 0u) & 0xFu, uv);');
+    expect(source).toContain(
+      'return sampleBatchSlotGrad((_textureSlots >> 0u) & 0xFu, uv, vec2<f32>(0.0), vec2<f32>(0.0));',
+    );
+
+    expect(source).toContain('return sampleBatchSlot((_textureSlots >> 4u) & 0xFu, uv);');
+    expect(source).toContain(
+      'return sampleBatchSlotGrad((_textureSlots >> 4u) & 0xFu, uv, vec2<f32>(0.0), vec2<f32>(0.0));',
+    );
   });
 
   it('prefers select only on Apple GPUs, outside Firefox, with MSAA on', () => {
@@ -121,18 +191,26 @@ describe('texturesPluginGpu', () => {
     expect(prefersSelectSampler({ adapter: apple, antialias: true, userAgent: chrome })).toBe(true);
     expect(prefersSelectSampler({ adapter: apple, antialias: true, userAgent: safari })).toBe(true);
 
-    // Every iOS browser is WebKit, whatever its name, and neither user agent contains `Firefox`.
-    expect(prefersSelectSampler({ adapter: apple, antialias: true, userAgent: chromeIos })).toBe(true);
-    expect(prefersSelectSampler({ adapter: apple, antialias: true, userAgent: firefoxIos })).toBe(true);
+    const webkitOnIos = 'every iOS browser is WebKit, and neither user agent says Firefox';
+    expect(prefersSelectSampler({ adapter: apple, antialias: true, userAgent: chromeIos }), webkitOnIos).toBe(true);
+    expect(prefersSelectSampler({ adapter: apple, antialias: true, userAgent: firefoxIos }), webkitOnIos).toBe(true);
 
-    // Gecko compiles the branching sampler without the stall, so `'select'` would be pure cost.
-    expect(prefersSelectSampler({ adapter: apple, antialias: true, userAgent: firefox })).toBe(false);
-    // With MSAA off there is no stall to trade the extra fetches for.
-    expect(prefersSelectSampler({ adapter: apple, antialias: false, userAgent: chrome })).toBe(false);
+    expect(
+      prefersSelectSampler({ adapter: apple, antialias: true, userAgent: firefox }),
+      'Gecko compiles the branch without the stall',
+    ).toBe(false);
+    expect(
+      prefersSelectSampler({ adapter: apple, antialias: false, userAgent: chrome }),
+      'without MSAA there is no stall to avoid',
+    ).toBe(false);
     expect(prefersSelectSampler({ adapter: { vendor: 'nvidia' }, antialias: true, userAgent: chrome })).toBe(false);
 
-    // A browser that masks its adapter info, or predates `info`, keeps the portable sampler.
-    expect(prefersSelectSampler({ adapter: { vendor: '' }, antialias: true, userAgent: chrome })).toBe(false);
-    expect(prefersSelectSampler({ adapter: undefined, antialias: true, userAgent: chrome })).toBe(false);
+    const unknownAdapter = 'a masked or missing adapter info keeps the portable sampler';
+    expect(prefersSelectSampler({ adapter: { vendor: '' }, antialias: true, userAgent: chrome }), unknownAdapter).toBe(
+      false,
+    );
+    expect(prefersSelectSampler({ adapter: undefined, antialias: true, userAgent: chrome }), unknownAdapter).toBe(
+      false,
+    );
   });
 });

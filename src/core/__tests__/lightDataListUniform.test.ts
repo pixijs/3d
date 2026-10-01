@@ -13,6 +13,11 @@ const RENDERERS = ['webgl', 'webgpu'] as const;
 /** Offset of the range float within a light's row (layout on `LightDataList`) */
 const RANGE = 7;
 
+/** Something to draw, since a view with nothing to draw skips its lighting update */
+function sphere(): Mesh3D {
+  return new Mesh3D({ geometry: new SphereGeometry({ radius: 1 }), material: new Material3D() });
+}
+
 for (const preference of RENDERERS) {
   // oxlint-disable-next-line vitest/valid-title -- parametrising over both renderers by name
   describe(preference, () => {
@@ -23,7 +28,7 @@ for (const preference of RENDERERS) {
       app = undefined;
     });
 
-    it('binds the packed light list itself as the uLightData uniform', async () => {
+    it('binds the packed light list itself as the uLightData uniform, so packing a light writes it', async () => {
       app = await getApp({ id: `light-list-uniform-${preference}`, appOptions: { preference } });
 
       const view = new View3D({ width: 64, height: 64 });
@@ -31,21 +36,19 @@ for (const preference of RENDERERS) {
 
       light.position.set(1, 2, 3);
       view.root.addChild(light);
-      // A view with nothing to draw skips its lighting update.
-      view.root.addChild(new Mesh3D({ geometry: new SphereGeometry({ radius: 1 }), material: new Material3D() }));
+      view.root.addChild(sphere());
       app.stage.addChild(view);
       app.render();
 
-      const uLightData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uLightData as Float32Array;
+      const uLightData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uLightData;
 
-      // Same array, not a copy: packing a light is what writes the uniform.
       expect(uLightData).toBe(view._lightDataList.data);
       expect(view._lightDataList.count).toBe(1);
       expect(Array.from(uLightData.subarray(0, 3))).toEqual([1, 2, 3]);
       expect(uLightData[RANGE]).toBe(5);
     });
 
-    it('packs each further light one stride along the uniform', async () => {
+    it("packs each further light one stride on, where the shader's `i * 4` vec4 step finds it", async () => {
       app = await getApp({ id: `light-list-stride-${preference}`, appOptions: { preference } });
 
       const view = new View3D({ width: 64, height: 64 });
@@ -56,15 +59,13 @@ for (const preference of RENDERERS) {
       second.position.set(-4, 6, -8);
       view.root.addChild(first);
       view.root.addChild(second);
-      view.root.addChild(new Mesh3D({ geometry: new SphereGeometry({ radius: 1 }), material: new Material3D() }));
+      view.root.addChild(sphere());
       app.stage.addChild(view);
       app.render();
 
-      const uLightData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uLightData as Float32Array;
+      const uLightData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uLightData;
 
       expect(view._lightDataList.count).toBe(2);
-      // Row 0 still holds the first light; the second sits a full stride along,
-      // which is where the shader's `i * 4` vec4 step lands it.
       expect(Array.from(uLightData.subarray(0, 3))).toEqual([1, 2, 3]);
       expect(uLightData[RANGE]).toBe(5);
       expect(Array.from(uLightData.subarray(FLOATS_PER_LIGHT, FLOATS_PER_LIGHT + 3))).toEqual([-4, 6, -8]);

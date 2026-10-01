@@ -5,7 +5,7 @@ import { Scene3DSource } from '~/assets/Scene3DSource';
 import { Model3D } from '~/scene/Model3D';
 import { Skeleton } from '~/scene/Skeleton';
 
-// An empty source builds an empty model, so the test stays renderer-free.
+/** An empty source, which builds an empty model without a renderer */
 const emptySource = new Scene3DSource({});
 
 function createSkeleton(): Skeleton {
@@ -31,8 +31,6 @@ describe('Model3D destroy', () => {
 
     const playerDestroy = vi.fn<() => void>();
 
-    // Real AnimationPlayer construction needs animations/target; only `destroy`
-    // is exercised here, so a localized cast to the player type keeps the test light.
     model.player = { destroy: playerDestroy } as unknown as AnimationPlayer;
 
     model.destroy();

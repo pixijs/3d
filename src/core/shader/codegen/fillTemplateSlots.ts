@@ -1,24 +1,20 @@
 const SLOT_PATTERN = /\{\{(.*?)\}\}/g;
 
 /**
- * Hard cap on substitution passes
+ * The most substitution passes `fillTemplateSlots` makes
  *
- * The natural depth today is 2 (a slot whose value contains a marker resolved by a sibling slot —
- * e.g. lobe markers nested inside a host lighting bit's body). Anything higher implies a cycle
- * (`{{x}}` whose value contains `{{x}}` again, or A↔B). The cap guarantees termination; markers
- * that survive a true cycle are caught after the loop.
+ * Two passes are enough today: one for the template's markers, one for markers inside slot code,
+ * such as the lobe markers in a lighting bit's loop. Needing more than eight means a slot's code
+ * brings its own marker back, directly or through another slot.
  */
 const MAX_PASSES = 8;
 
 /**
- * Fills template slots with collected code
+ * Replaces every `{{slotName}}` marker with that slot's code joined by newlines, or with nothing
  *
- * All `{{slotName}}` placeholders are replaced — with code if provided, or empty string if not.
- *
- * Substitution iterates until the result is stable (one pass produces no change) or `MAX_PASSES`
- * is reached. This lets one slot's value contain markers for other slots, which is how a sibling
- * bit's `gpu.fragment.lobePerLight` (etc.) snippets splice into a host lighting bit's
- * already-templated light loop without spawning a second loop — see `clearcoatBit` for an example.
+ * It repeats until a pass changes nothing, so a slot's code can hold markers of its own. That is
+ * how a lobe bit's `fragment.lobePerLight` code lands inside the light loop a lighting bit put in
+ * the `lighting` slot.
  * @example
  * ```ts
  * const template = "{{header}}\nvoid main() {\n  {{body}}\n}";
@@ -41,9 +37,8 @@ const MAX_PASSES = 8;
  * ```
  * @param templateSource - The template string containing `{{slotName}}` placeholders
  * @param slotCode - Record mapping slot names to arrays of code strings
- * @returns The template with all slots replaced. Throws if markers survive `MAX_PASSES`
- *   substitution passes (a cyclic slot value): silently stripping them would ship a shader
- *   missing the cyclic code.
+ * @returns The filled source. Throws if markers survive `MAX_PASSES` passes, since stripping them
+ *   would compile a shader missing that code.
  * @internal
  */
 export function fillTemplateSlots(templateSource: string, slotCode: Record<string, string[]>): string {
@@ -58,9 +53,6 @@ export function fillTemplateSlots(templateSource: string, slotCode: Record<strin
     result = next;
   }
 
-  // A marker can only survive the loop if a slot's value keeps reintroducing
-  // it — a cycle (`{{x}}` producing `{{x}}`, or A↔B). Stripping it would
-  // compile a shader silently missing that code; fail loudly instead.
   const survivors = result.match(SLOT_PATTERN);
   if (survivors) {
     const names = [...new Set(survivors)].join(', ');

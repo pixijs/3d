@@ -20,23 +20,37 @@ import { solidMeshDescriptor } from './solidMeshShader';
 export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'descriptor' | 'textures'> {
   /**
    * How far each vertex is pushed out along its normal, in the mesh's local units
+   *
+   * Local units mean a scaled mesh gets a scaled outline. Where a mesh splits its normals at a
+   * hard edge, as a cube does, the pushed faces part and the outline has gaps at those edges.
    * @default 0.03
+   * @example
+   * ```ts
+   * new OutlinePass({ width: 0.05 });
+   * ```
    */
   width?: number;
   /**
    * Ink colour
    * @default 0x000000
+   * @example
+   * ```ts
+   * new OutlinePass({ color: 0x1a0f33 });
+   * ```
    */
   color?: ColorSource;
 }
 
 /**
- * Inverted-hull outline — redraws opted-in meshes as an extruded, back-face-only shell
+ * Inverted-hull outline: redraws opted-in meshes as a slightly larger shell, showing only its
+ * back faces
  *
- * The view half of a toon look: add it to `View3D.passes`, and meshes join by opting
- * into the `outline` pass on their material (`passes: { outline: true }`). One class for
- * both backends; skinned and morphed meshes outline correctly because the draw is the
- * engine's forward path.
+ * The shell's front faces are culled, so only the inside of the shell draws, and the mesh itself
+ * hides all of it except the rim around its silhouette. That rim is the outline.
+ *
+ * The view half of a toon look: add it to `View3D.passes`, and meshes join by opting into the
+ * `outline` pass on their material (`passes: { outline: true }`). Skinned and morphed meshes
+ * outline correctly because the shell is drawn through the engine's own vertex path.
  * @example
  * ```ts
  * new View3D({ passes: [new OutlinePass({ width: 0.05 })] });
@@ -66,7 +80,6 @@ export class OutlinePass extends MeshPass {
   constructor(options: OutlinePassOptions = {}) {
     const { width, color, ...rest } = { ...OutlinePass.defaultOptions, ...definedProps(options) };
 
-    // Front faces culled: only the extruded back faces survive, which is the whole trick.
     const state = new State();
     state.depthTest = true;
     state.culling = true;

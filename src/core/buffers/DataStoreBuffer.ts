@@ -1,7 +1,7 @@
 import { BufferImageSource, BufferResource, BufferUsage, Texture } from 'pixi.js';
 
 import { Buffer3D } from './Buffer3D';
-import { alignToDataTextureRows, dataTextureSize } from './dataTextureLayout';
+import { alignToDataTextureRows, dataTextureSize, uploadFloatRange } from './dataTextureLayout';
 
 /**
  * Options for `DataStoreBuffer`
@@ -10,13 +10,12 @@ import { alignToDataTextureRows, dataTextureSize } from './dataTextureLayout';
 interface RenderDataBufferOptions {
   /** Floats per slot */
   stride: number;
-  /** Initial capacity in slots; default 100 */
+  /** Initial capacity in slots; defaults to 100 */
   initialSize?: number;
-  /** Property name on the item where the buffer index is stored (e.g. '_storeIndex') */
+  /** Name of the property on each item that holds its slot index, such as `'_storeIndex'` */
   indexKey: string;
   /** Writes one item's data into the buffer views at `offset`; called by `set` */
   copier: (
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     data: any,
     buffer: Float32Array,
     u32Buffer: Uint32Array,
@@ -27,34 +26,39 @@ interface RenderDataBufferOptions {
 }
 
 /**
- * Persistent slot store of per-item GPU data with stable item→slot mapping
+ * A store of per-item GPU data where each item keeps its slot until it's removed
  *
- * Each item claims a slot (index written back onto the item via `indexKey`)
- * that it keeps until removed; freed slots recycle through a free list.
- * Uploads use min/max dirty-range tracking so only the changed span moves to
- * the GPU. WebGPU binds the storage buffer; WebGL binds the lazily-created
- * rgba32float data-texture view over the same backing array.
+ * An item's slot index is written onto the item under `indexKey`, and freed slots are reused. The
+ * store tracks the lowest and highest changed slot, so an upload moves only that span.
+ *
+ * It has two GPU views over one CPU array, each made on first read, so a store only makes what
+ * something binds: a storage buffer for WebGPU, and an `rgba32uint` data texture for WebGL and for
+ * the WebGPU material store. Rows mix integer and float lanes, and an integer texture hands the
+ * shader every lane's exact bits, floats included. A float texture wouldn't: a small integer's bit
+ * pattern is a denormal float, which a texture fetch may flush to zero.
  * @internal
  */
 export class DataStoreBuffer {
-  /** Backing CPU array (f32 view) */
+  /**
+   * The CPU array, as floats
+   *
+   * Sized to whole data-texture rows once it's past one row, so the texture view never claims
+   * texels past its end.
+   */
   public data: Float32Array;
   /** `u32` view over the same backing array */
   public u32Data: Uint32Array;
   /** `f64` view over the same backing array */
   public fl64Data: Float64Array;
 
-  /** GPU buffer (storage) */
-  public buffer: Buffer3D;
-  /** Bindable resource for shaders */
-  public bufferResource: BufferResource;
+  private _buffer: Buffer3D | null = null;
+  private _bufferResource: BufferResource | null = null;
 
-  /**
-   * Buffers orphaned by `_expand` growth. They are {@link Buffer3D}s, so the
-   * renderer GC never reclaims them — retain each until `_freeRetired` frees
-   * it on `unload` or `destroy`.
-   */
+  /** Buffers `_expand` replaced; `_expand` says why they're kept, and `_freeRetired` frees them */
   private readonly _retiredBuffers: Buffer3D[] = [];
+
+  /** Data textures `_expand` replaced, kept like `_retiredBuffers` */
+  private readonly _retiredTextures: Texture[] = [];
 
   private _texture: Texture | null = null;
   private _textureSource: BufferImageSource | null = null;
@@ -62,10 +66,9 @@ export class DataStoreBuffer {
   private _indexKey: string;
   private _freeList!: Uint32Array;
   private _freeCount: number = 0;
-  private readonly _stride: number;
+  private readonly _stride: number = 0;
   private _count: number = 0;
   private readonly _copier: (
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     data: any,
     buffer: Float32Array,
     u32Buffer: Uint32Array,
@@ -77,10 +80,10 @@ export class DataStoreBuffer {
   private _minDirty: number = Infinity;
   private _maxDirty: number = -Infinity;
   /**
-   * Incremented whenever the backing buffer is reallocated in `_expand`
+   * Incremented each time `_expand` replaces the buffer and the texture view
    *
-   * Consumers watermark it and invalidate cached state that bound the old
-   * buffer — per-batch stores in `updateView3DScene`, shared stores via
+   * Consumers watermark it and invalidate cached state that bound the old buffer or texture.
+   * Per-batch stores do this in `updateView3DScene`, shared stores through
    * `detectSharedCacheInvalidation`.
    */
   public bufferVersion = 0;
@@ -92,9 +95,6 @@ export class DataStoreBuffer {
     const initialSize = options.initialSize || 100;
     let size = initialSize * this._stride;
     if (size % 4 !== 0) size += 4 - (size % 4);
-    // The WebGL texture view spans whole rows, so a store that starts out past one row has
-    // to fill them or the texture claims texels the array doesn't have. `_expand` keeps
-    // this true from here on.
     size = alignToDataTextureRows(size);
 
     this.data = new Float32Array(size);
@@ -103,17 +103,27 @@ export class DataStoreBuffer {
     this._freeList = new Uint32Array(initialSize);
 
     this._copier = options.copier;
+  }
 
-    this.buffer = new Buffer3D({
+  /** The store as a storage buffer, created on first read */
+  public get buffer(): Buffer3D {
+    return (this._buffer ??= new Buffer3D({
       data: this.data,
       usage: BufferUsage.STORAGE | BufferUsage.COPY_DST | BufferUsage.COPY_SRC,
       label: 'RenderDataBuffer',
-    });
-
-    this.bufferResource = new BufferResource({ buffer: this.buffer });
+    }));
   }
 
-  /** A texture view of the store for WebGL shaders */
+  /** Bindable resource over {@link DataStoreBuffer#buffer} */
+  public get bufferResource(): BufferResource {
+    return (this._bufferResource ??= new BufferResource({ buffer: this.buffer }));
+  }
+
+  /**
+   * An `rgba32uint` data-texture view of the store, created on first read
+   *
+   * Growth replaces it with a bigger one, so read it each frame rather than holding on to it.
+   */
   public get texture(): Texture {
     return this._texture || this._initTexture();
   }
@@ -129,10 +139,10 @@ export class DataStoreBuffer {
     const { width, height } = dataTextureSize(this.data.length);
 
     this._textureSource = new BufferImageSource({
-      resource: this.data,
+      resource: this.u32Data,
       width,
       height,
-      format: 'rgba32float',
+      format: 'rgba32uint',
       scaleMode: 'nearest',
       alphaMode: 'no-premultiply-alpha',
     });
@@ -144,35 +154,30 @@ export class DataStoreBuffer {
     return this._texture;
   }
 
-  /** Uploads changes to the GPU, using min/max dirty tracking to upload only the changed range */
+  /** Uploads the changed span of slots to whichever GPU views exist */
   public update(): void {
     if (this._minDirty > this._maxDirty) return;
 
-    const offsetInBytes = this._minDirty * this._stride * 4;
-    const sizeInBytes = (this._maxDirty - this._minDirty + 1) * this._stride * 4;
+    const start = this._minDirty * this._stride;
+    const end = (this._maxDirty + 1) * this._stride;
 
-    this.buffer.update(sizeInBytes, offsetInBytes);
-
-    if (this._textureSource) {
-      // The WebGL data-texture view re-uploads whole — BufferImageSource has
-      // no partial update.
-      this._textureSource.update();
-    }
+    this._buffer?.update((end - start) * 4, start * 4);
+    if (this._textureSource) uploadFloatRange(this._textureSource, start, end);
 
     this._minDirty = Infinity;
     this._maxDirty = -Infinity;
   }
 
   /**
-   * Allocates a slot for an item and writes the index back via the dynamic indexKey property
+   * Gives an item a slot and writes the index onto it under `indexKey`
    *
-   * Reuses a freed slot when one exists, otherwise appends (expanding as
-   * needed). Copies no data — pair with `set()` or a queued upload for the
-   * contents. No-op when the item already holds a slot.
+   * Reuses a freed slot when there is one, otherwise appends, growing as needed. Capacity is
+   * checked against the new slot's end, since the array is sized in whole texture rows rather than
+   * whole slots: a stride that doesn't divide a row, such as the mesh store's 24, leaves a partial
+   * slot at the end. Copies no data; `set()` does. Does nothing when the item already has a slot.
    * @param item - The item to allocate for; its indexKey property receives the slot index.
    * @returns The item's slot index.
    */
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   public allocate(item: any): number {
     let index: number = item[this._indexKey];
 
@@ -180,11 +185,6 @@ export class DataStoreBuffer {
       if (this._freeCount > 0) {
         index = this._freeList[--this._freeCount];
       } else {
-        // Compare the slot's end against capacity. `_expand` aligns to whole texture
-        // rows, so for strides that don't
-        // divide the row evenly (e.g. Mesh3DDataStoreBuffer stride 20) the
-        // last slot would overflow `data.length` and the trailing floats
-        // would be silently dropped by the typed-array bounds check.
         if ((this._count + 1) * this._stride > this.data.length) {
           this._expand();
         }
@@ -198,21 +198,20 @@ export class DataStoreBuffer {
   }
 
   /**
-   * Allocates (if needed) and copies data for an item via the copier function
+   * Gives the item a slot if it has none, then copies its data in through the `copier`
    *
-   * Reads/writes the stored index via the dynamic indexKey property. That read is one
-   * inline cache shared by every store's key, so it is megamorphic (~65 ns per call
-   * measured) — fine for the event-driven callers here, wrong for anything per-frame at
-   * scale. Hot paths pass the index in instead; see
-   * `Mesh3DDataStoreBuffer.writeWorldTransform`.
+   * The index is read under `indexKey`, one inline cache shared by every store's key, so the read is
+   * megamorphic, about 65 ns a call when measured. That's fine for the event-driven callers here and
+   * wrong for anything per-frame at scale; hot paths pass the index in instead, as
+   * `Mesh3DDataStoreBuffer.writeWorldTransform` does.
+   *
+   * Once the store is destroyed, which happens with its renderer, it writes nothing, and the item
+   * gets a slot in a live store the next time one sees it.
    * @param item - The item to stage; passed straight to the `copier`.
    * @returns The item's slot index, or -1 once the store is destroyed.
    */
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   public set(item: any): number {
-    // Store already torn down (renderer destroyed before the item): nothing
-    // left to write, and the item re-mints in a live store on its next use.
-    if (!this.buffer) return -1;
+    if (!this.data) return -1;
 
     const index = this.allocate(item);
     const stride = this._stride;
@@ -226,13 +225,12 @@ export class DataStoreBuffer {
   }
 
   /**
-   * Frees an item's slot
+   * Frees an item's slot for reuse and resets its index to -1
    *
-   * Reads the index from the item's indexKey property, adds the slot to the
-   * free-list, and resets the property to -1.
+   * Once the store is destroyed, it only resets the index, which lets the item take a slot in the
+   * next renderer's store.
    * @param item - The item whose slot to release.
    */
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   public remove(item: any): void {
     const index: number = item[this._indexKey];
 
@@ -240,10 +238,7 @@ export class DataStoreBuffer {
 
     item[this._indexKey] = -1;
 
-    // Store already torn down (renderer destroyed before the item): the index
-    // reset above still lets the item re-mint in a fresh renderer's store;
-    // there is no slot left to recycle.
-    if (!this.buffer) return;
+    if (!this.data) return;
 
     if (this._freeCount >= this._freeList.length) {
       const newFreeList = new Uint32Array(this._freeList.length * 2);
@@ -254,22 +249,20 @@ export class DataStoreBuffer {
     this._freeList[this._freeCount++] = index;
   }
 
-  /** The stride in u32 elements per entry */
+  /** 32-bit lanes per slot */
   get stride(): number {
     return this._stride;
   }
 
   /**
-   * Reserves a contiguous block of `count` slots for external writers (e.g. Mesh3DBatch)
+   * Reserves `count` consecutive slots for a caller that writes them itself, such as `Mesh3DBatch`
    *
-   * The caller writes directly to the typed arrays at the returned offset. No
-   * copier is invoked. Reads/writes the stored base index via the owner's
-   * indexKey property.
+   * The block's first index is written onto `owner` under `indexKey`; nothing is copied. The block
+   * comes from the end of the store and is never freed or reused.
    * @param owner - The owner object. Its indexKey property holds the base index (-1 if unallocated).
    * @param count - Number of contiguous slots to reserve.
    * @returns The base index of the block (multiply by stride for u32 offset).
    */
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   public allocateBlock(owner: any, count: number): number {
     const existing: number = owner[this._indexKey];
     if (existing >= 0) return existing;
@@ -291,9 +284,8 @@ export class DataStoreBuffer {
   }
 
   /**
-   * Marks a range of entries as dirty so they upload on the next `update()`
-   *
-   * Used by external writers (Mesh3DBatch) that write directly to the typed arrays.
+   * Marks a range of slots to upload on the next `update()`, for callers that write the arrays
+   * directly
    * @param fromIndex - Start index (inclusive).
    * @param toIndex - End index (inclusive).
    */
@@ -302,23 +294,26 @@ export class DataStoreBuffer {
     if (toIndex > this._maxDirty) this._maxDirty = toIndex;
   }
 
-  /** Frees buffers orphaned by growth; `unload` and `destroy` call it. Idempotent */
+  /** Frees the buffers and data textures orphaned by growth; `unload` and `destroy` call it. Idempotent */
   private _freeRetired(): void {
     for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
     this._retiredBuffers.length = 0;
+
+    for (let i = 0; i < this._retiredTextures.length; i++) this._retiredTextures[i].destroy(true);
+    this._retiredTextures.length = 0;
   }
 
   /**
-   * Frees the GPU copies of the store — the buffer, the lazily-created WebGL
-   * data-texture, and everything growth retired — while keeping the CPU arrays
+   * Frees the GPU copies of the store, whichever exist, and keeps the CPU arrays
    *
-   * Both are re-created from `data` on the next fetch, so the revival needs no
-   * dirty-marking. Idempotent.
+   * Covers the buffer, the data texture if one exists, and the buffers and textures that growth
+   * retired. The buffer and the live texture re-upload from `data` the next time a shader uses
+   * them, so nothing needs marking dirty. Idempotent.
    */
   public unload(): void {
-    if (!this.buffer) return;
+    if (!this.data) return;
 
-    this.buffer.unload();
+    this._buffer?.unload();
     this._textureSource?.unload();
     this._freeRetired();
   }
@@ -326,40 +321,43 @@ export class DataStoreBuffer {
   /**
    * Releases every owned GPU resource and drops the backing typed arrays
    *
-   * Covers the exclusively-owned GPU buffer, the lazily-created WebGL
-   * data-texture (if any), and every buffer retired by growth. Idempotent — a
-   * second call is a no-op.
+   * Covers the buffer and data texture, whichever exist, and every buffer and
+   * texture that growth retired. Idempotent, so a second call does nothing.
    */
   public destroy(): void {
-    if (!this.buffer) return;
+    if (!this.data) return;
 
-    // Free the BufferResource first (destroyBuffer:false) so its bound bind
-    // groups react to its change before the Buffer it references is destroyed.
-    this.bufferResource.destroy(false);
-    this.buffer.destroy();
+    this._bufferResource?.destroy(false);
+    this._buffer?.destroy();
 
     this._freeRetired();
 
-    // `_texture.destroy(true)` also frees the owned BufferImageSource.
     this._texture?.destroy(true);
 
     (this.data as Float32Array | null) = null;
     (this.u32Data as Uint32Array | null) = null;
     (this.fl64Data as Float64Array | null) = null;
-    (this.buffer as Buffer3D | null) = null;
-    (this.bufferResource as BufferResource | null) = null;
+    this._buffer = null;
+    this._bufferResource = null;
 
     (this._freeList as Uint32Array | null) = null;
     this._texture = null;
     this._textureSource = null;
   }
 
+  /**
+   * Doubles the array, or grows it to `minSize` floats if that's more, in whole texture rows
+   *
+   * The GPU views are retired rather than resized: a View3D that drew earlier in the frame
+   * recorded the old ones, and they must outlive its submit. The next `buffer` or `texture` read
+   * builds new ones over the new array, and each uploads it whole on first use. A retired
+   * {@link Buffer3D} is exempt from pixi's GC, so `_freeRetired` frees it on `unload` or `destroy`.
+   * @param minSize - The smallest length to grow to, in floats
+   */
   private _expand(minSize?: number): void {
     let newSize = this.data.length * 2;
     if (minSize !== undefined && newSize < minSize) newSize = minSize;
 
-    // Keep the array a whole number of texture rows so it matches the texture dimensions
-    // exactly.
     newSize = alignToDataTextureRows(newSize);
 
     const newData = new Float32Array(newSize);
@@ -375,31 +373,18 @@ export class DataStoreBuffer {
       this._freeList = newFreeList;
     }
 
-    this._retiredBuffers.push(this.buffer);
-
-    // Create a NEW Buffer so the old GPU buffer stays alive for in-flight
-    // render bundles recorded earlier in this frame by other View3D instances.
-    this.buffer = new Buffer3D({
-      data: this.data,
-      usage: BufferUsage.STORAGE | BufferUsage.COPY_DST | BufferUsage.COPY_SRC,
-      label: 'RenderDataBuffer',
-    });
-    this.bufferResource = new BufferResource({ buffer: this.buffer });
-    this.bufferVersion++;
-
-    // All existing data must be uploaded to the new GPU buffer.
-    this._minDirty = 0;
-    this._maxDirty = this._count - 1;
-
-    if (this._textureSource) {
-      const { width, height } = dataTextureSize(this.data.length);
-
-      this._textureSource.resource = this.data;
-
-      if (this._textureSource.width !== width || this._textureSource.height !== height) {
-        this._textureSource.resize(width, height);
-      }
-      this._textureSource.update();
+    if (this._buffer) {
+      this._retiredBuffers.push(this._buffer);
+      this._buffer = null;
+      this._bufferResource = null;
     }
+
+    if (this._texture) {
+      this._retiredTextures.push(this._texture);
+      this._texture = null;
+      this._textureSource = null;
+    }
+
+    this.bufferVersion++;
   }
 }

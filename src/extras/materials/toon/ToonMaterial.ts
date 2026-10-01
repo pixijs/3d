@@ -8,39 +8,66 @@ import { toonMaterialBit, toonLightingBit } from './toonBit';
 
 /**
  * Constructor options for {@link ToonMaterial}
+ * @example
+ * ```ts
+ * const flatShaded: ToonMaterialOptions = { bands: 1, rimIntensity: 0 };
+ * const red = new ToonMaterial({ ...flatShaded, baseColor: 0xd94a3d });
+ * const blue = new ToonMaterial({ ...flatShaded, baseColor: 0x3d6bd9 });
+ * ```
  * @category extras:materials
  * @standard
  */
 export interface ToonMaterialOptions extends BaseMaterial3DOptions {
   /**
-   * Number of discrete diffuse shading bands
+   * Number of diffuse light steps above unlit: `1` shades a surface in two tones, `3` in four
    * @default 3
+   * @example
+   * ```ts
+   * const twoTone = new ToonMaterial({ baseColor: 0x6ab04c, bands: 1 });
+   * ```
    */
   bands?: number;
   /**
    * Size of the specular highlight, 0–1
    * @default 0.15
+   * @example
+   * ```ts
+   * const glossy = new ToonMaterial({ baseColor: 0xf4a259, specularSize: 0.3 });
+   * ```
    */
   specularSize?: number;
   /**
-   * Exponent controlling rim light width
+   * Exponent of the rim light's falloff; higher values give a thinner rim
    * @default 3
+   * @example
+   * ```ts
+   * const thinRim = new ToonMaterial({ baseColor: 0x4a69bd, rimPower: 6 });
+   * ```
    */
   rimPower?: number;
   /**
-   * Intensity of the rim light
+   * Intensity of the rim light; `0` turns it off
    * @default 0.4
+   * @example
+   * ```ts
+   * const noRim = new ToonMaterial({ baseColor: 0x4a69bd, rimIntensity: 0 });
+   * ```
    */
   rimIntensity?: number;
   /**
-   * Whether this material joins the `outline` pass — pair with {@link OutlinePass} on the view
+   * Whether meshes with this material get the ink outline that an {@link OutlinePass} on the view
+   * draws
    * @default true
+   * @example
+   * ```ts
+   * const water = new ToonMaterial({ baseColor: 0x3fa7d6, outline: false });
+   * ```
    */
   outline?: boolean;
 }
 
 /**
- * The packed data shape `toonMaterialBit` produces
+ * The packed data shape {@link toonMaterialBit} produces
  *
  * `baseColor` and `alphaCutoff` are required because the bit always declares them.
  * @category extras:materials
@@ -51,21 +78,31 @@ export interface ToonData extends MaterialData {
   baseColor: Float32Array;
   /** Alpha below which a fragment is discarded in `mask` alpha mode */
   alphaCutoff: number;
-  /** Number of discrete diffuse shading bands */
+  /** See {@link ToonMaterialOptions#bands} */
   bands: number;
-  /** Size of the specular highlight, 0–1 */
+  /** See {@link ToonMaterialOptions#specularSize} */
   specularSize: number;
-  /** Exponent controlling rim light width */
+  /** See {@link ToonMaterialOptions#rimPower} */
   rimPower: number;
-  /** Intensity of the rim light */
+  /** See {@link ToonMaterialOptions#rimIntensity} */
   rimIntensity: number;
 }
 
 /**
- * Cel-shaded toon material — banded diffuse, a sharp specular highlight and a rim light
+ * Cel-shaded toon material: banded diffuse, a sharp specular highlight and a rim light
  *
  * The material half of the toon look. Pair it with {@link OutlinePass} on the view for the ink
  * outline; every instance opts into that pass unless `outline: false` is passed.
+ * @example
+ * ```ts
+ * const view3d = new View3D({ passes: [new OutlinePass({ width: 0.05 })] });
+ * const hero = new Mesh3D({
+ *   geometry: new SphereGeometry(),
+ *   material: new ToonMaterial({ baseColor: 0xf4a259, bands: 2 }),
+ * });
+ *
+ * view3d.root.addChild(hero);
+ * ```
  * @category extras:materials
  * @standard
  */

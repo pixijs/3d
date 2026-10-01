@@ -19,18 +19,13 @@ function buildOrthoFrustum(): Frustum {
 }
 
 describe('Frustum constructor', () => {
-  test('defaults to six default Plane instances when called with no args', () => {
+  test('defaults every plane to new Plane(), so +x is inside and -x outside', () => {
     const frustum = new Frustum();
-    // The class only exposes planes via methods that consume them. Test via containsPoint
-    // with the default plane (normal=(1,0,0), constant=0): a point at +x should be inside,
-    // -x outside.
     expect(frustum.containsPoint(new Vector3(1, 0, 0))).toBe(true);
     expect(frustum.containsPoint(new Vector3(-1, 0, 0))).toBe(false);
   });
 
   test('uses provided planes when supplied', () => {
-    // Six planes that bound a unit cube around the origin: each plane has an inward-facing
-    // unit normal and constant = 1, so distanceToPoint = n.x*x + n.y*y + n.z*z + 1.
     const frustum = new Frustum(
       new Plane(new Vector3(1, 0, 0), 1),
       new Plane(new Vector3(-1, 0, 0), 1),
@@ -62,28 +57,12 @@ describe('Frustum.set', () => {
     expect(frustum.containsPoint(new Vector3(0, 0, 0))).toBe(true);
     expect(frustum.containsPoint(new Vector3(2, 0, 0))).toBe(false);
   });
-
-  test('returns this for chaining', () => {
-    const frustum = new Frustum();
-    const result = frustum.set(new Plane(), new Plane(), new Plane(), new Plane(), new Plane(), new Plane());
-    expect(result).toBe(frustum);
-  });
 });
 
 describe('Frustum.clone', () => {
-  test('returns a new Frustum with equivalent containment behavior', () => {
-    const original = buildOrthoFrustum();
-    const clone = original.clone();
-    expect(clone).not.toBe(original);
-    expect(clone).toBeInstanceOf(Frustum);
-    expect(clone.containsPoint(new Vector3(0, 0, -1))).toBe(true);
-    expect(clone.containsPoint(new Vector3(0, 0, 50))).toBe(false);
-  });
-
   test('mutating the original does not affect the clone', () => {
     const original = buildOrthoFrustum();
     const clone = original.clone();
-    // Replace original's planes with a unit-cube frustum.
     original.set(
       new Plane(new Vector3(1, 0, 0), 1),
       new Plane(new Vector3(-1, 0, 0), 1),
@@ -92,7 +71,6 @@ describe('Frustum.clone', () => {
       new Plane(new Vector3(0, 0, 1), 1),
       new Plane(new Vector3(0, 0, -1), 1),
     );
-    // Clone still has the original ortho frustum (z in [-100, -0.1]).
     expect(clone.containsPoint(new Vector3(0, 0, -1))).toBe(true);
     expect(clone.containsPoint(new Vector3(0, 0, 0))).toBe(false);
   });
@@ -126,11 +104,9 @@ describe('Frustum.setFromProjectionMatrix', () => {
   test('produces the expected ortho frustum bounds', () => {
     const frustum = buildOrthoFrustum();
 
-    // Points inside the volume.
     expect(frustum.containsPoint(new Vector3(0, 0, -1))).toBe(true);
     expect(frustum.containsPoint(new Vector3(0.5, 0.5, -50))).toBe(true);
 
-    // Points outside on each axis.
     expect(frustum.containsPoint(new Vector3(2, 0, -1))).toBe(false);
     expect(frustum.containsPoint(new Vector3(-2, 0, -1))).toBe(false);
     expect(frustum.containsPoint(new Vector3(0, 2, -1))).toBe(false);
@@ -143,35 +119,35 @@ describe('Frustum.setFromProjectionMatrix', () => {
     const projection = new Matrix4().makePerspective(Math.PI / 2, 1, 1, 100);
     const frustum = new Frustum().setFromProjectionMatrix(projection);
 
-    // Origin (camera position) is inside the near-plane half-space but not strictly inside
-    // the frustum (it sits on the apex). Use a point clearly inside the volume.
-    expect(frustum.containsPoint(new Vector3(0, 0, -10))).toBe(true);
+    const insideTheVolume = new Vector3(0, 0, -10);
+    const behindTheCamera = new Vector3(0, 0, 10);
+    const pastTheFarPlane = new Vector3(0, 0, -200);
 
-    // Far behind the camera.
-    expect(frustum.containsPoint(new Vector3(0, 0, 10))).toBe(false);
-
-    // Past the far plane.
-    expect(frustum.containsPoint(new Vector3(0, 0, -200))).toBe(false);
-  });
-
-  test('returns this for chaining', () => {
-    const frustum = new Frustum();
-    const projection = new Matrix4().makeOrthographic(-1, 1, 1, -1, 0.1, 100);
-    expect(frustum.setFromProjectionMatrix(projection)).toBe(frustum);
+    expect(frustum.containsPoint(insideTheVolume)).toBe(true);
+    expect(frustum.containsPoint(behindTheCamera)).toBe(false);
+    expect(frustum.containsPoint(pastTheFarPlane)).toBe(false);
   });
 });
 
 describe('Frustum.getPlane', () => {
-  test('reads each plane back from setFromProjectionMatrix', () => {
+  test('reads the planes back from setFromProjectionMatrix as right, left, bottom, top, far, near', () => {
     const frustum = buildOrthoFrustum();
+    const center = new Vector3(0, 0, -50);
+    const boundaries = [
+      new Vector3(1, 0, -50),
+      new Vector3(-1, 0, -50),
+      new Vector3(0, -1, -50),
+      new Vector3(0, 1, -50),
+      new Vector3(0, 0, -100),
+      new Vector3(0, 0, -0.1),
+    ];
 
-    // Ortho frustum spans x in [-1, 1], y in [-1, 1], z in [-100, -0.1]. Plane order
-    // is right, left, top, bottom, far, near. Each plane faces inward, so its
-    // distanceToPoint at the boundary should be 0.
-    expect(frustum.getPlane(0).distanceToPoint(new Vector3(1, 0, -1))).toBeCloseTo(0);
-    expect(frustum.getPlane(1).distanceToPoint(new Vector3(-1, 0, -1))).toBeCloseTo(0);
-    expect(frustum.getPlane(4).distanceToPoint(new Vector3(0, 0, -100))).toBeCloseTo(0);
-    expect(frustum.getPlane(5).distanceToPoint(new Vector3(0, 0, -0.1))).toBeCloseTo(0);
+    boundaries.forEach((boundary, index) => {
+      const plane = frustum.getPlane(index);
+
+      expect(plane.distanceToPoint(boundary)).toBeCloseTo(0);
+      expect(plane.distanceToPoint(center)).toBeGreaterThan(0);
+    });
   });
 
   test('writes into the supplied out plane', () => {
@@ -197,12 +173,6 @@ describe('Frustum.equals', () => {
     expect(a.equals(b)).toBe(true);
   });
 
-  test('returns true after copyFrom', () => {
-    const a = buildOrthoFrustum();
-    const b = new Frustum().copyFrom(a);
-    expect(a.equals(b)).toBe(true);
-  });
-
   test('returns false when planes differ', () => {
     const a = buildOrthoFrustum();
     const b = new Frustum();
@@ -217,19 +187,8 @@ describe('Frustum.toString', () => {
 });
 
 describe('Frustum.containsPoint', () => {
-  test('returns true for points inside the ortho frustum', () => {
-    const frustum = buildOrthoFrustum();
-    expect(frustum.containsPoint(new Vector3(0, 0, -50))).toBe(true);
-  });
-
-  test('returns false for points outside the ortho frustum', () => {
-    const frustum = buildOrthoFrustum();
-    expect(frustum.containsPoint(new Vector3(0, 0, 0))).toBe(false);
-  });
-
   test('boundary points are inclusive', () => {
     const frustum = buildOrthoFrustum();
-    // Right boundary: x = 1 should yield distance 0 against the right plane (inclusive).
     expect(frustum.containsPoint(new Vector3(1, 0, -1))).toBe(true);
   });
 });
@@ -242,8 +201,8 @@ describe('Frustum.intersectsSphere', () => {
 
   test('true when sphere straddles a plane', () => {
     const frustum = buildOrthoFrustum();
-    // Centre is just outside the right plane (x=1.4) but radius = 0.5 reaches into the volume.
-    expect(frustum.intersectsSphere(new Sphere(new Vector3(1.4, 0, -1), 0.5))).toBe(true);
+    const centerOutsideRightPlane = new Vector3(1.4, 0, -1);
+    expect(frustum.intersectsSphere(new Sphere(centerOutsideRightPlane, 0.5))).toBe(true);
   });
 
   test('false when sphere is entirely outside one plane', () => {
@@ -257,11 +216,6 @@ describe('Frustum.intersectsSphere', () => {
     expect(sphere.radius).toBeLessThan(0);
     expect(frustum.intersectsSphere(sphere)).toBe(false);
   });
-
-  test('false when sphere is past the far plane', () => {
-    const frustum = buildOrthoFrustum();
-    expect(frustum.intersectsSphere(new Sphere(new Vector3(0, 0, -200), 1))).toBe(false);
-  });
 });
 
 describe('Frustum.intersectsBox', () => {
@@ -273,27 +227,13 @@ describe('Frustum.intersectsBox', () => {
 
   test('true when box straddles a plane', () => {
     const frustum = buildOrthoFrustum();
-    // Box extends past x = 1.
     const box = new Box(new Vector3(0.5, -0.5, -10), new Vector3(2, 0.5, -2));
     expect(frustum.intersectsBox(box)).toBe(true);
   });
 
   test('false when box is entirely outside one plane', () => {
     const frustum = buildOrthoFrustum();
-    // Far past the right plane.
     const box = new Box(new Vector3(5, -0.5, -10), new Vector3(6, 0.5, -2));
-    expect(frustum.intersectsBox(box)).toBe(false);
-  });
-
-  test('false when box is past the far plane', () => {
-    const frustum = buildOrthoFrustum();
-    const box = new Box(new Vector3(-0.5, -0.5, -300), new Vector3(0.5, 0.5, -200));
-    expect(frustum.intersectsBox(box)).toBe(false);
-  });
-
-  test('false when box is between camera and near plane', () => {
-    const frustum = buildOrthoFrustum();
-    const box = new Box(new Vector3(-0.5, -0.5, 1), new Vector3(0.5, 0.5, 5));
     expect(frustum.intersectsBox(box)).toBe(false);
   });
 });

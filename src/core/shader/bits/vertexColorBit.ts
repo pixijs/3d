@@ -1,42 +1,20 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Vertex colour shader bit — declares the `aColor` attribute, the `vColor`
- * varying, the vertex-side publish, and the fragment-side modulation snippet
+ * Multiplies `albedo` and `alpha` by the vertex colour, `aColor`
  *
- * Auto-injected by `MaterialSystemGpu`/`MaterialSystemGl` `ensureMaterial` when
- * the geometry has an `aColor` attribute. Users don't construct this directly.
+ * The renderer adds it when the geometry has `aColor` and the material turns on
+ * {@link BaseMaterial3D#vertexColors}. The template starts `albedo` and `alpha` at 1, and the
+ * material bits multiply onto them too. It runs ahead of the material's own bits so that
+ * `pbrMaterialBit` works out a metal's F0, `mix(F0, albedo, metallic)`, from the tinted albedo, and
+ * metals take the vertex colour.
  *
- * ## Modulation contract
+ * The shader reads four components, and `Geometry3D` stores colours four to a vertex, so the glTF
+ * loader widens `VEC3` colours to RGBA with an opaque alpha (`widenColorToRgba`). A normalized
+ * integer format such as `unorm8x4` reaches the shader as floats from 0 to 1.
  *
- * Tints `albedo` (and `alpha`) by multiplying. The template seeds
- * `albedo = vec3(1.0)` and `alpha = 1.0`, and every albedo-touching bit
- * (this one, `pbrMaterialBit`, `flatMaterialBit`, decals, ...) multiplies
- * onto the running value. The template runs `finalColor = albedo` after
- * the material slot to publish the unlit default; lighting bits
- * (`pbrLightingBit`) overwrite `finalColor` with the lit result.
- *
- * Pushed *before* the descriptor's material bits so that the metallic
- * specular F0 (`fresnelF0 = mix(F0, albedo, metallic)`, computed inside
- * `pbrMaterialBit` after its own `albedo *= baseColor.rgb;`) sees the
- * fully-tinted albedo. Metals correctly pick up vertex-colour tint.
- *
- * ## Format
- *
- * The `float32x4` declared below is the *shader-side* type. The buffer layout
- * comes from the geometry's own attribute format, and normalized integer
- * formats (`unorm8x4`, `unorm16x4`) resolve to the same `vec4<f32>` once the
- * hardware normalizes them, so those load and render correctly.
- *
- * Four components are required. glTF's `VEC3` color sets are widened to RGBA
- * by the loader (`widenColorToRgba`) rather than here, because the generic
- * VEC3 padding fills the fourth lane with zero — a transparent alpha.
- *
- * ## Colour space
- *
- * Vertex colours are treated as **linear** — matching the glTF spec and the
- * Khronos reference renderer. Authors converting from sRGB-painted assets
- * are responsible for the conversion at import time.
+ * Vertex colours are linear, as glTF defines `COLOR_n`, so an sRGB-painted asset needs converting
+ * when it's imported.
  * @internal
  */
 export const vertexColorBit: ShaderBit = {

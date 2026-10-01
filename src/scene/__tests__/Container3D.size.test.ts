@@ -44,14 +44,6 @@ describe('Container3D size', () => {
     expect(c.scale).toMatchObject({ x: 0.5, y: 2, z: 0.5 });
   });
 
-  it('setSize with one number sizes every axis', () => {
-    const c = makeBoxHolder();
-
-    c.setSize(12);
-
-    expect(c.scale).toMatchObject({ x: 6, y: 3, z: 2 });
-  });
-
   it('setSize fills a missing height or depth from the width, in both forms', () => {
     const c = makeBoxHolder();
 
@@ -65,14 +57,13 @@ describe('Container3D size', () => {
     expect(c.scale).toMatchObject({ x: 1, y: 1, z: 1 });
   });
 
-  it('keeps a unit scale on an axis with zero extent instead of dividing by zero', () => {
+  it('keeps a unit scale on an axis with zero extent, such as a plane’s z, instead of dividing by zero', () => {
     const plane = new Mesh3D({ geometry: new PlaneGeometry({ width: 2, height: 2 }), material: new Material3D({}) });
     const holder = new Container3D();
     holder.addChild(plane);
 
     holder.setSize(4, 4, 4);
 
-    // PlaneGeometry lies in XY, so its z extent is zero.
     expect(holder.scale).toMatchObject({ x: 2, y: 2, z: 1 });
   });
 

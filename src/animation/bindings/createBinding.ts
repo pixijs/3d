@@ -29,13 +29,12 @@ interface BindingOptions {
  * @internal
  */
 class DummyBinding extends Binding {
-  public apply(): void {
-    // No-op
-  }
+  public apply(): void {}
 }
 
 /**
- * Creates the most direct binding available for a target animation channel
+ * Picks the binding for a track's property: straight into the skeleton's buffers for a bone,
+ * otherwise by the type of the node's property
  * @param options - Target, channel, and optional skeleton context to bind
  * @returns A binding that can apply sampled track values to the target
  * @internal

@@ -11,34 +11,72 @@ import type { View3D } from '../../scene/View3D';
 /**
  * Constructor options for {@link FPSCamera}
  *
- * Every field but `view` has a default; every option is also a property on the instance.
+ * Every field but `view` has a default. Every option but `position` is also a property on the
+ * instance; move `camera.position` for that.
+ * @example
+ * ```ts
+ * const walker: Omit<FPSCameraOptions, 'view'> = { position: { x: 0, y: 1.7, z: 5 }, moveSpeed: 3 };
+ * const fpsCamera = new FPSCamera({ view: view3d, ...walker });
+ * ```
  * @see {@link FPSCamera} For the constructed controller.
  * @category extras:camera
  * @standard
  */
 export interface FPSCameraOptions {
-  /** The {@link View3D} to drive; the controller moves `view.camera` and listens for pointer events on the View */
+  /**
+   * The {@link View3D} to drive; the controller moves `view.camera` and listens for pointer events on the View
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d });
+   * ```
+   */
   view: View3D;
-  /** Initial world position — the camera's current position when omitted */
+  /**
+   * Initial world position; the camera's current position when omitted
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, position: { x: 0, y: 1.7, z: 5 } });
+   * ```
+   */
   position?: PointData3D;
   /**
-   * Initial yaw in radians (rotation around world Y)
+   * Initial {@link FPSCamera#yaw | yaw} in radians
    * @default 0
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, yaw: Math.PI });
+   * ```
    */
   yaw?: number;
   /**
-   * Initial pitch in radians (rotation around the camera's X axis)
+   * Initial {@link FPSCamera#pitch | pitch} in radians, clamped to `±maxPitch`
    * @default 0
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, pitch: -0.2 });
+   * ```
    */
   pitch?: number;
   /**
-   * Master enable/disable
+   * Whether look input and movement apply
    * @default true
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, enabled: false });
+   *
+   * playButton.on('pointertap', () => (fpsCamera.enabled = true));
+   * ```
    */
   enabled?: boolean;
   /**
    * Run {@link FPSCamera#update | update()} from `Ticker.shared` every frame
    * @default true
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, autoUpdate: false });
+   *
+   * app.ticker.add((ticker) => fpsCamera.update(ticker));
+   * ```
    */
   autoUpdate?: boolean;
   /**
@@ -47,28 +85,62 @@ export interface FPSCameraOptions {
    *
    * Dragging still looks around while unlocked, which is how touch input works.
    * @default false
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, pointerLock: true });
+   * ```
    */
   pointerLock?: boolean;
+  /**
+   * Keep the browser's context menu from opening over the View, so a right-button drag
+   * doesn't open it
+   *
+   * The View's `hitArea` bounds it like any other pointer event, and the menu still opens while
+   * `enabled` is `false`. On Windows the menu opens on release, so a right-button drag that ends
+   * outside the View still opens it.
+   * @default true
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, preventContextMenu: false });
+   * ```
+   */
+  preventContextMenu?: boolean;
   /**
    * Read WASD / arrow keys, Space and Shift from `window` for movement
    *
    * Set `false` to drive {@link FPSCamera#move | move} yourself.
    * @default true
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, keyboard: false });
+   * ```
    */
   keyboard?: boolean;
   /**
    * Movement speed in world units per second
    * @default 5
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, moveSpeed: 10 });
+   * ```
    */
   moveSpeed?: number;
   /**
    * Look sensitivity in radians per pixel
    * @default 0.002
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, lookSpeed: 0.004 });
+   * ```
    */
   lookSpeed?: number;
   /**
    * Pitch clamp in radians, keeping the view short of straight up / down
    * @default Math.PI * 0.49
+   * @example
+   * ```ts
+   * const fpsCamera = new FPSCamera({ view: view3d, maxPitch: Math.PI / 3 });
+   * ```
    */
   maxPitch?: number;
 }
@@ -95,19 +167,23 @@ const _pitchAxis = new Vector3(1, 0, 0);
  * ```ts
  * import { FPSCamera } from '@pixi/3d/extras';
  *
- * const controls = new FPSCamera({
+ * const fpsCamera = new FPSCamera({
  *   view: view3d,
  *   position: { x: 0, y: 1.7, z: 5 },
  *   pointerLock: true,
  *   moveSpeed: 6,
  * });
  *
- * controls.on('lock', () => hud.hidden = true);
- * controls.on('unlock', () => hud.hidden = false);
+ * fpsCamera.on('lock', () => (hud.hidden = true));
+ * fpsCamera.on('unlock', () => (hud.hidden = false));
  *
  * // On teardown:
- * controls.destroy();
+ * fpsCamera.destroy();
  * ```
+ * @remarks
+ * The controller blocks the browser's context menu over the View so a right-button drag can
+ * look around. Set {@link FPSCamera#preventContextMenu | preventContextMenu} to `false` to
+ * keep the menu.
  * @see {@link FPSCameraOptions} For all constructor options.
  * @see {@link OrbitCamera} For orbit / zoom / pan interaction.
  * @see {@link Camera3D} For the underlying camera.
@@ -115,54 +191,147 @@ const _pitchAxis = new Vector3(1, 0, 0);
  * @standard
  */
 export class FPSCamera extends EventEmitter<{
-  /** The camera moved or turned */
+  /**
+   * The camera moved or turned
+   * @example
+   * ```ts
+   * fpsCamera.on('change', () => (compass.rotation = -fpsCamera.yaw));
+   * ```
+   */
   change: [];
-  /** Pointer lock was acquired on the canvas */
+  /**
+   * Pointer lock was acquired on the canvas
+   * @example
+   * ```ts
+   * fpsCamera.on('lock', () => (pauseMenu.visible = false));
+   * ```
+   */
   lock: [];
-  /** Pointer lock was released */
+  /**
+   * Pointer lock was released, such as by the player pressing Escape
+   * @example
+   * ```ts
+   * fpsCamera.on('unlock', () => (pauseMenu.visible = true));
+   * ```
+   */
   unlock: [];
 }> {
-  /** Default {@link FPSCameraOptions} merged under every constructor call; mutate to change defaults process-wide */
+  /**
+   * Default {@link FPSCameraOptions} merged under every constructor call; mutate to change defaults process-wide
+   * @example
+   * ```ts
+   * FPSCamera.defaultOptions.pointerLock = true;
+   * ```
+   */
   public static defaultOptions: Partial<Omit<FPSCameraOptions, 'view'>> = {
     yaw: 0,
     pitch: 0,
     enabled: true,
     autoUpdate: true,
     pointerLock: false,
+    preventContextMenu: true,
     keyboard: true,
     moveSpeed: 5,
     lookSpeed: 0.002,
     maxPitch: Math.PI * 0.49,
   };
 
-  /** The {@link View3D} this controller listens on and whose camera it drives */
+  /**
+   * The {@link View3D} this controller listens on and whose camera it drives
+   * @example
+   * ```ts
+   * fpsCamera.view.cursor = 'crosshair';
+   * ```
+   */
   public readonly view: View3D;
 
-  /** Master enable/disable */
+  /**
+   * Whether look input and movement apply
+   *
+   * Disabling it doesn't release pointer lock, so a menu that needs the cursor has to exit the
+   * lock itself.
+   * @example
+   * ```ts
+   * inventory.on('open', () => {
+   *   fpsCamera.enabled = false;
+   *   document.exitPointerLock();
+   * });
+   * ```
+   */
   public enabled: boolean;
 
-  /** Request pointer lock on the canvas when the View is pressed */
+  /**
+   * Request pointer lock on the canvas when the View is pressed
+   * @example
+   * ```ts
+   * fpsCamera.pointerLock = settings.captureMouse;
+   * ```
+   */
   public pointerLock: boolean;
 
-  /** Movement speed in world units per second */
-  public moveSpeed: number;
+  /**
+   * Whether the browser's context menu is kept from opening over the View;
+   * {@link FPSCameraOptions#preventContextMenu} covers where it still opens
+   * @example
+   * ```ts
+   * fpsCamera.preventContextMenu = false;
+   * ```
+   */
+  public preventContextMenu: boolean;
 
-  /** Look sensitivity in radians per pixel */
-  public lookSpeed: number;
+  /**
+   * Movement speed in world units per second
+   *
+   * Diagonal input isn't normalised, so moving forward and sideways at once is about 1.4 times
+   * faster.
+   * @example
+   * ```ts
+   * window.addEventListener('keydown', (event) => {
+   *   if (event.code === 'ControlLeft') fpsCamera.moveSpeed = 10;
+   * });
+   * window.addEventListener('keyup', (event) => {
+   *   if (event.code === 'ControlLeft') fpsCamera.moveSpeed = 5;
+   * });
+   * ```
+   */
+  public moveSpeed = 0;
 
-  /** Pitch clamp in radians */
-  public maxPitch: number;
+  /**
+   * Look sensitivity in radians per pixel
+   * @example
+   * ```ts
+   * fpsCamera.lookSpeed = 0.002 * settings.mouseSensitivity;
+   * ```
+   */
+  public lookSpeed = 0;
+
+  /**
+   * Pitch clamp in radians
+   * @example
+   * ```ts
+   * fpsCamera.maxPitch = Math.PI / 3;
+   * ```
+   */
+  public maxPitch = 0;
 
   /**
    * External movement input, each axis in `[-1, 1]`
    *
    * `x` strafes right, `y` rises along world Y, `z` walks forward. Added to the keyboard
    * input on every update; set it from a joystick or gamepad and leave it at zero otherwise.
+   * @example
+   * ```ts
+   * app.ticker.add(() => {
+   *   const pad = navigator.getGamepads()[0];
+   *
+   *   if (pad) fpsCamera.move.set(pad.axes[0], 0, -pad.axes[1]);
+   * });
+   * ```
    */
   public readonly move = new Vector3();
 
-  private _yaw: number;
-  private _pitch: number;
+  private _yaw = 0;
+  private _pitch = 0;
   private readonly _orientation = new Quaternion();
 
   private _autoUpdate = false;
@@ -190,6 +359,7 @@ export class FPSCamera extends EventEmitter<{
     this.view = options.view;
     this.enabled = opts.enabled!;
     this.pointerLock = opts.pointerLock!;
+    this.preventContextMenu = opts.preventContextMenu!;
     this.moveSpeed = opts.moveSpeed!;
     this.lookSpeed = opts.lookSpeed!;
     this.maxPitch = opts.maxPitch!;
@@ -205,6 +375,7 @@ export class FPSCamera extends EventEmitter<{
     view.on('pointerup', this._onPointerUp);
     view.on('pointerupoutside', this._onPointerUp);
     view.on('pointercancel', this._onPointerUp);
+    view.on('contextmenu', this._onContextMenu);
     // oxlint-disable-next-line no-restricted-globals -- pointer lock is document-only; DOMAdapter has no equivalent
     document.addEventListener('pointerlockchange', this._onLockChange);
 
@@ -214,12 +385,31 @@ export class FPSCamera extends EventEmitter<{
     this._applyOrientation();
   }
 
-  /** The {@link Camera3D} being driven — always `view.camera` */
+  /**
+   * The {@link Camera3D} being driven, always `view.camera`
+   *
+   * Its rotation belongs to the controller, and the next look input overwrites a rotation set on
+   * the camera directly. Turn it with {@link FPSCamera#yaw | yaw} and {@link FPSCamera#pitch | pitch}.
+   * @example
+   * ```ts
+   * fpsCamera.on('change', () => {
+   *   if (fpsCamera.camera.position.y < -10) respawn();
+   * });
+   * ```
+   */
   public get camera(): Camera3D {
     return this.view.camera;
   }
 
-  /** Yaw in radians (rotation around world Y) */
+  /**
+   * Yaw in radians, around world Y: 0 faces -Z, and positive values turn left
+   * @example
+   * ```ts
+   * window.addEventListener('keydown', (event) => {
+   *   if (event.code === 'KeyQ') fpsCamera.yaw += Math.PI / 4;
+   * });
+   * ```
+   */
   public get yaw(): number {
     return this._yaw;
   }
@@ -233,7 +423,13 @@ export class FPSCamera extends EventEmitter<{
     this._applyOrientation();
   }
 
-  /** Pitch in radians, clamped to `±maxPitch` */
+  /**
+   * Pitch in radians, clamped to `±maxPitch`: 0 is level, and positive values look up
+   * @example
+   * ```ts
+   * fpsCamera.pitch = 0;
+   * ```
+   */
   public get pitch(): number {
     return this._pitch;
   }
@@ -247,12 +443,28 @@ export class FPSCamera extends EventEmitter<{
     this._applyOrientation();
   }
 
-  /** Whether the canvas currently holds pointer lock for this controller */
+  /**
+   * Whether the canvas currently holds pointer lock for this controller
+   * @example
+   * ```ts
+   * app.ticker.add(() => (clickToPlay.visible = fpsCamera.pointerLock && !fpsCamera.locked));
+   * ```
+   */
   public get locked(): boolean {
     return this._locked;
   }
 
-  /** Whether WASD / arrow keys, Space and Shift are read from `window` */
+  /**
+   * Whether WASD / arrow keys, Space and Shift are read from `window`
+   *
+   * Keys are matched by position (`KeyboardEvent.code`), so the same physical keys work on any
+   * keyboard layout.
+   * @example
+   * ```ts
+   * chatInput.addEventListener('focus', () => (fpsCamera.keyboard = false));
+   * chatInput.addEventListener('blur', () => (fpsCamera.keyboard = true));
+   * ```
+   */
   public get keyboard(): boolean {
     return this._keyboard;
   }
@@ -278,7 +490,17 @@ export class FPSCamera extends EventEmitter<{
     }
   }
 
-  /** Whether {@link FPSCamera#update | update()} runs from `Ticker.shared` every frame */
+  /**
+   * Whether {@link FPSCamera#update | update()} runs from `Ticker.shared` every frame
+   *
+   * {@link OrbitCamera#autoUpdate} explains why updating from `app.ticker` keeps movement in step
+   * with the render.
+   * @example
+   * ```ts
+   * fpsCamera.autoUpdate = false;
+   * app.ticker.add((ticker) => fpsCamera.update(ticker));
+   * ```
+   */
   public get autoUpdate(): boolean {
     return this._autoUpdate;
   }
@@ -303,6 +525,11 @@ export class FPSCamera extends EventEmitter<{
    * Remove every listener, release pointer lock, and drop event subscribers
    *
    * The View and camera are owned by the caller and are left intact.
+   * @example
+   * ```ts
+   * fpsCamera.destroy();
+   * const orbit = new OrbitCamera({ view: view3d });
+   * ```
    */
   public destroy(): void {
     this.autoUpdate = false;
@@ -315,6 +542,7 @@ export class FPSCamera extends EventEmitter<{
     view.off('pointerup', this._onPointerUp);
     view.off('pointerupoutside', this._onPointerUp);
     view.off('pointercancel', this._onPointerUp);
+    view.off('contextmenu', this._onContextMenu);
     // oxlint-disable-next-line no-restricted-globals -- pointer lock is document-only; DOMAdapter has no equivalent
     document.removeEventListener('pointerlockchange', this._onLockChange);
 
@@ -332,7 +560,17 @@ export class FPSCamera extends EventEmitter<{
    *
    * Runs every frame while {@link FPSCamera#autoUpdate | autoUpdate} is on. Call
    * it yourself when driving the controller from your own loop.
-   * @param ticker - the ticker driving this update; supplies the frame time. Omitted, one
+   *
+   * Walking follows the full view direction, pitch included, so walking forward while looking down
+   * descends. Strafing stays level, and Space and Shift move along world Y whatever the pitch.
+   * @example
+   * ```ts
+   * fpsCamera.autoUpdate = false;
+   * app.ticker.add((ticker) => {
+   *   if (fpsCamera.update(ticker)) resolveWallCollisions(fpsCamera.camera.position);
+   * });
+   * ```
+   * @param ticker - The ticker driving this update; supplies the frame time. Omitted, one
    *   60 fps frame is assumed.
    * @returns `true` when the camera moved
    */
@@ -356,8 +594,6 @@ export class FPSCamera extends EventEmitter<{
     const step = this.moveSpeed * (ticker ? ticker.deltaMS / 1000 : 1 / 60);
     const position = this.camera.position;
 
-    // Forward is the camera's local -Z and strafe its local X, both under the full
-    // yaw + pitch orientation; vertical stays on world Y so it never tilts with the view.
     _v.set(x, 0, -z).applyQuaternion(this._orientation);
     position.set(position.x + _v.x * step, position.y + (_v.y + y) * step, position.z + _v.z * step);
 
@@ -386,8 +622,6 @@ export class FPSCamera extends EventEmitter<{
     this.camera.quaternion.copyFrom(this._orientation);
     this.emit('change');
   }
-
-  // -- Event handlers --
 
   private readonly _onPointerDown = (event: FederatedPointerEvent): void => {
     if (!this.enabled) return;
@@ -431,6 +665,10 @@ export class FPSCamera extends EventEmitter<{
 
   private readonly _onPointerUp = (event: FederatedPointerEvent): void => {
     if (event.pointerId === this._dragPointer) this._dragPointer = null;
+  };
+
+  private readonly _onContextMenu = (event: FederatedPointerEvent): void => {
+    if (this.enabled && this.preventContextMenu) event.preventDefault();
   };
 
   private readonly _onLockChange = (): void => {

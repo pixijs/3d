@@ -4,9 +4,7 @@ import type { GltfFormat } from '~/assets/loaders/gltf/GltfFormat';
 import { processSkins } from '~/assets/loaders/gltf/process/processSkins';
 import type { Scene3DDescriptor, Scene3DNode } from '~/assets/Scene3DDescriptor';
 
-// Builds a tightly-packed MAT4 inverse-bind-matrix accessor (identity per joint)
-// plus the accessor/bufferView metadata `getBuffer` reads, and the backing buffer
-// passed to `processSkins` as its `buffers` argument.
+/** An identity inverse bind matrix per joint: the accessor, its bufferView and the buffer behind them */
 function identityIbm(jointCount: number): {
   accessors: GltfFormat['accessors'];
   bufferViews: GltfFormat['bufferViews'];
@@ -27,17 +25,13 @@ function identityIbm(jointCount: number): {
   };
 }
 
-// Empty descriptor nodes (label/children only) for `processSkins` to tag with isJoint.
+/** Bare descriptor nodes for `processSkins` to mark as joints */
 function descriptorNodes(labels: string[]): Scene3DNode[] {
   return labels.map((label) => ({ label, children: [] }));
 }
 
 describe('processSkins', () => {
-  it('keeps a mesh-anchoring ancestor out of the joint set and still marks pure bones', () => {
-    // Skeleton-less skin (no glTF `skeleton`). `Armature` anchors the skinned mesh
-    // `char`, while `Hips`/`Spine` are pure bones. collectSkeletonNodes sweeps the
-    // joints' shared ancestor `Armature` in, but it must stay in the scene graph
-    // because its subtree contains a renderable mesh.
+  it('collects the ancestor of a skin with no skeleton root but keeps it out of the joints when it holds a mesh', () => {
     const ibm = identityIbm(2);
     const gltfRaw: GltfFormat = {
       asset: { version: '2.0' },
@@ -61,15 +55,11 @@ describe('processSkins', () => {
     const skin = descriptor.skins![0];
 
     expect(skin.skeletonToModelRoot).toBe(true);
-    // Ancestors of the joints, ordered by depth.
     expect(Array.from(skin.skeletonNodes)).toEqual([0, 2, 3]);
 
-    // Armature anchors a mesh -> kept in the scene graph (not a joint).
     expect(descriptor.nodes![0].isJoint).toBeFalsy();
-    // Pure bones -> marked as joints.
     expect(descriptor.nodes![2].isJoint).toBe(true);
     expect(descriptor.nodes![3].isJoint).toBe(true);
-    // The mesh node itself is not part of the skeleton and is untouched.
     expect(descriptor.nodes![1].isJoint).toBeFalsy();
   });
 

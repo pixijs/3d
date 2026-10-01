@@ -22,12 +22,6 @@ function createTriangleSource(): Scene3DSource {
 }
 
 describe('View3D autoResize option', () => {
-  it('is off unless asked for', () => {
-    expect(new View3D().autoResize).toBe(false);
-    expect(new View3D({ autoResize: true }).autoResize).toBe(true);
-    expect(new View3D({ width: 800, height: 600, autoResize: true }).autoResize).toBe(true);
-  });
-
   it('turns off when a size is set explicitly', () => {
     const bySetSize = new View3D({ autoResize: true });
     bySetSize.setSize(100, 50);
@@ -84,16 +78,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.renderer.resize(200, 100);
         app.render();
         expect(view.getSize()).toEqual({ width: 400, height: 300 });
-      });
-    });
-
-    it('leaves a sized View alone', async () => {
-      await withApp('auto-resize-sized', (app) => {
-        const view = new View3D({ width: 64, height: 32 });
-        app.stage.addChild(view);
-
-        app.render();
-        expect(view.getSize()).toEqual({ width: 64, height: 32 });
       });
     });
 

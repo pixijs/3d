@@ -1,35 +1,31 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Reads Blinn-Phong surface properties and sets up the Phong lighting contract variables
+ * Reads a Phong material's surface and declares the values `phongLightingBit` shades with
  *
- * Reads from the material storage buffer, samples the base-colour texture, and
- * sRGB-decodes it to linear light — Phong shades in linear space and tone-maps
- * downstream, so the albedo texture must be decoded (unlike the unlit
- * `flatMaterialBit`, which shows the texture as authored).
+ * Provides `albedo` (base colour in linear light), `viewDir`, `specularColor`, `shininess` (at
+ * least 1), `specularStrength` and `emissive`. The last two start at the material's value and at
+ * zero; `phongSpecularTextureBit` and `emissiveBit` update them when present.
  *
- * Provides (consumed by phongLightingBit + the optional map bits):
- *   - albedo           vec3 — base colour (linear)
- *   - viewDir          vec3 — normalized fragment → camera
- *   - specularColor    vec3 — specular tint
- *   - shininess        f32  — specular exponent (>= 1)
- *   - emissive         vec3 — default vec3(0); assigned by the reused `emissiveBit`
- *   - specularStrength f32  — the material's scalar dial (default 1);
- *     `phongSpecularTextureBit` multiplies its texture on top
+ * Lighting works in linear light, so the base colour texture is sRGB-decoded with a 2.2 gamma,
+ * after undoing pixi's premultiplied upload so the decode sees the straight colour.
+ * `pbrMaterialBit` reads its base colour the same way; the unlit `flatMaterialBit` skips the
+ * decode. The texture is sampled unconditionally: an unset slot holds `Texture.WHITE`, so the
+ * multiply changes nothing.
  *
- * `emissive` is declared as a neutral default so the downstream read stays a
- * no-op when the optional emissive bit isn't in the descriptor — the same
- * pattern `pbrMaterialBit` uses.
+ * The `normal` slot always exists and holds a flat map by default. The renderer compiles normal
+ * mapping in only when the slot holds a real map, so the spare slot costs nothing per fragment. It
+ * also keeps mapped and unmapped materials at the same texture count, which the batcher sorts by.
+ *
+ * The struct declares `normalScale` for the normal-mapping bits to read. Those bits are chosen per
+ * mesh, while a material's struct is fixed at construction, so the field has to be here for the
+ * struct to come out the same either way. `alphaCutoff` is declared for the same reason, ready for
+ * `alphaMaskBit` in `'mask'` mode.
  * @internal
  */
 export const phongMaterialBit: ShaderBit = {
   name: 'phongMaterial',
 
-  // The `normal` slot is always reserved (defaults to the flat NORMAL_MAP).
-  // The pipe gates the actual sampling + TBN on `textures.normal !== NORMAL_MAP`,
-  // so an unmapped material does no normal work either way — reserving the slot
-  // costs nothing per fragment and keeps mapped and unmapped materials in the
-  // same texture-count batch bucket.
   textures: ['baseColor', 'normal'],
 
   bindings: {
@@ -37,13 +33,8 @@ export const phongMaterialBit: ShaderBit = {
       baseColor: 'vec4<f32>',
       specularColor: 'vec3<f32>',
       shininess: 'f32',
-      // Whole-lobe specular scale, Fresnel rim included — 0 kills the highlight.
       specularStrength: 'f32',
       alphaCutoff: 'f32',
-      // glTF `normalTextureInfo.scale`. Owned here — not by the normal-mapping
-      // bits — because those are selected per-MESH (geometry tangents +
-      // texture) and the Material struct must stay a pure function of the
-      // material's construction-pinned bits. Default 1 is a no-op.
       normalScale: 'f32',
     },
   },
@@ -51,17 +42,11 @@ export const phongMaterialBit: ShaderBit = {
   gpu: {
     fragment: {
       material: /*wgsl*/ `
-  // Neutral default — overwritten by the optional emissive bit.
   var emissive: vec3<f32> = vec3<f32>(0.0);
-  // Scalar dial; the optional specular texture bit multiplies on top.
   var specularStrength = material.specularStrength;
 
   var baseColor = material.baseColor;
 
-  // No HAS_UVS gate: unbound base-colour slots default to Texture.WHITE, so
-  // sampling at uv=(0,0) returns (1,1,1,1) and the multiply collapses to a
-  // no-op. sRGB → linear (gamma 2.2) decode; premultiplied alpha unwrapped
-  // first so the decode acts on the straight colour. Matches pbrMaterialBit.
   var baseTex = sampleBaseColor(input.vUV);
   let baseTexLinear = baseTex.rgb / max(baseTex.a, 0.001);
   baseTex = vec4<f32>(pow(baseTexLinear, vec3<f32>(2.2)), baseTex.a);

@@ -12,12 +12,6 @@ function row(store: MaterialDataStoreBuffer, material: BaseMaterial3D): number[]
   return Array.from(store.data.slice(offset, offset + MATERIAL_STRIDE_FLOATS));
 }
 
-// The material store owns the dirty queue in front of its rows: register()
-// mints the slot index synchronously (renderable rows read it in the same
-// walk) and enqueues; setters signal via material.update(); the store's
-// update() drains queued rows into staged memory and uploads. Nothing walks
-// renderables or batch items looking for stale materials — so a material
-// referenced only by batch slots must still upload.
 describe('MaterialDataStoreBuffer upload queue', () => {
   it('mints the index at register and uploads all data through update', () => {
     const store = new MaterialDataStoreBuffer();
@@ -25,8 +19,8 @@ describe('MaterialDataStoreBuffer upload queue', () => {
 
     store.register(material);
     expect(material._uploadQueue).toBe(store);
-    expect(material._materialIndex).toBeGreaterThanOrEqual(0); // synchronous — rows consume it this walk
-    expect(material._storeQueued).toBe(true); // the data itself rides the queue
+    expect(material._materialIndex).toBeGreaterThanOrEqual(0);
+    expect(material._storeQueued).toBe(true);
 
     store.update();
     expect(material._storeQueued).toBe(false);
@@ -47,19 +41,15 @@ describe('MaterialDataStoreBuffer upload queue', () => {
     store.update();
 
     material.alpha = 0.5;
-    material.baseColor = 0x123456; // same frame — coalesced on the queued flag
-    store.register(material); // already resident — no-op
+    material.baseColor = 0x123456;
+    store.register(material);
 
     store.update();
     expect(material._storeQueued).toBe(false);
     expect(row(store, material)).toEqual(Array.from(material.data._f32));
   });
 
-  // Most setters are generated and signal the queue for free. A setter that
-  // mutates a packed subarray view in place — PhongMaterial.specularColor — has
-  // to call update() by hand, so it's the one shape that can silently stop
-  // uploading while every other check stays green.
-  it('uploads a hand-rolled setter that writes through a packed view', () => {
+  it('uploads a hand-rolled setter, which writes a packed view in place and has to call update() itself', () => {
     const store = new MaterialDataStoreBuffer();
     const material = new PhongMaterial({ specularColor: 0x000000 });
 
@@ -78,19 +68,15 @@ describe('MaterialDataStoreBuffer upload queue', () => {
     const store = new MaterialDataStoreBuffer();
     const material = new FlatMaterial({});
 
-    material.baseColor = 0xabcdef; // no queue yet — update() is a no-op
+    material.baseColor = 0xabcdef;
     expect(material._storeQueued).toBe(false);
 
-    store.register(material); // the unconditional first enqueue captures it
+    store.register(material);
     store.update();
 
     expect(row(store, material)).toEqual(Array.from(material.data._f32));
   });
 
-  // The queue holds direct references, so a material can be destroyed while an
-  // entry for it is still pending (mutate → destroy in one tick — a normal
-  // teardown order). The update must skip the corpse, keep draining the rest,
-  // and leave the queue healthy for later frames.
   it('skips a material destroyed while queued and keeps draining', () => {
     const store = new MaterialDataStoreBuffer();
     const doomed = new FlatMaterial({});
@@ -100,20 +86,18 @@ describe('MaterialDataStoreBuffer upload queue', () => {
     store.register(survivor);
     store.update();
 
-    doomed.baseColor = 0xff0000; // queued ahead of the survivor…
+    doomed.baseColor = 0xff0000;
     survivor.baseColor = 0x123456;
-    doomed.destroy(); // …then destroyed while both entries are pending
+    doomed.destroy();
 
     expect(() => store.update()).not.toThrow();
-    expect(doomed._storeQueued).toBe(false); // corpse entry closed out
+    expect(doomed._storeQueued).toBe(false);
     expect(survivor._storeQueued).toBe(false);
     expect(row(store, survivor)).toEqual(Array.from(survivor.data._f32));
 
-    // Destroy severed the queue seam — late signals can't resurrect it.
     doomed.update();
     expect(doomed._storeQueued).toBe(false);
 
-    // And the queue isn't poisoned: later frames drain normally.
     survivor.baseColor = 0xabcdef;
     store.update();
     expect(row(store, survivor)).toEqual(Array.from(survivor.data._f32));
@@ -129,17 +113,12 @@ describe('MaterialDataStoreBuffer upload queue', () => {
     doomed.destroy();
     expect(doomed._materialIndex).toBe(-1);
 
-    // The freed row is recycled, not appended past — material churn must not
-    // grow the store for the renderer's lifetime.
     const next = new FlatMaterial({});
     store.register(next);
     expect(next._materialIndex).toBe(slot);
   });
 
-  // The store is renderer-scoped; materials are user-owned and outlive it. A
-  // survivor keeps the dead store's wiring until the next renderer's store sees
-  // it, and register() re-mints there instead of adopting the stale row.
-  it('a material minted by a destroyed store re-mints lazily in a fresh store', () => {
+  it('a material minted by a destroyed store re-mints lazily in a fresh store, not adopting its stale row', () => {
     const store = new MaterialDataStoreBuffer();
     const material = new FlatMaterial({});
     store.register(material);
@@ -147,13 +126,12 @@ describe('MaterialDataStoreBuffer upload queue', () => {
 
     store.destroy();
 
-    // Late signals into the dead seam are inert and never latch the queue flag.
     material.baseColor = 0xff0000;
     expect(material._storeQueued).toBe(false);
 
     const fresh = new MaterialDataStoreBuffer();
     const resident = new FlatMaterial({});
-    fresh.register(resident); // takes the row number the survivor still carries
+    fresh.register(resident);
     fresh.register(material);
     expect(material._uploadQueue).toBe(fresh);
     expect(material._materialIndex).not.toBe(resident._materialIndex);
@@ -169,7 +147,7 @@ describe('MaterialDataStoreBuffer upload queue', () => {
     store.register(material);
     store.update();
 
-    material.baseColor = 0xff0000; // queued against the store being torn down
+    material.baseColor = 0xff0000;
     store.destroy();
 
     const fresh = new MaterialDataStoreBuffer();
@@ -179,19 +157,18 @@ describe('MaterialDataStoreBuffer upload queue', () => {
     expect(row(fresh, material)).toEqual(Array.from(material.data._f32));
   });
 
-  it('a material moving between two live stores re-mints instead of adopting the foreign slot', () => {
+  it('a material moving between live stores gets a fresh row instead of the foreign slot, and destroy frees it', () => {
     const storeA = new MaterialDataStoreBuffer();
     const storeB = new MaterialDataStoreBuffer();
     const material = new FlatMaterial({});
     const resident = new FlatMaterial({});
 
-    storeA.register(material); // minted in A: slot 0
-    storeB.register(resident); // B's slot 0 belongs to someone else
+    storeA.register(material);
+    storeB.register(resident);
     storeB.register(material);
     expect(material._uploadQueue).toBe(storeB);
-    expect(material._materialIndex).toBe(1); // B minted its own row — A's slot 0 was never adopted
+    expect(material._materialIndex).toBe(1);
 
-    // Destroy frees B's row (the back-ref store), never poisoning it with A's index.
     material.destroy();
     const next = new FlatMaterial({});
     storeB.register(next);
@@ -209,9 +186,10 @@ describe('MaterialDataStoreBuffer upload queue', () => {
   });
 });
 
-// Float struct slots store float32, so 0.3 reads back as 0.30000001192092896. Setters run per
-// frame from animation code, and re-setting the value a slot already holds must not queue an upload.
-describe('re-setting a value the material already holds', () => {
+/** A value a float32 struct slot can't hold exactly: it reads back as 0.30000001192092896 */
+const INEXACT_IN_FLOAT32 = 0.3;
+
+describe('re-setting a value the material already holds, as per-frame animation code does', () => {
   function drain(material: BaseMaterial3D): void {
     const store = new MaterialDataStoreBuffer();
     store.register(material);
@@ -220,19 +198,19 @@ describe('re-setting a value the material already holds', () => {
 
   it('queues nothing for an inexact float scalar', () => {
     const material = new Material3D({});
-    material.normalScale = 0.3;
+    material.normalScale = INEXACT_IN_FLOAT32;
     drain(material);
 
-    material.normalScale = 0.3;
+    material.normalScale = INEXACT_IN_FLOAT32;
     expect(material._storeQueued).toBe(false);
   });
 
   it('queues nothing for an inexact float lane of a feature group', () => {
     const material = new Material3D({ clearcoat: {} });
-    material.clearcoat!.roughness = 0.3;
+    material.clearcoat!.roughness = INEXACT_IN_FLOAT32;
     drain(material);
 
-    material.clearcoat!.roughness = 0.3;
+    material.clearcoat!.roughness = INEXACT_IN_FLOAT32;
     expect(material._storeQueued).toBe(false);
   });
 
@@ -240,21 +218,20 @@ describe('re-setting a value the material already holds', () => {
     'queues nothing for an inexact %s',
     (prop) => {
       const material = new Material3D({});
-      material[prop] = 0.3;
+      material[prop] = INEXACT_IN_FLOAT32;
       drain(material);
 
-      material[prop] = 0.3;
+      material[prop] = INEXACT_IN_FLOAT32;
       expect(material._storeQueued).toBe(false);
     },
   );
 
-  it('still queues a real change to an integer field', () => {
+  it('still queues a change to an integer field that float32 would round away', () => {
     const bit: ShaderBit = { name: 'flags', bindings: { material: { flags: 'u32' } } };
     const material = new BaseMaterial3D({ descriptor: { bitsGpu: [bit], bitsGl: [bit] } });
     material.data.flags = 0xffff0000;
     drain(material);
 
-    // Both values round to the same float32, so only an exact integer compare sees the change.
     material.data.flags = 0xffff0001;
     expect(material._storeQueued).toBe(true);
     expect(material.data.flags).toBe(0xffff0001);

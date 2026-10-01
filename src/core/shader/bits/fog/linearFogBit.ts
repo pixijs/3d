@@ -1,19 +1,17 @@
 import type { ShaderBit } from '../../ShaderBit';
 
 /**
- * Linear distance fog
+ * Distance fog that fades from none at `uFogParams.x`, the near distance, to full at
+ * `uFogParams.y`, the far one
  *
- * Fades fragments toward `uFogColor` between `uFogParams.x` (near, no
- * fog) and `uFogParams.y` (far, full fog). View-space depth is computed
- * once per vertex and interpolated as `vFogDepth`.
+ * The factor is `smoothstep(near, far, depth)` rather than a clamped line, so it eases in and out
+ * at both ends with no visible crease.
  *
- * Runs in linear radiance, before any tone-mapping bit — `uFogColor` arrives
- * already decoded and scaled by exposure, so the mix and the scene share one
- * space and one curve.
- *
- * The factor uses `smoothstep` (rather than a plain clamp) for C¹
- * continuity at the near/far boundaries — gives a slightly softer
- * falloff at both ends.
+ * All three fog bits work the same way. The vertex stage writes the view-space depth into
+ * `vFogDepth`, and the fragment stage mixes `finalColor` toward `uFogColor`. The mix runs after
+ * exposure and before tone mapping, and `uFogColor` arrives decoded to linear and scaled by the
+ * exposure, so the fog and the scene share one space and one curve. `uFogParams` is
+ * `(near, far, density)`: the linear fog reads the first two and the exponential ones the third.
  * @internal
  */
 export const linearFogBit: ShaderBit = {
@@ -31,7 +29,6 @@ export const linearFogBit: ShaderBit = {
     },
     fragment: {
       end: /*wgsl*/ `
-  // uFogParams = (near, far, density); linear reads near + far.
   let fogFactor = smoothstep(global.uFogParams.x, global.uFogParams.y, input.vFogDepth);
   finalColor = mix(finalColor, global.uFogColor, fogFactor);
 `,

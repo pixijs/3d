@@ -1,5 +1,5 @@
-import { getApp } from '@test-utils';
-import type { Application, Renderer, WebGPURenderer } from 'pixi.js';
+import { expectCleanRender, getApp } from '@test-utils';
+import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import type { CullResult, CullResults } from '~/core/render-passes/CullResult';
@@ -52,19 +52,6 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-/** Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL). */
-async function renderCatchingValidationErrors(app: Application<Renderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? (app.renderer as WebGPURenderer).gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  device.pushErrorScope('validation');
-  app.render();
-  return device.popErrorScope();
-}
-
 /** Anything carrying pixi's GC idle clock — a buffer or a geometry. */
 interface GcClocked {
   _gcLastUsed: number;
@@ -108,7 +95,7 @@ function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`shadow capture lifecycle (${preference})`, () => {
-    it('lets the last shadow build’s geometry age out once nothing casts', async () => {
+    it('lets the last shadow build’s geometry age out once nothing casts, while the ground keeps the forward passes running', async () => {
       const app = await getApp<Renderer>({
         id: `shadow-capture-cull-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE },
@@ -118,11 +105,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
         app.stage.addChild(view3d);
 
-        // `dynamic` keeps the geometry out of the shared atlas, so the drawn buffers are its own —
-        // the only buffers a shadow build captures.
+        /** `dynamic` keeps it out of the shared atlas, so the buffers a shadow build captures are its own */
         const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1, dynamic: true });
         const caster = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0x4a7c59 }), castShadow: true });
-        // The ground keeps the forward passes alive, so only the shadow pass culls.
         view3d.root.addChild(ground(), caster, sun());
         frame(view3d);
 
@@ -134,16 +119,16 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const buffers = geometry.buffers;
         expect(buffers.map((b) => gpuCopies(b) > 0)).toEqual(buffers.map(() => true));
 
-        // With no caster the shadow pass culls: its build empties without a rebuild, and nothing
-        // keeps the geometry's buffers (or its recorded layout) from ageing out.
         caster.removeFromParent();
         app.render();
-        expect(pd.commandList.count).toBe(0);
+        expect(pd.commandList.count, 'with no caster the shadow pass is skipped and its build empties').toBe(0);
         collectStale(app.renderer, geometry, ...buffers);
-        expect(buffers.map(gpuCopies)).toEqual(buffers.map(() => 0));
+        expect(buffers.map(gpuCopies), "nothing keeps the geometry's buffers from ageing out").toEqual(
+          buffers.map(() => 0),
+        );
 
         view3d.root.addChild(caster);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
+        await expectCleanRender(app);
         app.render();
         expect(pd.commandList.count).toBeGreaterThan(0);
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
@@ -177,13 +162,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const built = pd.commandList.dirtyId;
         expect(pd.commandList.count).toBeGreaterThan(0);
 
-        // Removing the light culls the shadow pass with its casters still in place — the case that
-        // separates shadow from a forward pass, which only culls once its renderables are gone.
-        // Nothing about the casters changed, so the list stays as built.
         light.removeFromParent();
         app.render();
-        expect(pd.commandList.count).toBeGreaterThan(0);
-        expect(pd.commandList.dirtyId).toBe(built);
+        expect(pd.commandList.count, 'skipped for want of a light, with its casters in place').toBeGreaterThan(0);
+        expect(pd.commandList.dirtyId, 'nothing about the casters changed, so the list stays as built').toBe(built);
 
         view3d.root.addChild(light);
         app.render();
@@ -217,18 +199,19 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const pd = view3d._sceneBatch.drawLists[RenderPassBit.SHADOW];
         const built = pd.commandList.dirtyId;
 
-        // The culled pass keeps its list but nothing replays it, so the buffers it captured age out.
-        // Losing them is what marks the list stale: the frame that brings the light back rebuilds it
-        // instead of binding freed buffers.
         light.removeFromParent();
         app.render();
         const buffers = geometry.buffers;
         collectStale(app.renderer, geometry, ...buffers);
-        expect(buffers.map(gpuCopies)).toEqual(buffers.map(() => 0));
+        expect(buffers.map(gpuCopies), 'the skipped pass keeps its list, but nothing replays it').toEqual(
+          buffers.map(() => 0),
+        );
 
         view3d.root.addChild(light);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
-        expect(pd.commandList.dirtyId).toBeGreaterThan(built);
+        await expectCleanRender(app);
+        expect(pd.commandList.dirtyId, 'losing the buffers marked the list stale, so it rebuilt').toBeGreaterThan(
+          built,
+        );
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
       } finally {
         app.destroy();
@@ -256,11 +239,12 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         app.render();
 
-        // WebGPU culls the scene batch once per cascade into a result held on the light; WebGL culls
-        // nothing and holds none.
         const cascadeCount = cascadeCountFor(light);
         const results = shadowCullResults(light);
-        expect(results !== undefined).toBe(preference === 'webgpu');
+        expect(
+          results !== undefined,
+          'WebGPU culls the scene batch per cascade into results on the light; WebGL holds none',
+        ).toBe(preference === 'webgpu');
 
         const held: CullResult[] = [];
         for (let c = 0; c < cascadeCount; c++) {
@@ -269,22 +253,25 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           if (result) held.push(result);
         }
         expect(held.length).toBe(preference === 'webgpu' ? cascadeCount : 0);
-        // Both buffers of every cascade's result are resident, so the zeros below mean something.
-        expect(held.map(resultResidency)).toEqual(held.map(() => 2));
+        expect(held.map(resultResidency), "both buffers of every cascade's result are resident").toEqual(
+          held.map(() => 2),
+        );
         expect(light._gpuShadowData).not.toBeNull();
 
         view3d.unload();
 
-        // Returning a result to the pool unloads it: a pooled result holds no GPU memory, or a warm
-        // pool would keep buffers no later unload could ever reach.
-        expect(held.map(resultResidency)).toEqual(held.map(() => 0));
-        // `release()` empties the container, and the light drops the shadow data that held it.
-        expect(Object.keys((results as unknown as CullResultsProbe | undefined)?._byBatch ?? {})).toEqual([]);
-        expect(light._gpuShadowData).toBeNull();
+        expect(
+          held.map(resultResidency),
+          'a pooled result holds no GPU memory, or a warm pool would keep buffers no unload reaches',
+        ).toEqual(held.map(() => 0));
+        expect(
+          Object.keys((results as unknown as CullResultsProbe | undefined)?._byBatch ?? {}),
+          '`release()` empties the container',
+        ).toEqual([]);
+        expect(light._gpuShadowData, 'and the light drops the shadow data that held it').toBeNull();
 
         app.render();
 
-        // Fresh shadow data, fresh results out of the pool, resident again.
         const reminted = shadowCullResults(light);
         expect(reminted !== undefined).toBe(preference === 'webgpu');
         const revived: CullResult[] = [];
@@ -293,7 +280,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           if (result) revived.push(result);
         }
         expect(revived.length).toBe(held.length);
-        expect(revived.map(resultResidency)).toEqual(held.map(() => 2));
+        expect(revived.map(resultResidency), 'fresh results out of the pool, resident again').toEqual(
+          held.map(() => 2),
+        );
       } finally {
         app.destroy();
       }

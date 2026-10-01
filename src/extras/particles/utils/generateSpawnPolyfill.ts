@@ -37,9 +37,11 @@ const SPEED_OFFSET = 2;
  *
  * Same arguments, same contract, same bytes: each particle is assembled as one
  * vertex row, the shape's position then every attribute in list order, and the
- * row is stamped across the quad. The loop reads the attribute list's numbers
- * from a flat table and switches on them per particle, which is the ~30 ns a
- * particle the generated function gets back.
+ * row is stamped across the quad as 32-bit words, so packed attributes copy
+ * bit-exact. The loop reads the attribute list's numbers from a flat table,
+ * five ints per attribute (element index, components, source, store and
+ * spread), and switches on them per particle, which is the ~30 ns a particle
+ * the generated function gets back.
  * @param attributes - The attributes a spawn writes, in the order it writes them
  * @param kinds - Each attribute's override kind for this pattern, parallel to `attributes`
  * @param positionKind - The position override's kind
@@ -55,11 +57,9 @@ export function generateSpawnPolyfill(
 ): SpawnFn {
   const { floatStride, world, randomFrames } = shape;
   const length = attributes.length;
-  // Five ints per attribute: element index, components, source, store, spread.
   const table = new Int32Array(length * 5);
   const kindTable = Int32Array.from(kinds);
   const scratch = attributes.map((): PointData4D => ({ x: 0, y: 0, z: 0, w: 0 }));
-  // One vertex, assembled per particle then stamped; three views of one buffer.
   const row32 = new Uint32Array(floatStride);
   const row = new Float32Array(row32.buffer);
   const row16 = new Uint16Array(row32.buffer);
@@ -80,14 +80,9 @@ export function generateSpawnPolyfill(
     let index = first;
 
     for (let n = 0; n < count; n++) {
-      // Where the particle starts: the shape's sample, placed by the caller's
-      // origin or by the emitter's transform.
       shape.sample(rng, pos, dir);
 
       if (positionKind !== ABSENT) {
-        // An explicit origin means the caller is placing this spawn themselves,
-        // so the emitter's transform stays out of it; the shape only contributes
-        // its scatter around the given point.
         let origin: PointData3D;
 
         if (positionKind === CONSTANT) {
@@ -103,20 +98,15 @@ export function generateSpawnPolyfill(
 
         pos.set(origin.x + pos.x, origin.y + pos.y, origin.z + pos.z);
       } else if (world) {
-        // Shape samples are emitter-relative; a world-space system bakes the
-        // emitter's transform in at spawn so the particle is then on its own.
         pos.applyMatrix4(worldTransform);
       }
 
-      // The direction follows the emitter's rotation whether or not the caller
-      // placed the spawn: only the position is theirs.
       if (world) dir.transformDirection(worldTransform);
 
       row[0] = pos.x;
       row[1] = pos.y;
       row[2] = pos.z;
 
-      // Every other attribute, by list order.
       for (let i = 0, t = 0; i < length; i++, t += 5) {
         const kind = kindTable[i];
         const at = table[t];
@@ -166,7 +156,6 @@ export function generateSpawnPolyfill(
           continue;
         }
 
-        // A point, resolved into the entry's scratch.
         const p = scratch[i];
 
         if (kind === ABSENT) {
@@ -220,8 +209,6 @@ export function generateSpawnPolyfill(
         }
       }
 
-      // The finished vertex, stamped across the quad as 32-bit words so the
-      // packed attributes copy bit-exact.
       for (let v = 0, o = index * VERTS * floatStride; v < VERTS; v++, o += floatStride) {
         for (let k = 0; k < floatStride; k++) u32[o + k] = row32[k];
       }

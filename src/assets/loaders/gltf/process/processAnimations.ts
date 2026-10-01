@@ -51,19 +51,28 @@ export function processAnimations(gltfRaw: GltfFormat, buffers: ArrayBuffer[], s
   });
 }
 
-// Per glTF spec: normalized integer accessors map into [-1, 1] for signed and
-// [0, 1] for unsigned. KHR_mesh_quantization animation samplers store keyframes
-// (notably rotations) as Int16 normalized; interpolation runs in JS so we
-// dequantize once up-front. Without this, SLERP sees Int16-magnitude values
-// and `sqrt(1 - cos²)` intermittently returns NaN on specific frame pairs,
-// producing brief flashes of exploded geometry.
+/**
+ * The scale from a normalized integer to its float, per component type: 5120 BYTE, 5121
+ * UNSIGNED_BYTE, 5122 SHORT and 5123 UNSIGNED_SHORT
+ */
 const DEQUANT_NORMALIZED: Record<number, number> = {
-  5120: 1 / 127, // INT8
-  5121: 1 / 255, // UINT8
-  5122: 1 / 32767, // INT16
-  5123: 1 / 65535, // UINT16
+  5120: 1 / 127,
+  5121: 1 / 255,
+  5122: 1 / 32767,
+  5123: 1 / 65535,
 };
 
+/**
+ * Reads keyframe times or values as floats
+ *
+ * `KHR_mesh_quantization` lets keyframes, rotations above all, be stored as normalized integers.
+ * Interpolation runs on the CPU, so they are converted here, once: left as integers, a quaternion
+ * slerp would see values far outside -1 to 1 and produce NaN. Signed values clamp at -1, as the
+ * glTF formula does.
+ * @param gltfRaw - Parsed glTF JSON
+ * @param buffers - Binary buffers holding the keyframe data
+ * @param accessorIndex - Index of the accessor to read
+ */
 function getBufferAsFloat32(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accessorIndex: number): Float32Array {
   const raw = getBuffer(gltfRaw, buffers, accessorIndex);
   if (raw instanceof Float32Array) return raw;
@@ -76,8 +85,6 @@ function getBufferAsFloat32(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accesso
     const scale = DEQUANT_NORMALIZED[accessor.componentType as number] ?? 1;
     const isSigned = accessor.componentType === 5120 || accessor.componentType === 5122;
 
-    // Branch hoisted out of the per-element loop so V8 doesn't re-evaluate
-    // the signedness check on every keyframe component.
     if (isSigned) {
       for (let i = 0; i < typedRaw.length; i++) {
         const v = typedRaw[i] * scale;
@@ -89,13 +96,22 @@ function getBufferAsFloat32(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accesso
       }
     }
   } else {
-    // Native bulk copy — drops into a memcpy-style routine in V8 and is
-    // dramatically faster than a JS for-loop for typed-array widening.
     out.set(typedRaw);
   }
   return out;
 }
 
+/**
+ * Builds the track for one animation channel
+ *
+ * A `weights` channel holds one value per morph target per keyframe, or three with `CUBICSPLINE`
+ * (in-tangent, value, out-tangent), so its value size is the value count over the keyframe count,
+ * divided by three for `CUBICSPLINE`.
+ * @param target - The node property the channel drives
+ * @param sampler - The channel's keyframes
+ * @param gltfRaw - Parsed glTF JSON
+ * @param buffers - Binary buffers holding the keyframe data
+ */
 function createTrack(
   target: AnimationChannelTarget,
   sampler: AnimationSampler,
@@ -112,9 +128,6 @@ function createTrack(
   const interpolation = (sampler.interpolation as InterpolationMode) ?? 'LINEAR';
 
   if (target.path === 'weights') {
-    // Morph weights pack `targetCount` scalars per keyframe. CUBICSPLINE keyframes
-    // additionally store in-/out-tangents (3 values per component), so the divisor
-    // grows accordingly — Track applies the tangent stride internally from valueSize.
     const componentsPerKeyframe = times.length > 0 ? values.length / times.length : 1;
     const valueSize = interpolation === 'CUBICSPLINE' ? componentsPerKeyframe / 3 : componentsPerKeyframe;
 

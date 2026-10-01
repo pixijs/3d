@@ -7,12 +7,8 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// The WebGL pipe owns the same shared morph store as WebGPU; sync() runs
-// backend-neutrally, so slots, derived offsets, weight data, and the
-// data-texture view the GL morph bits read must all be live on a webgl app.
-
 describe('morph store plumbing (WebGL)', () => {
-  it('runs the prepare pass and exposes the data-texture view', async () => {
+  it('allocates, packs and syncs the shared morph store and exposes its data texture on a WebGL app', async () => {
     const app = await getApp<WebGLRenderer>({
       id: 'morph-gl-plumbing',
       appOptions: { preference: 'webgl', width: 128, height: 128 },
@@ -38,22 +34,17 @@ describe('morph store plumbing (WebGL)', () => {
       const store = pipe._morphStoreBuffer;
       const morph = mesh.morph!;
 
-      // Slot allocated, deltas packed, and the absolute offset derived. (No
-      // store-row assertion here: the GL scene batch doesn't mint store-buffer
-      // rows — its batcher packs per-instance records instead, which is where
-      // the morph lanes surface when the GL morph bits land.)
-      expect(morph._slot).toBeGreaterThanOrEqual(0);
-      expect(geometry._morphDeltaBase).toBeGreaterThanOrEqual(0);
+      expect(morph._slot, 'a weight slot is allocated').toBeGreaterThanOrEqual(0);
+      expect(geometry._morphDeltaBase, 'the deltas are packed').toBeGreaterThanOrEqual(0);
       const weightsBase = (store as unknown as { _deltaCapacity: number })._deltaCapacity;
-      expect(morph._weightIndex).toBe(weightsBase + morph._slot);
+      expect(morph._weightIndex, 'the absolute weight offset is derived').toBe(weightsBase + morph._slot);
 
-      // Weights diffed into the shared array.
-      expect(store.data[morph._weightIndex]).toBeCloseTo(0.25);
+      expect(store.data[morph._weightIndex], 'the weight is diffed into the shared array').toBeCloseTo(0.25);
 
-      // The data-texture view exists (the pipe binds it every frame) and
-      // exactly covers the backing array.
       const source = store.texture.source;
-      expect(source.width * source.height * 4).toBe(store.data.length);
+      expect(source.width * source.height * 4, 'the data texture covers the backing array exactly').toBe(
+        store.data.length,
+      );
     } finally {
       app.destroy();
     }

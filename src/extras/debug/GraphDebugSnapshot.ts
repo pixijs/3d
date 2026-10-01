@@ -24,7 +24,7 @@ import type { View3D } from '../../scene/View3D';
 export const GRAPH_DEBUG_SNAPSHOT_VERSION = 4;
 
 /**
- * Which retained scene-mesh workload a graph pass carries
+ * Kind of scene pass: a forward pass that draws meshes, or the shadow pass
  * @category extras:debug
  * @advanced
  */
@@ -58,17 +58,22 @@ export interface GraphDebugPassSnapshot {
   name: string;
   /** Optional human-readable pass description */
   description: string | null;
-  /** Retained scene-mesh workload; other GPU work remains represented by the graph metadata */
+  /** Which kind of scene pass this is; null for every other pass, such as a fullscreen effect */
   sceneWorkload: GraphDebugScenePassKind | null;
   /** Whether the pass survived the graph's dependency cull */
   active: boolean;
   /** Execution index among active passes; null when the pass was culled */
   passIdx: number | null;
-  /** Whether the pass writes or produces an imported resource and therefore always survives the cull */
+  /**
+   * Whether the pass writes or produces an imported resource, or a camera target the graph
+   * copies out, and therefore always survives the cull
+   */
   isAnchored: boolean;
   /**
-   * Ids of colour resources whose mipmaps the graph generated right after this pass, in the
-   * last frame — the pass was their final writer and their source asks for them
+   * Ids of the colour resources this pass was the last to write in the frame
+   *
+   * Right after the pass, the graph generates mipmaps for those whose texture source has
+   * `autoGenerateMipmaps` set, so a non-empty list doesn't mean any were generated.
    */
   mipmapHandles: number[];
   /**
@@ -206,7 +211,7 @@ export interface GraphDebugMeshSnapshot {
   geometryId: number;
   /** Uid of the mesh's material */
   materialId: number;
-  /** Whether the mesh is visible in world space */
+  /** Whether the mesh and every one of its ancestors is visible */
   visible: boolean;
 }
 
@@ -342,7 +347,7 @@ export interface GraphDebugBatchPassSnapshot {
   bit: number;
   /** Meshes submitted to the pass */
   renderableCount: number;
-  /** Retained logical draw commands; self-managed passes may replay these commands more than once */
+  /** Draw commands in the pass's list, each counted once even when the pass replays the list */
   drawCallCount: number;
   /** Batcher-assigned instances summed across the pass's draws */
   sourceInstanceCount: number;
@@ -378,7 +383,7 @@ export interface GraphDebugBatchSnapshot {
   materialCount: number;
   /** Distinct textures sampled by the active meshes */
   textureCount: number;
-  /** Retained logical draw commands summed across passes */
+  /** Draw commands summed across passes */
   drawCallCount: number;
   /** Batcher-assigned instances summed across passes */
   sourceInstanceCount: number;
@@ -406,7 +411,7 @@ export interface GraphDebugSummarySnapshot {
   materialCount: number;
   /** Distinct textures captured this frame */
   textureCount: number;
-  /** Retained logical draw commands across active mesh passes; does not multiply internal pass replays */
+  /** Draw commands across active scene passes, each counted once however often its pass replays it */
   drawCallCount: number;
   /** Batcher-assigned instances summed across batches */
   sourceInstanceCount: number;
@@ -418,7 +423,9 @@ export interface GraphDebugSummarySnapshot {
  * Complete JSON-serialisable capture of one rendered frame
  *
  * Combines the resolved graph structure with every batch, mesh, geometry, material, and texture
- * that contributed retained draw work.
+ * that contributed retained draw work. A scene pass keeps its draw commands from frame to frame
+ * and rebuilds them only when something they depend on changes; those kept commands are what
+ * "retained" means throughout these types.
  * @category extras:debug
  * @advanced
  */
@@ -494,9 +501,8 @@ interface GraphDebugCaptureResult {
 type GraphDebugGeometryCapture = (geometry: Geometry3D) => void;
 
 /**
- * Capture the resolved render-graph structure without adding serialization code to the graph itself
- * @param graph - The graph to inspect; its private resolution state is read reflectively
- * @returns The graph's passes and resources as plain data
+ * Capture the passes and resources of a render graph's last resolve as plain data
+ * @param graph - The graph to inspect, once it has resolved a frame
  * @category extras:debug
  * @advanced
  */
@@ -703,11 +709,8 @@ function captureBatchPass(
     meshStates.set(mesh.uid, captureMeshInput(mesh, cache));
   }
 
-  // WebGPU keeps what the pass's frustum decided — the culled counts and the bundle watermark — on
-  // the pass's result for the batch; WebGL rewrites the list's own args in place and records nothing.
   const result = cullResultFor(pass, batch);
   const args = result ? result.indirectDrawData.drawCalls : passData.drawData.drawCalls;
-  // Render bundles exist only on the WebGPU pipe.
   const usesBundle = pass.pipe.renderer.type === RendererType.WEBGPU && passUsesBundle(pass);
   const state: GraphDebugBatchPassState = {
     key,
@@ -758,7 +761,11 @@ interface CullingPass {
 }
 
 /**
- * The pass's cull result for `batch` — present on WebGPU once the pass has drawn the batch
+ * The pass's cull result for `batch`, present on WebGPU once the pass has drawn the batch
+ *
+ * WebGPU keeps what the pass's frustum decided there: the culled draw args and the bundle
+ * watermark. WebGL culls by rewriting the draw list's own args in place, so it has no result and
+ * the list's args are already the culled ones.
  * @param pass - Pass to read the cull results from
  * @param batch - Batch whose cull result to find
  */
@@ -1010,6 +1017,16 @@ function compareDrawBuildState(
   return { status: 'rebuilt', commandListDirtyId: current.commandListDirtyId, causes };
 }
 
+/**
+ * Classify the pass's WebGPU bundle against the previous capture
+ *
+ * A rebuilt draw list counts as a recording although the bundle counter didn't move: the cull
+ * result drops its bundle when the command list moves, without touching the counter. Only a
+ * bundle-only change shows in the watermark.
+ * @param previous - The pass's state at the previous capture, if it was captured
+ * @param current - The pass's state now
+ * @param drawBuild - This capture's draw-build outcome for the pass
+ */
 function compareBundleState(
   previous: GraphDebugBatchPassState | undefined,
   current: GraphDebugBatchPassState,
@@ -1036,8 +1053,6 @@ function compareBundleState(
   if (current.bundleDirtyId !== current.lastBundleDirtyId) {
     return { ...base, status: 'invalidated', causes: [{ code: cause }] };
   }
-  // A rebuilt draw list always re-records: the result drops its bundle when the command list
-  // moves, without touching the bundle counter. Only a bundle-only change shows in the watermark.
   if (drawBuild.status === 'rebuilt' || current.lastBundleDirtyId !== previous.lastBundleDirtyId) {
     return { ...base, status: 'recorded', causes: [{ code: cause }] };
   }
@@ -1120,11 +1135,13 @@ export interface RenderGraphDebuggerOptions {
 }
 
 /**
- * Stateful, passive render-debug capture
+ * Captures a {@link GraphDebugSnapshot} of a view's last frame and explains what changed since
+ * the previous capture
  *
- * Call {@link RenderGraphDebugger#capture} after every rendered frame when draw-rebuild and
- * bundle-recording attribution is required: causes describe changes since the previous capture,
- * while a skipped capture necessarily collapses several frames into one comparison.
+ * It reads what the renderer already keeps and changes nothing. Call
+ * {@link RenderGraphDebugger#capture} after every rendered frame if you want draw rebuilds and
+ * bundle recordings explained: causes compare against the previous capture, so a skipped frame
+ * folds its changes into the next one.
  * @category extras:debug
  * @advanced
  */
@@ -1141,7 +1158,7 @@ export class RenderGraphDebugger {
   }
 
   /**
-   * Capture one fully JSON-serialisable view of the resolved graph and its retained draw work
+   * Capture the view's last frame as JSON-serialisable data
    * @param captureGeometry - Called once per distinct geometry in this capture, before it is snapshotted
    * @returns The frame snapshot, or null when the source resolves to no view with a graph
    */

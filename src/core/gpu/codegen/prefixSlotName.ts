@@ -7,11 +7,10 @@ function capitalize(str: string): string {
 }
 
 /**
- * Prefixes a slot name with the stage in camelCase
+ * Prefixes a slot name with the stage in camelCase: `('vertex', 'input')` gives `'vertexInput'`
  *
- * e.g., ("vertex", "input") → "vertexInput", ("fragment", "end") → "fragmentEnd"
- *
- * Used by WGSL compilation where vertex and fragment share a single template.
+ * WGSL needs the prefix because one template holds both stages, so the stages' slots can't share
+ * names.
  * @param stage - Shader stage the slot belongs to
  * @param slotName - Bare slot name from the bit
  * @returns The stage-prefixed slot name

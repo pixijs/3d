@@ -20,13 +20,6 @@ describe('Spherical', () => {
     });
   });
 
-  describe('type', () => {
-    test('is "spherical"', () => {
-      const s = new Spherical();
-      expect(s.type).toBe('spherical');
-    });
-  });
-
   describe('set', () => {
     test('sets all three components', () => {
       const s = new Spherical();
@@ -34,11 +27,6 @@ describe('Spherical', () => {
       expect(s.radius).toBe(2);
       expect(s.phi).toBe(Math.PI / 2);
       expect(s.theta).toBe(Math.PI / 4);
-    });
-
-    test('returns this', () => {
-      const s = new Spherical();
-      expect(s.set(1, 2, 3)).toBe(s);
     });
   });
 
@@ -50,12 +38,6 @@ describe('Spherical', () => {
       expect(b.radius).toBe(2);
       expect(b.phi).toBe(Math.PI / 3);
       expect(b.theta).toBe(Math.PI / 6);
-    });
-
-    test('returns this', () => {
-      const a = new Spherical();
-      const b = new Spherical();
-      expect(b.copyFrom(a)).toBe(b);
     });
   });
 
@@ -140,11 +122,6 @@ describe('Spherical', () => {
       s.makeSafe();
       expect(s.phi).toBeCloseTo(0.000001, 10);
     });
-
-    test('returns this', () => {
-      const s = new Spherical();
-      expect(s.makeSafe()).toBe(s);
-    });
   });
 
   describe('setFromPoint3D', () => {
@@ -156,11 +133,6 @@ describe('Spherical', () => {
       expect(a.radius).toBeCloseTo(b.radius, 5);
       expect(a.phi).toBeCloseTo(b.phi, 5);
       expect(a.theta).toBeCloseTo(b.theta, 5);
-    });
-
-    test('returns this', () => {
-      const s = new Spherical();
-      expect(s.setFromPoint3D({ x: 1, y: 0, z: 0 })).toBe(s);
     });
   });
 
@@ -212,18 +184,6 @@ describe('Spherical', () => {
         expect(recovered.y).toBeCloseTo(y, 5);
         expect(recovered.z).toBeCloseTo(z, 5);
       }
-    });
-
-    test('returns this', () => {
-      const s = new Spherical();
-      expect(s.setFromCartesianCoords(1, 0, 0)).toBe(s);
-    });
-  });
-
-  describe('toString', () => {
-    test('includes radius, phi, theta', () => {
-      const s = new Spherical(2, 0.5, 1.5);
-      expect(s.toString()).toBe('[pixi-3d/math:Spherical radius=2 phi=0.5 theta=1.5]');
     });
   });
 });

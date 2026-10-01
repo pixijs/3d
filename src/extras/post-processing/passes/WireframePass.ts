@@ -22,22 +22,34 @@ export interface WireframePassOptions extends Omit<MeshPassOptions, 'name' | 'de
   /**
    * Line colour
    * @default 0x00ff00
+   * @example
+   * ```ts
+   * new WireframePass({ color: 0xff00ff });
+   * ```
    */
   color?: ColorSource;
   /**
-   * Where in the default graph the lines draw
+   * Where in the default graph the lines draw; {@link PassStage} lists the stages
    * @default 'afterTransparent'
+   * @example
+   * ```ts
+   * new WireframePass({ stage: 'afterOpaque' });
+   * ```
    */
   stage?: Exclude<PassStage, 'post'>;
 }
 
 /**
- * Wireframe debug pass — redraws opted-in meshes as lines over their shaded result
+ * Wireframe debug pass: redraws opted-in meshes as lines over their shaded result
  *
  * Add it to `View3D.passes`; meshes join by opting into the `wireframe` pass on their
- * material. Depth testing is off so the lines never z-fight the surface they trace. A
- * triangle-list index buffer drawn as lines yields triangle edges with 3x overdraw — fine for
- * inspection, not for production.
+ * material. Depth testing is off, so the lines never z-fight the surface they trace, and the
+ * edges on the far side of a mesh show through too.
+ *
+ * The pass draws each mesh's triangle indices as a line list, which pairs them two at a time and
+ * so doesn't line up with the triangles: some edges are drawn, others are missed, and some lines
+ * join one triangle's last corner to the next one's first. That is enough to inspect a mesh, not
+ * an exact wireframe.
  * @example
  * ```ts
  * new View3D({ passes: [new WireframePass({ color: 0x00ff66 })] });

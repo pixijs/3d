@@ -10,20 +10,20 @@ import { Sprite3D } from '~/scene/Sprite3D';
 const makeTexture = (width = 8, height = 8): Texture =>
   new Texture({ source: new TextureSource({ width, height, resolution: 1 }) });
 
-/** A texture that declares it will change shape, which is what earns an `update` listener. */
+/** A `dynamic` texture, the only kind a sprite listens to for `update` */
 const makeDynamicTexture = (width = 8, height = 8): Texture => {
   const texture = makeTexture(width, height);
   texture.dynamic = true;
   return texture;
 };
 
-/** Reads Geometry3D's private teardown latch without an `any` cast. */
+/** Geometry3D's private `_destroyed` flag, typed for reading through a cast instead of `any` */
 interface GeometryInternals {
   _destroyed: boolean;
 }
 
 describe('Sprite3D.destroy', () => {
-  it('leaves the shared quad alive even under destroy(true)', () => {
+  it('leaves the shared quad alive even under destroy(true), for the next sprite to draw', () => {
     const quad = PlaneGeometry.spriteQuad;
     const sprite = new Sprite3D({ texture: makeTexture() });
 
@@ -31,19 +31,16 @@ describe('Sprite3D.destroy', () => {
 
     expect((quad as unknown as GeometryInternals)._destroyed).toBe(false);
     expect(quad.buffers).not.toBe(null);
-    // The next sprite draws from the same live instance.
     expect(new Sprite3D({ texture: makeTexture() }).geometry).toBe(quad);
   });
 
-  it('hands destroyed children the caller’s own options, not a rewritten set', () => {
+  it('hands destroyed children the caller’s own options, so a child mesh still frees its own geometry', () => {
     const sprite = new Sprite3D({ texture: makeTexture() });
     const childGeometry = new SphereGeometry();
     const child = new Mesh3D({ geometry: childGeometry, material: new Material3D({ baseColor: 0x223344 }) });
 
     sprite.addChild(child);
 
-    // The sprite spares its own shared quad, but a child mesh owns its geometry: strip `geometry`
-    // on the way down and that geometry leaks.
     sprite.destroy({ children: true, geometry: true });
 
     expect(child.destroyed).toBe(true);
@@ -91,15 +88,13 @@ describe('Sprite3D.destroy', () => {
     expect(material.destroyed).toBe(true);
   });
 
-  it('keeps a supplied material, which the caller may be sharing', () => {
+  it('keeps a supplied material, which the caller may be sharing, unless `material` asks for it', () => {
     const shared = new Material3D({ baseColor: 0x336699, baseColorTexture: makeTexture() });
     const a = new Sprite3D({ material: shared });
     const b = new Sprite3D({ material: shared });
 
     a.destroy();
 
-    // Only a material the sprite minted is exclusively owned. Tearing down one
-    // sprite must not pull the material out from under its siblings.
     expect(shared.destroyed).toBe(false);
     expect(b.material).toBe(shared);
 
@@ -168,8 +163,6 @@ describe('Sprite3D.destroy', () => {
     const shared = new Material3D({ baseColorTexture: texture });
     const sprite = new Sprite3D({ material: shared });
 
-    // The material went first, and without `texture`, so the sprite's texture is still live
-    // and the sprite is the only path left that can free it.
     shared.destroy();
     sprite.destroy({ texture: true });
 
@@ -220,13 +213,10 @@ describe('Sprite3D.destroy', () => {
     sprite.destroy();
   });
 
-  it('never subscribes to a static texture', () => {
+  it('never subscribes to a static texture, matching 2D `Sprite`', () => {
     const texture = makeTexture();
     const sprite = new Sprite3D({ texture });
 
-    // Matching 2D `Sprite`: a texture that declares it never changes shape never
-    // fires, so subscribing would cost every sprite a listener for nothing — and
-    // the add/remove pair on every swap is what makes animated frames expensive.
     expect(texture.listenerCount('update')).toBe(0);
 
     sprite.texture = makeTexture(16, 16);

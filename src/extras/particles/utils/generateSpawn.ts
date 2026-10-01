@@ -18,16 +18,17 @@ import type { SpawnAttribute, SpawnFn, SpawnShape } from './spawnPlan';
  * Generates a straight-line spawn function for one override pattern
  *
  * The attribute list is the declaration and the pattern of kinds is the
- * structure, so everything the polyfill dispatches on per particle,
- * components, source, store, kind, is a literal here. Spreads and lerps are
- * inlined, the spread offsets and element indices are literals, and the stamp
- * across the quad is unrolled. Per-system values, the capacity, the frame
- * count and the packed constants, come through the context so systems with
- * the same attributes share one function. The same idea as pixi's uniform
- * sync generators, applied to a particle's birth record.
+ * structure, so everything the polyfill dispatches on per particle (components,
+ * source, store and kind) is a literal here. Spreads and lerps are inlined, the
+ * spread offsets and element indices are literals, and the stamp across the
+ * quad is unrolled. Per-system values (the capacity, the frame count and the
+ * packed constants) come through the context, so systems with the same
+ * attributes share one function. The same idea as pixi's uniform sync
+ * generators, applied to a particle's birth record.
  *
- * Random draws happen in exactly the order `generateSpawnPolyfill` makes
- * them, which the parity test pins byte for byte.
+ * Every byte or short it packs inlines `unorm8` or `unorm16`, clamp included.
+ * Random draws happen in exactly the order `generateSpawnPolyfill` makes them,
+ * which the parity test pins byte for byte.
  * @param attributes - The attributes a spawn writes, in the order it writes them
  * @param kinds - Each attribute's override kind for this pattern, parallel to `attributes`
  * @param positionKind - The position override's kind
@@ -47,7 +48,6 @@ export function generateSpawn(
     lines.push(line);
   };
 
-  // --- hoist ---
   emit(
     'const rng = ctx.rng, spreads = ctx.spreads, shape = ctx.shape, pos = ctx.pos, dir = ctx.dir, origin3 = ctx.origin3;',
   );
@@ -72,7 +72,6 @@ export function generateSpawn(
     `  const o0 = index * ${VERTS * floatStride}, o1 = o0 + ${floatStride}, o2 = o1 + ${floatStride}, o3 = o2 + ${floatStride};`,
   );
 
-  // --- position: the shape's sample, placed ---
   emit('  shape.sample(rng, pos, dir);');
 
   if (positionKind === ABSENT) {
@@ -88,13 +87,10 @@ export function generateSpawn(
     emit('  { const q = posRaw(rng, index); pos.set(q.x + pos.x, q.y + pos.y, q.z + pos.z); }');
   }
 
-  // The shape's direction follows the emitter's rotation whether or not the
-  // caller placed the spawn: only the position is theirs.
   if (world) emit('  dir.transformDirection(wt);');
 
   emit(stamp('f32', 0, 'pos.x') + stamp('f32', 1, 'pos.y') + stamp('f32', 2, 'pos.z'));
 
-  // --- every other attribute, in list order ---
   for (let i = 0; i < attributes.length; i++) {
     const a = attributes[i];
     const kind = kinds[i];
@@ -129,7 +125,6 @@ export function generateSpawn(
       continue;
     }
 
-    // A point: resolve its components into locals, then store.
     const n = a.components;
     const names = ['x', 'y', 'z', 'w'].slice(0, n);
 
@@ -153,7 +148,6 @@ export function generateSpawn(
     if (a.store === AS_F32) {
       for (let c = 0; c < n; c++) emit('  ' + stamp('f32', at + c, names[c]));
     } else if (a.store === AS_UNORM8) {
-      // Clamped per channel, so an overshoot can't spill into its neighbour.
       for (const c of names) emit(`    const ${c}8 = ${c} <= 0 ? 0 : ${c} >= 1 ? 255 : (${c} * 255 + 0.5) | 0;`);
       emit('    const c = (x8 | (y8 << 8) | (z8 << 16) | (w8 << 24)) >>> 0;');
       emit('  ' + stamp('u32', at, 'c'));

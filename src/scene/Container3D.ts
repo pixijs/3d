@@ -21,14 +21,16 @@ declare global {
     /**
      * Augmentation hook for members mixed into {@link Container3D}
      *
-     * Declare the added members here and merge their implementation onto the class with
-     * pixi.js's `extensions.mixin(Container3D, myMixin)` — the same pattern the
-     * 2D `Container` uses for its mixins (events, effects, sorting, …).
+     * Declare the added members here and merge their implementation onto the class with pixi.js's
+     * `extensions.mixin(Container3D, myMixin)`, the pattern pixi's 2D `Container` uses for its
+     * events, effects and sorting. The interaction members (`eventMode`, `cursor`, `hitVolume`,
+     * the `on*` handlers and the rest) arrive this way. They reach the class through the
+     * `Container3D` interface declared beside it.
      */
     interface Container3D {}
     /**
-     * Augmentation hook for {@link Container3DOptions}. The events module merges its
-     * {@link Federated3DOptions} in here, mirroring how pixi.js's mixins extend `ContainerOptions`.
+     * Augmentation hook for {@link Container3DOptions}; the interaction options,
+     * {@link Federated3DOptions}, merge in here, as pixi's mixins extend `ContainerOptions`
      */
     interface Container3DOptions {}
     /** Augmentation hook for extra {@link Container3DEvents} event signatures */
@@ -38,7 +40,6 @@ declare global {
 
 let UID = 0;
 
-// lookAt scratch — module-level so calls don't allocate.
 const _lookAtParentWorld = new Matrix4();
 const _lookAtPos = new Vector3();
 const _lookAtMatrix = new Matrix4();
@@ -46,22 +47,18 @@ const _lookAtWorldQuat = new Quaternion();
 const _lookAtParentQuat = new Quaternion();
 const _lookAtDefaultUp: PointData3D = { x: 0, y: 1, z: 0 };
 
-// Origin offset scratch — each call consumes it before the next write.
 const _originOffset = new Vector3();
 
-// toGlobal / toLocal scratch — module-level so per-call conversions don't allocate.
 const _convertMatrix = new Matrix4();
 const _convertVec = new Vector3();
 const _convertFromVec = new Vector3();
 
-// reparentChildAt scratch — module-level so calls don't allocate.
 const _reparentChildWorld = new Matrix4();
 const _reparentParentWorld = new Matrix4();
 const _reparentPos = new Vector3();
 const _reparentScale = new Vector3();
 const _reparentQuat = new Quaternion();
 
-// width / height / depth / getSize / setSize scratch — module-level so measuring doesn't allocate.
 const _measureBox = new Box();
 
 /**
@@ -93,55 +90,111 @@ function labelMatches(value: string | null, label: string | RegExp): boolean {
 
 /**
  * Width, height and depth of a {@link Container3D}, as returned by {@link Container3D.getSize}
+ * @example
+ * ```ts
+ * const { width, height, depth }: Size3D = model.getSize();
+ *
+ * crate.setSize({ width: 2, height: 1, depth: 1 });
+ * ```
  * @category scene
  * @standard
  */
 export interface Size3D {
   /** Extent along x */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- result field, read back from getSize
   width: number;
   /** Extent along y */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- result field, read back from getSize
   height: number;
   /** Extent along z */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- result field, read back from getSize
   depth: number;
 }
 
 /**
- * Events emitted by a {@link Container3D} as children are added and removed
+ * Events a {@link Container3D} emits, with the same names and payloads as pixi's 2D `Container`
  *
- * Listen with `container.on('childAdded', ...)` and friends — payloads mirror pixi.js's 2D
- * `Container` events, so the same listener shapes work in both dimensions.
- * @see {@link Container3D.addChild} For the methods that emit these events.
+ * Listen with `on`, `once` and `off`. The pointer events (`pointerdown`, `click` and the rest) are
+ * typed through `PixiMixins.Container3DEvents`.
+ * @example
+ * ```ts
+ * level.on('childAdded', (child) => colliders.add(child));
+ * level.on('childRemoved', (child) => colliders.delete(child));
+ * ```
  * @category scene
  * @standard
  */
 export interface Container3DEvents extends PixiMixins.Container3DEvents {
-  /** Emitted on a child once it has been added to a parent; passes the new parent */
+  /**
+   * Emitted on a child after it joins a parent; passes the parent
+   * @example
+   * ```ts
+   * enemy.on('added', () => enemyCount++);
+   * ```
+   */
   added: [container: Container3D];
-  /** Emitted on a child once it has been removed from a parent; passes the former parent */
+  /**
+   * Emitted on a child after it leaves its parent; passes the former parent
+   * @example
+   * ```ts
+   * enemy.on('removed', () => enemyCount--);
+   * ```
+   */
   removed: [container: Container3D];
-  /** Emitted on a parent once a child is added; passes the child, this parent and the child's index */
+  /**
+   * Emitted on a parent after it gains a child; passes the child, this parent and the child's
+   * index
+   * @example
+   * ```ts
+   * level.on('childAdded', (child) => colliders.add(child));
+   * ```
+   */
   childAdded: [child: Container3D, container: Container3D, index: number];
-  /** Emitted on a parent once a child is removed; passes the child, this parent and the removed index */
+  /**
+   * Emitted on a parent after it loses a child; passes the child, this parent and an index
+   *
+   * From `removeChild`, the index is where the child was. From `removeChildren`, it is the child's
+   * place in the returned array, as in pixi.
+   * @example
+   * ```ts
+   * level.on('childRemoved', (child) => colliders.delete(child));
+   * ```
+   */
   childRemoved: [child: Container3D, container: Container3D, index: number];
-  /** Emitted once {@link Container3D.destroy} has emptied and detached this container; passes the container */
+  /**
+   * Emitted once {@link Container3D.destroy} has emptied and detached this container; passes the
+   * container
+   * @example
+   * ```ts
+   * crate.once('destroyed', () => colliders.delete(crate));
+   * ```
+   */
   destroyed: [container: Container3D];
-  /** Emitted when {@link Container3D.visible} changes value; passes the new value */
+  /**
+   * Emitted when {@link Container3D.visible} changes value; passes the new value
+   * @example
+   * ```ts
+   * door.on('visibleChanged', (visible) => {
+   *   doorCollider.enabled = visible;
+   * });
+   * ```
+   */
   visibleChanged: [visible: boolean];
 }
 
 /**
  * Constructor options for {@link Container3D}, the 3D counterpart of pixi.js's `ContainerOptions`
  *
- * Every member is optional. Keys are applied in the order they're written, through the same setters
- * as assigning them afterwards, so later keys win: `{ position, x }` ends with `x`, and of
- * `rotation` / `quaternion` the last one written is the rotation used. `children` are added after
- * that, then `hitVolume` resolves and `width` / `height` / `depth` measure the finished subtree, and
- * `parent` adds this node to its parent last.
+ * Every member is optional, and one set to `undefined` is skipped. Keys are applied in the order
+ * they're written, through the same setters as assigning them afterwards, so later keys win:
+ * `{ position, x }` ends with `x`, and of `rotation` and `quaternion` the last one written is the
+ * rotation used. `children` are added after that, then `hitVolume` resolves and `width`, `height`
+ * and `depth` measure the finished subtree, and `parent` adds this node to its parent last.
  *
- * The events module mixes in the interaction surface through `PixiMixins.Container3DOptions`
- * (`eventMode`, `interactive`, `interactiveChildren`, `cursor`, `hitVolume`, the `on*` handlers).
- * Constructor-set event state is safe before the node is attached: registration is derived when the
- * node joins a {@link View3D}'s scene graph.
+ * The interaction options come in through `PixiMixins.Container3DOptions`: `eventMode`,
+ * `interactive`, `interactiveChildren`, `cursor`, `hitVolume` and the `on*` handlers.
+ * They're safe to set before the node is in a scene; they take effect when it joins a
+ * {@link View3D}'s scene.
  * @example
  * ```ts
  * const arm = new Container3D({
@@ -160,71 +213,162 @@ export interface Container3DEvents extends PixiMixins.Container3DEvents {
  */
 export interface Container3DOptions extends PixiMixins.Container3DOptions {
   /**
-   * Free-form name for telling nodes apart in `logHierarchy` output and when debugging
+   * Name to find the node by; see {@link Container3D#label}
    * @default null
+   * @example
+   * ```ts
+   * const turret = new Container3D({ label: 'turret' });
+   * ```
    */
   label?: string | null;
   /**
    * Local position
    * @default { x: 0, y: 0, z: 0 }
+   * @example
+   * ```ts
+   * const lamp = new Container3D({ position: { x: 0, y: 3, z: 0 } });
+   * ```
    */
   position?: PointData3D;
-  /** Local position on x; an alias for `position.x` */
+  /**
+   * Local position on x; the same as `position.x`
+   * @example
+   * ```ts
+   * const left = new Container3D({ x: -2 });
+   * ```
+   */
   x?: number;
-  /** Local position on y; an alias for `position.y` */
+  /**
+   * Local position on y; the same as `position.y`
+   * @example
+   * ```ts
+   * const shelf = new Container3D({ y: 1.2 });
+   * ```
+   */
   y?: number;
-  /** Local position on z; an alias for `position.z` */
+  /**
+   * Local position on z; the same as `position.z`
+   * @example
+   * ```ts
+   * const back = new Container3D({ z: -5 });
+   * ```
+   */
   z?: number;
   /**
    * Local scale; a number scales all three axes
    * @default 1
+   * @example
+   * ```ts
+   * const giant = new Container3D({ scale: 3 });
+   * ```
    */
   scale?: PointData3D | number;
   /**
-   * Local rotation as Euler angles (radians, XYZ order)
+   * Local rotation as Euler angles in radians, XYZ order
    * @default { x: 0, y: 0, z: 0 }
+   * @example
+   * ```ts
+   * const turned = new Container3D({ rotation: { x: 0, y: Math.PI / 2, z: 0 } });
+   * ```
    */
   rotation?: PointData3D;
   /**
-   * Local rotation as Euler angles in degrees; the degree twin of `rotation`. Passing both is
-   * last-wins, like pixi.js's `rotation` / `angle`.
+   * Local rotation as Euler angles in degrees, the degree twin of `rotation`
+   *
+   * Of the two, the last one written wins, like pixi's `rotation` and `angle`.
    * @default { x: 0, y: 0, z: 0 }
+   * @example
+   * ```ts
+   * const turned = new Container3D({ angle: { x: 0, y: 90, z: 0 } });
+   * ```
    */
   angle?: PointData3D;
   /**
    * Local rotation as a unit quaternion
    * @default { x: 0, y: 0, z: 0, w: 1 }
+   * @example
+   * ```ts
+   * const turned = new Container3D({ quaternion: { x: 0, y: Math.SQRT1_2, z: 0, w: Math.SQRT1_2 } });
+   * ```
    */
   quaternion?: QuaternionData;
   /**
-   * Point in local space that rotation and scale happen around, without moving the node. A number
-   * sets all three axes.
+   * Point in local space that rotation and scale happen around, without moving the node; see
+   * {@link Container3D#origin}
    * @default { x: 0, y: 0, z: 0 }
+   * @example
+   * ```ts
+   * const hinge = new Container3D({ origin: { x: 0.5, y: 0, z: 0 } });
+   * ```
    */
   origin?: PointData3D | number;
   /**
    * Whether this node and its descendants draw
    * @default true
+   * @example
+   * ```ts
+   * const hiddenUntilSpawn = new Container3D({ visible: false });
+   * ```
    */
   visible?: boolean;
-  /** Target width along x; sets `scale.x` against the local bounds of the node and its `children` */
+  /**
+   * Target width along x; sets `scale.x` from the local bounds of the node and its `children`
+   * @example
+   * ```ts
+   * const crate = new Container3D({ children: [crateMesh], width: 2 });
+   * ```
+   */
   width?: number;
-  /** Target height along y; sets `scale.y` against the local bounds of the node and its `children` */
+  /**
+   * Target height along y; sets `scale.y` from the local bounds of the node and its `children`
+   * @example
+   * ```ts
+   * const tree = new Container3D({ children: [treeMesh], height: 6 });
+   * ```
+   */
   height?: number;
-  /** Target depth along z; sets `scale.z` against the local bounds of the node and its `children` */
+  /**
+   * Target depth along z; sets `scale.z` from the local bounds of the node and its `children`
+   * @example
+   * ```ts
+   * const bench = new Container3D({ children: [benchMesh], depth: 0.5 });
+   * ```
+   */
   depth?: number;
   /**
-   * Fixed local-space box used in place of this node's subtree when measuring bounds
-   * @see {@link Container3D.boundsVolume}
+   * Fixed local-space box used in place of this node's subtree when measuring bounds; see
+   * {@link Container3D.boundsVolume}
+   * @example
+   * ```ts
+   * const swarm = new Container3D({ boundsVolume: new Box(new Vector3(-10, 0, -10), new Vector3(10, 5, 10)) });
+   * ```
    */
   boundsVolume?: Box;
-  /** Children to add, in order */
+  /**
+   * Children to add, in order
+   * @example
+   * ```ts
+   * const car = new Container3D({ children: [body, frontWheels, rearWheels] });
+   * ```
+   */
   children?: Container3D[];
-  /** Parent to add this node to, once everything else is applied */
+  /**
+   * Parent to add this node to, once everything else is applied
+   * @example
+   * ```ts
+   * const crate = new Container3D({ label: 'crate', parent: view.root });
+   * ```
+   */
   parent?: Container3D;
 }
 
-/** Option keys the constructor applies itself, after the plain assignment */
+/**
+ * Option keys the constructor applies itself, after the others
+ *
+ * `children` go first. `hitVolume` waits for them because its `'box'` shorthand measures the
+ * subtree, and on an empty node it would give a zero box that is never hit. `width`, `height` and
+ * `depth` measure the subtree too, and `parent` comes last.
+ */
 const OPTIONS_APPLIED_LATER: Record<string, boolean> = {
   children: true,
   hitVolume: true,
@@ -234,87 +378,98 @@ const OPTIONS_APPLIED_LATER: Record<string, boolean> = {
   depth: true,
 };
 
-// Merges the PixiMixins hook into the class type — mixed-in members declared
-// there (and applied with `extensions.mixin`) surface on every Container3D.
-// oxlint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging, pixi3d/require-export-jsdoc, pixi3d/require-member-api-doc
+// oxlint-disable-next-line pixi3d/require-export-jsdoc, pixi3d/require-member-api-doc
 export interface Container3D extends PixiMixins.Container3D {}
 
-// Keeps arbitrary custom events typed on the emitter, mirroring pixi's Container. The branded
-// `({} & string)` / `({} & symbol)` keys are load-bearing: plain index signatures would swallow
-// the literal-key inference of the known events above.
+/**
+ * Keeps custom event names typed on the emitter, as pixi's `Container` does
+ *
+ * The `({} & string)` and `({} & symbol)` keys matter: a plain index signature would swallow the
+ * literal-key inference of the known events.
+ */
 type AnyEvent = {
   [K: ({} & string) | ({} & symbol)]: any;
 };
 
 /**
- * `Container3D` is the scene-graph node of a 3D scene — the 3D counterpart of pixi.js's `Container`
+ * A node in a 3D scene, the 3D counterpart of pixi.js's `Container`
  *
- * It carries a local TRS transform ({@link Container3D.position | position},
- * {@link Container3D.scale | scale}, and either {@link Container3D.rotation | rotation} or
- * {@link Container3D.quaternion | quaternion}), tracks its parent and children, and resolves its
- * world transform during the per-frame transform pass owned by the enclosing {@link View3D}.
+ * It has a local transform, made of {@link Container3D.position | position},
+ * {@link Container3D.scale | scale} and a rotation set through either
+ * {@link Container3D.rotation | rotation} or {@link Container3D.quaternion | quaternion}, plus a
+ * parent and children. Put it under a view's {@link View3D.root | root}, at any depth, and the
+ * view draws the meshes and uses the lights in its subtree.
  *
- * Add lights, meshes, and cameras by parenting them under a Container3D that lives under
- * {@link View3D.root | view.root}; the View indexes them automatically as the graph changes.
- *
- * Transform changes (position/scale/rotation/quaternion mutations) flow through observers, set
- * cascading dirty flags, and enqueue this node into the View's per-depth update bucket — so cost
- * is paid once per frame, not once per write.
+ * Changing a transform only marks the node. The view works out world transforms once per frame,
+ * however many changes you make. The child methods and events match pixi's `Container`.
  * @example
  * ```ts
- * const root = new Container3D();
- * root.position.set(0, 1, 0);
+ * const arm = new Container3D();
+ * arm.position.set(0, 1, 0);
  *
- * const child = new Container3D();
- * child.scale.set(2);
- * root.addChild(child);
+ * const hand = new Container3D();
+ * hand.scale.set(2);
+ * arm.addChild(hand);
  *
- * root.lookAt({ x: 0, y: 0, z: 0 }); // orient root's +Z toward the origin
+ * arm.lookAt({ x: 0, y: 0, z: 0 });
  * ```
- * @see {@link View3D} For the scene root that owns the transform pass.
- * @see {@link Container3DEvents} For the events emitted on add/remove.
+ * @see {@link View3D} For the view that draws a scene.
+ * @see {@link Container3DEvents} For the events it emits.
  * @see {@link Camera3D} For the camera subclass that faces local -Z.
  * @see {@link Light} For the light subclass that faces local -Z.
  * @category scene
  * @standard
  */
 export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
-  /** Process-wide unique id assigned at construction */
+  /**
+   * Unique id, assigned at construction
+   * @advanced
+   */
   public readonly uid: number = UID++;
 
   /**
-   * Free-form label used by {@link Container3D.logHierarchy} and by user-side debugging
+   * Name to find the node by
    *
-   * `null` until set, as in pixi.js's `Container`, so a label search matches only the nodes that
-   * were actually named. Subclasses name themselves (`'Mesh3D'`, `'Sprite3D'`, ...).
+   * {@link Container3D.getChildByLabel | getChildByLabel} searches by it, animation tracks find
+   * their target by it, and {@link Container3D.logHierarchy | logHierarchy} prints it. A plain
+   * `Container3D` starts with `null`, as pixi's `Container` does, so a label search only matches
+   * nodes you named. Built-in subclasses such as `Mesh3D` start with their class name.
+   * @example
+   * ```ts
+   * turret.label = 'turret';
+   * tank.getChildByLabel('turret', true)?.lookAt(target);
+   * ```
    */
   public label: string | null = null;
 
   /**
-   * `true` when {@link Container3D.rotation | rotation} (Euler angles) is the authoritative
-   * rotation representation
+   * Whether {@link Container3D.rotation | rotation} is the rotation in use, so the next
+   * {@link Container3D.updateLocalTransform | updateLocalTransform} rebuilds the quaternion from it
    *
-   * When set, {@link Container3D.quaternion | quaternion} needs to be rebuilt from the Euler
-   * angles on the next {@link updateLocalTransform}. Cleared once the quaternion has been
-   * synced, or whenever the quaternion is written directly.
+   * Cleared by that rebuild and by any write to the quaternion.
    * @internal
    */
   public rotationDirty = false;
 
   /**
-   * Local TRS matrix — rebuilt from {@link position}, {@link scale} and {@link quaternion} during
-   * the transform pass
+   * Local transform matrix, built from the position, rotation, scale and
+   * {@link Container3D.origin | origin}
    *
-   * Treat as read-only outside the engine; write to the components instead.
+   * It catches up with changes in the view's transform pass, or when you call
+   * {@link Container3D.updateLocalTransform | updateLocalTransform}. Read it, but change the
+   * components instead: the next rebuild overwrites it.
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- rebuilt by the view, never set by hand
   public localTransform: Matrix4 = new Matrix4();
   /**
-   * World transform — `parent.worldTransform * this.localTransform`
+   * World transform: the parent's world transform times this node's
+   * {@link Container3D.localTransform | localTransform}
    *
-   * Resolved during the transform pass; reads from this matrix outside the pass may be stale.
-   * {@link Container3D.getGlobalTransform | getGlobalTransform} computes a definitely-current one on
-   * demand.
+   * The view updates it once per frame, before drawing, and skips hidden nodes. So it can be out
+   * of date: after a change this frame, or while the node or an ancestor is hidden.
+   * {@link Container3D.getGlobalTransform | getGlobalTransform} always works out a current one.
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- rebuilt by the view, never set by hand
   public worldTransform: Matrix4 = new Matrix4();
 
   private readonly _position = new ObservableVector3(this, 0, 0, 0);
@@ -326,14 +481,24 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   /** Created on first use of {@link Container3D.origin}, so a node without one pays nothing */
   protected _origin: ObservableVector3 | null = null;
 
-  /** Child containers, in draw order; treat as read-only and mutate via {@link addChild} / {@link removeChild} */
+  /**
+   * Child nodes, in the order they were added
+   *
+   * The order doesn't decide what draws first; the render passes do. Read the array, but change it
+   * through {@link Container3D.addChild | addChild} and {@link Container3D.removeChild | removeChild}.
+   * @example
+   * ```ts
+   * for (const child of group.children) child.visible = false;
+   * ```
+   */
   public children: Container3D[] = [];
 
-  /** Parent container, or `null` when unparented or when this node is the scene root */
+  /** Parent node, or `null` for a node with none, such as a view's root */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- set by addChild and removeChild, never by hand
   public parent: Container3D | null = null;
 
   /**
-   * Backing field for {@link Container3D.view3d}; written by `View3D._attach` / `_detach`
+   * Backing field for {@link Container3D.view3d}; written by `View3D._attach` and `_detach`
    * @internal
    */
   public _view3d: View3D | null = null;
@@ -344,7 +509,7 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    *
    * Setting one skips walking the children, which pays off for a large subtree whose extent you
    * already know (a particle cloud, a level chunk). {@link Container3D.getLocalBounds | getLocalBounds},
-   * `width` / `height` / `depth` and `setSize` all use it. This is pixi's `boundsArea`, named like
+   * `width`, `height`, `depth` and `setSize` all use it. This is pixi's `boundsArea`, named like
    * {@link Container3D#hitVolume | hitVolume} because the value is a {@link Box}.
    * @example
    * ```ts
@@ -353,30 +518,25 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    */
   public boundsVolume: Box | null = null;
 
-  /**
-   * Set `true` once {@link Container3D.destroy} has run
-   *
-   * Guards against double-destroy, mirroring pixi.js's `Container.destroyed`.
-   */
+  /** Whether {@link Container3D.destroy | destroy} has run, as in pixi's `Container` */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
   public destroyed = false;
 
-  /** Re-entry guard — prevents double-enqueueing in the same frame @internal */
+  /** Set once this node is queued for the transform pass, so it is queued once per frame @internal */
   public didChange = false;
 
-  /** Cascading dirty flag — world matrix needs rebuild @internal */
+  /** World matrix needs a rebuild; passes down to descendants @internal */
   public _worldTransformDirty = true;
 
-  /** Cascading dirty flag — `worldVisible` needs re-resolve @internal */
+  /** `worldVisible` needs working out again; passes down to descendants @internal */
   public _worldVisibleDirty = true;
 
-  /** Self-only dirty flag — local matrix needs recompute @internal */
+  /** Local matrix needs a rebuild; this node only @internal */
   public _localTransformDirty = false;
 
   /**
-   * Local visibility as a 0|1 mask. Stored as a number — not boolean — so the
-   * worldVisible cascade and render-side gate can multiply instead of branch,
-   * matching the shape GPU culling will use when frustum / occlusion / layer
-   * masks land. Toggle via the boolean `visible` getter/setter (public API).
+   * Local visibility as 0 or 1 rather than a boolean, so the visibility pass multiplies instead
+   * of branching; set it through `visible`
    * @internal
    */
   public _visible = 1;
@@ -400,30 +560,30 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   public _relativeSceneDepth = 0;
 
   /**
-   * Whether the scene sweep must re-emit this node's whole store row (matrix and u32 lanes)
+   * Whether the scene sweep must write this node's whole store row again (matrix and u32 lanes)
    *
-   * Raised by lane changes — material / geometry swaps, visibility flips, morph slots — and
-   * by the transform pass when a mesh has no row yet. A plain move never raises it: the pass
-   * publishes the matrix itself through {@link Container3D._storeWorldTransform}.
+   * Raised by lane changes (material or geometry swaps, visibility flips, morph slots) and by the
+   * transform pass when a mesh has no row yet. A plain move never raises it: the pass writes the
+   * matrix itself through {@link Container3D._storeWorldTransform}.
    * @internal
    */
   public _storeDirty = false;
 
   /**
-   * Monotonic version bumped each time {@link worldTransform} is recomputed in the transform pass
+   * Version bumped each time the transform pass recomputes {@link Container3D.worldTransform}
    *
-   * Lets derived per-node caches — e.g. {@link Mesh3D.boundingSphere} — invalidate by comparing a
-   * stored snapshot, rather than subscribing to transform events or re-reading the whole matrix.
+   * Per-node caches such as {@link Mesh3D.boundingSphere} compare it with a stored copy to know
+   * when to recompute, rather than listening for transform changes or reading the whole matrix.
    * @internal
    */
   public _worldTransformId = 0;
 
   /**
-   * Whether this node's visual forward axis is local +Z (true) or local -Z (false)
+   * Whether this node faces local +Z (`true`) or local -Z (`false`)
    *
-   * Container3D defaults to +Z (mesh / glTF authoring convention — `mesh.lookAt(target)`
-   * orients the mesh's +Z toward target). Camera3D and Light set this to false because
-   * cameras and lights face -Z by definition.
+   * Nodes default to +Z, the convention meshes and glTF use. `Camera3D` and `Light` set it to
+   * `false`, since cameras and lights face -Z. `Matrix4.lookAt` points local -Z at its target, so
+   * {@link Container3D.lookAt | lookAt} swaps the eye and the target for a +Z node.
    * @internal
    */
   protected _lookAtForwardIsPositiveZ: boolean = true;
@@ -431,7 +591,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   constructor(options: Container3DOptions = {}) {
     super();
 
-    // Skips `undefined` values, so an explicit `undefined` never clobbers a default.
     assignWithIgnore(this as Container3DOptions, options, OPTIONS_APPLIED_LATER);
 
     const { children, hitVolume, width, height, depth, parent } = options;
@@ -440,8 +599,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
       for (let i = 0; i < children.length; i++) this.addChild(children[i]);
     }
 
-    // Held back until the children are attached: a `'box'` shorthand measures the subtree, so on an
-    // empty node it would resolve to a zero box and the node would never be hit.
     if (hitVolume !== undefined) this.hitVolume = hitVolume;
 
     if (width !== undefined) this.width = width;
@@ -501,8 +658,10 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   /**
    * Local rotation as Euler angles (radians, XYZ order)
    *
-   * Shares storage with {@link Container3D.quaternion | quaternion}: whichever was written last is
-   * authoritative. Always the same observable; assigning copies the values in.
+   * The node keeps both this and {@link Container3D.quaternion | quaternion}, and whichever you
+   * set last is the rotation in use. Always the same observable; assigning copies the values in.
+   * Writing values it already holds through a component, `set` or `copyFrom` changes nothing,
+   * even while the quaternion is in use; assign the whole rotation to switch back to it.
    * @example
    * ```ts
    * node.rotation.y = Math.PI / 2;
@@ -514,15 +673,13 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Copies `value` (radians) into the Euler rotation, which becomes the authoritative rotation
+   * Copies `value` (radians) into the Euler rotation and makes it the rotation in use, even when
+   * the values match the ones stored
    * @param value - The new Euler angles, in radians
    */
   set rotation(value: PointData3D) {
     this._rotation.copyFrom(value);
 
-    // `copyFrom` stays silent when every component already matches, and the two representations
-    // drift apart — so assigning the angles the node happens to store would otherwise leave the
-    // quaternion authoritative and the write would do nothing. Claim authority either way.
     if (!this.rotationDirty) this._onUpdate(this._rotation);
   }
 
@@ -543,35 +700,41 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Copies `value` (degrees) into the Euler rotation
+   * Copies `value` (degrees) into the Euler rotation and makes it the rotation in use, even when
+   * the values match the ones stored
    * @param value - The new Euler angles, in degrees
    */
   set angle(value: PointData3D) {
     this._rotation.set(value.x * DEG_TO_RAD, value.y * DEG_TO_RAD, value.z * DEG_TO_RAD);
 
-    // Same guard as the rotation setter: `set` is silent when nothing changed.
     if (!this.rotationDirty) this._onUpdate(this._rotation);
   }
 
   /**
    * Local rotation as a unit quaternion
    *
-   * Shares storage with {@link Container3D.rotation | rotation}: whichever was written last is
-   * authoritative. Always the same observable; assigning copies the values in.
+   * The node keeps both this and {@link Container3D.rotation | rotation}, and whichever you set
+   * last is the rotation in use. Always the same observable; assigning copies the values in.
+   * Writing values it already holds through a component, `set` or `copyFrom` changes nothing,
+   * even while `rotation` is in use; assign the whole quaternion to switch back to it.
+   * @example
+   * ```ts
+   * node.quaternion = other.quaternion;
+   * node.quaternion = { x: 0, y: Math.SQRT1_2, z: 0, w: Math.SQRT1_2 };
+   * ```
    */
   get quaternion(): ObservableQuaternion {
     return this._quaternion;
   }
 
   /**
-   * Copies `value` into the quaternion, which becomes the authoritative rotation
+   * Copies `value` into the quaternion and makes it the rotation in use, even when the values
+   * match the ones stored
    * @param value - The new rotation, as a unit quaternion
    */
   set quaternion(value: QuaternionData) {
     this._quaternion.copyFrom(value);
 
-    // As in the rotation setter: a write matching the stored components changes nothing on its own,
-    // so take authority back from the Euler angles explicitly.
     if (this.rotationDirty) this._onUpdate(this._quaternion);
   }
 
@@ -605,7 +768,13 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     else origin.copyFrom(value);
   }
 
-  /** Local position on the x axis; an alias for `position.x` */
+  /**
+   * Local position on the x axis; the same as `position.x`
+   * @example
+   * ```ts
+   * player.x += speed * dt;
+   * ```
+   */
   get x(): number {
     return this._position._x;
   }
@@ -618,7 +787,13 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     this._position.x = value;
   }
 
-  /** Local position on the y axis; an alias for `position.y` */
+  /**
+   * Local position on the y axis; the same as `position.y`
+   * @example
+   * ```ts
+   * ball.y = Math.abs(Math.sin(time)) * 2;
+   * ```
+   */
   get y(): number {
     return this._position._y;
   }
@@ -631,7 +806,13 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     this._position.y = value;
   }
 
-  /** Local position on the z axis; an alias for `position.z` */
+  /**
+   * Local position on the z axis; the same as `position.z`
+   * @example
+   * ```ts
+   * if (car.z > finishLine) finish();
+   * ```
+   */
   get z(): number {
     return this._position._z;
   }
@@ -645,11 +826,16 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Adds one or more children to the end of this container's child list
+   * Adds one or more children to the end of this container's child list, as pixi's
+   * `Container.addChild` does
    *
-   * A child already parented elsewhere is removed from its previous parent first. Emits
-   * {@link Container3DEvents.childAdded} on this container and {@link Container3DEvents.added}
-   * on each newly added child.
+   * A child with another parent leaves it first. Emits {@link Container3DEvents.childAdded} on
+   * this container and {@link Container3DEvents.added} on each new child. A child that is already
+   * here moves to the end, without events.
+   * @example
+   * ```ts
+   * view.root.addChild(crate, lamp);
+   * ```
    * @param children - The children to add
    * @returns The first added child
    */
@@ -693,12 +879,17 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Removes one or more children from this container
+   * Removes one or more children from this container, as pixi's `Container.removeChild` does
    *
    * Emits {@link Container3DEvents.childRemoved} on this container and
-   * {@link Container3DEvents.removed} on each removed child.
+   * {@link Container3DEvents.removed} on each removed child. A node that isn't a child is
+   * ignored.
+   * @example
+   * ```ts
+   * view.root.removeChild(crate);
+   * ```
    * @param children - The children to remove
-   * @returns The first removed child
+   * @returns The first child passed in
    */
   public removeChild<U extends Container3D[]>(...children: U): U[0] {
     if (children.length > 1) {
@@ -728,13 +919,18 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Removes every child in the index range `[beginIndex, endIndex)`
+   * Removes every child in the index range `[beginIndex, endIndex)`, as pixi's
+   * `Container.removeChildren` does
    *
-   * Emits {@link Container3DEvents.childRemoved} / {@link Container3DEvents.removed} for each
+   * Emits {@link Container3DEvents.childRemoved} and {@link Container3DEvents.removed} for each
    * removed child.
+   * @example
+   * ```ts
+   * const debris = level.removeChildren();
+   * ```
    * @param beginIndex - First index to remove
    * @param endIndex - End of the range, exclusive; defaults to the child count
-   * @returns The removed children
+   * @returns The removed children, last child first
    * @throws {RangeError} When the range falls outside the children list.
    */
   public removeChildren(beginIndex = 0, endIndex?: number): Container3D[] {
@@ -773,7 +969,11 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Removes the child at `index`
+   * Removes the child at `index`, as pixi's `Container.removeChildAt` does
+   * @example
+   * ```ts
+   * const newest = queue.removeChildAt(queue.children.length - 1);
+   * ```
    * @param index - Index of the child to remove
    * @returns The removed child
    * @throws {Error} When `index` is out of bounds.
@@ -785,7 +985,11 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Gets the child at `index`
+   * Gets the child at `index`, as pixi's `Container.getChildAt` does
+   * @example
+   * ```ts
+   * const first = group.getChildAt(0);
+   * ```
    * @param index - Index of the child to fetch
    * @returns The child at `index`
    * @throws {Error} When `index` is out of bounds.
@@ -799,7 +1003,11 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Gets the index of `child` within this container
+   * Gets the index of `child` within this container, as pixi's `Container.getChildIndex` does
+   * @example
+   * ```ts
+   * const slot = rack.getChildIndex(sword);
+   * ```
    * @param child - The child to look up
    * @returns The child's index
    * @throws {Error} When `child` is not a child of this container.
@@ -815,7 +1023,12 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Moves an existing `child` to `index` within this container
+   * Moves an existing `child` to `index` within this container, as pixi's
+   * `Container.setChildIndex` does
+   * @example
+   * ```ts
+   * rack.setChildIndex(sword, 0);
+   * ```
    * @param child - The child to move
    * @param index - The destination index
    * @throws {Error} When `index` is out of bounds or `child` is not a child of this container.
@@ -825,16 +1038,21 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
       throw new Error(`setChildIndex: The index ${index} supplied is out of bounds ${this.children.length}.`);
     }
 
-    this.getChildIndex(child); // verifies `child` belongs to this container
+    this.getChildIndex(child);
 
     this.addChildAt(child, index);
   }
 
   /**
-   * Adds `child` at `index`, or moves it there when it is already a child of this container
+   * Adds `child` at `index`, or moves it there when it is already a child of this container, as
+   * pixi's `Container.addChildAt` does
    *
-   * Emits {@link Container3DEvents.childAdded} / {@link Container3DEvents.added} for an add — not
-   * for a move within this same container.
+   * Emits {@link Container3DEvents.childAdded} and {@link Container3DEvents.added} for an add, but
+   * not for a move within this container.
+   * @example
+   * ```ts
+   * rack.addChildAt(sword, 0);
+   * ```
    * @param child - The child to add or move
    * @param index - The destination index
    * @returns The added child
@@ -867,7 +1085,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
       children.splice(index, 0, child);
     }
 
-    // A move within the same parent leaves parentage and transforms untouched.
     if (sameParent) return child;
 
     child._worldTransformDirty = true;
@@ -886,7 +1103,12 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Swaps the positions of two children within this container
+   * Swaps the places of two children in this container's list, as pixi's
+   * `Container.swapChildren` does
+   * @example
+   * ```ts
+   * rack.swapChildren(sword, shield);
+   * ```
    * @param child - The first child
    * @param child2 - The second child
    * @throws {Error} When either argument is not a child of this container.
@@ -904,8 +1126,8 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   /**
    * Returns the first child whose label matches, or `null`
    *
-   * Direct children are checked first; with `deep`, the search then recurses into each child in
-   * order (pre-order), as pixi.js's `Container.getChildByLabel` does.
+   * Each container checks its direct children before searching inside them, in order, as pixi.js's
+   * `Container.getChildByLabel` does. An unlabelled node never matches, even a pattern.
    * @param label - Exact label, or a pattern to test labels against
    * @param deep - Whether to search the whole subtree, not only direct children
    * @returns The first match, or `null` when nothing matches
@@ -963,14 +1185,25 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     return out;
   }
 
-  /** Removes this container from its parent; does nothing when it has no parent */
+  /**
+   * Removes this container from its parent, if it has one, as pixi's `Container.removeFromParent`
+   * does
+   * @example
+   * ```ts
+   * pickup.removeFromParent();
+   * ```
+   */
   public removeFromParent(): void {
     this.parent?.removeChild(this);
   }
 
   /**
-   * Reparents one or more children under this container, preserving each child's world transform
-   * so its rendered position and orientation are unchanged
+   * Moves one or more nodes under this container without moving them in the world, as pixi's
+   * `Container.reparentChild` does; see {@link Container3D.reparentChildAt | reparentChildAt}
+   * @example
+   * ```ts
+   * hand.reparentChild(sword);
+   * ```
    * @param child - The children to reparent
    * @returns The first reparented child
    */
@@ -987,11 +1220,18 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Reparents `child` under this container at `index`, preserving its world transform so its
-   * rendered position and orientation are unchanged
+   * Moves `child` under this container at `index` without moving it in the world, as pixi's
+   * `Container.reparentChildAt` does
    *
-   * World transforms are resolved on demand, so the result is correct even before the scene's
-   * transform pass has run this frame.
+   * Its local position, rotation and scale change so that it renders where it did. A child with
+   * an {@link Container3D.origin | origin} keeps it, and its position is solved around it. Unlike
+   * pixi, which reads the cached world transforms, this works them out on the spot, so it's right
+   * even when something moved earlier in the frame. A child that is already here only changes
+   * index.
+   * @example
+   * ```ts
+   * rack.reparentChildAt(sword, 0);
+   * ```
    * @param child - The child to reparent
    * @param index - The destination index
    * @returns The reparented child
@@ -1003,7 +1243,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
       return child;
     }
 
-    // World transform of `child` = (its parent's world) * (its local).
     updateTransformBackwards3D(child, _reparentChildWorld);
     if (child._localTransformDirty) {
       child.updateLocalTransform();
@@ -1014,7 +1253,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     child.removeFromParent();
     this.addChildAt(child, index);
 
-    // World transform of the new parent = (its parent's world) * (its local).
     updateTransformBackwards3D(this, _reparentParentWorld);
     if (this._localTransformDirty) {
       this.updateLocalTransform();
@@ -1022,7 +1260,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     }
     _reparentParentWorld.multiply(this.localTransform);
 
-    // New local = inverse(new parent world) * (child world); decompose it back onto the child.
     _reparentParentWorld.getInverse(_reparentParentWorld);
     _reparentChildWorld.premultiply(_reparentParentWorld);
     _reparentChildWorld.decompose(_reparentPos, _reparentQuat, _reparentScale);
@@ -1030,8 +1267,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     child.scale.copyFrom(_reparentScale);
     child.quaternion.copyFrom(_reparentQuat);
 
-    // The decomposed translation is `position + offset`: rebuild the basis for the new rotation and
-    // scale, then solve for position.
     if (child._origin !== null) {
       child.updateLocalTransform();
       _reparentPos.subtract(child._getOriginOffset(_originOffset));
@@ -1044,10 +1279,18 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
 
   /**
    * Replaces `oldChild` with `newChild` at the same index, copying `oldChild`'s local position,
-   * rotation, and scale onto `newChild`
+   * rotation and scale onto `newChild`, as pixi's `Container.replaceChild` does
    *
-   * `newChild` keeps its own {@link Container3D.origin | origin}; its position is solved so it sits
-   * exactly where `oldChild` did.
+   * `newChild` takes the rotation through whichever of `rotation` or `quaternion` was in use on
+   * `oldChild`. It keeps its own {@link Container3D.origin | origin}, and its position is solved
+   * so it sits exactly where `oldChild` did.
+   *
+   * `oldChild.rotationDirty` must be copied before `oldChild`'s local transform is rebuilt, because
+   * the rebuild clears it.
+   * @example
+   * ```ts
+   * car.replaceChild(flatTyre, spareWheel);
+   * ```
    * @param oldChild - The child to replace
    * @param newChild - The child that takes its place
    * @throws {Error} When `oldChild` is not a child of this container.
@@ -1057,15 +1300,11 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
 
     this.addChildAt(newChild, index);
 
-    // Copy `oldChild`'s local transform onto `newChild`, preserving whichever rotation
-    // representation — euler `rotation` or `quaternion` — is the authoritative one.
     newChild.scale.copyFrom(oldChild.scale);
     newChild.rotation.copyFrom(oldChild.rotation);
     newChild.quaternion.copyFrom(oldChild.quaternion);
-    // Copied before the rebuilds below clear `oldChild`'s.
     newChild.rotationDirty = oldChild.rotationDirty;
 
-    // Match translations: newPosition + newOffset = oldPosition + oldOffset, each offset on its own basis.
     const position = newChild.position.copyFrom(oldChild.position);
 
     if (oldChild._origin !== null) {
@@ -1082,10 +1321,23 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Rebuilds {@link localTransform} from {@link position}, {@link scale} and {@link quaternion}
+   * Rebuilds {@link Container3D.localTransform | localTransform} from the position, rotation,
+   * scale and {@link Container3D.origin | origin}
    *
-   * When `rotationDirty` is set, {@link rotation} (Euler XYZ, radians) is converted to a
-   * quaternion first. Runs in the transform pass; rarely needs to be called by user code.
+   * The view's transform pass calls it for each node that changed, so you only need it to read a
+   * current `localTransform` before the next frame. When {@link Container3D.rotation | rotation}
+   * is the rotation in use, it converts the angles to the quaternion first.
+   *
+   * It reads and writes the components' backing fields directly. That saves a getter call per
+   * read on a hot path, and skips the setters, which would mark this node changed and queue it
+   * again.
+   * @example
+   * ```ts
+   * crate.rotation.y = Math.PI / 4;
+   * crate.updateLocalTransform();
+   * const local = crate.localTransform.clone();
+   * ```
+   * @advanced
    */
   public updateLocalTransform(): void {
     const quat = this._quaternion;
@@ -1093,7 +1345,6 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     if (this.rotationDirty) {
       this.rotationDirty = false;
 
-      // Direct field access — we already own this update, observer fires would re-enqueue this node.
       const rx = this._rotation._x;
       const ry = this._rotation._y;
       const rz = this._rotation._z;
@@ -1106,14 +1357,12 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
       const s2 = Math.sin(ry / 2);
       const s3 = Math.sin(rz / 2);
 
-      // Direct write — batch all four components, skip the four observer dispatches the setters would fire.
       quat._x = s1 * c2 * c3 + c1 * s2 * s3;
       quat._y = c1 * s2 * c3 - s1 * c2 * s3;
       quat._z = c1 * c2 * s3 + s1 * s2 * c3;
       quat._w = c1 * c2 * c3 - s1 * s2 * s3;
     }
 
-    // Direct field access — getter dispatch would inflate this hot path.
     const x = quat._x;
     const y = quat._y;
     const z = quat._z;
@@ -1245,6 +1494,10 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    * Height along local y: `|scale.y| × local bounds height`
    *
    * Assigning writes `scale.y` only; see {@link Container3D.width | width}.
+   * @example
+   * ```ts
+   * tree.height = 6;
+   * ```
    */
   get height(): number {
     return Math.abs(this._scale._y * this.getLocalBounds(_measureBox).height);
@@ -1262,6 +1515,10 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    * Depth along local z: `|scale.z| × local bounds depth`
    *
    * Assigning writes `scale.z` only; see {@link Container3D.width | width}.
+   * @example
+   * ```ts
+   * bench.depth = 0.5;
+   * ```
    */
   get depth(): number {
     return Math.abs(this._scale._z * this.getLocalBounds(_measureBox).depth);
@@ -1335,33 +1592,29 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Orients this node so its forward axis points at `target`
+   * Turns this node so its forward axis points at a world-space `target`
    *
-   * Container3D's forward is local +Z (mesh / glTF convention) — `mesh.lookAt(target)`
-   * orients the mesh's +Z toward the target. Camera3D and Light face local -Z and
-   * override this convention internally.
+   * A node's forward axis is local +Z, the convention meshes and glTF use. Cameras and lights
+   * face local -Z instead, and their `lookAt` aims that axis.
    *
-   * Aims from `position + origin`, the point the rotation turns around, so a node with an
-   * {@link Container3D.origin | origin} faces the target from where it stands.
-   *
-   * Computes parent's current world transform on demand (walks up the parent chain
-   * via `updateTransformBackwards3D`), so the result is correct even if an ancestor's
-   * transform changed this frame and the cascade hasn't run yet.
+   * It aims from `position + origin`, the point the node turns around, so a node with an
+   * {@link Container3D.origin | origin} faces the target from where it stands. It works out the
+   * parent's current world transform itself, so the result is right even when an ancestor moved
+   * earlier in the frame.
+   * @example
+   * ```ts
+   * turret.lookAt(enemy.getGlobalPosition());
+   * ```
    * @param target - World-space point to face
    * @param up - World-space up reference; defaults to `(0, 1, 0)`
    */
   public lookAt(target: PointData3D, up: PointData3D = _lookAtDefaultUp): void {
-    // Compute parent's current world transform without mutating any stored worldTransform.
     updateTransformBackwards3D(this, _lookAtParentWorld.identity());
 
-    // Local rotation and scale don't move the eye, so we skip `updateLocalTransform()` and the 4x4
-    // multiplyMatrices entirely.
     _lookAtPos.copyFrom(this.position);
     if (this._origin !== null) _lookAtPos.add(this._origin);
     _lookAtPos.applyAffineMatrix4(_lookAtParentWorld);
 
-    // Build a world-space rotation matrix and extract its quaternion. The Matrix4.lookAt
-    // convention places target along the local -Z axis; swapping eye/target flips that to +Z.
     if (this._lookAtForwardIsPositiveZ) {
       _lookAtMatrix.lookAt(target, _lookAtPos, up);
     } else {
@@ -1369,33 +1622,29 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
     }
     _lookAtWorldQuat.setFromRotationMatrix(_lookAtMatrix);
 
-    // Convert world→local by undoing parent's world rotation. The combined
-    // `setFromScaledRotationMatrix` strips scale and extracts the quaternion
-    // in one pass — no intermediate "rotation only" matrix needed.
     if (this.parent) {
       _lookAtParentQuat.setFromScaledRotationMatrix(_lookAtParentWorld);
       _lookAtParentQuat.inverse();
       _lookAtWorldQuat.premultiply(_lookAtParentQuat);
     }
 
-    // ObservableQuaternion.copyFrom auto-fires _onUpdate → marks dirty + queues for cascade.
     this.quaternion.copyFrom(_lookAtWorldQuat);
   }
 
   /**
-   * Computes this container's current world transform into `out` and returns it — the 3D
-   * counterpart of pixi.js's `Container.getGlobalTransform`.
+   * Works out this container's current world transform into `out`, the 3D counterpart of
+   * pixi.js's `Container.getGlobalTransform`
    *
-   * With `skipUpdate = false` (default) the transform is resolved on demand by walking the
-   * parent chain, so the result is correct even mid-frame, before the View's transform pass
-   * has run. With `skipUpdate = true` the cached {@link Container3D.worldTransform} from the
-   * last transform pass is copied instead — cheaper, but stale for anything moved this frame.
-   * @param out - matrix the result is written into. Defaults to a new `Matrix4`.
+   * By default it walks up the parent chain, so the result is right even before the view's
+   * transform pass has run this frame. With `skipUpdate` it copies the cached
+   * {@link Container3D.worldTransform | worldTransform} from the last pass instead: cheaper, but
+   * out of date for anything that moved since, or that is hidden.
+   * @param out - Matrix the result is written into. Defaults to a new `Matrix4`.
    * @param skipUpdate - `true` to copy the cached world transform instead of recomputing.
    * @example
    * ```ts
    * const world = mesh.getGlobalTransform();
-   * ray.applyMatrix4(world.getInverse(world)); // world-space ray → mesh-local space
+   * const localRay = ray.applyMatrix4(world.getInverse(world), new Ray());
    * ```
    * @see {@link Container3D.toGlobal} / {@link Container3D.toLocal} For point conversions.
    */
@@ -1413,19 +1662,16 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Converts a point from this container's local space into the 3D world space of the
-   * enclosing scene (the space of {@link View3D.root}) — the 3D counterpart of pixi.js's
-   * `Container.toGlobal`.
+   * Converts a point from this container's local space to the world space of its scene, the space
+   * of {@link View3D.root}; the 3D counterpart of pixi.js's `Container.toGlobal`
    *
-   * To go all the way to 2D screen coordinates, feed the result through
-   * {@link View3D.worldToScreen}.
-   * @param position - the local-space point to convert.
-   * @param out - point the result is written into. Defaults to a new {@link Vector3}.
+   * Pass the result to {@link View3D.worldToScreen} to go on to 2D screen coordinates.
+   * @param position - The local-space point to convert.
+   * @param out - Point the result is written into. Defaults to a new {@link Vector3}.
    * @param skipUpdate - `true` to use the cached world transform (see {@link Container3D.getGlobalTransform}).
    * @example
    * ```ts
-   * // World-space position of a point 1 unit above a mesh's origin:
-   * const worldPos = mesh.toGlobal({ x: 0, y: 1, z: 0 });
+   * const aboveHead = player.toGlobal({ x: 0, y: 2, z: 0 });
    * ```
    * @see {@link Container3D.toLocal} For the reverse conversion.
    * @see {@link Container3D.getGlobalPosition} For this container's own world position.
@@ -1440,17 +1686,18 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Converts a point into this container's local space — the 3D counterpart of pixi.js's
-   * `Container.toLocal`. `position` is interpreted in `from`'s local space when `from` is
-   * given, otherwise in 3D world space (the space of {@link View3D.root}).
-   * @param position - the point to convert.
-   * @param from - container whose local space `position` is in. Defaults to world space.
-   * @param out - point the result is written into. Defaults to a new {@link Vector3}.
+   * Converts a point into this container's local space, the 3D counterpart of pixi.js's
+   * `Container.toLocal`
+   *
+   * `position` is in `from`'s local space when `from` is given, and otherwise in world space, the
+   * space of {@link View3D.root}.
+   * @param position - The point to convert.
+   * @param from - Container whose local space `position` is in. Defaults to world space.
+   * @param out - Point the result is written into. Defaults to a new {@link Vector3}.
    * @param skipUpdate - `true` to use cached world transforms (see {@link Container3D.getGlobalTransform}).
    * @example
    * ```ts
-   * // Where is the target mesh, seen from the turret's local space?
-   * const aim = turret.toLocal({ x: 0, y: 0, z: 0 }, targetMesh);
+   * const targetFromTurret = turret.toLocal({ x: 0, y: 0, z: 0 }, target);
    * ```
    * @see {@link Container3D.toGlobal} For the reverse conversion.
    */
@@ -1472,11 +1719,12 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Returns this container's own position in 3D world space (the space of {@link View3D.root})
-   * — the 3D counterpart of pixi.js's `Container.getGlobalPosition`. Equivalent to
-   * `parent.toGlobal(this.position)`; an unparented container returns a copy of its local
-   * {@link Container3D.position}.
-   * @param out - point the result is written into. Defaults to a new {@link Vector3}.
+   * Returns this container's own position in world space, the space of {@link View3D.root}; the
+   * 3D counterpart of pixi.js's `Container.getGlobalPosition`
+   *
+   * The same as `parent.toGlobal(this.position)`. A container with no parent returns a copy of
+   * its local {@link Container3D.position | position}.
+   * @param out - Point the result is written into. Defaults to a new {@link Vector3}.
    * @param skipUpdate - `true` to use the cached world transform (see {@link Container3D.getGlobalTransform}).
    * @example
    * ```ts
@@ -1491,10 +1739,13 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
 
   /**
    * Prints this container's subtree to the console as an indented tree of `ConstructorName "label"`
-   * lines
-   *
-   * Intended for debugging.
+   * lines, for debugging
+   * @example
+   * ```ts
+   * model.logHierarchy();
+   * ```
    * @param depth - Indentation level to start at; used by the recursion
+   * @advanced
    */
   public logHierarchy(depth: number = 0): void {
     const indent = '  '.repeat(depth);
@@ -1509,19 +1760,23 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Local visibility; setting `false` hides this container and its descendants on the next frame
+   * Whether this container and its descendants draw; a change shows on the next frame
    *
-   * Visibility is temporary and cheap by design: it never changes pass membership —
-   * hidden meshes are skipped by the compaction that fills the draw counts, so no draw
-   * commands or render bundles rebuild (use `removeChild` to actually leave the scene).
-   * Toggling enqueues this node for the next transform pass.
+   * Hiding is cheap: hidden meshes stay in the scene and the renderer skips them without
+   * rebuilding any draw commands. To take a node out of the scene, remove it with
+   * {@link Container3D.removeChild | removeChild}. Emits
+   * {@link Container3DEvents.visibleChanged | visibleChanged} when the value changes.
+   * @example
+   * ```ts
+   * door.visible = false;
+   * ```
    */
   public get visible(): boolean {
     return !!this._visible;
   }
 
   /**
-   * Sets local visibility and enqueues this node for the next transform pass
+   * Sets local visibility and queues this node for the next transform pass
    * @param value - Whether this container and its descendants draw
    */
   public set visible(value: boolean) {
@@ -1539,26 +1794,29 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Effective visibility as a 0|1 mask: 1 only when this node and every ancestor are visible
+   * `1` when this node and every ancestor are visible, otherwise `0`
    *
-   * Resolved by the transform pass, so it lags a `visible` change until the next frame. Kept as a
-   * number so the render side can multiply it into cull masks instead of branching.
+   * The view's transform pass works it out, so it lags a `visible` change until the next frame.
+   * It's a number rather than a boolean because the renderer multiplies it into its masks.
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
   get worldVisible(): number {
     return this._worldVisible;
   }
 
-  /** The {@link View3D} this node is attached to, or `null` when it isn't in a scene */
+  /** The {@link View3D} this node is in, or `null` when it isn't in a scene */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
   get view3d(): View3D | null {
     return this._view3d;
   }
 
   /**
-   * Observer callback fired by {@link position}, {@link scale}, {@link rotation}, and
-   * {@link quaternion} when any component changes
+   * Observer callback that {@link Container3D.position | position}, {@link Container3D.scale | scale},
+   * {@link Container3D.rotation | rotation} and {@link Container3D.quaternion | quaternion} fire
+   * when a component changes
    *
-   * Resolves which rotation representation is now authoritative, sets the cascading dirty flags,
-   * and enqueues this node into the View's update bucket once per frame.
+   * Records which rotation is now in use, sets the dirty flags, and queues this node for the
+   * view's transform pass, once per frame.
    * @param pointOrQuat - The observable that changed; identifies the rotation representation
    * @internal
    */
@@ -1569,11 +1827,8 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
       } else if (pointOrQuat === this._quaternion) {
         this.rotationDirty = false;
       }
-
-      // position and scale just mark dirty, no special handling needed
     }
 
-    // Local matrix is stale (self-only); world matrix needs rebuild (cascades).
     this._localTransformDirty = true;
     this._worldTransformDirty = true;
 
@@ -1586,10 +1841,12 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Give the GPU memory of this subtree's geometry back now — for a branch of the scene that is
-   * out of rotation for a while. Recurses depth-first through each child's own `unload`: every
-   * {@link Mesh3D} it reaches gives back its geometry and keeps its CPU-side vertex data, so
-   * re-adding the subtree (or simply rendering it again) rebuilds everything, pixel for pixel.
+   * Frees the GPU memory of this subtree's geometry now, for a part of the scene you'll show again
+   * later
+   *
+   * It calls each child's own `unload`, depth first. Every {@link Mesh3D} it reaches frees its
+   * geometry and keeps its CPU-side vertex data, so adding the subtree back, or just rendering it
+   * again, rebuilds everything, pixel for pixel.
    *
    * Materials are shared far beyond a subtree, so a mesh's unload leaves its material alone. A
    * {@link Model3D} met on the way runs its own override, which does unload the materials its
@@ -1599,7 +1856,7 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    * @example
    * ```ts
    * view.root.removeChild(level);
-   * level.unload(); // hand back the whole level's geometry until it is needed again
+   * level.unload();
    * ```
    * @see {@link Mesh3D.unload} For the per-mesh unload this recurses into.
    * @see {@link Model3D.unload} For the variant that also gives back the textures.
@@ -1610,43 +1867,43 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   }
 
   /**
-   * Transform-pass hook, fired right after {@link worldTransform} is recomputed
+   * Transform-pass hook, called right after {@link Container3D.worldTransform} is recomputed
    *
-   * A plain container has nowhere to publish its matrix, so this is a no-op. {@link Mesh3D}
+   * A plain container has nowhere to write its matrix, so this does nothing. {@link Mesh3D}
    * overrides it to write its store row while the matrix is still in cache.
    * @internal
    */
   public _storeWorldTransform(): void {}
 
   /**
-   * Tears this container down, mirroring pixi.js's `Container.destroy`
+   * Destroys this container, in the same order as pixi.js's `Container.destroy`
    *
-   * Detaches it from the scene graph (releasing any {@link View3D} indices), emits
-   * {@link Container3DEvents.destroyed}, and drops references. Idempotent — guarded by
-   * {@link Container3D.destroyed}.
+   * It removes its children, leaves its parent and its {@link View3D}, emits
+   * {@link Container3DEvents.destroyed | destroyed}, and drops its listeners. Calling it again
+   * does nothing.
    *
-   * Shared resources are preserved by default: children, and any geometry / materials / textures
-   * owned by mesh subclasses, are only destroyed when the matching {@link Destroy3DOptions} flag is
-   * set. The same options object is forwarded unchanged to every destroyed child.
-   * @param options - `true` destroys everything reachable; an object gates each resource; omitted /
-   * `false` releases only this node and its exclusively-owned GPU resources.
+   * Shared resources survive by default. Children, and the geometry, materials and textures a
+   * mesh uses, are destroyed only when the matching {@link Destroy3DOptions} flag is set, and
+   * destroyed children get the same `options`. Unlike pixi, `position`, `scale` and the transform
+   * matrices stay readable afterwards; nothing updates them once the node is detached.
+   * @example
+   * ```ts
+   * crate.destroy({ children: true });
+   * ```
+   * @param options - `true` destroys everything reachable; an object picks each resource; left
+   * out or `false`, only this node and the GPU resources it alone owns go.
    */
   public destroy(options?: Destroy3DOptions): void {
     if (this.destroyed) return;
     this.destroyed = true;
 
-    // Snapshot children before removal only when we'll recurse — removeChildren empties the live list.
     const destroyChildren = resolveDestroy3DFlag(options, 'children');
     const oldChildren = destroyChildren ? this.children.slice() : null;
 
-    // Detaches each child (firing childRemoved/removed and releasing its View3D
-    // indices) before we recurse.
     this.removeChildren(0, this.children.length);
 
-    // Detach this node via its parent's removeChild, running this node's own View3D._detach.
     this.removeFromParent();
 
-    // Listeners observe an already-emptied, already-detached container, matching pixi's order.
     this.emit('destroyed', this);
     this.removeAllListeners();
 
@@ -1658,9 +1915,5 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
 
     this.parent = null;
     this._view3d = null;
-
-    // Transform components (the origin included) and localTransform/worldTransform are non-nullable
-    // CPU-only fields left intact: once detached they are inert (no View3D enqueues this node, no
-    // transform pass touches it) and are released with the node.
   }
 }

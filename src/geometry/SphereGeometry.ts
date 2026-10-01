@@ -4,6 +4,11 @@ import { clampSegments } from './utils/clampSegments';
 
 /**
  * Options for {@link SphereGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<SphereGeometryOptions> = { radius: 0.5, widthSegments: 64, heightSegments: 32 };
+ * const ball = new SphereGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
@@ -11,20 +16,32 @@ export interface SphereGeometryOptions extends Geometry3DOptions {
   /**
    * The radius of the sphere
    * @default 1
+   * @example
+   * ```ts
+   * const marble = new SphereGeometry({ radius: 0.05 });
+   * ```
    */
   radius: number;
   /**
    * The number of horizontal segments (longitudes around the +Y axis)
    *
-   * Clamped to a minimum of 3; fewer would collapse the sphere into a degenerate shape.
+   * Floored, and clamped to a minimum of 3.
    * @default 32
+   * @example
+   * ```ts
+   * const smooth = new SphereGeometry({ widthSegments: 64, heightSegments: 32 });
+   * ```
    */
   widthSegments: number;
   /**
    * The number of vertical segments (latitudes between the poles)
    *
-   * Clamped to a minimum of 2.
+   * Floored, and clamped to a minimum of 2: a single band between the poles has no triangles.
    * @default 16
+   * @example
+   * ```ts
+   * const lowPoly = new SphereGeometry({ widthSegments: 8, heightSegments: 6 });
+   * ```
    */
   heightSegments: number;
 }
@@ -32,12 +49,11 @@ export interface SphereGeometryOptions extends Geometry3DOptions {
 /**
  * A UV sphere geometry built as a longitude-by-latitude grid around the +Y axis
  *
- * UVs run from `(0, 0)` at the south pole seam to `(1, 1)` at the north pole seam,
- * equirectangular-style.
+ * UVs are equirectangular: `u` wraps once around the Y axis, starting at +X, and `v` runs from 0 at
+ * the north pole (+Y) to 1 at the south pole, so an image's top row lands on the north pole.
  *
- * The pole rows produce intentionally degenerate triangles (zero area at the seam), which is the
- * standard UV-sphere trade-off. For uniform tessellation without pole pinching prefer
- * {@link IcosahedronGeometry}.
+ * At each pole every segment ends in a single triangle, so triangles crowd together there and a
+ * texture pinches. For even tessellation prefer {@link IcosahedronGeometry}.
  * @example
  * ```ts
  * const sphere = new SphereGeometry({
@@ -53,7 +69,13 @@ export interface SphereGeometryOptions extends Geometry3DOptions {
  * @standard
  */
 export class SphereGeometry extends Geometry3D {
-  /** Default options for {@link SphereGeometry} */
+  /**
+   * Default options for {@link SphereGeometry}
+   * @example
+   * ```ts
+   * SphereGeometry.defaultOptions.widthSegments = 16;
+   * ```
+   */
   public static defaultOptions: SphereGeometryOptions = {
     ...Geometry3D.defaultOptions,
     radius: 1,
@@ -71,8 +93,6 @@ export class SphereGeometry extends Geometry3D {
       ...options,
     };
     const { radius } = resolvedOptions;
-    // Geometric minimums: a closed UV sphere needs ≥3 longitudes (otherwise
-    // every "segment" collapses) and ≥2 latitudes (one band between the poles).
     const widthSegments = clampSegments(resolvedOptions.widthSegments, 3);
     const heightSegments = clampSegments(resolvedOptions.heightSegments, 2);
 

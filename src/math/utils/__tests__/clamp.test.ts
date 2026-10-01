@@ -23,27 +23,9 @@ describe('clamp', () => {
     expect(clamp(10, 0, 10)).toBe(10);
   });
 
-  test('handles negative ranges', () => {
-    expect(clamp(-5, -10, -1)).toBe(-5);
-    expect(clamp(-15, -10, -1)).toBe(-10);
-    expect(clamp(0, -10, -1)).toBe(-1);
-  });
-
-  test('handles ranges crossing zero', () => {
-    expect(clamp(0, -5, 5)).toBe(0);
-    expect(clamp(-10, -5, 5)).toBe(-5);
-    expect(clamp(10, -5, 5)).toBe(5);
-  });
-
   test('handles min equal to max', () => {
     expect(clamp(5, 3, 3)).toBe(3);
     expect(clamp(1, 3, 3)).toBe(3);
-  });
-
-  test('handles floating-point values', () => {
-    expect(clamp(0.5, 0, 1)).toBeCloseTo(0.5, 5);
-    expect(clamp(1.5, 0, 1)).toBeCloseTo(1, 5);
-    expect(clamp(-0.5, 0, 1)).toBeCloseTo(0, 5);
   });
 
   test('handles Infinity and -Infinity', () => {

@@ -1,6 +1,6 @@
-import { getApp } from '@test-utils';
+import { expectCleanRender, getApp } from '@test-utils';
 import { CanvasSource, Texture } from 'pixi.js';
-import type { Application, Renderer, WebGPURenderer } from 'pixi.js';
+import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { MAX_BATCH_TEXTURES } from '~/core/batcher/batchConstants';
@@ -51,19 +51,6 @@ function readPixels(app: Application<Renderer>, view3d: View3D): number[] {
     }
   }
   return samples;
-}
-
-/** Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL). */
-async function renderCatchingValidationErrors(app: Application<Renderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? (app.renderer as WebGPURenderer).gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  device.pushErrorScope('validation');
-  app.render();
-  return device.popErrorScope();
 }
 
 /** Anything carrying pixi's GC idle clock — a texture source, a buffer, or a geometry. */
@@ -121,7 +108,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           geometry,
           material: new Material3D({ baseColorTexture: texture, metallic: 0, roughness: 0.5 }),
         });
-        // A second, untextured mesh keeps the view non-empty so the removal is a plain rebuild.
+        /** Untextured, it keeps the view non-empty, so removing the textured mesh is a plain rebuild */
         const keeper = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0xffffff }) });
         keeper.position.set(0, -3, 0);
         view3d.root.addChild(mesh, keeper);
@@ -131,25 +118,24 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(before.some((channel) => channel > 0)).toBe(true);
         expect(gpuCopies(texture.source)).toBeGreaterThan(0);
 
-        // Idle by the clock, then drawn: the frame has to stamp the texture, even though a
-        // recorded bundle rebinds nothing.
         backdate(texture.source);
         app.render();
         collectStale(app.renderer);
-        expect(gpuCopies(texture.source)).toBeGreaterThan(0);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
+        expect(
+          gpuCopies(texture.source),
+          'the frame stamps the texture, though a recorded bundle binds nothing',
+        ).toBeGreaterThan(0);
+        await expectCleanRender(app);
         expect(readPixels(app, view3d)).toEqual(before);
 
-        // Nothing draws it any more, so it ages out like any idle texture...
         mesh.removeFromParent();
         app.render();
         collectStale(app.renderer, texture.source);
-        expect(gpuCopies(texture.source)).toBe(0);
+        expect(gpuCopies(texture.source), 'nothing draws it, so it ages out like any idle texture').toBe(0);
 
-        // ...and comes back when it is drawn again.
         view3d.root.addChild(mesh);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
-        expect(gpuCopies(texture.source)).toBeGreaterThan(0);
+        await expectCleanRender(app);
+        expect(gpuCopies(texture.source), 'drawn again, it comes back').toBeGreaterThan(0);
         expect(readPixels(app, view3d)).toEqual(before);
       } finally {
         app.destroy();
@@ -178,15 +164,16 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const before = readPixels(app, view3d);
         expect(before.some((channel) => channel > 0)).toBe(true);
 
-        // An empty view skips its render entirely, so the last build lingers — but it holds
-        // nothing: the texture is collectable, and the build notices when it goes.
         mesh.removeFromParent();
         app.render();
         collectStale(app.renderer, texture.source);
-        expect(gpuCopies(texture.source)).toBe(0);
+        expect(
+          gpuCopies(texture.source),
+          "an empty view skips its render, and its lingering build doesn't keep the texture",
+        ).toBe(0);
 
         view3d.root.addChild(mesh);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
+        await expectCleanRender(app);
         expect(readPixels(app, view3d)).toEqual(before);
       } finally {
         app.destroy();
@@ -217,13 +204,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const pd = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
         const drawDirtyId = pd.drawDirtyId;
 
-        // The build baked this source into its bind groups (and, on WebGPU, its bundles).
-        // Dropping the GPU copy under them must force a rebuild, not a stale-handle draw.
         texture.source.unload();
-        expect(pd.drawDirtyId).toBeGreaterThan(drawDirtyId);
+        expect(pd.drawDirtyId, 'losing a source the build holds forces a rebuild').toBeGreaterThan(drawDirtyId);
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
         expect(readPixels(app, view3d)).toEqual(before);
       } finally {
         app.destroy();
@@ -241,7 +225,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.stage.addChild(view3d);
         lightAndFrame(view3d);
 
-        // `dynamic` keeps the geometry out of the shared atlas, so the drawn buffers are its own.
+        /** Dynamic, so it stays out of the shared atlas and the buffers drawn are its own */
         const geometry = new CubeGeometry({ width: 2, height: 2, depth: 2, dynamic: true });
         const mesh = new Mesh3D({
           geometry,
@@ -255,22 +239,26 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const buffers = geometry.buffers;
         expect(buffers.map((b) => gpuCopies(b) > 0)).toEqual(buffers.map(() => true));
 
-        // Idle by the clock, then drawn: the replay stamps every buffer it bakes.
         backdate(...buffers);
         app.render();
         collectStale(app.renderer);
-        expect(buffers.map((b) => gpuCopies(b) > 0)).toEqual(buffers.map(() => true));
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
+        expect(
+          buffers.map((b) => gpuCopies(b) > 0),
+          'the replay stamps every buffer it holds',
+        ).toEqual(buffers.map(() => true));
+        await expectCleanRender(app);
         expect(readPixels(app, view3d)).toEqual(before);
 
-        // Removed, nothing keeps them (or the geometry's recorded layout) alive.
         mesh.removeFromParent();
         app.render();
         collectStale(app.renderer, geometry, ...buffers);
-        expect(buffers.map(gpuCopies)).toEqual(buffers.map(() => 0));
+        expect(
+          buffers.map(gpuCopies),
+          "once removed, nothing keeps the buffers or the geometry's recorded layout alive",
+        ).toEqual(buffers.map(() => 0));
 
         view3d.root.addChild(mesh);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
+        await expectCleanRender(app);
         expect(readPixels(app, view3d)).toEqual(before);
       } finally {
         app.destroy();
@@ -301,18 +289,17 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const pd = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
         const drawDirtyId = pd.drawDirtyId;
 
-        // Growth mints a new GPU buffer behind the same pixi Buffer — the recorded commands
-        // reference the old one, so the build has to be thrown away.
         const positions = geometry.getBuffer('aPosition');
         const grown = new Float32Array((positions.data as Float32Array).length + 9);
         grown.set(positions.data as Float32Array);
         positions.data = grown;
-        expect(pd.drawDirtyId).toBeGreaterThan(drawDirtyId);
+        expect(
+          pd.drawDirtyId,
+          'growth puts a new GPU buffer behind the same pixi Buffer, so the build that holds the old one goes',
+        ).toBeGreaterThan(drawDirtyId);
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
-        // The extra vertices are unindexed, so the frame must be unchanged.
-        expect(readPixels(app, view3d)).toEqual(before);
+        await expectCleanRender(app);
+        expect(readPixels(app, view3d), 'the extra vertices are unindexed').toEqual(before);
       } finally {
         app.destroy();
       }
@@ -340,31 +327,31 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const before = readPixels(app, view3d);
         expect(before.some((channel) => channel > 0)).toBe(true);
 
-        // A reference frame for the cube shifted along x, taken through the ordinary update path.
         const positions = geometry.getBuffer('aPosition');
         const original = positions.data as Float32Array;
         const shifted = original.map((v, i) => (i % 3 === 0 ? v + 1.5 : v));
         positions.data = shifted;
         app.render();
+        /** The cube shifted along x, drawn through the ordinary update path */
         const moved = readPixels(app, view3d);
         expect(moved).not.toEqual(before);
         positions.data = original;
         app.render();
         expect(readPixels(app, view3d)).toEqual(before);
 
-        // Unloading a baked buffer marks the build stale; the next frame rebuilds on the re-created copy.
         const pd = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
         const drawDirtyId = pd.drawDirtyId;
         positions.unload();
-        expect(pd.drawDirtyId).toBeGreaterThan(drawDirtyId);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
+        expect(pd.drawDirtyId, 'unloading a buffer the build holds marks it stale').toBeGreaterThan(drawDirtyId);
+        await expectCleanRender(app);
         expect(readPixels(app, view3d)).toEqual(before);
 
-        // The re-created buffer must be the one the recorded layout reads: a stale WebGL VAO would
-        // keep drawing the dead buffer's storage and miss this update.
         positions.data = shifted;
         app.render();
-        expect(readPixels(app, view3d)).toEqual(moved);
+        expect(
+          readPixels(app, view3d),
+          'the recorded layout reads the re-created buffer; a stale WebGL VAO would miss this update',
+        ).toEqual(moved);
       } finally {
         app.destroy();
       }
@@ -396,38 +383,35 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(pd.commandList.count).toBeGreaterThan(0);
         const builtId = pd.commandList.dirtyId;
 
-        // Detached, the batch keeps its build, so adding it back replays rather than rebuilds —
-        // reparenting is a detach and an attach in one call.
         batched.removeFromParent();
         app.render();
         expect(pd.commandList.count).toBeGreaterThan(0);
         expect(readPixels(app, view3d)).not.toEqual(attached);
 
         view3d.root.addChild(batched);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
-        expect(pd.commandList.dirtyId).toBe(builtId);
+        await expectCleanRender(app);
+        expect(
+          pd.commandList.dirtyId,
+          'added back, the batch replays its kept build, since reparenting is a detach and an attach in one call',
+        ).toBe(builtId);
         expect(readPixels(app, view3d)).toEqual(attached);
 
-        // While it is out, nothing draws its texture, so the GC may take it; the kept build
-        // notices and rebuilds on the way back in.
         batched.removeFromParent();
         app.render();
         collectStale(app.renderer, texture.source);
-        expect(gpuCopies(texture.source)).toBe(0);
+        expect(gpuCopies(texture.source), 'while out of the view, nothing draws its texture').toBe(0);
 
         view3d.root.addChild(batched);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
-        expect(pd.commandList.dirtyId).toBeGreaterThan(builtId);
+        await expectCleanRender(app);
+        expect(pd.commandList.dirtyId, 'the kept build noticed the texture go and rebuilds').toBeGreaterThan(builtId);
         expect(readPixels(app, view3d)).toEqual(attached);
 
-        // `unload()` is what hands a detached batch's memory back: the build goes, and the next
-        // frame that draws the batch rebuilds it.
         batched.removeFromParent();
         batched.unload();
-        expect(pd.commandList.count).toBe(0);
+        expect(pd.commandList.count, "unload is what gives a detached batch's build back").toBe(0);
 
         view3d.root.addChild(batched);
-        expect(await renderCatchingValidationErrors(app)).toBeNull();
+        await expectCleanRender(app);
         expect(readPixels(app, view3d)).toEqual(attached);
       } finally {
         app.destroy();
@@ -446,7 +430,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         lightAndFrame(view3d);
 
         const geometry = new CubeGeometry({ width: 0.5, height: 0.5, depth: 0.5 });
-        // One more texture than a bind group carries, so the build needs two groups.
+        /** One more texture than a bind group holds, so the build needs two groups */
         const textures = Array.from({ length: MAX_BATCH_TEXTURES + 1 }, (_, i) =>
           makeCollectableTexture(`hsl(${i * 30}, 80%, 50%)`),
         );
@@ -455,7 +439,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           mesh.position.set(i - 5, 0, 0);
           return mesh;
         });
-        // An untextured mesh keeps the view non-empty, so the removal is a rebuild that needs one group.
+        /** Untextured, it keeps the view non-empty, so the removal is a rebuild that needs one group */
         const keeper = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0xffffff }) });
         keeper.position.set(0, -2, 0);
         view3d.root.addChild(keeper, ...meshes);
@@ -464,11 +448,13 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.root.removeChild(...meshes);
         app.render();
 
-        // Destroying a source a bind group still holds is what pixi warns about.
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         try {
           for (const texture of textures) texture.destroy(true);
-          expect(warn.mock.calls.filter((call) => String(call[1]).includes('BindGroup'))).toEqual([]);
+          expect(
+            warn.mock.calls.filter((call) => String(call[1]).includes('BindGroup')),
+            'pixi warns when a destroyed source is still in a bind group',
+          ).toEqual([]);
         } finally {
           warn.mockRestore();
         }

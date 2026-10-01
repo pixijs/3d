@@ -30,7 +30,7 @@ const WINDOW_GLSL = /*glsl*/ `
     uv = window.xy + uv * window.zw;`;
 
 /**
- * Spreads the flipbook across a particle's lifetime — one pass, first frame
+ * Spreads the flipbook across a particle's lifetime: one pass, first frame
  * at birth, last frame at death
  *
  * Reads `particleProgress` from {@link particleLifetimeBit} and rewrites `uv`

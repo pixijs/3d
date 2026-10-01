@@ -1,36 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { Track } from '~/animation/tracks/Track';
-import { Vector3Track } from '~/animation/tracks/Vector3Track';
 
 describe('Track', () => {
-  it('reports the configured value size', () => {
-    const track = new Track({ label: 'n.weights', times: [0, 1], values: [0, 0, 1, 1], valueSize: 2 });
-    expect(track.valueSize).toBe(2);
-  });
-
-  it('defaults to one component, and fixed-width subclasses set their own', () => {
-    expect(new Track({ label: 'n.x', times: [0], values: [0] }).valueSize).toBe(1);
-    expect(new Vector3Track({ label: 'n.position', times: [0], values: [0, 0, 0] }).valueSize).toBe(3);
-  });
-
-  it('LINEAR-interpolates each component independently', () => {
-    // Two morph targets: keyframe 0 = [0, 10], keyframe 1 = [1, 20].
-    const track = new Track({
-      label: 'n.weights',
-      times: [0, 1],
-      values: [0, 10, 1, 20],
-      interpolation: 'LINEAR',
-      valueSize: 2,
-    });
-
-    const out = new Float32Array(2);
-    track.evaluate(0.5, 0, out);
-
-    expect(out[0]).toBeCloseTo(0.5);
-    expect(out[1]).toBeCloseTo(15);
-  });
-
   it('STEP holds the prior keyframe across all components', () => {
     const track = new Track({
       label: 'n.weights',

@@ -1,12 +1,15 @@
 /**
- * A shader template that defines the structure for compiled shaders
+ * The source a shader compiles from: its entry points, with `{{slot}}` markers the bits fill
  *
- * Includes source templates, bind group order, and injection slots.
+ * `{{header}}` takes every bit's header code and the declarations the compiler generates for the
+ * attributes, varyings and bindings. Every other marker takes the code the bits give for that slot,
+ * joined in bit order, and a marker no bit fills is removed.
  *
- * ## Slot Naming
+ * The WGSL template is one source that holds both entry points, so its stage slots carry the stage
+ * as a prefix: a bit's `vertex.body` fills `{{vertexBody}}`. Each GLSL template holds one stage, so
+ * its slots don't: `vertex.body` fills the vertex template's `{{body}}`.
  *
- * - **GLSL**: Uses `{{slotName}}` directly (e.g., `{{header}}`, `{{body}}`)
- * - **WGSL**: Prefixes slots with stage name (e.g., `{{vertexBody}}`, `{{fragmentBody}}`)
+ * Compiled shaders are cached by template identity, so build a template once and don't change it.
  * @example
  * ```ts
  * const pbrTemplate: ShaderBitTemplate = {
@@ -42,13 +45,13 @@
  * @advanced
  */
 export interface ShaderBitTemplate {
-  /** Bind group names in order (determines @group index) */
+  /** The bind groups the shader binds, in `@group` index order */
   readonly bindGroups: readonly string[];
 
-  /** WebGPU/WGSL shader template (single source with both entry points) */
+  /** The WGSL source for WebGPU, holding both entry points */
   readonly gpu?: string;
 
-  /** WebGL/GLSL shader templates (separate vertex/fragment) */
+  /** The GLSL sources for WebGL, one per stage */
   readonly gl?: {
     /** GLSL vertex shader template */
     readonly vertex: string;
@@ -57,7 +60,7 @@ export interface ShaderBitTemplate {
   };
 
   /**
-   * Lazy identity stamped on first use in a descriptor key — templates with the same bits must not collide in the shader cache
+   * This template's id in shader cache keys, stamped the first time a descriptor uses it
    * @internal
    */
   _uid?: number;

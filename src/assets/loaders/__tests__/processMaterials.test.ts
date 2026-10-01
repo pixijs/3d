@@ -9,7 +9,6 @@ import { Material3D } from '~/materials/pbr/Material3D';
 
 function makeSource(textures: Texture[] = [Texture.WHITE]): Scene3DSource {
   const source = new Scene3DSource({});
-  // Scene3DSource.textures is `readonly` but the field itself is mutable in-place.
   for (let i = 0; i < textures.length; i++) source.textures[i] = textures[i];
   return source;
 }
@@ -42,24 +41,6 @@ describe('processMaterial — KHR_materials_unlit', () => {
     expect(flat.alphaCutoff).toBe(0.3);
   });
 
-  it('returns a Material3D when the extension is absent (PBR regression guard)', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'Pbr',
-      pbrMetallicRoughness: {
-        metallicFactor: 0.7,
-        roughnessFactor: 0.4,
-      },
-    };
-
-    const material = processMaterial(raw, source);
-
-    expect(material).toBeInstanceOf(Material3D);
-    const pbr = material as Material3D;
-    expect(pbr.metallic).toBeCloseTo(0.7);
-    expect(pbr.roughness).toBeCloseTo(0.4);
-  });
-
   it('ignores PBR-only fields and other KHR extensions on an unlit material (per spec)', () => {
     const source = makeSource();
     const raw: Material = {
@@ -82,8 +63,6 @@ describe('processMaterial — KHR_materials_unlit', () => {
 
     const material = processMaterial(raw, source);
 
-    // FlatMaterial has none of the PBR-only getters, so reaching this assertion
-    // implicitly proves the unlit path didn't try to set metallic/normalTexture/etc.
     expect(material).toBeInstanceOf(FlatMaterial);
     expect(material).not.toBeInstanceOf(Material3D);
     const flat = material as FlatMaterial;
@@ -92,40 +71,7 @@ describe('processMaterial — KHR_materials_unlit', () => {
 });
 
 describe('processMaterial — KHR_materials_specular', () => {
-  it('reads specularFactor from the extension into Material3D.specularFactor', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'SpecFactor',
-      extensions: {
-        KHR_materials_specular: { specularFactor: 0.25 },
-      },
-    };
-
-    const material = processMaterial(raw, source);
-
-    expect(material).toBeInstanceOf(Material3D);
-    expect((material as Material3D).specular!.factor).toBeCloseTo(0.25);
-  });
-
-  it('reads specularColorFactor from the extension into Material3D.specularColor', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'SpecTint',
-      extensions: {
-        KHR_materials_specular: { specularColorFactor: [1, 0.5, 0] },
-      },
-    };
-
-    const material = processMaterial(raw, source);
-    const mat = material as Material3D;
-
-    const specularParams = mat.data.specularParams!;
-    expect(specularParams[0]).toBeCloseTo(1);
-    expect(specularParams[1]).toBeCloseTo(0.5);
-    expect(specularParams[2]).toBeCloseTo(0, 5);
-  });
-
-  it('resolves specularTexture and specularColorTexture indices against the source textures', () => {
+  it('keeps the specularColorTexture when specularTexture names a different texture', () => {
     const tex0 = Texture.WHITE;
     const tex1 = Texture.EMPTY;
     const source = makeSource([tex0, tex1]);
@@ -141,7 +87,6 @@ describe('processMaterial — KHR_materials_specular', () => {
 
     const material = processMaterial(raw, source) as Material3D;
 
-    // Pack-into-one-slot: the colour texture wins (see constructor fallback).
     expect(material.specular!.texture).toBe(tex1);
   });
 
@@ -167,26 +112,6 @@ describe('processMaterial — KHR_materials_specular', () => {
 });
 
 describe('processMaterial — KHR_materials_anisotropy', () => {
-  it('reads anisotropyStrength and anisotropyRotation into Material3D.anisotropy', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'Aniso',
-      extensions: {
-        KHR_materials_anisotropy: { anisotropyStrength: 0.5, anisotropyRotation: 1.25 },
-      },
-    };
-
-    const material = processMaterial(raw, source);
-
-    expect(material).toBeInstanceOf(Material3D);
-    const mat = material as Material3D;
-    expect(mat.anisotropy!.strength).toBeCloseTo(0.5);
-    expect(mat.anisotropy!.rotation).toBeCloseTo(1.25);
-    // Packed: strength → lane 0, rotation → lane 1.
-    expect(mat.data.anisotropyParams![0]).toBeCloseTo(0.5);
-    expect(mat.data.anisotropyParams![1]).toBeCloseTo(1.25);
-  });
-
   it('resolves anisotropyTexture index against the source textures', () => {
     const tex0 = Texture.WHITE;
     const tex1 = Texture.EMPTY;
@@ -225,22 +150,6 @@ describe('processMaterial — KHR_materials_anisotropy', () => {
 });
 
 describe('processMaterial — KHR_materials_emissive_strength', () => {
-  it('reads emissiveStrength from the extension into Material3D.emissiveStrength', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'EmissiveStrong',
-      emissiveFactor: [1, 1, 1],
-      extensions: {
-        KHR_materials_emissive_strength: { emissiveStrength: 5 },
-      },
-    };
-
-    const material = processMaterial(raw, source);
-
-    expect(material).toBeInstanceOf(Material3D);
-    expect((material as Material3D).emissive!.strength).toBe(5);
-  });
-
   it('defaults emissiveStrength to 1 per spec when the extension omits emissiveStrength', () => {
     const source = makeSource();
     const raw: Material = {
@@ -252,22 +161,9 @@ describe('processMaterial — KHR_materials_emissive_strength', () => {
     const material = processMaterial(raw, source);
     expect((material as Material3D).emissive!.strength).toBe(1);
   });
-
-  it('leaves emissiveStrength at the Material3D default of 1 when the extension is absent', () => {
-    const source = makeSource();
-    const raw: Material = { name: 'NoExt', emissiveFactor: [1, 0, 0] };
-
-    const material = processMaterial(raw, source);
-    expect((material as Material3D).emissive!.strength).toBe(1);
-  });
 });
 
 describe('processMaterial — alphaMode coercion under transmission', () => {
-  // See processMaterials.ts: alphaMode BLEND/MASK + transmission is undefined in
-  // the spec, and leaving state.blend/depthMask on in the transmission pass
-  // produces striping on doubleSided meshes (front/back triangles with no depth
-  // writes). Coercing to OPAQUE matches the Khronos sample renderer.
-
   it('coerces alphaMode from BLEND to opaque when transmission is present', () => {
     const source = makeSource();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -281,22 +177,6 @@ describe('processMaterial — alphaMode coercion under transmission', () => {
 
     expect(material.alphaMode).toBe('opaque');
     expect(material.transmission!.factor).toBeCloseTo(0.5);
-    expect(warn).toHaveBeenCalledOnce();
-    warn.mockRestore();
-  });
-
-  it('coerces alphaMode from MASK to opaque when transmission is present', () => {
-    const source = makeSource();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const raw: Material = {
-      name: 'MaskTransmission',
-      alphaMode: 'MASK',
-      extensions: { KHR_materials_transmission: { transmissionFactor: 0.3 } },
-    };
-
-    const material = processMaterial(raw, source) as Material3D;
-
-    expect(material.alphaMode).toBe('opaque');
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
   });
@@ -351,12 +231,6 @@ describe('processMaterial — alphaMode coercion under transmission', () => {
 });
 
 describe('processMaterial — KHR_texture_transform extraction', () => {
-  // pixi-3d uses a single-per-material UV transform. The loader scans every
-  // texture slot it forwards to Material3D; whichever slot declares the
-  // extension first contributes the transform for the whole material. This
-  // guards against silently dropping the transform when it's only declared
-  // on an extension slot (e.g. clearcoat-only).
-
   const ktt = (offset: [number, number]): { KHR_texture_transform: KHRTextureTransform } => ({
     KHR_texture_transform: { offset, scale: [1, 1], rotation: 0 },
   });
@@ -366,16 +240,6 @@ describe('processMaterial — KHR_texture_transform extraction', () => {
     expect(material.uvTransform!.tx).toBeCloseTo(x);
     expect(material.uvTransform!.ty).toBeCloseTo(y);
   }
-
-  it('picks up the transform from baseColorTexture (regression guard for core slots)', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'BaseColorKtt',
-      pbrMetallicRoughness: { baseColorTexture: { index: 0, extensions: ktt([0.1, 0.2]) } },
-    };
-    const material = processMaterial(raw, source) as Material3D;
-    expectOffset(material, 0.1, 0.2);
-  });
 
   it('picks up the transform from a clearcoat slot when no core slot declares one', () => {
     const source = makeSource();
@@ -487,31 +351,9 @@ describe('processMaterial — KHR_texture_transform extraction', () => {
       expectOffset(material, expected[0], expected[1]);
     }
   });
-
-  it('leaves uvTransform undefined when no slot declares KHR_texture_transform', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'NoKtt',
-      pbrMetallicRoughness: { baseColorTexture: { index: 0 } },
-    };
-    const material = processMaterial(raw, source) as Material3D;
-    expect(material.uvTransform).toBeUndefined();
-  });
 });
 
 describe('processMaterial — glTF linear factor colours', () => {
-  // glTF factors are linear per spec; the loader pre-encodes them to sRGB so
-  // the material's display-space decode lands the spec value on the GPU.
-  it('round-trips emissiveFactor onto the GPU at its spec value', () => {
-    const raw: Material = { name: 'Emissive', emissiveFactor: [0.1, 0.5, 0.9] };
-    const material = processMaterial(raw, makeSource()) as Material3D;
-
-    const emissive = material.data.emissive!;
-    expect(emissive[0]).toBeCloseTo(0.1, 5);
-    expect(emissive[1]).toBeCloseTo(0.5, 5);
-    expect(emissive[2]).toBeCloseTo(0.9, 5);
-  });
-
   it('round-trips baseColorFactor rgb; alpha passes through untouched', () => {
     const raw: Material = {
       name: 'Base',

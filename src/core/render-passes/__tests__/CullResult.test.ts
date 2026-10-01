@@ -34,18 +34,18 @@ describe('CullResult', () => {
     expect(rb.sync(list)).toBe(true);
     expect(ra.sync(list)).toBe(false);
 
-    // Each result carries the list's lanes; a cull rewriting one's counts leaves the other and the
-    // list's template untouched.
-    expect(Array.from(rb.indirectDrawData.drawCalls.subarray(0, 10))).toEqual([6, 3, 0, 0, 0, 6, 2, 0, 0, 3]);
+    expect(Array.from(rb.indirectDrawData.drawCalls.subarray(0, 10)), "each result carries the list's lanes").toEqual([
+      6, 3, 0, 0, 0, 6, 2, 0, 0, 3,
+    ]);
     ra.indirectDrawData.drawCalls[1] = 1;
-    expect(rb.indirectDrawData.drawCalls[1]).toBe(3);
-    expect(list.drawData.drawCalls[1]).toBe(3);
+    expect(rb.indirectDrawData.drawCalls[1], "a cull rewriting one result's counts leaves the other").toBe(3);
+    expect(list.drawData.drawCalls[1], "and the list's template").toBe(3);
 
     a.release();
     b.release();
   });
 
-  it('a rebuild re-syncs the result, drops its bundle and forces the visibility walk', () => {
+  it('a rebuild, which clears the command list and changes the lanes, re-syncs the result, drops its bundle and forces the visibility walk', () => {
     const list = builtList();
     const results = new CullResults();
     const result = results.ensure(batch(1));
@@ -58,7 +58,6 @@ describe('CullResult', () => {
     expect(result.isBundleStale(list, groupA)).toBe(false);
     expect(result.isBundleStale(list, groupB)).toBe(true);
 
-    // The batcher rebuilds: the command list is cleared (its dirty id moves) and the lanes change.
     list.commandList.clear();
     list.commandList.next();
     list.drawData.drawCalls.set([9, 5, 0, 0, 0]);
@@ -71,7 +70,7 @@ describe('CullResult', () => {
     results.release();
   });
 
-  it('removes results for detached batches, once per batch-list change', () => {
+  it('removes results for detached batches, once per batch-list change, and single results by index', () => {
     const results = new CullResults();
     const kept = batch(1);
     const gone = batch(2);
@@ -84,23 +83,21 @@ describe('CullResult', () => {
     expect(results.get(kept)).toBe(r1);
     expect(results.get(gone, 1)).toBe(r2);
 
-    // Same dirty id: the sweep is skipped even though the batch list shrank.
     view._meshBatches = [kept];
     reconcile();
-    expect(results.get(gone, 1)).toBe(r2);
+    expect(results.get(gone, 1), 'same dirty id: the sweep is skipped although the batch list shrank').toBe(r2);
 
     view._meshBatchesDirtyId++;
     reconcile();
     expect(results.get(gone, 1)).toBeUndefined();
     expect(results.get(kept)).toBe(r1);
 
-    // Removing hands one result back; a missing index is a no-op, and the others stay.
     results.ensure(kept, 1);
     results.ensure(kept, 2);
     results.remove(kept, 2);
     results.remove(kept, 3);
     expect(results.get(kept, 2)).toBeUndefined();
-    expect(results.get(kept, 1)).toBeDefined();
+    expect(results.get(kept, 1), 'removing a missing index is a no-op, and the others stay').toBeDefined();
     results.remove(kept, 1);
     expect(results.get(kept, 1)).toBeUndefined();
     expect(results.get(kept)).toBe(r1);

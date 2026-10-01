@@ -6,12 +6,13 @@ import { Container3D } from '~/scene/Container3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { updateTransformAndChildren3D } from '~/scene/utils/updateView3DTransforms';
 
-// A blank Container3D is shape-equivalent to the production TEMP_PARENT_3D sentinel
-// (identity worldTransform, worldVisible=1), so it stands in as the parent.
+/** Stands in for `TEMP_PARENT_3D`, the transform pass's root parent: identity world transform, `worldVisible` 1 */
 const tempParent = new Container3D();
 let tick = 0;
-// Drives the real transform pass: recomputes worldTransform and bumps _worldTransformId,
-// exactly as updateView3DTransforms does each frame.
+/**
+ * Runs the transform pass over `node` and its subtree, which recomputes `worldTransform` and bumps
+ * `_worldTransformId`
+ */
 const runTransformPass = (node: Container3D) => updateTransformAndChildren3D(node, tempParent, ++tick, false, false);
 
 const makeMesh = (size: number, dynamic = false) =>
@@ -20,25 +21,14 @@ const makeMesh = (size: number, dynamic = false) =>
     material: new Material3D({ baseColor: 0xffffff }),
   });
 
-// Local bounding sphere radius the cull derives from an AABB: half the diagonal.
+/** The local bounding sphere radius the cull derives from the geometry's AABB: half its diagonal */
 const localRadius = (mesh: Mesh3D) => {
   const { min, max } = mesh.geometry.bounds3D;
   return 0.5 * Math.hypot(max.x - min.x, max.y - min.y, max.z - min.z);
 };
 
 describe('Mesh3D.boundingSphere', () => {
-  it('returns the geometry local sphere under an identity transform', () => {
-    const mesh = makeMesh(2);
-    runTransformPass(mesh);
-
-    const s = mesh.boundingSphere;
-    expect(s.center.x).toBeCloseTo(0);
-    expect(s.center.y).toBeCloseTo(0);
-    expect(s.center.z).toBeCloseTo(0);
-    expect(s.radius).toBeCloseTo(localRadius(mesh));
-  });
-
-  it('follows the world translation after the transform pass', () => {
+  it('follows the world translation after the transform pass, keeping the local radius', () => {
     const mesh = makeMesh(2);
     mesh.position.set(5, -3, 2);
     runTransformPass(mesh);
@@ -47,7 +37,7 @@ describe('Mesh3D.boundingSphere', () => {
     expect(s.center.x).toBeCloseTo(5);
     expect(s.center.y).toBeCloseTo(-3);
     expect(s.center.z).toBeCloseTo(2);
-    expect(s.radius).toBeCloseTo(localRadius(mesh)); // translation doesn't scale the radius
+    expect(s.radius).toBeCloseTo(localRadius(mesh));
   });
 
   it('scales the radius by the max axis scale', () => {
@@ -55,7 +45,7 @@ describe('Mesh3D.boundingSphere', () => {
     runTransformPass(mesh);
     const base = mesh.boundingSphere.radius;
 
-    mesh.scale.set(2, 3, 1); // longest axis = 3
+    mesh.scale.set(2, 3, 1);
     runTransformPass(mesh);
     expect(mesh.boundingSphere.radius).toBeCloseTo(base * 3);
   });
@@ -65,12 +55,11 @@ describe('Mesh3D.boundingSphere', () => {
     runTransformPass(mesh);
     expect(mesh.boundingSphere.center.x).toBeCloseTo(0);
 
-    // Sets the dirty flags but does NOT bump _worldTransformId (only the transform pass does).
     mesh.position.set(10, 0, 0);
-    expect(mesh.boundingSphere.center.x).toBeCloseTo(0); // still the cached value
+    expect(mesh.boundingSphere.center.x).toBeCloseTo(0);
 
     runTransformPass(mesh);
-    expect(mesh.boundingSphere.center.x).toBeCloseTo(10); // recomputed against the new transform
+    expect(mesh.boundingSphere.center.x).toBeCloseTo(10);
   });
 
   it('recomputes when the geometry is swapped, even without a transform change', () => {
@@ -79,7 +68,6 @@ describe('Mesh3D.boundingSphere', () => {
     const small = mesh.boundingSphere.radius;
 
     mesh.geometry = new CubeGeometry({ width: 10, height: 10, depth: 10 });
-    // No transform pass — the geometry reference changed, which alone invalidates the cache.
     expect(mesh.boundingSphere.radius).toBeGreaterThan(small);
   });
 

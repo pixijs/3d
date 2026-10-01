@@ -11,7 +11,10 @@ const lightMap: Record<string, number> = {
 };
 
 /**
- * Converts KHR_lights_punctual lights into descriptor light presets
+ * Converts `KHR_lights_punctual` lights into descriptor lights
+ *
+ * A spot's cone becomes a `coneAngle` of the outer angle in degrees and a `penumbra` of
+ * `1 - inner / outer`, clamped to 0 to 1. A light with no `range` gets 0, which means infinite.
  * @param gltfRaw - Parsed glTF JSON
  * @param descriptor - Receives the light presets
  * @internal
@@ -26,9 +29,6 @@ export function processLights(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor
 
       return {
         name: rawLight.name,
-        // KHR_lights_punctual colours are linear per spec; pre-encode to the
-        // display-space convention light colours use (decoded at upload), and
-        // carry the float triple as-is so nothing quantizes to 8-bit.
         color: linearRgbToSrgb(rawLight.color ?? [1, 1, 1]),
         intensity: rawLight.intensity,
         type: lightMap[rawLight.type],

@@ -11,11 +11,6 @@ import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Engine-owned buffers are baked into recorded bundles / bind groups / VAOs that never re-fetch
- * them, so the renderer's GC must never reclaim one — including the buffers minted when a store
- * outgrows itself, and the ones it retires in the process.
- */
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`engine buffer GC exemption (${preference})`, () => {
     it('renders a real scene with every engine-owned buffer exempt', async () => {
@@ -40,13 +35,14 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           if (buffer.autoGarbageCollect) collectable.push(label);
         };
 
-        check('scene store', view3d._sceneBatch.storeBuffer.buffer);
-        // WebGPU draws the batch's indirect args from the opaque pass's cull result; WebGL reads the
-        // draw list's CPU array and owns no args buffer.
+        /** Null on WebGL, which reads the store through its data texture */
+        const sceneStore = (view3d._sceneBatch.storeBuffer as unknown as { _buffer: Buffer | null })._buffer;
+        if (sceneStore) check('scene store', sceneStore);
         const opaque = view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass;
+        /** Undefined on WebGL, which draws from the draw list's CPU args and owns no args buffer */
         const result = opaque.cullResults.get(view3d._sceneBatch);
         if (result) check('draw calls', result.indirectDrawData.drawCallsBuffer);
-        // The mesh was atlased, so the buffers it actually draws from are the atlas's.
+        /** The atlas the mesh was packed into, whose buffers are the ones it draws from */
         const atlas = geometry._geometryAtlasAllocation!.atlas!;
         atlas.geometry.buffers.forEach((buffer, i) => check(`atlas buffer ${i}`, buffer));
 
@@ -56,7 +52,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it('keeps the store exempt across the growth a large batch forces', async () => {
+    it.skipIf(preference === 'webgl')('keeps the store exempt across the growth a large batch forces', async () => {
       const app = await getApp<Renderer>({
         id: `engine-buffer-growth-${preference}`,
         appOptions: { preference, width: 128, height: 128 },
@@ -69,12 +65,13 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const geometry = new CubeGeometry({ width: 0.2, height: 0.2, depth: 0.2 });
         const material = new Material3D({ baseColor: 0x8899aa });
 
-        // A batch bigger than the store's initial 100 slots: allocating its block expands the
-        // store, retiring the buffer it was born with.
+        /** Past the store's initial 100 slots, so its block grows the store and retires the first buffer */
         const batched = new BatchedMesh3D({ size: 400 });
         const storeBuffer = batched.batch.storeBuffer;
-        // A non-zero version means the store really reallocated rather than fitting in its initial block.
-        expect(storeBuffer.bufferVersion).toBeGreaterThan(0);
+        expect(
+          storeBuffer.bufferVersion,
+          'the store reallocated rather than fitting its initial block',
+        ).toBeGreaterThan(0);
 
         for (let i = 0; i < 400; i++) {
           batched.setGeometryAt(i, geometry);

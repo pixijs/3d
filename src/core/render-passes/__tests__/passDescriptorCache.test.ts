@@ -9,12 +9,7 @@ import { View3D } from '~/scene/View3D';
 
 import { RenderPassBit } from '../RenderPass';
 
-// A pass-descriptor pass (shadow, outline, custom) compiles its own shader rather than
-// taking the material's, and that compile folds in the geometry it was handed — vertex
-// formats, morph targets, and the resolved topology. The entry is cached, so it has to
-// re-resolve when the mesh swaps either half of the (geometry, material) pair it was
-// built from, or the pass keeps drawing whatever the mesh happened to hold first.
-
+/** A one-triangle geometry, drawn as a line list when `topology` says so */
 const triangle = (topology?: 'triangle-list' | 'line-list'): Geometry3D =>
   new Geometry3D({
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
@@ -24,7 +19,7 @@ const triangle = (topology?: 'triangle-list' | 'line-list'): Geometry3D =>
   });
 
 for (const preference of ['webgpu', 'webgl'] as const) {
-  describe(`pass-descriptor cache (${preference})`, () => {
+  describe(`a pass's own shader entry for a mesh, which bakes in its geometry and material (${preference})`, () => {
     it('re-resolves the entry when the geometry moves', async () => {
       const app = await getApp<Renderer>({
         id: `pass-descriptor-geometry-${preference}`,
@@ -82,17 +77,15 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const first = mesh._passCache[RenderPassBit.SHADOW];
         expect(first.lastMaterialUid).toBe(materialA.uid);
 
-        // Nothing moved — a re-dirty must reuse the entry rather than recompile.
         mesh.invalidate();
         app.render();
-        expect(mesh._passCache[RenderPassBit.SHADOW]).toBe(first);
+        expect(mesh._passCache[RenderPassBit.SHADOW], 'nothing moved, so a re-dirty reuses the entry').toBe(first);
 
         mesh.material = materialB;
         app.render();
 
-        // Refreshed in place rather than replaced, so nothing holding the entry goes stale.
         const second = mesh._passCache[RenderPassBit.SHADOW];
-        expect(second).toBe(first);
+        expect(second, 'refreshed in place, so nothing holding the entry goes stale').toBe(first);
         expect(second.lastMaterialUid).toBe(materialB.uid);
       } finally {
         app.destroy();

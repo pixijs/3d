@@ -35,11 +35,11 @@ import {
 } from './shadowPassUtils';
 import type { CascadeSlot, ShadowQuality } from './shadowPassUtils';
 
-// Reused scratch for `_commitCascadeCamera` — the cascade's eye, inverted out of its view.
+/** Scratch for `_commitCascadeCamera`: the cascade's eye, inverted out of its view */
 const tempEyeMatrix = new Matrix4();
 const tempEye = new Vector3();
 
-// Reused scratch for the auto-fit scene-bounds gather.
+/** Scratch for the auto-fit caster-bounds gather */
 const _scratchSphere = new Sphere();
 const _scratchBox = new Box();
 const _scratchVec = new Vector3();
@@ -73,8 +73,10 @@ const SHADOW_SOFT_TEXEL_THRESHOLD = 0.15;
  */
 const MAX_AUTO_FIT_CASTERS = 256;
 
-// Messages for warns whose trigger state persists frame over frame — hoisted so the hot
-// paths stay allocation-free; `warnOnce` dedups the console side.
+/**
+ * Warning for a light with both `bounds` and `cascades`; like the two warnings below, its trigger
+ * holds frame after frame, so the text is built once and the per-frame check allocates nothing
+ */
 const WARN_BOUNDS_WITH_CASCADES =
   'Shadow: shadow.bounds and shadow.cascades are both set — cascades take precedence and the bounds ' +
   'box is ignored. Use bounds for a fixed region or cascades for a camera-following shadow, not both.';
@@ -247,7 +249,7 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Frees the shadow map now — the largest allocation this pass owns (64 MB at the default tier)
+   * Frees the shadow map now, the largest allocation this pass owns (up to 64 MB at the default tier)
    *
    * Idempotent, and recoverable by construction: the next frame that needs shadows re-creates the
    * map and every light re-renders its layers into it.
@@ -312,15 +314,13 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Culls the pass when there's nothing to do: no shadow-casting light is in the scene,
-   * or no mesh participates in the SHADOW bit
+   * Skips the frame when no light in the scene can cast a shadow, or no mesh is in the shadow pass
    *
-   * Membership, not visibility: the pass stays active while casters *exist*, so the
-   * shadow-map binding (baked into forward bundles) never appears or disappears with a
-   * visibility flip — an all-hidden frame just renders a validly empty map. Lifting both
-   * gates here lets refcount cull drop the pass entirely (no per-light loop entered).
-   * A culled pass keeps each batch's recorded list: nothing about the casters changed, so
-   * the next active frame replays it as is.
+   * Membership decides, not visibility: the pass keeps running while casters exist, so the
+   * shadow-map binding that forward bundles bake doesn't come and go when something is hidden. A
+   * frame where everything is hidden just renders an empty map. A skipped pass never enters its
+   * per-light loop, and keeps each batch's recorded list, which the next frame it runs replays as
+   * is since nothing about the casters changed.
    * @param session - The current frame's render session
    * @returns Whether the pass should run this frame
    */
@@ -361,9 +361,11 @@ export abstract class ShadowRenderPassBase<
     return (light._gpuShadowData ??= {
       inverseLightMatrix: new Matrix4(),
       lightProjectionMatrix: new Matrix4(),
-      // Born current: this light has drawn nothing into any earlier map, so it owes no re-render
-      // for a discarded one. Its first layers come from the refresh a new light starts with
-      // (`_shadowRefreshRequested`), which `updateLightShadowData` turns into `needsRender`.
+      /**
+       * Current from the start: the light drew nothing into an earlier map, so it owes no re-render
+       * for a discarded one. Its first layers come from the refresh a new light starts with
+       * (`_shadowRefreshRequested`), which `updateLightShadowData` turns into `needsRender`.
+       */
       targetVersion: this.targetVersion,
     }) as S;
   }
@@ -404,21 +406,19 @@ export abstract class ShadowRenderPassBase<
    *
    * The cull volume is refreshed here too, so a cascade throttled off this frame keeps a frustum
    * that matches its frozen matrices. Every cascade projection already carries the toward-light
-   * near extension, so the volume is exactly what the map rasterises.
+   * near extension, and a shadow map gets no winding flip, so the frustum comes straight from the
+   * draw matrix and is exactly what the map rasterises.
    * @param slot - The cascade being fitted.
    * @param view - The cascade's light-space view matrix.
    * @param projection - The cascade's projection.
    */
   protected _commitCascadeCamera(slot: CascadeSlot, view: Matrix4, projection: Matrix4): void {
-    // The eye is the view's inverse translation — exact for every fit (stable-fit cascades move
-    // the light-space origin off the light node, so the node's own position would not match).
     tempEyeMatrix.getInverse(view);
     tempEyeMatrix.extractPosition(tempEye);
 
     const cameraData = slot.cameraData;
 
     cameraData.set(tempEye, view, projection);
-    // No target-winding flip on a shadow map, so the draw matrix is also the cull matrix.
     cameraData.frustum.setFromProjectionMatrix(cameraData.viewProjection);
   }
 
@@ -426,16 +426,19 @@ export abstract class ShadowRenderPassBase<
    * Updates a light's shadow matrices and fills its cascade slot(s) with everything the
    * `uShadowData` uniform needs — shared by both backends
    *
-   * Spot lights fill slot 0 with a single perspective map. Directional lights
-   * take one of two placements: with `shadow.cascades` set, camera-following
-   * stable-fit cascades; otherwise a single fixed box — `shadow.bounds` if given,
-   * else auto-fit to the scene's casters. Per cascade, the resolved `shadow.update`
-   * cadence throttles re-rendering: `1` (default) every frame, `N` every Nth,
-   * `0`/`'manual'` only when {@link Light.refreshShadows} forces it. A skipped
-   * cascade keeps its frozen matrix and depth layer; the decision is recorded on
-   * `cascade.needsRender` for `render()` to honour.
+   * Spot lights fill slot 0 with a single perspective map. Directional lights take one of two
+   * placements: with `shadow.cascades` set, cascades that follow the camera, keep a fixed size and
+   * snap to texels; otherwise a single fixed box, `shadow.bounds` (read each fit) if given, else
+   * auto-fit to the scene's casters. A spot light or a fixed box keeps a cascade count of `0`.
+   * The cascades' reach, `shadow.maxDistance`, is clamped to the camera's far plane, where the
+   * frustum and every receiver end, which packs the cascades into what is visible.
    *
-   * Point lights are filtered out upstream and never reach here.
+   * Per cascade, the resolved `shadow.update` cadence throttles re-rendering: `1` (default) every
+   * frame, `N` every Nth, `0`/`'manual'` only when {@link Light.refreshShadows} forces it. A skipped
+   * cascade keeps its frozen matrix and depth layer, unless the map it drew into has been discarded
+   * since: its matrices still hold, but its depth has to be drawn again. The decision is recorded on
+   * `cascade.needsRender` for `render()` to honour. A light that can't cast, such as a point light,
+   * returns at once.
    * @param light - The shadow-casting light to update
    * @param view3d - The view whose camera and casters place the shadow volume
    */
@@ -445,16 +448,12 @@ export abstract class ShadowRenderPassBase<
     const camera = view3d.camera;
     const shadowData = this.getShadowGPUData(light);
     const { inverseLightMatrix, lightProjectionMatrix } = shadowData;
-    // The map this light drew into was discarded, so its layers are gone whatever the cadence says.
-    // The frozen matrices stay valid — only the rasterisation has to happen again.
     const targetStale = shadowData.targetVersion !== this.targetVersion;
     const mapSize = SHADOW_QUALITY_SIZE[this._quality];
     const forceUpdate = light._shadowRefreshRequested;
     const update = light.shadow.update;
     const bias = light.shadow.bias ?? DEFAULT_SHADOW_BIAS;
 
-    // Spot: single perspective map. Directional without cascades: single fixed box.
-    // Both fill slot 0 with `cascadeCount = 0` (the shader treats it as a plain shadow).
     if (light.type === 'spot' || light.shadow.cascades === undefined) {
       const slot = this._cascadeSlot(light, 0);
       const renderSkip = cascadeRenderSkip(updateRateFor(update, 0), this._frameCount, forceUpdate);
@@ -465,7 +464,6 @@ export abstract class ShadowRenderPassBase<
           this._commitCascadeCamera(slot, inverseLightMatrix, lightProjectionMatrix);
           slot.normalBias = light.shadow.normalBias ?? SPOT_SHADOW_NORMAL_BIAS;
         } else {
-          // Fixed box: a user-supplied region (read live), or the auto-fit box.
           const bounds = light.shadow.bounds ?? this._resolveAutoShadowBounds(light, view3d, mapSize);
           if (bounds !== undefined && !bounds.isEmpty()) {
             inverseLightMatrix.getInverse(light.worldTransform);
@@ -484,21 +482,14 @@ export abstract class ShadowRenderPassBase<
       return;
     }
 
-    // Directional camera-fit: stable-fit cascades (constant ortho scale + texel snap).
     if (light.shadow.bounds !== undefined) warnOnce('pixi3d-shadow-bounds-cascades', WARN_BOUNDS_WITH_CASCADES);
     inverseLightMatrix.getInverse(light.worldTransform);
 
     const cascadeCount = cascadeCountFor(light);
     const lambda = light.shadow.lambda;
 
-    // Cascades slice the camera frustum, which ends at the far plane — beyond it there is
-    // nothing to slice and no receiver is ever drawn. Clamping packs the cascades into the
-    // visible range, which makes every one of them sharper.
     const maxDist = Math.min(light.shadow.maxDistance ?? DEFAULT_CASCADE_MAX_DISTANCE, camera.far);
 
-    // Cascade 0 owns the persistent split-depth scratch (filled in place, no
-    // per-frame allocation); only it is packed into the shader (cascadeCount >
-    // 1), so cascades 1+ stay null.
     const cascade0 = this._cascadeSlot(light, 0);
     const splits = (cascade0.splits ??= []);
     computeCascadeSplits(camera.near, maxDist, cascadeCount, lambda, splits);
@@ -518,8 +509,6 @@ export abstract class ShadowRenderPassBase<
 
       slot.bias = bias;
       slot.mapSize = mapSize;
-      // Cascade count + splits live on cascade 0 only; a lone cascade keeps
-      // `cascadeCount = 0` so the shader treats it as a standard shadow.
       slot.cascadeCount = c === 0 && cascadeCount > 1 ? cascadeCount : 0;
       if (c > 0) slot.splits = null;
       slot.needsRender = targetStale || !renderSkip;
@@ -546,11 +535,10 @@ export abstract class ShadowRenderPassBase<
    * Cost is bounded by {@link MAX_AUTO_FIT_CASTERS}. At or under the cap the box is
    * re-fitted from the casters every rendered frame, so moved or added content just works.
    * Above it the walk is the expensive part, so the box is fitted once and frozen with a
-   * one-time warn — on the *second* gather, because a light's first render can see
-   * unsettled pass membership (e.g. a `castShadow: false` ground listed for one frame).
-   * The caster count is O(batches) to read, so the live/frozen decision itself is free;
-   * dropping back under the cap resumes live fitting, and {@link Light.fitShadowBounds}
-   * re-fits a frozen box on demand. Returns `undefined` until the first non-empty gather.
+   * one-time warn. The caster count is O(batches) to read, so the live/frozen decision
+   * itself is free; dropping back under the cap resumes live fitting, and
+   * {@link Light.fitShadowBounds} re-fits a frozen box on demand. Returns `undefined`
+   * until the first non-empty gather.
    * @param light - The directional light being fitted
    * @param view3d - The view whose casters the box encloses
    * @param mapSize - Shadow-map size in texels, for the large-box warning
@@ -569,8 +557,7 @@ export abstract class ShadowRenderPassBase<
 
     if (casterCount <= MAX_AUTO_FIT_CASTERS) {
       light._autoShadowBoundsFrozen = false;
-    } else if (prev !== null) {
-      // Over the cap with membership settled — this gather is the last free one.
+    } else {
       light._autoShadowBoundsFrozen = true;
       warnOnce(
         'pixi3d-shadow-autofit-cap',
@@ -610,9 +597,11 @@ export abstract class ShadowRenderPassBase<
    * auto-fit box tracks
    *
    * Cached per frame so multiple lights re-fitting on the same frame walk the casters
-   * once. Scene-mesh bounding spheres are already world-space; a {@link BatchedMesh3D}'s
-   * are batch-local, so they're lifted by the batch's world matrix. Dynamic
-   * geometry (no registered bounds) is skipped. No casters → an empty box.
+   * once. Reads each shadow list's `renderableIndices`, not its sorted `indices`. This runs
+   * before the pass sorts, and a union needs no order. The scene batch, always first in the
+   * view's batch list, holds world-space bounding spheres; a {@link BatchedMesh3D}'s are
+   * batch-local, so they're lifted by the batch's world matrix. Dynamic geometry has no bounds
+   * (a negative radius) and is skipped. No casters → an empty box.
    * @param view3d - The view whose casters to enclose
    */
   private _ensureSceneCasterBounds(view3d: View3D): Box {
@@ -628,18 +617,12 @@ export abstract class ShadowRenderPassBase<
       const list = batch.drawLists[this.bit];
       if (!list || list.view.count === 0) continue;
 
-      // Scene batch (0): spheres already in world space. User batches: batch-local → lift by B.
       const batchMatrix = b === 0 ? null : batch.renderData.worldTransform;
       const items = list.view.items;
-      const indices = list.view.indices;
+      const renderableIndices = list.view.renderableIndices;
 
       for (let i = 0; i < list.view.count; i++) {
-        // Slots are a StableList with null holes; the pass view's compaction can lag a
-        // frame behind a removal, so a live index may briefly point at a freed slot.
-        const item = items[indices[i]];
-        if (!item) continue;
-
-        const sphere = item.boundingSphere;
+        const sphere = items[renderableIndices[i]].boundingSphere;
         if (sphere.radius < 0) continue;
 
         const world = batchMatrix ? sphere.applyMatrix4(batchMatrix, _scratchSphere) : sphere;
@@ -714,7 +697,7 @@ export abstract class ShadowRenderPassBase<
    *
    * Returns `0` when the light isn't a caster (point lights never cast) or the budget
    * is full; over-budget casters are marked unshadowed (`_shadowDataIndex = -1`) with a
-   * one-time dev warning.
+   * one-time warning.
    * @param light - The light claiming slots
    * @param claimed - Slots already claimed this frame; the light's base slot if it fits
    */
@@ -739,14 +722,14 @@ export abstract class ShadowRenderPassBase<
    *
    * Invoked by `RenderGraph.destroy` through `pass.destroy?.()`. The per-light
    * cascade bind groups (`Light._gpuShadowData`) and the View's bone pit are
-   * owned elsewhere and freed on their own teardown, not here.
+   * owned elsewhere and freed on their own teardown, not here. The view tears its global bind
+   * group down before it destroys the graph, so the pass forgets the view first and releases the
+   * map without unbinding it.
    */
   public override destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
 
-    // The view tears its global bind group down before it destroys the graph, so the release has
-    // nothing left to unbind — dropping the back-reference keeps it from touching a dead view.
     this._view3d = null;
     this._releaseTarget();
 

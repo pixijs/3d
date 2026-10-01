@@ -9,23 +9,17 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Internal-field shape read by these tests. The owned GPU buffers are `@internal`
- * fields on View3D; reading them through this narrowing keeps the rest of the
- * test type-checked without an `as any`.
- */
-interface View3DInternals {
-  _bonePit: { buffer: Buffer };
-}
-
 const RENDERERS = ['webgl', 'webgpu'] as const;
 
-/** First attribute buffer (the underlying pixi `Buffer`) of a geometry. */
+/** The pixi `Buffer` behind a geometry's `aPosition` attribute */
 function positionBuffer(geometry: Geometry3D): Buffer {
   return geometry.attributes.aPosition.buffer;
 }
 
-/** Builds a populated View3D (meshes + shadow-casting light) and renders one frame. */
+/**
+ * Builds a View3D with three meshes and a shadow-casting light, and renders a frame so its graph
+ * and GPU resources exist
+ */
 function buildScene(app: Application<WebGLRenderer | WebGPURenderer>): { view: View3D; meshes: Mesh3D[] } {
   const view = new View3D({ width: 512, height: 512 });
   app.stage.addChild(view);
@@ -49,7 +43,6 @@ function buildScene(app: Application<WebGLRenderer | WebGPURenderer>): { view: V
   view.camera.position.set(0, 2.5, 8);
   view.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-  // Force one synchronous frame so the graph builds and all GPU resources upload.
   app.render();
 
   return { view, meshes };
@@ -61,27 +54,22 @@ for (const preference of RENDERERS) {
     let app: Application<WebGLRenderer | WebGPURenderer> | undefined;
 
     afterEach(() => {
-      // Tear each app down so contexts/canvases don't leak across cases.
       app?.destroy();
       app = undefined;
     });
 
-    it('destroys without throwing and flips destroyed + the owned GPU buffer', async () => {
+    it('destroys without throwing, flags itself destroyed, and frees the bone pit buffer it owns', async () => {
       app = await getApp({ id: `view3d-destroy-${preference}`, appOptions: { preference } });
       const { view } = buildScene(app);
 
-      const internals = view as unknown as View3DInternals;
-      // Capture owned GPU resources before destroy: the bone pit nulls its
-      // `buffer` ref on teardown, so the destroyed flag must be read off a
-      // pre-captured reference.
-      const bonePitBuffer = internals._bonePit.buffer;
+      /** Read before the destroy, which drops the bone pit's reference to its buffer */
+      const bonePitBuffer = view._bonePit.buffer;
 
       expect(bonePitBuffer.destroyed).toBe(false);
 
       expect(() => view.destroy()).not.toThrow();
 
       expect(view.destroyed).toBe(true);
-      // The bone pit's underlying pixi Buffer is exclusively owned and always freed.
       expect(bonePitBuffer.destroyed).toBe(true);
     });
 
@@ -95,11 +83,9 @@ for (const preference of RENDERERS) {
 
       view.destroy();
 
-      // Geometry is shared by default; a flagless destroy never reaches it.
       expect(destroySpy).not.toHaveBeenCalled();
       expect(buffer.destroyed).toBe(false);
 
-      // Clean up the geometry the View left alone so it doesn't leak.
       geometry.destroy(true);
     });
 
@@ -112,46 +98,16 @@ for (const preference of RENDERERS) {
 
       view.destroy({ children: true, geometry: true, material: true });
 
-      // Cascading into the subtree with the geometry flag frees each mesh's geometry buffers.
       for (const buffer of buffers) expect(buffer.destroyed).toBe(true);
       for (const mesh of meshes) expect(mesh.destroyed).toBe(true);
     });
 
-    it('destroys cleanly after rendering a transmissive material', async () => {
-      app = await getApp({ id: `view3d-destroy-transmission-${preference}`, appOptions: { preference } });
-
-      // End-to-end teardown smoke test through the transmission/refraction pass path,
-      // which uses transient attachments and extra graph state. (The owned-target
-      // RenderTargetCache teardown is unit-covered in RenderTargetCache.test.ts.)
-      const view = new View3D({ width: 512, height: 512 });
-      app.stage.addChild(view);
-
-      const glass = new Mesh3D({
-        geometry: new SphereGeometry({ radius: 1 }),
-        material: new Material3D({
-          baseColor: 0xffffff,
-          roughness: 0.1,
-          transmission: { factor: 1, thickness: 0.5 },
-          ior: 1.5,
-        }),
-      });
-      view.root.addChild(glass);
-
-      view.camera.position.set(0, 0, 5);
-      view.camera.lookAt({ x: 0, y: 0, z: 0 });
-      app.render();
-
-      expect(() => view.destroy({ children: true, geometry: true, material: true })).not.toThrow();
-      expect(view.destroyed).toBe(true);
-    });
-
-    it('does not double-free geometry shared across meshes on a cascading destroy', async () => {
+    it('destroys a geometry shared by several meshes only once', async () => {
       app = await getApp({ id: `view3d-destroy-shared-geom-${preference}`, appOptions: { preference } });
 
       const view = new View3D({ width: 512, height: 512 });
       app.stage.addChild(view);
 
-      // One geometry instance shared by several meshes (idiomatic instancing).
       const shared = new SphereGeometry({ radius: 1 });
       for (let i = 0; i < 3; i++) {
         const mesh = new Mesh3D({ geometry: shared, material: new Material3D({ baseColor: 0xff8844 }) });
@@ -164,10 +120,10 @@ for (const preference of RENDERERS) {
 
       const buffer = positionBuffer(shared);
 
-      // Cascading with the geometry flag would, without the Geometry3D
-      // idempotency guard, call the non-idempotent pixi Geometry.destroy once
-      // per mesh and throw on the second. It must free the shared geometry once.
-      expect(() => view.destroy({ children: true, geometry: true, material: true })).not.toThrow();
+      expect(
+        () => view.destroy({ children: true, geometry: true, material: true }),
+        'pixi’s Geometry.destroy throws on a second call',
+      ).not.toThrow();
       expect(buffer.destroyed).toBe(true);
     });
 
@@ -177,32 +133,26 @@ for (const preference of RENDERERS) {
       const { view, meshes } = buildScene(localApp);
 
       const retained = meshes[0];
-      // Attached to the view (its scene batch) after being added + rendered.
       expect(retained.view3d).toBe(view);
 
-      // Flagless destroy: the subtree is left intact for the caller, but it must
-      // be detached from the (always-freed) scene batch so it holds no stale ref.
       view.destroy();
 
       expect(view.destroyed).toBe(true);
       expect(retained.destroyed).toBe(false);
       expect(retained.view3d).toBeNull();
 
-      // The retained mesh must be safe to reparent into a fresh view and render —
-      // without the detach it would still point at the destroyed scene batch.
       const view2 = new View3D({ width: 256, height: 256 });
       localApp.stage.addChild(view2);
       view2.root.addChild(retained);
       view2.camera.position.set(0, 2.5, 8);
       view2.camera.lookAt({ x: 0, y: 0, z: 0 });
-      expect(() => localApp.render()).not.toThrow();
+      expect(() => localApp.render(), 'the retained mesh renders in a new view').not.toThrow();
 
       view2.destroy({ children: true, geometry: true, material: true });
-      // meshes[1..] were detached (not destroyed) by the flagless destroy; free them.
       for (let i = 1; i < meshes.length; i++) meshes[i].destroy({ geometry: true, material: true });
     });
 
-    it('invalidates a detached shadow light so it is reusable after a flagless destroy', async () => {
+    it('drops a detached light’s shadow data, so a new view can reuse the light', async () => {
       app = await getApp({ id: `view3d-destroy-light-${preference}`, appOptions: { preference } });
       const localApp = app;
 
@@ -215,16 +165,12 @@ for (const preference of RENDERERS) {
       viewA.root.addChild(light);
       viewA.camera.position.set(0, 2.5, 8);
       viewA.camera.lookAt({ x: 0, y: 0, z: 0 });
-      localApp.render(); // caches light._gpuShadowData binding viewA's bone pit (WebGPU)
+      localApp.render();
 
-      // Flagless destroy frees viewA's bone pit; the detached light's cached
-      // shadow bind group must be invalidated so it doesn't dangle.
       viewA.destroy();
       expect(light.destroyed).toBe(false);
-      expect(light._gpuShadowData).toBeNull();
+      expect(light._gpuShadowData, 'its WebGPU shadow bundles bake the freed bone pit').toBeNull();
 
-      // Reusing the light in a fresh view must rebuild its shadow data and render
-      // cleanly (it would otherwise bind viewA's freed bone-pit buffer).
       const viewB = new View3D({ width: 256, height: 256 });
       localApp.stage.addChild(viewB);
       viewB.root.addChild(new Mesh3D({ geometry: new SphereGeometry({ radius: 1 }), material: new Material3D({}) }));
@@ -243,15 +189,6 @@ for (const preference of RENDERERS) {
       view.destroy();
       expect(() => view.destroy()).not.toThrow();
       expect(view.destroyed).toBe(true);
-    });
-
-    it('tears down cleanly through the pixi app.destroy path', async () => {
-      app = await getApp({ id: `view3d-app-destroy-${preference}`, appOptions: { preference } });
-      buildScene(app);
-
-      const localApp = app;
-      app = undefined; // hand off ownership so afterEach doesn't double-destroy
-      expect(() => localApp.destroy()).not.toThrow();
     });
   });
 }

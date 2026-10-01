@@ -15,7 +15,7 @@ const bonePosition = (skeleton: Skeleton): number[] =>
   Array.from(skeleton.localPosition.subarray(0, 3), (v) => Math.round(v * 1e6) / 1e6 + 0);
 
 describe('Skeleton container bones', () => {
-  it('moves the bone by the origin offset, as the scene graph does', () => {
+  it('moves the bone by the origin minus its turned image, as the scene graph does', () => {
     const skeleton = oneBoneSkeleton();
     const bone = new Container3D({
       position: { x: 10, y: 0, z: 0 },
@@ -26,7 +26,6 @@ describe('Skeleton container bones', () => {
     skeleton.bindContainerBone(0, bone);
     skeleton.updateWorld();
 
-    // The 90° turn about +Z sends the origin (1, 0, 0) to (0, 1, 0), so the offset is (1, -1, 0).
     expect(bonePosition(skeleton)).toEqual([11, -1, 0]);
     expect(bonePosition(skeleton)).toEqual(Array.from(bone.localTransform.elements.subarray(12, 15)));
   });

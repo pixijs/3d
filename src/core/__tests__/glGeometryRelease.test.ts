@@ -3,20 +3,17 @@ import { BufferImageSource, CubeTexture, Texture } from 'pixi.js';
 import type { Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { fullscreenTriangleGeometry } from '~/core/fullscreenTriangleGeometry';
 import { BackgroundPass } from '~/core/render-passes/background/BackgroundPass';
-import { OutputPass } from '~/core/render-passes/output/OutputPass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/*
- * WebGL keeps one managed entry (the VAO cache) per drawn geometry and frees it only from that
- * geometry's `unload` event. The pass-owned and atlas-owned geometries are plain pixi `Geometry`
- * objects torn down with `destroy()` alone, so their entries must leave the hash on destroy.
- */
-
 const SIZE = 64;
+
+/** Enough cubes to grow the atlas past its first capacity, retiring the wrapper that holds a VAO */
+const CUBES_PAST_ATLAS_CAPACITY = 200;
 
 interface AtlasProbe {
   geometry: { uid: number } | null;
@@ -33,7 +30,11 @@ interface PassProbe {
   _geometry: { uid: number };
 }
 
-/** How many of `uids` still hold an entry in the GL geometry system's managed hash */
+/**
+ * How many of `uids` still hold an entry in the GL geometry system's managed hash, its VAO cache
+ *
+ * Pixi frees an entry only from the geometry's `unload` event, which `destroy()` emits.
+ */
 function managedCount(renderer: RendererProbe, uids: number[]): number {
   const items = renderer.geometry._managedGeometries.items;
   return uids.filter((uid) => items[uid] != null).length;
@@ -55,8 +56,8 @@ function cubeMesh(material: Material3D): Mesh3D {
   return new Mesh3D({ geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }), material });
 }
 
-describe('GL geometry layouts are released on destroy (webgl)', () => {
-  it('drops the output and background pass geometries when their View3D is destroyed', async () => {
+describe('pass- and atlas-owned geometries leave the WebGL geometry hash when destroyed (webgl)', () => {
+  it('drops the background pass geometry and keeps the shared triangle when their View3D is destroyed', async () => {
     const app = await getApp<Renderer>({
       id: 'gl-geometry-release-passes',
       appOptions: { preference: 'webgl', width: SIZE, height: SIZE },
@@ -64,7 +65,7 @@ describe('GL geometry layouts are released on destroy (webgl)', () => {
     const renderer = app.renderer as unknown as RendererProbe;
 
     try {
-      // Composite adds the output pass; a background makes the background pass draw.
+      /** Composite, so its output pass draws the shared triangle */
       const view3d = new View3D({ width: SIZE, height: SIZE, composite: true });
       view3d.background = CubeTexture.from({
         faces: {
@@ -81,13 +82,16 @@ describe('GL geometry layouts are released on destroy (webgl)', () => {
       app.render();
       app.render();
 
-      const uids = [OutputPass, BackgroundPass].map(
-        (Pass) => (view3d._graph.passes.find((pass) => pass instanceof Pass) as unknown as PassProbe)._geometry.uid,
-      );
-      expect(managedCount(renderer, uids)).toBe(2);
+      const background = view3d._graph.passes.find((pass) => pass instanceof BackgroundPass) as unknown as PassProbe;
+      const owned = [background._geometry.uid];
+      /** The output pass's shared triangle, which outlives any one View */
+      const shared = [fullscreenTriangleGeometry().uid];
+      expect(managedCount(renderer, owned)).toBe(1);
+      expect(managedCount(renderer, shared)).toBe(1);
 
       view3d.destroy({ children: true });
-      expect(managedCount(renderer, uids)).toBe(0);
+      expect(managedCount(renderer, owned)).toBe(0);
+      expect(managedCount(renderer, shared)).toBe(1);
     } finally {
       app.destroy(true, { children: true });
     }
@@ -108,8 +112,7 @@ describe('GL geometry layouts are released on destroy (webgl)', () => {
       app.render();
       app.render();
 
-      // Growing the atlas past its initial capacity retires the wrapper that already holds a VAO.
-      for (let i = 0; i < 200; i++) view3d.root.addChild(cubeMesh(material));
+      for (let i = 0; i < CUBES_PAST_ATLAS_CAPACITY; i++) view3d.root.addChild(cubeMesh(material));
       app.render();
       app.render();
 

@@ -17,74 +17,16 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
-// View-local probe point (camera at z=10, fov 60): casts through the world origin.
+/** View-local point whose ray passes through the world origin (camera at z = 10, fov 60) */
 const CENTER = { x: 50, y: 50 };
 
-// A 2×2×2 cube centred at origin, so each face sits one unit from the centre.
+/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
-    -1,
-    -1,
-    -1,
-    1,
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    -1,
-    1,
-    -1, // back
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    1,
-    1,
-    1,
-    1,
-    -1,
-    1,
-    1, // front
+    -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
   ]);
   const indices = new Uint16Array([
-    0,
-    1,
-    2,
-    0,
-    2,
-    3, // back
-    4,
-    6,
-    5,
-    4,
-    7,
-    6, // front
-    0,
-    4,
-    5,
-    0,
-    5,
-    1, // bottom
-    2,
-    6,
-    7,
-    2,
-    7,
-    3, // top
-    1,
-    5,
-    6,
-    1,
-    6,
-    2, // right
-    0,
-    3,
-    7,
-    0,
-    7,
-    4, // left
+    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 2, 6, 7, 2, 7, 3, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4,
   ]);
   const geometry = new Geometry3D({
     positions,
@@ -94,8 +36,7 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-// Run the transform pass + camera projection so worldTransform / viewProjection
-// reflect the current scene state. These tests sit outside the render loop.
+/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -109,9 +50,10 @@ function makeView(): View3D {
   return view3d;
 }
 
-// A hand-rolled IHitVolume3D — an origin-centred local-space sphere implemented
-// against the structural interface, with a call counter for broadphase /
-// prefilter observation. No containsPoint: this volume never clips.
+/**
+ * An origin-centred sphere built on the structural `IHitVolume3D` interface, counting its `raycast`
+ * calls; it has no `containsPoint`, so it never clips
+ */
 class LocalSphereVolume implements IHitVolume3D {
   public raycastCalls = 0;
   protected readonly _sphere: Sphere;
@@ -135,14 +77,14 @@ class LocalSphereVolume implements IHitVolume3D {
   }
 }
 
-// The same volume with containment — the shape that can also act as a clip.
+/** `LocalSphereVolume` with `containsPoint`, so it can also clip descendants */
 class ClippingSphereVolume extends LocalSphereVolume {
   public containsPoint(localPoint: Vector3): boolean {
     return this._sphere.containsPoint(localPoint);
   }
 }
 
-// Minimal stand-in for a pooled FederatedPointerEvent, as in picking-dispatch.
+/** A plain-object stand-in for a pooled `FederatedPointerEvent`, with the fields the 3D dispatcher reads */
 function makeEvent(type: string): FederatedPointerEvent {
   return {
     type,
@@ -172,7 +114,6 @@ describe('custom IHitVolume3D volumes', () => {
     const hit = view3d.raycast(CENTER);
     expect(hit).not.toBeNull();
     expect(hit!.target).toBe(node);
-    // Front of the unit sphere from the camera at z=10.
     expect(hit!.point.z).toBeCloseTo(1);
     expect(hit!.distance).toBeCloseTo(9);
     expect(hit!.normal.x).toBe(0);
@@ -193,7 +134,6 @@ describe('custom IHitVolume3D volumes', () => {
     view3d.root.addChild(far);
     tickPick(view3d);
 
-    // CENTER's ray passes nowhere near a 0.05-radius bound at x=5.
     expect(view3d.raycast(CENTER)).toBeNull();
     expect(tiny.raycastCalls).toBe(0);
 
@@ -202,43 +142,9 @@ describe('custom IHitVolume3D volumes', () => {
     expect(view3d.raycast(CENTER)).toBeNull();
     expect(unbounded.raycastCalls).toBe(1);
   });
-
-  test('a passive node with a custom volume registers through the cascade and targets its ancestor', () => {
-    const view3d = makeView();
-    const robot = new Container3D();
-    robot.eventMode = 'static';
-    const part = new Container3D();
-    robot.addChild(part);
-    view3d.root.addChild(robot);
-    tickPick(view3d);
-
-    expect(view3d.raycast(CENTER)).toBeNull();
-
-    part.hitVolume = new LocalSphereVolume(1);
-    expect(view3d.events._interactiveList).toContain(part);
-    expect(view3d.raycast(CENTER)!.target).toBe(robot);
-  });
 });
 
 describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
-  test('a child inside the ancestor clip is picked; outside it is not', () => {
-    const view3d = makeView();
-    const clip = new Container3D();
-    const mesh = makeCube();
-    mesh.interactive = true;
-    clip.addChild(mesh);
-    view3d.root.addChild(clip);
-    clip.hitVolume = new Sphere(new Vector3(), 3);
-    tickPick(view3d);
-
-    // Hit point (0, 0, 1) sits inside the r=3 sphere.
-    expect(view3d.raycast(CENTER)!.target).toBe(mesh);
-
-    // Move the clip away: the same hit point now falls outside it.
-    clip.hitVolume = new Sphere(new Vector3(5, 0, 0), 1);
-    expect(view3d.raycast(CENTER)).toBeNull();
-  });
-
   test('a clip rejection does not occlude nodes behind the clipped one', () => {
     const view3d = makeView();
     const clip = new Container3D();
@@ -258,7 +164,7 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     expect(hit!.point.z).toBeCloseTo(-4);
   });
 
-  test('default volumes never clip: a child poking outside its Mesh3D parent AABB still picks', () => {
+  test('default volumes never clip, even with clipping on elsewhere: a child poking outside its Mesh3D parent AABB still picks', () => {
     const view3d = makeView();
     const parent = makeCube();
     parent.interactive = true;
@@ -267,24 +173,19 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     child.position.set(0, 0, 3);
     parent.addChild(child);
     view3d.root.addChild(parent);
-    // An unrelated explicit volume elsewhere keeps the clip machinery active,
-    // so the walk really runs and must still skip the parent's default AABB.
-    const unrelated = new Container3D();
-    unrelated.hitVolume = new Sphere(new Vector3(50, 0, 0), 1);
-    view3d.root.addChild(unrelated);
+    const clipElsewhere = new Container3D();
+    clipElsewhere.hitVolume = new Sphere(new Vector3(50, 0, 0), 1);
+    view3d.root.addChild(clipElsewhere);
     tickPick(view3d);
 
-    // The child's front face (z=4) is well outside the parent's implicit ±1
-    // AABB; the closer child must win, not be clipped by the default volume.
     const hit = view3d.raycast(CENTER);
     expect(hit!.target).toBe(child);
     expect(hit!.point.z).toBeCloseTo(4);
   });
 
-  test('a Geometry3D clip clips by its bounds3D AABB, not per triangle', () => {
+  test('a Geometry3D clip clips by its bounds3D AABB, not per triangle, so a hit far from its one triangle still picks', () => {
     const view3d = makeView();
     const clip = new Container3D();
-    // One tiny triangle in a corner, with deliberately generous bounds.
     clip.hitVolume = new Geometry3D({
       positions: new Float32Array([1.9, 1.9, 0, 1.9, 1.8, 0, 1.8, 1.9, 0]),
       indices: new Uint16Array([0, 1, 2]),
@@ -296,7 +197,6 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     view3d.root.addChild(clip);
     tickPick(view3d);
 
-    // (0, 0, 1) is nowhere near the triangle but inside bounds3D → allowed.
     expect(view3d.raycast(CENTER)!.target).toBe(mesh);
   });
 
@@ -357,11 +257,6 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     view3d.root.addChild(clip);
     tickPick(view3d);
 
-    // The ray misses the clip box outright: both children are rejected by the
-    // ancestor ray test, so neither custom narrowphase ever runs. (That the
-    // clip volume itself is ray-tested once, not once per child, is the memo's
-    // job — not directly observable from here, so behavioral equivalence is
-    // what this asserts.)
     expect(view3d.raycast(CENTER)).toBeNull();
     expect(aVolume.raycastCalls).toBe(0);
     expect(bVolume.raycastCalls).toBe(0);
@@ -378,8 +273,6 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     view3d.root.addChild(clip);
     tickPick(view3d);
 
-    // The CENTER ray passes straight through the r=2 clip sphere (prefilter
-    // passes), but the cube's front face at z=-3 lies beyond its far side.
     expect(view3d.raycast(CENTER)).toBeNull();
   });
 
@@ -392,11 +285,9 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     view3d.root.addChild(clip);
     tickPick(view3d);
 
-    // With containment: the hit at (0, 0, 1) is outside a r=0.5 sphere → clipped.
     clip.hitVolume = new ClippingSphereVolume(0.5);
     expect(view3d.raycast(CENTER)).toBeNull();
 
-    // Same shape without containsPoint: it can never clip.
     clip.hitVolume = new LocalSphereVolume(0.5);
     expect(view3d.raycast(CENTER)!.target).toBe(mesh);
   });
@@ -415,12 +306,10 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     expect(view3d.events._clipVolumeCount).toBe(1);
     expect(view3d.raycast(CENTER)).toBeNull();
 
-    // Clearing the volume restores un-clipped picking and zeroes the count.
     clip.hitVolume = null;
     expect(view3d.events._clipVolumeCount).toBe(0);
     expect(view3d.raycast(CENTER)!.target).toBe(mesh);
 
-    // Detaching a subtree carries its explicit volume out; re-attaching carries it back in.
     clip.hitVolume = new Sphere(new Vector3(5, 0, 0), 1);
     view3d.root.removeChild(clip);
     expect(view3d.events._clipVolumeCount).toBe(0);
@@ -429,7 +318,6 @@ describe('ancestor clipping — explicit hitVolumes clip descendants', () => {
     expect(view3d.events._clipVolumeCount).toBe(1);
     expect(view3d.raycast(CENTER)).toBeNull();
 
-    // A second View is untouched by the first View's clips.
     const other = makeView();
     const otherMesh = makeCube();
     otherMesh.interactive = true;

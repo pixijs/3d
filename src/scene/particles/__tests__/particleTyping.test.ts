@@ -3,14 +3,16 @@ import { describe, expect, it } from 'vitest';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { ParticleContainer3D } from '~/scene/particles/ParticleContainer3D';
 
-// Declared with `satisfies`, so its attribute names survive as literal keys.
+/** Declared with `satisfies`, so its attribute names survive as literal keys */
 const trajectoryBit = {
   name: 'typing-trajectory',
   attributes: { aVel: 'float32x3', aBirth: 'float32', aTint: 'unorm8x4' },
 } satisfies ShaderBit;
 
-// Declared with an annotation, so its attribute names collapsed to an index
-// signature. The container must still accept it, and fall back to runtime checks.
+/**
+ * Declared with an annotation, so its attribute names collapsed to an index signature. The
+ * container must still accept it, and fall back to runtime checks.
+ */
 const annotatedBit: ShaderBit = {
   name: 'typing-annotated',
   attributes: { aWind: 'float32x2' },
@@ -37,30 +39,23 @@ function typeOnly(): void {
 
   const permissive = new ParticleContainer3D({ capacity: 1, extraBits: [annotatedBit] });
 
-  // Any name goes through to the runtime check; nothing to assert against at compile time.
   permissive.setParticle(0, { aWind: { x: 1, y: 2 }, aWhatever: 3 });
 
   const mixed = new ParticleContainer3D({ capacity: 1, extraBits: [trajectoryBit, annotatedBit] });
 
-  // The typed bit still checks its own names even beside an annotated one.
   mixed.setParticle(0, { aVel: { x: 1, y: 2, z: 3 }, aWind: { x: 0, y: 0 } });
   // @ts-expect-error aVel is still a vec3, not a number
   mixed.setParticle(0, { aVel: 5 });
 
   const bare = new ParticleContainer3D({ capacity: 1 });
 
-  // No extra bits given, so B is its wide default and the shape is permissive:
-  // the built-ins are typed, and any other name falls through to the runtime
-  // check. The default has to be wide so that a variable annotated with the
-  // bare class name accepts every instantiation.
   bare.setParticle(0, { aParticleSizeRot: { x: 1, y: 0 }, aAnything: 1 });
   // @ts-expect-error the built-ins keep their shapes even when the rest is open
   bare.setParticle(0, { aParticleSizeRot: 5 });
 }
 
 describe('ParticleContainer3D typing', () => {
-  it('compiles the positive cases and rejects the negative ones', () => {
-    // The assertions above are checked by tsc; this just keeps the file in the suite.
+  it('compiles the positive cases and rejects the negative ones under tsc', () => {
     expect(typeof typeOnly).toBe('function');
   });
 });

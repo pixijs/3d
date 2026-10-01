@@ -1,6 +1,6 @@
 {
   "name": "@pixi/3d",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "A 3D extension for PixiJS",
   "homepage": "https://github.com/pixijs/pixi-3d#readme",
   "bugs": {
@@ -92,12 +92,13 @@
     "watch:docs": "npm run watch -w @pixi/3d-docs",
     "watch:test": "vitest",
     "download:assets": "node scripts/assets/download-assets.mts",
-    "test": "npm run test:lint && npm run test:types && vitest run --browser.headless",
+    "test": "npm run test:lint && npm run test:types && npm run test:examples && vitest run --browser.headless",
     "test:unit": "vitest run src --browser.headless",
     "test:visual": "vitest run scenes --browser.headless",
     "test:update": "vitest run --browser.headless --update=true",
-    "test:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p playground/tsconfig.json && tsc --noEmit -p examples/tsconfig.json",
+    "test:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p playground/tsconfig.json && tsc --noEmit -p examples/tsconfig.json && tsc --noEmit -p bench/tsconfig.json",
     "test:lint": "oxlint --deny-warnings && oxfmt --check",
+    "test:examples": "node scripts/typedoc/check-examples.mts",
     "test:bundle": "node scripts/build/check-split.mts",
     "test:dts": "node scripts/build/check-dts.mts",
     "lint": "oxlint --fix && oxfmt --write",
@@ -126,7 +127,7 @@
     "oxlint": "^1.82.0",
     "oxlint-tsgolint": "^7.0.2001",
     "pixelmatch": "^7.2.0",
-    "pixi.js": "^8.21.0",
+    "pixi.js": "^8.22.0",
     "playwright": "^1.62.1",
     "pngjs": "^7.0.0",
     "rolldown": "1.2.8",
@@ -136,7 +137,7 @@
     "vitest": "^5.0.0"
   },
   "peerDependencies": {
-    "pixi.js": "^8.21.0"
+    "pixi.js": "^8.22.0"
   },
   "lint-staged": {
     "*": [

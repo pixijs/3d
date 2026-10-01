@@ -19,7 +19,9 @@ const SCALES = [0.001, 0.01, 0.1, 1, 10, 100, 1000] as const;
  *
  * Caster and ground are both white and the count is taken from the whole frame, so nothing
  * but a genuine shadow reads dark — a caster tinted to look like a shadow would make this
- * pass while measuring the wrong thing.
+ * pass while measuring the wrong thing. The app is destroyed as soon as it is read: test files
+ * share a page, so an app left running keeps rendering into other files and eventually draws
+ * through resources they have torn down.
  */
 async function shadowPixels(k: number, cascades: 1 | 2 | 3 | 4 | undefined): Promise<number> {
   const app = await getApp({ id: `shadow-scale-${k}`, appOptions: { preference: 'webgl', width: SIZE, height: SIZE } });
@@ -83,30 +85,21 @@ async function shadowPixels(k: number, cascades: 1 | 2 | 3 | 4 | undefined): Pro
     if (px[i + 3] > 0 && px[i] < lit * 0.7) shadowed++;
   }
 
-  // Test files share a page, so an app left running keeps rendering into other files and
-  // eventually draws through resources they have torn down. Each one goes as it is read.
   app.destroy(true, true);
 
   return shadowed;
 }
 
-/**
- * A shadow frustum sized in world units only works for scenes modelled at roughly that
- * scale. Sized in fixed units, a scene 1000x smaller got a depth range thousands of times
- * its own extent — and since `bias` is a fraction of that range, the bias grew past the
- * whole scene and erased every shadow.
- */
-describe('shadow placement across scene scales', () => {
+describe('shadow placement across scene scales, where a depth range sized in fixed units would make the bias outgrow a small scene', () => {
   it.each([
     ['cascades', 3 as const],
     ['fixed box', undefined],
   ])(
-    'holds the same shadow at every unit scale (%s)',
+    'holds the same shadow at every unit scale, since every length scales together (%s)',
     async (_label, cascades) => {
       const counts: number[] = [];
       for (const k of SCALES) counts.push(await shadowPixels(k, cascades));
 
-      // Every length in the scene scales together, so the render is the same picture at any k.
       expect(Math.min(...counts)).toBeGreaterThan(0);
       for (const count of counts) {
         expect(count, `scales: ${SCALES.join(', ')} -> ${counts.join(', ')}`).toBe(counts[0]);

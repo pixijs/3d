@@ -1,4 +1,4 @@
-import { getApp } from '@test-utils';
+import { expectCleanRender, getApp } from '@test-utils';
 import { CanvasSource, Texture } from 'pixi.js';
 import type { Application, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
@@ -92,23 +92,6 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-/** Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL). */
-async function renderCatchingValidationErrors(app: Application<Gpu3DRenderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? app.renderer.gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  device.pushErrorScope('validation');
-  app.render();
-  return device.popErrorScope();
-}
-
-// The material, geometry and morph stores are renderer-scoped; the objects
-// they row are user-owned and outlive them. Nothing unwires a survivor when
-// its renderer dies: it carries the dead store until the next renderer's store
-// sees it, and re-mints there.
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`store re-adoption (${preference})`, () => {
     const appOptions = { preference, width: SIZE, height: SIZE, backgroundColor: 0x101018 };
@@ -127,14 +110,11 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       expect(morphed._morphStore).toBe(pipeA._morphStoreBuffer);
       expect(morphedMesh.morph!._store).toBe(pipeA._morphStoreBuffer);
 
-      // The View and everything in it survive, still wired to the dead stores.
       appA.destroy();
 
-      // A late signal through the stale back-reference is inert.
       material.update();
-      expect(material._storeQueued).toBe(false);
-      // Handing the geometry's own buffers back between renderers is fine: B re-uploads them.
-      expect(() => geometry.unload()).not.toThrow();
+      expect(material._storeQueued, 'a late update through the dead store does nothing').toBe(false);
+      expect(() => geometry.unload(), 'unloading between renderers is fine; B re-uploads the buffers').not.toThrow();
 
       const appB = await getApp<Gpu3DRenderer>({ id: `store-readoption-b-${preference}`, appOptions });
       try {
@@ -144,17 +124,17 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         viewB.camera.position.set(0, 4, 9);
         viewB.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-        const error = await renderCatchingValidationErrors(appB);
-        expect(error).toBe(null);
+        await expectCleanRender(appB);
 
         const pipeB = appB.renderer.renderPipes.view3d;
         expect(material._uploadQueue).toBe(pipeB.materialStoreBuffer);
         expect(material._materialIndex).toBeGreaterThanOrEqual(0);
         expect(geometry._geometryDataStore).toBe(pipeB.geometryDataStoreBuffer);
         expect(geometry._geometryDataIndex).toBeGreaterThanOrEqual(0);
-        // The raw targets went at the first pack, so the morphed survivor reads
-        // as unpacked (it draws its base pose, which is what weight 0 drew before).
-        expect(morphed._morphDeltaBase).toBe(-1);
+        expect(
+          morphed._morphDeltaBase,
+          'its raw targets went at the first pack, so it draws its base pose, as weight 0 did',
+        ).toBe(-1);
         expect(morphed._morphStore).toBeNull();
         expect(morphedMesh.morph!._store).toBe(pipeB._morphStoreBuffer);
         expect(morphedMesh.morph!._slot).toBeGreaterThanOrEqual(0);

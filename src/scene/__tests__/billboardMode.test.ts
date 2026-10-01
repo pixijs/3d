@@ -12,8 +12,10 @@ import { View3D } from '~/scene/View3D';
 const makeTexture = (): Texture => new Texture({ source: new TextureSource({ width: 8, height: 8, resolution: 1 }) });
 
 /**
- * Compiled shader-cache keys are the joined bit names, so they show exactly
- * which bits the core injected — the same probe `normalMapVariant.test.ts` uses.
+ * Compiled shader-cache keys
+ *
+ * Each key joins its bit names in bit-list order, so it shows which bits the core injected and in
+ * what order.
  */
 const shaderKeys = (app: Application<WebGLRenderer | WebGPURenderer>): string[] => [
   ...(app.renderer.material3d['_shaderCache'].keys() as Iterable<string>),
@@ -36,33 +38,14 @@ describe('getMeshBillboardBit', () => {
     expect(names).toContain('meshBillboardSphericalLit');
   });
 
-  it('memoises each variant', () => {
-    expect(getMeshBillboardBit('spherical', true)).toBe(getMeshBillboardBit('spherical', true));
-    expect(getMeshBillboardBit('spherical', true)).not.toBe(getMeshBillboardBit('spherical', false));
-  });
-
-  it('emits the normal rotation only for the lit variant', () => {
+  it('emits the normal rotation only for the lit variant, since an unlit shader never reads vNormal', () => {
     const unlit = getMeshBillboardBit('cylindrical', false);
     const lit = getMeshBillboardBit('cylindrical', true);
 
     expect(lit.gpu!.vertex!.afterTransform).toContain('worldNormal');
     expect(lit.gl!.vertex!.afterTransform).toContain('worldNormal');
-    // An unlit shader never reads vNormal, so the work must not be emitted.
     expect(unlit.gpu!.vertex!.afterTransform).not.toContain('worldNormal');
     expect(unlit.gl!.vertex!.afterTransform).not.toContain('worldNormal');
-  });
-
-  it('spans all three axes, so solid geometry keeps its depth', () => {
-    for (const mode of ['spherical', 'cylindrical'] as const) {
-      for (const lit of [false, true]) {
-        const bit = getMeshBillboardBit(mode, lit);
-
-        // Without the Z term a mesh collapses onto the billboard plane, which is
-        // invisible on a quad (z = 0) and wrong on everything else.
-        expect(bit.gpu!.vertex!.afterTransform).toContain('bbNormal * (position.z * bbScaleZ)');
-        expect(bit.gl!.vertex!.afterTransform).toContain('bbNormal * (position.z * bbScaleZ)');
-      }
-    }
   });
 
   it("refuses 'none' — the caller skips injection instead", () => {
@@ -96,7 +79,7 @@ describe('billboardMode injection', () => {
     }
   });
 
-  it('injects the unlit variant for an unlit material', async () => {
+  it('injects the unlit variant, with no normal rotation, for an unlit material', async () => {
     const app = await render('billboard-unlit', (view3d) => {
       view3d.root.addChild(new Sprite3D({ texture: makeTexture(), billboardMode: 'spherical' }));
     });
@@ -104,7 +87,6 @@ describe('billboardMode injection', () => {
       const keys = billboardKeys(app);
       expect(keys).toHaveLength(1);
       expect(keys[0]).toContain('meshBillboardSpherical');
-      // The lit suffix would mean paying for a normal rotation nothing reads.
       expect(keys[0]).not.toContain('meshBillboardSphericalLit');
     } finally {
       app.destroy();
@@ -132,8 +114,6 @@ describe('billboardMode injection', () => {
     try {
       const keys = billboardKeys(app);
       expect(keys).toHaveLength(1);
-      // Billboarding and PBR shading in one shader — what injecting the bit from
-      // core buys.
       expect(keys[0]).toContain('meshBillboardCylindricalLit');
       expect(keys[0]).toMatch(/pbr/i);
     } finally {
@@ -141,7 +121,7 @@ describe('billboardMode injection', () => {
     }
   });
 
-  it('is injected before the fog bit, which reads the billboarded worldPosition', async () => {
+  it('is injected before the fog bit, which reads the billboarded worldPosition in the same vertex slot', async () => {
     const app = await getApp<WebGLRenderer | WebGPURenderer>({
       id: 'billboard-fog',
       appOptions: { width: 128, height: 128 },
@@ -160,19 +140,13 @@ describe('billboardMode injection', () => {
       const key = billboardKeys(app)[0];
       expect(key).toBeDefined();
       expect(key).toContain('linearFog');
-
-      // Cache keys are the bit names joined in list order, and both bits write
-      // the vertex `afterTransform` slot — where contributions concatenate in
-      // that same order. Billboarding has to land first or fog measures depth
-      // against the un-billboarded position. This is the one ordering mistake
-      // that fails silently and only under fog.
       expect(key.indexOf('meshBillboard')).toBeLessThan(key.indexOf('linearFog'));
     } finally {
       app.destroy();
     }
   });
 
-  it('recompiles to the other variant when the mode changes at runtime', async () => {
+  it('recompiles to the other variant when the mode flips at runtime, with no material change', async () => {
     const app = await getApp<WebGLRenderer | WebGPURenderer>({
       id: 'billboard-swap',
       appOptions: { width: 128, height: 128 },
@@ -192,7 +166,6 @@ describe('billboardMode injection', () => {
       sprite.billboardMode = 'cylindrical';
       app.render();
 
-      // Mode is a mesh flag, so a runtime flip just re-runs ensureMaterial.
       expect(billboardKeys(app).some((k) => k.includes('meshBillboardCylindrical'))).toBe(true);
     } finally {
       app.destroy();

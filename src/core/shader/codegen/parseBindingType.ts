@@ -1,18 +1,7 @@
-/**
- * Shared parsing helpers for binding type strings used by shader bit codegen
- *
- * Keep these in codegen (not ShaderBit authoring types) so the public bit API stays declarative
- * and the parsing stays an internal implementation detail.
- */
-
 import type { BindingSpec, BindingVisibility } from '../ShaderBit';
 
 /**
- * Normalises a {@link BindingSpec} to its WGSL type string
- *
- * A binding may be authored as the bare type (`'storage<Renderable>'`) or as `{ type, visibility }`;
- * every codegen consumer reads the type through here so the object form is transparent to
- * WGSL/GLSL emission.
+ * Returns a {@link BindingSpec}'s WGSL type, whether it was written bare or as `{ type, visibility }`
  * @param spec - The binding spec to normalise
  * @returns The WGSL type string
  * @internal
@@ -22,10 +11,9 @@ export function bindingType(spec: BindingSpec): string {
 }
 
 /**
- * Returns the stage visibility a binding was tagged with, defaulting to `'both'` for bare-string
- * bindings
+ * Returns the stages a binding is visible to: its `visibility`, or `'both'`
  *
- * Only the WebGPU pipeline-layout builder consults this.
+ * Only the WebGPU pipeline layout reads it.
  * @param spec - The binding spec to read
  * @returns The declared visibility, or `'both'`
  * @internal
@@ -35,12 +23,16 @@ export function bindingVisibility(spec: BindingSpec): BindingVisibility {
 }
 
 /**
- * WGSL resource types that require individual `var` declarations (as opposed to uniforms which
- * are grouped into structs)
+ * The WGSL texture and sampler types, each of which gets a binding of its own rather than a field
+ * in the group's uniform struct
+ *
+ * It lists every type of `ResourceType` in `ShaderBit.ts`, and the two must stay in step.
  * @internal
  */
 export const RESOURCE_TYPES = new Set([
   'texture_2d<f32>',
+  'texture_2d<u32>',
+  'texture_2d<i32>',
   'texture_2d_array<f32>',
   'texture_3d<f32>',
   'texture_cube<f32>',
@@ -54,14 +46,15 @@ export const RESOURCE_TYPES = new Set([
 ]);
 
 /**
- * Returns true if `type` is a WGSL storage buffer binding type (`storage<StructName>` syntax)
+ * Whether `type` is a storage buffer type, `storage<StructName>`
+ *
+ * It matches a malformed one such as `storage<>` too, so the caller can warn about it;
+ * `parseStorageType` returns `null` for those.
  * @param type - The binding type string to test
  * @returns Whether the type is a storage buffer binding
  * @internal
  */
 export function isStorageType(type: string): boolean {
-  // Treat any `storage<...>` as a storage type so callers can emit a warning
-  // when the inner type is malformed (e.g. `storage<>`).
   return /^storage<[^>]*>$/.test(type);
 }
 

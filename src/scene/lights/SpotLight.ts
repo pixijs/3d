@@ -4,53 +4,58 @@ import { Light } from './Light';
 import type { LightOptions } from './Light';
 
 /**
- * Constructor options for {@link SpotLight}
- *
- * Adds cone-shape fields ({@link SpotLightOptions.range | range},
- * {@link SpotLightOptions.coneAngle | coneAngle},
- * {@link SpotLightOptions.penumbra | penumbra}) on top of {@link LightOptions}.
+ * Constructor options for {@link SpotLight}: the {@link LightOptions} plus the cone's
+ * {@link SpotLightOptions.range | range}, {@link SpotLightOptions.coneAngle | coneAngle} and
+ * {@link SpotLightOptions.penumbra | penumbra}
+ * @example
+ * ```ts
+ * const options: SpotLightOptions = { intensity: 10, range: 25, coneAngle: 30, penumbra: 0.25 };
+ * const flashlight = new SpotLight(options);
+ * ```
  * @category scene
  * @standard
  */
 export interface SpotLightOptions extends LightOptions {
   /**
-   * Maximum distance (in world units) over which this light contributes
-   *
-   * `0` means infinite range.
+   * Distance the light reaches, in world units; see {@link SpotLight.range}
    * @default 0
+   * @example
+   * ```ts
+   * const streetLamp = new SpotLight({ intensity: 20, range: 8 });
+   * ```
    */
   range?: number;
   /**
-   * Half-angle of the cone in degrees: the angle between the cone's central axis and its edge
-   *
-   * The default is a 60° half-angle, so a 120° cone.
+   * Angle between the cone's axis and its edge, in degrees; see {@link SpotLight.coneAngle}
    * @default 60
+   * @example
+   * ```ts
+   * const narrowBeam = new SpotLight({ coneAngle: 15 });
+   * ```
    */
   coneAngle?: number;
   /**
-   * Soft edge of the cone, expressed as a fraction of {@link SpotLightOptions.coneAngle | coneAngle}
-   *
-   * `0` is a hard-edged cone; `1` fades from the center to the edge.
+   * How soft the cone's edge is, from `0` to `1`; see {@link SpotLight.penumbra}
    * @default 0
+   * @example
+   * ```ts
+   * const softSpot = new SpotLight({ coneAngle: 30, penumbra: 0.5 });
+   * ```
    */
   penumbra?: number;
 }
 
 /**
- * Directional cone emitter radiating from a world-space position outward along
- * the cone's central axis
+ * Light that shines in a cone from a point, like a torch or a stage light
  *
- * The cone has a configurable half-angle and soft edge. The light's central
- * axis is its local **-Z** transformed by its world matrix; aim it with
- * {@link Container3D.lookAt | lookAt}.
+ * The cone points along the light's local **-Z** axis; aim it with
+ * {@link Container3D.lookAt | lookAt}. Light stops at the cone's edge, softened by the
+ * {@link SpotLight.penumbra | penumbra}, and dims with the square of the distance, fading to
+ * nothing at the {@link SpotLight.range | range} when it has one.
  *
- * Intensity falls off both with cone angle (hard cutoff at the edge,
- * smoothly faded over the {@link SpotLight.penumbra | penumbra} band) and
- * with distance (inverse-square, windowed to zero at {@link SpotLight.range}
- * when range is non-zero).
- *
- * Spot lights support shadow casting via a single perspective shadow
- * frustum framed to the cone.
+ * Its shadow is one perspective map that covers the cone from 1 world unit out to the range,
+ * or out to 1000 with no range. Casters closer than 1 unit to the light cast no shadow. The
+ * shadow needs a {@link SpotLight.coneAngle | coneAngle} under 90 degrees.
  * @example
  * ```ts
  * import { SpotLight } from '@pixi/3d';
@@ -76,9 +81,12 @@ export class SpotLight extends Light {
   /**
    * Default {@link SpotLightOptions} merged under every constructor call
    *
-   * `new SpotLight(opts)` resolves as
-   * `{ ...SpotLight.defaultOptions, ...definedProps(opts) }`. Mutate to
-   * change the defaults process-wide.
+   * `new SpotLight(opts)` resolves as `{ ...SpotLight.defaultOptions, ...opts }`, ignoring
+   * options set to `undefined`. Mutate to change the defaults process-wide.
+   * @example
+   * ```ts
+   * SpotLight.defaultOptions.penumbra = 0.2;
+   * ```
    */
   public static defaultOptions: SpotLightOptions = {
     color: 0xffffff,
@@ -89,39 +97,48 @@ export class SpotLight extends Light {
     penumbra: 0,
   };
 
-  /** Discriminator for the spot light kind */
+  /** Always `'spot'` */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
   public readonly type = 'spot';
 
   /**
-   * Maximum distance (in world units) over which this light contributes
+   * Distance the light reaches, in world units, or `0` for no limit
    *
-   * `0` disables the distance cutoff so only inverse-square falloff applies.
+   * Works as {@link PointLight.range} does, and also sets how far the shadow reaches.
    * @default 0
-   */
-  public range: number;
-
-  /**
-   * Half-angle of the cone in degrees: the angle between the cone's central axis and its edge
    * @example
    * ```ts
-   * spot.coneAngle = 30; // 30° half-angle, a 60° cone
+   * flashlight.range = 25;
+   * ```
+   */
+  public range = 0;
+
+  /**
+   * Angle between the cone's axis and its edge, in degrees, so the cone is twice as wide
+   * @example
+   * ```ts
+   * spot.coneAngle = 30; // a 60° cone
    * ```
    * @default 60
    */
-  public coneAngle: number;
+  public coneAngle = 0;
 
   /**
-   * Soft edge of the cone, expressed as a fraction of {@link SpotLight.coneAngle | coneAngle}
+   * How soft the cone's edge is, as a fraction of {@link SpotLight.coneAngle | coneAngle}
    *
-   * `0` is a hard-edged cone; `1` fades from the center to the edge.
+   * The light is at full strength out to `coneAngle * (1 - penumbra)` and fades to nothing at
+   * `coneAngle`. `0` gives a hard edge; `1` fades all the way from the axis.
    * @default 0
+   * @example
+   * ```ts
+   * flashlight.penumbra = 0.25;
+   * ```
    */
-  public penumbra: number;
+  public penumbra = 0;
 
   /**
-   * Creates a new `SpotLight`. Add it to a {@link View3D} by parenting it
-   * under {@link View3D.root | view.root}.
-   * @param options - construction options; see {@link SpotLightOptions}.
+   * Creates a new `SpotLight`; add it under {@link View3D.root | view.root} to light the view
+   * @param options - Construction options; see {@link SpotLightOptions}.
    */
   constructor(options: SpotLightOptions = {}) {
     const { range, coneAngle, penumbra, ...rest } = { ...SpotLight.defaultOptions, ...definedProps(options) };

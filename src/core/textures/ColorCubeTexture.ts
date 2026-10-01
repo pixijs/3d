@@ -1,30 +1,28 @@
 import { BufferImageSource, CubeTexture, Texture } from 'pixi.js';
 
 /**
- * Creates {@link CubeTexture}s filled with a solid color
+ * Makes {@link CubeTexture}s of one solid colour, for a plain background or a flat environment
  *
- * Useful for simple solid-color skyboxes or environment maps.
+ * Each face is a single texel, so the cube costs almost no memory.
  * @example
  * ```ts
- * // Create a blue cube texture
- * const blueSky = ColorCubeTexture.from(0x87CEEB);
- *
- * // Create from RGB values
- * const redSky = ColorCubeTexture.fromRGB(255, 0, 0);
- *
- * // Use as a view's background skybox
- * view.background = blueSky;
+ * view3d.background = ColorCubeTexture.from(0x87ceeb);
+ * view3d.environment = ColorCubeTexture.fromRGB(40, 44, 60);
  * ```
  * @category rendering
  * @standard
  */
 export class ColorCubeTexture {
   /**
-   * Creates a CubeTexture from a hex color value
-   * @param color - Hex color value (e.g., 0xFF0000 for red, 0x87CEEB for sky blue)
-   * @param alpha - Alpha value from 0-255 (default: 255)
-   * @param label - Optional label for the texture
-   * @returns A CubeTexture with all faces set to the specified color
+   * Creates a cube texture of one colour, given as a hex number
+   * @example
+   * ```ts
+   * view3d.background = ColorCubeTexture.from(0x202830, 255, 'night-sky');
+   * ```
+   * @param color - Colour as `0xRRGGBB`
+   * @param alpha - Alpha, from 0 to 255
+   * @param label - Label for the cube; each face adds its side, as in `night-sky-left`
+   * @returns A cube texture with every face set to the colour
    */
   public static from(color: number, alpha = 255, label?: string): CubeTexture {
     const r = (color >> 16) & 0xff;
@@ -35,13 +33,17 @@ export class ColorCubeTexture {
   }
 
   /**
-   * Creates a CubeTexture from RGB(A) values
-   * @param r - Red value (0-255)
-   * @param g - Green value (0-255)
-   * @param b - Blue value (0-255)
-   * @param a - Alpha value (0-255, default: 255)
-   * @param label - Optional label for the texture
-   * @returns A CubeTexture with all faces set to the specified color
+   * Creates a cube texture of one colour, given as channels from 0 to 255
+   * @example
+   * ```ts
+   * view3d.environment = ColorCubeTexture.fromRGB(255, 240, 220);
+   * ```
+   * @param r - Red, from 0 to 255
+   * @param g - Green, from 0 to 255
+   * @param b - Blue, from 0 to 255
+   * @param a - Alpha, from 0 to 255
+   * @param label - Label for the cube; each face adds its side, as in `night-sky-left`
+   * @returns A cube texture with every face set to the colour
    */
   public static fromRGB(r: number, g: number, b: number, a = 255, label?: string): CubeTexture {
     const createFaceTexture = (faceName: string): Texture => {

@@ -7,18 +7,21 @@ const VERSION_LINE = '#version 300 es';
 /**
  * Default precision declarations for GLSL ES 3.00 shaders compiled by `compileGlslSource`
  *
- * Fragment shaders have no default float precision, default ints to `mediump`,
- * and predeclare `sampler2D` and `samplerCube` as `lowp`. Other sampler types
- * have no default precision. Explicit `highp` defaults keep integer bit maths
- * and floating-point data texture reads within the ranges the engine requires.
- * GLSL ES 3.00 guarantees `highp` support for these types in both stages.
+ * GLSL ES 3.00 declares `sampler2D` and `samplerCube` as `lowp` in both stages, and fragment
+ * `int` as `mediump`. The fragment stage has no default float precision, and the other sampler
+ * types have no default at all, so declaring one without a precision fails to compile. Desktop
+ * and Apple GPUs run everything at `highp` anyway, but Mali honours the defaults: data-texture
+ * fetches would come back at half-float precision and `uint` bit maths would break. GLSL ES 3.00
+ * requires `highp` support in both stages, so these lines are safe everywhere.
  *
- * The prelude lists the GLSL ES 3.00 sampler types used by the engine.
- * `samplerCubeArray*` arrived later and would be a compile error here.
+ * Lists every sampler type `WGSL_TO_GLSL` in `glslBindingsPlugin` maps to, except
+ * `samplerCubeArrayShadow`, which GLSL ES 3.00 doesn't have.
  */
 const GLSL_PRECISION_PRELUDE = `precision highp float;
 precision highp int;
 precision highp sampler2D;
+precision highp usampler2D;
+precision highp isampler2D;
 precision highp sampler3D;
 precision highp samplerCube;
 precision highp sampler2DArray;

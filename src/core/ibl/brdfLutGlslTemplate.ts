@@ -1,10 +1,10 @@
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
 
 /**
- * GLSL template for the BRDF-LUT generation pass (see `generateBrdfLut`)
+ * GLSL template for the BRDF lookup table pass; `generateBrdfLut` describes the integral
  *
- * Runs the Karis split-sum integration: a full-screen quad where UV x = NdotV
- * and UV y = roughness, Monte Carlo integrating the GGX BRDF per texel.
+ * Unlike the WGSL template, the vertex stage needs no y flip: WebGL puts texture row 0 at
+ * clip y = -1, where UV v = 0 reads.
  * @internal
  */
 export const brdfLutGlslTemplate: ShaderBitTemplate = {
@@ -20,14 +20,12 @@ export const brdfLutGlslTemplate: ShaderBitTemplate = {
     fragment: /* glsl */ `#version 300 es
       {{header}}
 
-      // Geometry function (Smith GGX) for a single direction
       float geometrySchlickGGX(float NdotV, float roughness) {
           float a = roughness;
           float k = (a * a) / 2.0;
           return NdotV / (NdotV * (1.0 - k) + k);
       }
 
-      // Combined geometry function for view and light directions
       float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
           float NdotV = max(dot(N, V), 0.0);
           float NdotL = max(dot(N, L), 0.0);

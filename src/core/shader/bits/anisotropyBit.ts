@@ -1,88 +1,13 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * KHR_materials_anisotropy — stretches the specular response along a surface direction
- *
- * The look of brushed metal, vinyl records, and (with a per-texel direction
- * map) woven carbon fibre. Replaces the base isotropic GGX specular with the
- * anisotropic GGX of Burley / Heitz, for both direct lighting and image-based
- * lighting.
- *
- * ## Two construction-selected variants
- *
- * Built via `createAnisotropyBit`, picked at material-construction time
- * (like `createClearcoatBit`):
- *
- *  - **`anisotropy`** (no texture): the direction is a uniform `(1, 0)` in
- *    tangent space, strength comes from the factor alone. No texture fetch.
- *  - **`anisotropy:texture`**: samples the anisotropy texture — RG is the
- *    per-texel direction (a `[-1,1]` vector encoded to `[0,1]`), B is the
- *    per-texel strength. This is what gives carbon fibre its woven sheen.
- *
- * Both carry the identical `anisotropyParams` struct binding, so the packed
- * Material layout is the same regardless of variant.
- *
- * ## Architecture: a "lobe" that *replaces* the base specular
- *
- * Unlike clearcoat/sheen (which add a lobe on top), anisotropy modifies the
- * substrate's own specular lobe. It splices into `pbrLightingBit`'s single
- * light loop via the lobe convention (see {@link createLightingBit}) and reads
- * the base `specular` local that `pbrLightingBit.perLight` already computed,
- * adding the **delta** `(anisotropicSpecular - specular)`. The net specular is
- * the anisotropic term; diffuse is untouched and `pbrLightingBit` needs no
- * change. There is still **one** light loop and **one** shadow sample.
- *
- *  - `material`         — build the tangent frame and overwrite the shared
- *                         `specularNormal` slot with the bent normal (runs in
- *                         the material slot, before lighting, so `iblBit`
- *                         picks it up).
- *  - `lobePreLighting`  — directional roughnesses + hoisted T·V / B·V.
- *  - `lobePerLight`     — anisotropic GGX D + V, replace the base specular.
- *
- * ## Tangent frame
- *
- * The frame is derived from screen-space UV derivatives (`calculateAnisotropyTBN`),
- * not vertex tangents: it must work on meshes that ship no `TANGENT` attribute
- * (e.g. the Khronos CarbonFibre model). The helper is named distinctly so a
- * material that also normal-maps doesn't redeclare `normalMappingBit`'s
- * `calculateTBN`. The WGSL body negates `dpdy()` for the window-Y convention,
- * exactly as documented on `normalMappingBit`.
- *
- * ## Image-based lighting
- *
- * The specular env reflection is bent toward the low-roughness anisotropy
- * direction — the "bent normal" of the glTF reference renderer. Rather than a
- * bespoke IBL variant, this bit overrides the shared `specularNormal` surface
- * slot (`pbrMaterialBit` defaults it to `normal`); `iblBit` always
- * reflects off `specularNormal`. With no anisotropy bit present, that slot is a
- * dead copy of `normal` the compiler removes, so the IBL shader is unchanged.
- * Diffuse irradiance and the BRDF `N·V` still use `normal`.
- *
- * ## Per-material data
- *
- * Packed into one `vec4<f32>` (`anisotropyParams`):
- *
- * | channel | meaning                                                |
- * |---------|--------------------------------------------------------|
- * | `.x`    | anisotropyStrength — multiplies the texture's B channel |
- * | `.y`    | anisotropyRotation — radians, rotates the direction    |
- * | `.zw`   | reserved                                               |
- *
- * Spec: https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_anisotropy
- *
- * References:
- *   - Anisotropic GGX distribution + height-correlated visibility: the widely
- *     documented optimised form (Heitz 2014, "Understanding the Masking-Shadowing
- *     Function"; Burley 2012, Disney BRDF).
- *   - Bent-normal anisotropic IBL: the glTF Sample Renderer's reference approach.
- *   - Derivative cotangent TBN: tangent-free normal mapping (Schüler) — the same
- *     technique already used by `normalMappingBit`.
+ * WGSL `calculateAnisotropyTBN`: the derivative tangent frame of `normalMappingBit`, for the
+ * variants without vertex tangents
  */
-
 const ANISOTROPY_TBN_GPU = /*wgsl*/ `
 fn calculateAnisotropyTBN(surfaceNormal: vec3<f32>, position: vec3<f32>, texCoord: vec2<f32>) -> mat3x3<f32> {
   let dp1 = dpdx(position);
-  let dp2 = -dpdy(position); // WGSL window-Y is flipped vs GLSL; see normalMappingBit
+  let dp2 = -dpdy(position);
   let duv1 = dpdx(texCoord);
   let duv2 = -dpdy(texCoord);
 
@@ -96,6 +21,7 @@ fn calculateAnisotropyTBN(surfaceNormal: vec3<f32>, position: vec3<f32>, texCoor
 }
 `;
 
+/** The GLSL `calculateAnisotropyTBN`, guarded so that two anisotropy bits in one shader declare it once */
 const ANISOTROPY_TBN_GL = /*glsl*/ `
 #ifndef PIXI3D_ANISOTROPY_TBN_DEFINED
 #define PIXI3D_ANISOTROPY_TBN_DEFINED
@@ -117,14 +43,49 @@ mat3 calculateAnisotropyTBN(highp vec3 surfaceNormal, highp vec3 position, highp
 `;
 
 /**
- * Build an anisotropy bit
+ * Builds a `KHR_materials_anisotropy` bit: a specular highlight stretched along a direction on the
+ * surface, the look of brushed metal, vinyl records and woven carbon fibre
  *
- * The tangent variant emits its own `vAnisoTangent`/`vAnisoBitangent` varyings
- * (distinct from `tangentNormalMappingBit`'s `vTangent`/`vBitangent`) so
- * the two never collide; the shared `aTangent` attribute is deduplicated by the
- * codegen. Both tangent and derivative variants carry the identical
- * `anisotropyParams` binding and texture slot, so swapping between them per-mesh
- * in MaterialSystemGpu keeps the packed Material layout and sample indices stable.
+ * There are four variants:
+ * - Without a texture the direction is `(1, 0)` in tangent space and the strength comes from the
+ *   factor alone. With one, the texture's red and green hold the direction, encoded from [-1, 1],
+ *   and its blue scales the strength. `Material3D` picks this at construction.
+ * - Without `aTangent` the tangent frame comes from screen-space UV derivatives, so it works on
+ *   meshes that ship no tangents. With it, the frame comes from the mesh's tangents and is smooth.
+ *   The renderer picks this per mesh with `anisotropyTangentVariant`. The swap keeps the
+ *   `anisotropyParams` field and the textures, so the material's layout doesn't change.
+ *
+ * `anisotropyParams.x` is the strength and `.y` the rotation in radians, counter-clockwise from the
+ * tangent; `.zw` are unused. The frame is built against the geometric normal, flipped on back
+ * faces, rather than the normal-mapped one, against which the direction would wobble from texel to
+ * texel. Shading still uses the mapped `normal`. The bitangent is the geometric normal crossed with
+ * the tangent, as in the glTF sample renderer.
+ *
+ * The clearcoat and sheen lobes add a layer, but this one replaces the base layer's specular. In
+ * `pbrLightingBit`'s loop it adds `anisotropicSpecular - specular`, so one loop and one shadow
+ * sample still serve both, and diffuse is untouched:
+ * - `lobePreLighting` works out the two roughnesses, α_b = α and α_t = mix(α, 1, strength²), from
+ *   `pbrLightingBit`'s α = roughness², and hoists T·V and B·V.
+ * - `lobePerLight` evaluates the anisotropic GGX distribution and height-correlated visibility the
+ *   spec gives, after Burley 2012 and Heitz 2014.
+ *
+ * For the environment it bends `specularNormal`, which `pbrMaterialBit` sets to `normal` and
+ * `iblBit` reflects off, toward the grain, as the glTF sample renderer does:
+ * `normalize(mix(bent, normal, (1 - strength * (1 - roughness))⁴))`, where `bent` is
+ * `cross(cross(B, V), B)` normalized. Where `B` lines up with the view that cross product vanishes,
+ * and `normal` stands in rather than normalizing zero. Diffuse and the BRDF's N·V still use
+ * `normal`. The bend runs in the `material` slot, before `iblBit` reads `specularNormal` in the
+ * `lighting` slot.
+ *
+ * The tangent variants turn the shared `tangent` local into world space after the skinning bits
+ * have moved it, so the grain follows the skeleton, and take the handedness from the raw attribute.
+ * They write their own `vAnisoTangent` and `vAnisoBitangent` varyings, apart from
+ * `tangentNormalMappingBit`'s, and the `aTangent` they share is declared once.
+ *
+ * WGSL's `calculateAnisotropyTBN` negates `dpdy` for the reason `normalMappingBit` gives. It is
+ * named apart from `calculateTBN` so a normal-mapped material doesn't declare that twice.
+ *
+ * Spec: https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_anisotropy
  * @param withTexture - Samples the per-texel direction/strength map instead of the cheaper factor-only default
  * @param withVertexTangent - Builds the tangent frame from the mesh's `TANGENT` attribute (smooth, matches the
  *   glTF reference) instead of the screen-space UV-derivative fallback for meshes that ship no tangents
@@ -132,7 +93,6 @@ mat3 calculateAnisotropyTBN(highp vec3 surfaceNormal, highp vec3 position, highp
 function createAnisotropyBit(withTexture: boolean, withVertexTangent: boolean): ShaderBit {
   const name = `anisotropy${withTexture ? ':texture' : ''}${withVertexTangent ? ':tangent' : ''}`;
 
-  // Direction (RG, [-1,1]) + strength (B) come from the texture or are constant.
   const gpuSource = withTexture
     ? /*wgsl*/ `
   let anisoSample = sampleAnisotropy(input.vUV);
@@ -155,13 +115,6 @@ function createAnisotropyBit(withTexture: boolean, withVertexTangent: boolean): 
   float anisoTexStrength = 1.0;
 `;
 
-  // Tangent frame: vertex tangents (smooth) when present, else a UV-derivative
-  // TBN (faceted, but works on tangent-less meshes).
-  // The anisotropy frame uses the *geometric* normal, not the normal-mapped one:
-  // re-deriving the tangent against a bumpy normal makes the direction wobble
-  // per-texel (e.g. concentric rings on a grooved surface). Shading still uses
-  // the perturbed `normal` (nDotH/nDotL and the bent specularNormal); only the
-  // direction frame is geometric. Matches the glTF reference (anisotropicB = cross(ng, T)).
   const gpuFrame = withVertexTangent
     ? /*wgsl*/ `
   let anisoTw = normalize(input.vAnisoTangent);
@@ -196,13 +149,9 @@ function createAnisotropyBit(withTexture: boolean, withVertexTangent: boolean): 
     },
 
     gpu: {
-      // The UV-derivative TBN helper is only needed by the derivative variant.
       header: withVertexTangent ? undefined : ANISOTROPY_TBN_GPU,
       fragment: {
-        // Runs in the material slot (after the normal is finalised) so the
-        // overwritten `specularNormal` is available to iblBit's lighting slot.
         material: /*wgsl*/ `
-  // KHR_materials_anisotropy — see anisotropyBit.ts.
 ${gpuSource}
   let anisoRot = material.anisotropyParams.y;
   let anisoC = cos(anisoRot);
@@ -213,15 +162,10 @@ ${gpuSource}
   );
   let anisoStrength = clamp(material.anisotropyParams.x * anisoTexStrength, 0.0, 1.0);
 
-  // Geometric normal (front-face corrected), kept smooth across normal-map bumps.
   let anisoGeoN = normalize(select(-input.vNormal, input.vNormal, input.frontFacing));
 ${gpuFrame}
   let anisoB = normalize(cross(anisoGeoN, anisoT));
 
-  // Bend the specular IBL reflection toward the anisotropy grain (glTF reference
-  // renderer): overwrite the shared specularNormal slot (default = normal). Falls
-  // back to the geometric normal where the cross collapses (anisotropy bitangent
-  // ~parallel to the view) to avoid normalize(0) = NaN.
   let anisoBentCross = cross(cross(anisoB, viewDir), anisoB);
   let anisoBentLenSq = dot(anisoBentCross, anisoBentCross);
   var anisoBentN = normal;
@@ -233,15 +177,12 @@ ${gpuFrame}
   specularNormal = normalize(mix(anisoBentN, normal, anisoBend4));
 `,
         lobePreLighting: /*wgsl*/ `
-  // Directional roughnesses; a (= roughness^2) comes from pbrLightingBit.
   let anisoAlphaB = a;
   let anisoAlphaT = mix(a, 1.0, anisoStrength * anisoStrength);
   let anisoTdotV = dot(anisoT, viewDir);
   let anisoBdotV = dot(anisoB, viewDir);
 `,
         lobePerLight: /*wgsl*/ `
-    // Anisotropic GGX (Burley D, Heitz height-correlated V); replaces the base
-    // isotropic specular by adding the delta over pbrLightingBit's specular.
     {
       let anisoTdotL = dot(anisoT, lightDir);
       let anisoBdotL = dot(anisoB, lightDir);
@@ -250,7 +191,7 @@ ${gpuFrame}
 
       let anisoA2 = anisoAlphaT * anisoAlphaB;
       let anisoFv = vec3<f32>(anisoAlphaB * anisoTdotH, anisoAlphaT * anisoBdotH, anisoA2 * nDotH);
-      let anisoW2 = anisoA2 / max(dot(anisoFv, anisoFv), 1e-5);
+      let anisoW2 = anisoA2 / dot(anisoFv, anisoFv);
       let anisoD = anisoA2 * anisoW2 * anisoW2 * INV_PI;
 
       let anisoGGXV = nDotL * length(vec3<f32>(anisoAlphaT * anisoTdotV, anisoAlphaB * anisoBdotV, nDotV));
@@ -266,10 +207,8 @@ ${gpuFrame}
 
     gl: {
       fragment: {
-        // The UV-derivative TBN helper is only needed by the derivative variant.
         header: withVertexTangent ? undefined : ANISOTROPY_TBN_GL,
         material: /*glsl*/ `
-  // KHR_materials_anisotropy — see anisotropyBit.ts.
 ${glSource}
   float anisoRot = material.anisotropyParams.y;
   float anisoC = cos(anisoRot);
@@ -280,14 +219,10 @@ ${glSource}
   );
   float anisoStrength = clamp(material.anisotropyParams.x * anisoTexStrength, 0.0, 1.0);
 
-  // Geometric normal (front-face corrected), kept smooth across normal-map bumps.
   vec3 anisoGeoN = normalize(gl_FrontFacing ? vNormal : -vNormal);
 ${glFrame}
   vec3 anisoB = normalize(cross(anisoGeoN, anisoT));
 
-  // Bend the specular IBL reflection toward the anisotropy grain — overwrite the
-  // shared specularNormal slot (default = normal). Falls back to the geometric
-  // normal where the cross collapses, to avoid normalize(0) = NaN.
   vec3 anisoBentCross = cross(cross(anisoB, viewDir), anisoB);
   float anisoBentLenSq = dot(anisoBentCross, anisoBentCross);
   vec3 anisoBentN = anisoBentLenSq > 1e-8 ? anisoBentCross * inversesqrt(anisoBentLenSq) : normal;
@@ -296,15 +231,12 @@ ${glFrame}
   specularNormal = normalize(mix(anisoBentN, normal, anisoBend4));
 `,
         lobePreLighting: /*glsl*/ `
-  // Directional roughnesses; a (= roughness^2) comes from pbrLightingBit.
   float anisoAlphaB = a;
   float anisoAlphaT = mix(a, 1.0, anisoStrength * anisoStrength);
   float anisoTdotV = dot(anisoT, viewDir);
   float anisoBdotV = dot(anisoB, viewDir);
 `,
         lobePerLight: /*glsl*/ `
-    // Anisotropic GGX (Burley D, Heitz height-correlated V); replaces the base
-    // isotropic specular by adding the delta over pbrLightingBit's specular.
     {
       float anisoTdotL = dot(anisoT, lightDir);
       float anisoBdotL = dot(anisoB, lightDir);
@@ -313,7 +245,7 @@ ${glFrame}
 
       float anisoA2 = anisoAlphaT * anisoAlphaB;
       vec3 anisoFv = vec3(anisoAlphaB * anisoTdotH, anisoAlphaT * anisoBdotH, anisoA2 * nDotH);
-      float anisoW2 = anisoA2 / max(dot(anisoFv, anisoFv), 1e-5);
+      float anisoW2 = anisoA2 / dot(anisoFv, anisoFv);
       float anisoD = anisoA2 * anisoW2 * anisoW2 * INV_PI;
 
       float anisoGGXV = nDotL * length(vec3(anisoAlphaT * anisoTdotV, anisoAlphaB * anisoBdotV, nDotV));
@@ -328,30 +260,20 @@ ${glFrame}
     },
   };
 
-  // The vertex-tangent variant reads the mesh tangent and emits a smooth
-  // world-space frame; the derivative variant adds nothing to the vertex stage.
   if (withVertexTangent) {
     bit.attributes = { aTangent: 'float32x4' };
     bit.interStage = { vAnisoTangent: 'vec3<f32>', vAnisoBitangent: 'vec3<f32>' };
     bit.gpu!.vertex = {
       input: /*wgsl*/ `  tangent = input.aTangent.xyz;`,
       end: /*wgsl*/ `
-  // World-space tangent frame for anisotropy. Skinning has already transformed the
-  // shared \`tangent\` local in stage 1, so the grain follows the skeleton. Handedness
-  // comes from the raw attribute, never the skin-transformed local, so the ±1 sign
-  // can't be perturbed by the bone matrix (and matches the GL path exactly).
   let anisoWorldT = normalize(modelMatrix3 * tangent);
   output.vAnisoTangent = anisoWorldT;
   output.vAnisoBitangent = cross(worldNormal, anisoWorldT) * input.aTangent.w;
 `,
     };
     bit.gl!.vertex = {
-      // Seed the shared \`tangent\` local so skinningBitGl transforms it in stage 1,
-      // exactly like the WGSL input slot — otherwise the grain freezes in bind pose
-      // on skinned meshes.
       input: /*glsl*/ `  tangent = aTangent.xyz;`,
       end: /*glsl*/ `
-  // World-space tangent frame for anisotropy (skinning already applied to tangent).
   vec3 anisoWorldT = normalize(modelMatrix3 * tangent);
   vAnisoTangent = anisoWorldT;
   vAnisoBitangent = cross(worldNormal, anisoWorldT) * aTangent.w;
@@ -363,36 +285,34 @@ ${glFrame}
 }
 
 /**
- * Anisotropy, UV-derivative tangent frame (no `TANGENT` attribute)
+ * Anisotropy from the factor alone, with the derivative tangent frame; see `createAnisotropyBit`
  * @internal
  */
 export const anisotropyBit: ShaderBit = createAnisotropyBit(false, false);
 
 /**
- * Anisotropy with a per-texel direction/strength texture, UV-derivative frame
+ * Anisotropy with a direction and strength texture, with the derivative tangent frame
  * @internal
  */
 export const anisotropyTextureBit: ShaderBit = createAnisotropyBit(true, false);
 
 /**
- * Anisotropy using the mesh's vertex `TANGENT` for a smooth frame
+ * Anisotropy from the factor alone, with the mesh's tangents for its frame
  * @internal
  */
 export const anisotropyTangentBit: ShaderBit = createAnisotropyBit(false, true);
 
 /**
- * Anisotropy with a direction texture, using the mesh's vertex `TANGENT`
+ * Anisotropy with a direction and strength texture, with the mesh's tangents for its frame
  * @internal
  */
 export const anisotropyTextureTangentBit: ShaderBit = createAnisotropyBit(true, true);
 
 /**
- * Map a UV-derivative anisotropy bit to its vertex-tangent variant
+ * Returns the vertex-tangent variant of an anisotropy bit, and any other bit unchanged
  *
- * Used by MaterialSystemGpu to pick the smooth frame per-mesh when a `TANGENT`
- * attribute is present (mirroring the normalMapping/tangentNormalMapping
- * selection). Any non-anisotropy bit is returned unchanged, so it is safe to
- * call on every descriptor bit.
+ * Both material systems call it on every descriptor bit of a mesh that has `aTangent`, as they
+ * pick `tangentNormalMappingBit` over `normalMappingBit`.
  * @param bit - The descriptor bit to map
  * @returns The vertex-tangent variant for anisotropy bits; `bit` unchanged otherwise
  * @internal

@@ -12,27 +12,29 @@ import { glslInterStagePlugin } from './glslInterStagePlugin';
 import { glslOverridesPlugin } from './glslOverridesPlugin';
 import { glslPrecisionPlugin } from './glslPrecisionPlugin';
 import { glslStageSlotsPlugin } from './glslStageSlotsPlugin';
-import { glslStorageAccessPlugin } from './glslStorageAccessPlugin';
 
 /**
  * Options controlling how GLSL uniforms, locations, and overrides are emitted
  * @internal
  */
 export interface CompileGlslSourceOptions {
-  /** Groups to compile as UBOs (WebGL2 uniform buffer objects); groups not in this set compile as flat uniforms */
+  /** Groups to declare as `std140` uniform blocks; any other group's fields become plain uniforms */
   uboGroups?: Set<string> | string[];
 
   /**
-   * Whether to include explicit layout(location) declarations for attributes and inter-stage variables
-   * @default true (WebGL2 style)
+   * Whether to declare `layout(location = n)` on attributes and inter-stage variables
+   *
+   * Every caller passes `false`. GLSL ES 3.00 only accepts locations on vertex inputs and
+   * fragment outputs, so `true` fails to compile once the shader has an inter-stage variable.
+   * @default true
    */
   useLocations?: boolean;
 
   /**
-   * Runtime override values, read by `glslOverridesPlugin` and baked into
-   * the GLSL header as `#define KEY VALUE`. Mirrors `descriptor.overrides`
-   * on the WGSL path but the substitution happens at compile time, since
-   * GLSL has no specialization-constant equivalent.
+   * Override values, baked into the header as `#define KEY VALUE` by `glslOverridesPlugin`
+   *
+   * GLSL ES 3.00 has no specialization constants, so where WebGPU applies overrides when it builds
+   * the pipeline, WebGL compiles one program per set of values.
    */
   overrides?: Record<string, number>;
 }
@@ -71,7 +73,7 @@ interface CompileGlslOptions extends CompileGlslSourceOptions {
   bits: ShaderBit[];
   /** Template defining bind groups and vertex/fragment GLSL sources */
   template: ShaderBitTemplate;
-  /** Optional plugins prepended before the defaults (e.g. batch texture plugin) */
+  /** Plugins that run before the defaults, such as `texturesPluginGl` */
   extraPlugins?: ShaderCompilerPlugin[];
 }
 
@@ -79,8 +81,8 @@ interface CompileGlslOptions extends CompileGlslSourceOptions {
  * Compiles GLSL vertex + fragment sources from bits + template using the
  * default GLSL plugins
  *
- * Handles the two-pass compilation (vertex then fragment) and shares data
- * between passes.
+ * Compiles the vertex stage, then the fragment stage, sharing `context.data` between them, so
+ * what the plugins collect once (bindings, inter-stage variables, the group map) matches in both.
  * @param options - Bits, template, and GLSL emission options
  * @returns Compiled sources plus struct/group metadata
  * @internal
@@ -92,7 +94,6 @@ export function compileGlslSource(options: CompileGlslOptions): CompileGlslResul
     glslGroupMapPlugin,
     glslOverridesPlugin,
     glslBindingsPlugin,
-    glslStorageAccessPlugin,
     glslInterStagePlugin,
     glslAttributesPlugin,
     glslHeadersPlugin,

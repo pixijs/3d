@@ -2,16 +2,13 @@ import { fillTemplateSlots } from './codegen/fillTemplateSlots';
 import type { ShaderCompilerContext, ShaderCompilerPlugin } from './ShaderCompilerPlugin';
 
 /**
- * Compiles a shader template by running plugins through three phases
+ * Compiles one template source by running the plugins' phases, then filling its slots
  *
- * 1. `collectData` lets plugins populate `context.data` with structured objects
- * 2. `preCompile` lets plugins modify `context.data` (e.g. struct padding) or `context.templateString`
- * 3. `injectCode` lets plugins read `context.data` and return slot code strings
- *
- * After all phases, slot code is assembled into the final source via template substitution.
- * @param context - The compilation context (bits, template, data, stage)
- * @param plugins - Array of plugins to execute in order
- * @returns The compiled shader string
+ * See {@link ShaderCompilerPlugin} for the phases. Slot code can contain markers of its own, which
+ * the fill resolves too.
+ * @param context - The bits, the template and its source, and the shared data
+ * @param plugins - The plugins, in the order each phase runs them
+ * @returns The compiled shader source
  * @category rendering
  * @advanced
  */

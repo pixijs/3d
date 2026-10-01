@@ -17,17 +17,15 @@ import type { EmissiveOptions } from '../../../../materials/utils/emissiveProps'
 import type { Scene3DSource } from '../../../Scene3DSource';
 import type { GltfFormat, KHRTextureTransform, Material } from '../GltfFormat';
 
-// KHR_texture_transform is per-TextureInfo in the spec, but our material model
-// has a single per-material UV transform applied in the vertex shader — so any
-// texture slot that declares the extension contributes the same transform to
-// all texture reads on this material. Picks the first slot that has it.
-//
-// The candidate list must include every texture slot this loader forwards to
-// Material3D — otherwise a material that declares KHR_texture_transform only
-// on, say, clearcoat slots would have its transform silently dropped even
-// though the shader would honour it if extracted. Per-slot divergent
-// transforms are still unsupported (single-per-material model); this just
-// ensures the single transform is found wherever it's declared.
+/**
+ * The first `KHR_texture_transform` on any texture the material uses
+ *
+ * glTF puts the transform on each texture reference, but a material here has one UV transform for
+ * all its textures, so the first one found applies to every texture. Different transforms on
+ * different textures are not supported. The list covers every texture passed to `Material3D`, so a
+ * transform declared only on, say, a clearcoat texture still applies.
+ * @param rawMaterial - The glTF material
+ */
 function extractUvTransform(rawMaterial: Material): KHRTextureTransform | undefined {
   const pbr = rawMaterial.pbrMetallicRoughness;
   const ext = rawMaterial.extensions;
@@ -57,14 +55,6 @@ function extractUvTransform(rawMaterial: Material): KHRTextureTransform | undefi
   return undefined;
 }
 
-// Tracked in https://github.com/pixijs/pixi-3d/issues/57.
-//
-// Until per-binding `texCoord` routing lands we sample everything from UV0,
-// which silently misrenders any binding that asks for `texCoord = 1` (common
-// in baked-AO PBR exports and Khronos sample assets like BoomBox). Warn at
-// load time so users get an actionable log line instead of debugging a subtle
-// visual bug. Deduplicated by (binding, texCoord) across the load to avoid
-// spamming scenes with many materials that share the same issue.
 const TEXCOORD_ISSUE_URL = 'https://github.com/pixijs/pixi-3d/issues/57';
 const warnedTexCoords = new Set<string>();
 
@@ -73,6 +63,16 @@ interface TextureBindingLike {
   extensions?: { KHR_texture_transform?: { texCoord?: number } };
 }
 
+/**
+ * Warns when a texture asks for a UV set other than the first, once per texture slot and set
+ *
+ * Every texture samples UV set 0, which misdraws a texture made for set 1, such as the baked
+ * occlusion map of many PBR exports. It also warns when a `KHR_texture_transform` names a different
+ * set than its texture.
+ * @param bindingName - The texture slot, for the message
+ * @param info - The texture reference, when the material has one
+ * @param materialName - The material's name, for the message
+ */
 function warnUnsupportedTexCoord(
   bindingName: string,
   info: TextureBindingLike | undefined,
@@ -157,12 +157,14 @@ function warnUnsupportedUnlitTexCoords(rawMaterial: Material): void {
   warnUnsupportedTexCoord('baseColorTexture', rawMaterial.pbrMetallicRoughness?.baseColorTexture, name);
 }
 
-// Builds the affine matrix the shader expects from a parsed KHR_texture_transform.
-// Equivalent to `new Matrix().scale(sx, sy).rotate(rot).translate(ox, oy)` but
-// built explicitly to remove any ambiguity in Pixi's chain order. The shader
-// reads row0 row-major (see BaseMaterial3D.uvTransform setter), so this affine
-// follows the de-facto KHR_texture_transform convention (visual CCW rotation in
-// y-down UV).
+/**
+ * The matrix `BaseMaterial3D.uvTransform` takes for a `KHR_texture_transform`
+ *
+ * It equals `new Matrix().scale(sx, sy).rotate(rotation).translate(ox, oy)`, written out. The
+ * shader applies it transposed (see the `uvTransform` setter), so the rotation turns the way the
+ * Khronos sample renderer turns it, the opposite of the GLSL snippet in the extension's README.
+ * @param ktt - The texture transform
+ */
 function buildUvTransformMatrix(ktt: KHRTextureTransform): Matrix {
   const [ox, oy] = ktt.offset ?? [0, 0];
   const [sx, sy] = ktt.scale ?? [1, 1];
@@ -177,16 +179,11 @@ function gltfAlphaMode(rawMaterial: Material): BaseMaterial3DOptions['alphaMode'
 }
 
 /**
- * Converts a linear-light RGB triple to the sRGB display domain
+ * Encodes a linear RGB colour to sRGB
  *
- * glTF factor colours (`baseColorFactor`, `emissiveFactor`, `attenuationColor`,
- * `sheenColorFactor`, `specularColorFactor`) are linear per spec, while the
- * material API's `ColorSource` inputs follow Pixi's display-space convention
- * and are sRGB-decoded at write. Pre-encoding here makes the round trip land
- * the spec value on the GPU (round-trip error < 1e-6). A working-space-aware
- * colour pipeline would obsolete this hop.
- *
- * Shared by `processLights` — KHR_lights_punctual colours are linear per spec too.
+ * glTF colour factors and `KHR_lights_punctual` colours are linear, while material and light
+ * colours are set in sRGB and decoded when written. Encoding first lands the file's value on the
+ * GPU. The result stays a float triple, so nothing is rounded to 8 bits on the way.
  * @param rgb - Linear-light colour; only the first three components are read
  * @internal
  */
@@ -194,11 +191,15 @@ export function linearRgbToSrgb(rgb: number[]): [number, number, number] {
   return [linearToSrgb(rgb[0]), linearToSrgb(rgb[1]), linearToSrgb(rgb[2])];
 }
 
-// KHR_materials_unlit: presence-only extension. Per spec, only baseColorFactor,
-// baseColorTexture, alphaMode, alphaCutoff and doubleSided are honoured — every
-// other core PBR field and KHR material extension is ignored. We instantiate
-// FlatMaterial (which uses flatMaterialBit and skips all PBR/IBL/lighting
-// shader work) rather than a runtime branch in Material3D.
+/**
+ * Builds a {@link FlatMaterial} for a `KHR_materials_unlit` material
+ *
+ * An unlit material uses only its base colour and base colour texture, alpha mode, alpha cutoff and
+ * double-sidedness, and ignores everything else. So only the base colour texture's
+ * `KHR_texture_transform` applies, where the PBR path takes the first transform on any texture.
+ * @param rawMaterial - The glTF material
+ * @param source - Supplies the textures the material refers to
+ */
 function processUnlitMaterial(rawMaterial: Material, source: Scene3DSource): FlatMaterial {
   warnUnsupportedUnlitTexCoords(rawMaterial);
 
@@ -217,20 +218,35 @@ function processUnlitMaterial(rawMaterial: Material, source: Scene3DSource): Fla
     options.baseColorTexture = source.textures[pbr.baseColorTexture.index];
   }
 
-  // Per KHR_materials_unlit spec, only baseColorTexture's KHR_texture_transform
-  // applies — other bindings are ignored entirely, so we must not inherit their
-  // transforms (unlike the PBR path, which fans out across all slots).
   const ktt = pbr?.baseColorTexture?.extensions?.KHR_texture_transform;
   if (ktt) options.uvTransform = buildUvTransformMatrix(ktt as KHRTextureTransform);
 
   const material = new FlatMaterial(options);
 
-  // See the PBR path — glTF's COLOR_0 tints, so loaded materials opt in.
   material.vertexColors = true;
 
   return material;
 }
 
+/**
+ * Builds a {@link Material3D} for a glTF material that isn't unlit
+ *
+ * Every value the file leaves out gets its glTF default, passed explicitly, because `Material3D`
+ * defaults differ: metallic is 0, and an extension group, which its presence switches on, starts
+ * visibly on at factor 1 or white. An extension that would draw nothing creates no group: emissive
+ * strength without an emissive colour or texture, or a volume without transmission.
+ *
+ * Where an extension has two textures, `Material3D` packs them into one slot and keeps one (see
+ * {@link SpecularOptions}, {@link SheenOptions} and {@link IridescenceOptions}). A file that binds
+ * two different images gets a warning.
+ *
+ * With transmission, alpha mode `BLEND` or `MASK` becomes `OPAQUE`, with a warning, because the
+ * transmission pass draws the see-through itself. Blending would also turn depth writes off, and a
+ * double-sided transmissive mesh would then draw its front and back triangles in no set order and
+ * show stripes.
+ * @param rawMaterial - The glTF material
+ * @param source - Supplies the textures the material refers to
+ */
 function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Material3D {
   warnUnsupportedPbrTexCoords(rawMaterial);
 
@@ -238,21 +254,17 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     alphaMode: gltfAlphaMode(rawMaterial),
     alphaCutoff: rawMaterial.alphaCutoff,
     doubleSided: rawMaterial.doubleSided ?? false,
+    metallic: 1,
+    roughness: 1,
   };
 
   if (rawMaterial.normalTexture !== undefined) {
     options.normalTexture = source.textures[rawMaterial.normalTexture.index];
-    // glTF 2.0 spec: normalTextureInfo.scale defaults to 1.0 when unspecified.
     if (rawMaterial.normalTexture.scale !== undefined) {
       options.normalScale = rawMaterial.normalTexture.scale;
     }
   }
 
-  // Core emissive + KHR_materials_emissive_strength, fused into one group.
-  // Spec default emissiveFactor is [0, 0, 0] — passed explicitly, since the
-  // constructor's presence default is white. A strength extension without a
-  // colour or texture is inert per spec (black × anything) so no group is
-  // created for it.
   if (rawMaterial.emissiveFactor || rawMaterial.emissiveTexture) {
     const emissive: EmissiveOptions = {
       color: linearRgbToSrgb(rawMaterial.emissiveFactor ?? [0, 0, 0]),
@@ -278,11 +290,8 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
       options.baseColor = linearRgbToSrgb(pbr.baseColorFactor);
       options.alpha = pbr.baseColorFactor[3];
     }
-    // glTF 2.0 spec defaults both factors to 1.0 when unspecified — pin
-    // them explicitly so the loader stays spec-compliant whatever the
-    // Material3D constructor's default is.
-    options.metallic = pbr.metallicFactor ?? 1;
-    options.roughness = pbr.roughnessFactor ?? 1;
+    if (pbr.metallicFactor !== undefined) options.metallic = pbr.metallicFactor;
+    if (pbr.roughnessFactor !== undefined) options.roughness = pbr.roughnessFactor;
 
     if (pbr.baseColorTexture !== undefined) {
       options.baseColorTexture = source.textures[pbr.baseColorTexture.index];
@@ -295,10 +304,6 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
   const ktt = extractUvTransform(rawMaterial);
   if (ktt) options.uvTransform = buildUvTransformMatrix(ktt);
 
-  // --- KHR_materials_transmission + KHR_materials_volume ---
-  // pixi-3d fuses the pair into one `transmission` group. A volume extension
-  // without transmission has no supported consumer (no diffuse transmission)
-  // and was already inert, so no group is created for it.
   const transmissionExt = rawMaterial.extensions?.KHR_materials_transmission;
   if (transmissionExt) {
     const transmission: TransmissionOptions = { factor: transmissionExt.transmissionFactor ?? 0 };
@@ -318,16 +323,6 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
 
     options.transmission = transmission;
 
-    // KHR_materials_transmission leaves alphaMode BLEND/MASK as undefined —
-    // the transmission pass already composites see-through via its own
-    // mix(albedo, transmittedColor, effectiveTx). Leaving alphaMode='blend'
-    // also toggles state.blend / state.depthMask in the material setter,
-    // which then leaks into the transmission pass: no depth writes means
-    // doubleSided meshes render front/back triangles in undefined order,
-    // producing latitude-ring striping at grazing view angles. Matches the
-    // Khronos sample renderer's behaviour of treating transmission as its
-    // own transparency pathway. We still honour the author's doubleSided
-    // and alphaCutoff fields.
     const hasTransmission = (transmission.factor ?? 0) > 0 || transmission.texture !== undefined;
     if (hasTransmission && options.alphaMode !== 'opaque') {
       warn(
@@ -339,19 +334,11 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     }
   }
 
-  // --- KHR_materials_ior ---
   const iorExt = rawMaterial.extensions?.KHR_materials_ior;
   if (iorExt) {
     options.ior = iorExt.ior ?? 1.5;
   }
 
-  // --- KHR_materials_iridescence ---
-  // The spec exposes iridescenceTexture (R = factor) and iridescenceThicknessTexture
-  // (G = thickness) as separate bindings, but they almost always reference the
-  // same packed image. pixi-3d uses a single texture slot (R + G) — see
-  // Material3D.ts / iridescenceBit.ts. If a pathological asset binds two distinct
-  // textures we warn and use the factor texture; its G channel then drives the
-  // thickness lerp.
   const iridescence = rawMaterial.extensions?.KHR_materials_iridescence;
   if (iridescence) {
     const irid: IridescenceOptions = {
@@ -376,11 +363,8 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     }
   }
 
-  // --- KHR_materials_clearcoat ---
   const clearcoat = rawMaterial.extensions?.KHR_materials_clearcoat;
   if (clearcoat) {
-    // Spec defaults (factor 0, roughness 0) passed explicitly — the
-    // constructor's presence default for `factor` is 1.
     const cc: ClearcoatOptions = {
       factor: clearcoat.clearcoatFactor ?? 0,
       roughness: clearcoat.clearcoatRoughnessFactor ?? 0,
@@ -400,16 +384,8 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     options.clearcoat = cc;
   }
 
-  // --- KHR_materials_sheen ---
-  // The spec exposes sheenColorTexture (RGB) and sheenRoughnessTexture (A) as
-  // separate bindings, but they almost always reference the same packed image.
-  // pixi-3d uses a single texture slot (RGB + A) — see Material3D.ts. If a
-  // pathological asset binds two distinct textures we warn and use the color
-  // texture; roughness falls back to `sheenRoughnessFactor`.
   const sheen = rawMaterial.extensions?.KHR_materials_sheen;
   if (sheen) {
-    // Spec defaults (colour black — lobe off — and roughness 0) passed
-    // explicitly; the constructor's presence default for `color` is white.
     const sh: SheenOptions = {
       color: linearRgbToSrgb(sheen.sheenColorFactor ?? [0, 0, 0]),
       roughness: sheen.sheenRoughnessFactor ?? 0,
@@ -430,12 +406,6 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     }
   }
 
-  // --- KHR_materials_specular ---
-  // The spec exposes specularTexture (A = factor) and specularColorTexture
-  // (RGB = colour, sRGB) as separate bindings, but they almost always reference
-  // the same packed image. pixi-3d uses a single texture slot (RGB + A) — see
-  // Material3D.ts / specularBit.ts. If a pathological asset binds two distinct
-  // textures we warn and use the colour texture; its alpha then drives factor.
   const specular = rawMaterial.extensions?.KHR_materials_specular;
   if (specular) {
     const spec: SpecularOptions = {
@@ -458,10 +428,6 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     }
   }
 
-  // --- KHR_materials_anisotropy ---
-  // anisotropyTexture packs the per-texel fibre direction in RG (a [-1,1] vector
-  // encoded to [0,1]) and the strength in B. Spec defaults (strength 0, rotation 0)
-  // are passed explicitly; Material3D's presence default for `strength` is 1.
   const anisotropy = rawMaterial.extensions?.KHR_materials_anisotropy;
   if (anisotropy) {
     const aniso: AnisotropyOptions = {
@@ -475,16 +441,17 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
 
   const material = new Material3D(options);
 
-  // glTF defines COLOR_0 as multiplying base color, so materials loaded from a
-  // glTF opt in even though the engine default is off. Hand-authored materials
-  // keep the safe default; see `BaseMaterial3D.vertexColors`.
   material.vertexColors = true;
 
   return material;
 }
 
 /**
- * Converts one glTF material into a runtime material (unlit → `FlatMaterial`, PBR → `Material3D`)
+ * Converts one glTF material into a runtime material: a `FlatMaterial` when it's unlit, a
+ * `Material3D` otherwise
+ *
+ * Either way it turns {@link BaseMaterial3D#vertexColors} on, because glTF multiplies the base
+ * colour by `COLOR_0`.
  * @param rawMaterial - The glTF material to convert
  * @param source - Supplies the already-processed textures the material references
  * @internal
@@ -498,20 +465,28 @@ export function processMaterial(rawMaterial: Material, source: Scene3DSource): B
 
 /**
  * Converts every glTF material and stores it on the source by index and name
+ *
+ * When a mesh primitive names no material, one unnamed glTF default material (white, fully
+ * metallic, fully rough, opaque, single-sided) is added in the slot after the file's own
+ * materials, and every such primitive shares it; `processNodes` points them there.
  * @param gltfRaw - Parsed glTF JSON
  * @param source - Receives the materials and supplies the already-processed textures they reference
  * @internal
  */
 export function processMaterials(gltfRaw: GltfFormat, source: Scene3DSource): void {
-  if (gltfRaw.materials) {
-    gltfRaw.materials.forEach((rawMaterial, index) => {
-      const material = processMaterial(rawMaterial, source);
+  const rawMaterials = gltfRaw.materials ?? [];
 
-      source.materials[index] = material;
+  rawMaterials.forEach((rawMaterial, index) => {
+    const material = processMaterial(rawMaterial, source);
 
-      if (rawMaterial.name) {
-        source.material[rawMaterial.name] = material;
-      }
-    });
+    source.materials[index] = material;
+
+    if (rawMaterial.name) {
+      source.material[rawMaterial.name] = material;
+    }
+  });
+
+  if (gltfRaw.meshes?.some((mesh) => mesh.primitives.some((p) => p.material === undefined))) {
+    source.materials[rawMaterials.length] = new Material3D({ metallic: 1, roughness: 1 });
   }
 }

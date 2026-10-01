@@ -160,7 +160,11 @@ const compareScreenshot: BrowserCommand<[imagePath: string, pixelMatch?: number]
 
   const res = pixelmatch(comparableActual.data, comparableExpected.data, diff.data, width, height, { threshold: 0.1 });
 
-  if (res > (pixelMatch ?? 0)) {
+  // The same condition the scene test asserts (`tests/test-utils.ts`), so update mode
+  // rewrites every reference the test would fail, including one exactly at the tolerance.
+  const failing = pixelMatch ? res >= pixelMatch : res > 0;
+
+  if (failing) {
     // In update mode, replace failing references instead of reporting them.
     // Passing snapshots are left alone so a full update run doesn't churn every PNG.
     if (updateSnapshot === 'all') {

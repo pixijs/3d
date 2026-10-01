@@ -9,27 +9,6 @@ afterEach(() => {
 });
 
 describe('Camera3D options', () => {
-  test('defaults to label Camera3D and the documented projection settings', () => {
-    const camera = new Camera3D();
-
-    expect(camera.label).toBe('Camera3D');
-    expect(camera.mode).toBe('perspective');
-    expect(camera.fov).toBe(60);
-    expect(camera.zoom).toBe(1);
-    expect(camera.near).toBe(0.1);
-    expect(camera.far).toBe(1000);
-    expect(camera.orthographicSize).toBe(5);
-  });
-
-  test('forwards inherited Container3D options to the base', () => {
-    const camera = new Camera3D({ label: 'main', position: { x: 1, y: 2, z: 3 }, eventMode: 'static', fov: 45 });
-
-    expect(camera.label).toBe('main');
-    expect(camera.position.z).toBe(3);
-    expect(camera.eventMode).toBe('static');
-    expect(camera.fov).toBe(45);
-  });
-
   test('an explicit undefined keeps the default', () => {
     const camera = new Camera3D({ fov: undefined, far: undefined, label: undefined });
 

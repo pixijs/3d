@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { Container3D } from '~/scene/Container3D';
 import { Skeleton } from '~/scene/Skeleton';
 
+/** A one-node skeleton whose node is the only joint, with an identity inverse bind, bound to a fresh container */
 function createBoundRig(): { skeleton: Skeleton; bone: Container3D } {
-  // One node that is also the only joint, with an identity inverse bind.
   const skeleton = new Skeleton({
     parent: new Int16Array([-1]),
     joints: new Int16Array([0]),
@@ -17,7 +17,11 @@ function createBoundRig(): { skeleton: Skeleton; bone: Container3D } {
   return { skeleton, bone };
 }
 
+/** Written into the first joint slot; a rebuild rewrites every slot, so a marker that survives proves none ran */
 const MARKER = 7;
+
+/** Joint matrices are stored as three rows of four, so slot 3 holds the x translation */
+const X_TRANSLATION_SLOT = 3;
 
 describe('Skeleton with a container-bound bone', () => {
   it.each([
@@ -32,7 +36,6 @@ describe('Skeleton with a container-bound bone', () => {
 
     pose(bone);
     skeleton.updateWorld();
-    // A rebuild rewrites every slot, so a marker that survives proves none ran.
     skeleton.worldMatrix[0] = MARKER;
     skeleton.updateWorld();
 
@@ -46,7 +49,6 @@ describe('Skeleton with a container-bound bone', () => {
     bone.position.x = 2;
     skeleton.updateWorld();
 
-    // Joint matrices are stored as three rows of four, so slot 3 is the x translation.
-    expect(skeleton.worldMatrix[3]).toBe(2);
+    expect(skeleton.worldMatrix[X_TRANSLATION_SLOT]).toBe(2);
   });
 });

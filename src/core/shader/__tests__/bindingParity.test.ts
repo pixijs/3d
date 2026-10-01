@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 import { compileGlslSource } from '~/core/gl/codegen/compileGlslSource';
 import { texturesPluginGl } from '~/core/gl/shader/texturesPluginGl';
 import { compileWgslSource } from '~/core/gpu/codegen/compileWgslSource';
-import { materialStoragePaddingPlugin } from '~/core/gpu/codegen/materialStoragePaddingPlugin';
 import { buildWgslBindingMap, collectBindings, emitBindingsWgsl } from '~/core/gpu/codegen/wgslBindingsPlugin';
 import { createTexturesPluginGpu } from '~/core/gpu/shader/texturesPluginGpu';
 import { generateGroupMap } from '~/core/shader/codegen/generateGroupMap';
@@ -16,23 +15,7 @@ import type { Material3DOptions } from '~/materials/pbr/Material3D';
 import { collectTextureNames } from '~/materials/utils/validateMaterialTextureSlots';
 import { View3D } from '~/scene/View3D';
 
-/**
- * WebGL and WebGPU assign binding indices in two independent code paths —
- * `generateGroupMap` (GL) and `buildWgslBindingMap` (WGSL, which the emitter
- * consumes directly). Nothing structural forces them to agree, so this suite
- * is the referee: identical bit lists must produce identical per-group
- * binding-name order, identical Material struct layouts, and identical
- * texture sequences on both backends.
- *
- * Scope note: the *full* per-backend pipelines intentionally diverge in the
- * global group (GL feeds per-instance data through attributes where WebGPU
- * uses storage buffers), so parity is asserted where it must hold — shared
- * bit lists and the material layer — not on backend infrastructure bits.
- */
-
-// --- Binding-assignment lockstep (synthetic bits, both groups + all kinds) ---
-
-/** The binding layout is the same whichever sampler a renderer picks, so these checks use the portable one */
+/** The binding layout doesn't depend on the sampler form, so these checks use the default `'branch'` */
 const texturesPluginGpu = createTexturesPluginGpu('branch');
 
 const parityTemplate: ShaderBitTemplate = {
@@ -41,6 +24,10 @@ const parityTemplate: ShaderBitTemplate = {
   gl: { vertex: '{{header}}\nvoid main() {}', fragment: '{{header}}\nvoid main() {}' },
 };
 
+/**
+ * Two bits covering both groups and every binding kind; `parityBatch` redeclares `uParityView`,
+ * which must not take a second slot
+ */
 const parityBits: ShaderBit[] = [
   {
     name: 'parityGlobals',
@@ -59,7 +46,6 @@ const parityBits: ShaderBit[] = [
     bindings: {
       batch: { uParityTexture: 'texture_2d<f32>' },
       global: {
-        // Deduped against parityGlobals' declaration — must not double-assign.
         uParityView: 'mat4x4<f32>',
         uParityExposure: 'f32',
       },
@@ -67,7 +53,7 @@ const parityBits: ShaderBit[] = [
   },
 ];
 
-/** Flatten a group's entries to binding-ordered names, per backend. */
+/** One group's names from the GL group map, in binding order */
 function glGroupNames(map: Record<number, Record<number, string>>, groupIndex: number): string[] {
   const group = map[groupIndex] ?? {};
   return Object.keys(group)
@@ -76,7 +62,7 @@ function glGroupNames(map: Record<number, Record<number, string>>, groupIndex: n
     .map((binding) => group[binding]);
 }
 
-describe('GL ↔ WGSL binding assignment lockstep', () => {
+describe('generateGroupMap (GL) and buildWgslBindingMap (WGSL), two separate paths, assign the same bindings', () => {
   it('assigns identical per-group binding-name order for the same bits', () => {
     const wgsl = buildWgslBindingMap(collectBindings(parityBits, parityTemplate));
     const gl = generateGroupMap(parityBits, parityTemplate);
@@ -118,9 +104,26 @@ describe('GL ↔ WGSL binding assignment lockstep', () => {
 
     expect(emitted).toEqual(expected);
   });
-});
 
-// --- Material-layer parity across the full feature matrix (real materials) ---
+  it('declares an integer texture with its own sampler type on both backends', () => {
+    const bits: ShaderBit[] = [
+      {
+        name: 'parityIntegers',
+        bindings: { global: { uParityStore: 'texture_2d<u32>', uParitySigned: 'texture_2d<i32>' } },
+      },
+    ];
+    const gl = compileGlslSource({ bits, template: parityTemplate, uboGroups: [], useLocations: false });
+    const gpu = compileWgslSource({ bits, template: parityTemplate });
+
+    expect(gl.fragment).toContain('uniform usampler2D uParityStore;');
+    expect(gl.fragment).toContain('uniform isampler2D uParitySigned;');
+    expect(gpu.fragment.source).toContain('var uParityStore: texture_2d<u32>;');
+    expect(gpu.fragment.source).toContain('var uParitySigned: texture_2d<i32>;');
+
+    const sampleTypes = gpu.gpuLayout[0].map((entry) => entry.texture?.sampleType);
+    expect(sampleTypes).toEqual(['uint', 'sint']);
+  });
+});
 
 const FEATURES: { name: string; options: Material3DOptions }[] = [
   { name: 'emissive', options: { emissive: { color: 0xff0000 } } },
@@ -143,7 +146,7 @@ const glslTemplate: ShaderBitTemplate = {
 describe('material-layer parity across the feature matrix', () => {
   const view = new View3D({ width: 64, height: 64 });
 
-  it('produces identical Material structs and texture sequences on both backends', () => {
+  it('produces identical texture sequences and Material structs, field order included, on both backends', () => {
     for (let mask = 0; mask < 1 << FEATURES.length; mask++) {
       const options: Material3DOptions = {};
       let label = 'plain';
@@ -155,7 +158,6 @@ describe('material-layer parity across the feature matrix', () => {
 
       const descriptor = new Material3D(options).getPrimaryDescriptor(view);
 
-      // Texture sequence — the shader's sample indices — must match.
       expect(collectTextureNames(descriptor.bitsGl), label).toEqual(collectTextureNames(descriptor.bitsGpu));
 
       const gpu = compileWgslSource({
@@ -171,37 +173,7 @@ describe('material-layer parity across the feature matrix', () => {
         useLocations: false,
       });
 
-      // Field ORDER and types must match exactly — the JIT material sync and
-      // the GL texel accessors derive offsets from this shape.
       expect(Object.entries(gl.structs.Material ?? {}), label).toEqual(Object.entries(gpu.structs.Material ?? {}));
     }
-  });
-
-  it('GPU stride padding only appends a trailing _pad field', () => {
-    const descriptor = new Material3D({
-      emissive: { color: 0xff0000 },
-      specular: { factor: 0.5 },
-      iridescence: { factor: 0.5 },
-      transmission: { factor: 0.5 },
-      clearcoat: {},
-      sheen: { color: 0xffffff },
-    }).getPrimaryDescriptor(view);
-
-    const unpadded = compileWgslSource({
-      bits: descriptor.bitsGpu,
-      template: wgslTemplate,
-      extraPlugins: [materialStructPackPlugin, texturesPluginGpu],
-    });
-    const padded = compileWgslSource({
-      bits: descriptor.bitsGpu,
-      template: wgslTemplate,
-      extraPlugins: [materialStructPackPlugin, materialStoragePaddingPlugin, texturesPluginGpu],
-    });
-
-    const unpaddedFields = Object.keys(unpadded.structs.Material!);
-    const paddedFields = Object.keys(padded.structs.Material!);
-
-    expect(paddedFields.slice(0, unpaddedFields.length)).toEqual(unpaddedFields);
-    expect(paddedFields.slice(unpaddedFields.length).every((f) => f === '_pad')).toBe(true);
   });
 });

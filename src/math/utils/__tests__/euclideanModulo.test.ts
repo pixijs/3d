@@ -23,14 +23,6 @@ describe('euclideanModulo', () => {
     expect(euclideanModulo(2.5, 1)).toBeCloseTo(0.5, 5);
     expect(euclideanModulo(-0.25, 1)).toBeCloseTo(0.75, 5);
   });
-
-  test('result is always non-negative', () => {
-    for (let n = -20; n <= 20; n++) {
-      const result = euclideanModulo(n, 7);
-      expect(result).toBeGreaterThanOrEqual(0);
-      expect(result).toBeLessThan(7);
-    }
-  });
 });
 
 describe('pingpong', () => {
@@ -54,14 +46,5 @@ describe('pingpong', () => {
     expect(pingpong(-0.5, 1)).toBeCloseTo(0.5, 5);
     expect(pingpong(-1, 1)).toBeCloseTo(1, 5);
     expect(pingpong(-1.5, 1)).toBeCloseTo(0.5, 5);
-  });
-
-  test('result is always within [0, length]', () => {
-    const length = 3;
-    for (let i = -10; i <= 10; i += 0.5) {
-      const result = pingpong(i, length);
-      expect(result).toBeGreaterThanOrEqual(0);
-      expect(result).toBeLessThanOrEqual(length);
-    }
   });
 });

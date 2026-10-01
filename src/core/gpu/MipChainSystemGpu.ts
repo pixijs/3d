@@ -43,7 +43,9 @@ interface MipCacheEntry {
  * submission. The graph calls it after a mip-chained colour's last writer.
  *
  * Caches the per-format pipeline + sampler, and each source's views/bind groups
- * keyed by uid (a pooled copy crossing a pow2 bucket is a new source/uid).
+ * keyed by uid (a pooled copy crossing a pow2 bucket is a new source/uid). The views
+ * bind the GPU texture, not its contents, so one set serves every frame for as long as the
+ * source keeps that GPU texture; nothing drops an entry when it doesn't.
  * Registered as a WebGPU renderer system (`renderer.mipChain3d`).
  * @internal
  */
@@ -75,8 +77,6 @@ export class MipChainSystemGpu {
     const encoder = this._renderer.encoder.commandEncoder;
     const pipeline = this._pipeline(device, source.format as GPUTextureFormat);
 
-    // Views/bind groups bind the texture, not its contents — built once per uid,
-    // reused; the live mip is read at draw time.
     const { bindGroups, dstViews } = this._cache[source.uid] || this._buildCacheEntry(source);
 
     for (let i = 0; i < dstViews.length; i++) {

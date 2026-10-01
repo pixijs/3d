@@ -1,5 +1,3 @@
-/** @module */
-
 export * from './animation';
 export * from './assets';
 export * from './core';

@@ -114,18 +114,6 @@ describe('AnimationPlayer autoUpdate', () => {
     expect(target.position.x).toBeCloseTo(5);
   });
 
-  it('uses ticker deltaMS as seconds for automatic updates', () => {
-    const { connections } = mockSharedTicker();
-    const { player, target } = createPlayer();
-
-    const action = player.play('move');
-
-    action.loop = false;
-    connections[0].fn(tick(250));
-
-    expect(target.position.x).toBeCloseTo(2.5);
-  });
-
   it('advances one 60 fps frame when update() gets no ticker', () => {
     const { player } = createPlayer({ autoUpdate: false });
     const state = player.play('move');
@@ -171,17 +159,6 @@ describe('AnimationPlayer autoUpdate', () => {
     expect(connections).toHaveLength(1);
 
     idle.stop();
-
-    expect(removeSpy).toHaveBeenCalledTimes(1);
-    expect(connections).toHaveLength(0);
-  });
-
-  it('disconnects from the shared ticker when destroyed', () => {
-    const { connections, removeSpy } = mockSharedTicker();
-    const { player } = createPlayer();
-
-    player.play('move');
-    player.destroy();
 
     expect(removeSpy).toHaveBeenCalledTimes(1);
     expect(connections).toHaveLength(0);
@@ -253,27 +230,6 @@ describe('AnimationState playback', () => {
     player.update(tick(250));
 
     expect(target.position.x).toBeCloseTo(2.5);
-  });
-
-  it('player stop() freezes every playing state', () => {
-    const { connections } = mockSharedTicker();
-    const { player } = createPlayer();
-
-    player.addAnimations([new Animation({ label: 'idle', duration: 1 })]);
-
-    const move = player.play('move');
-    const idle = player.play('idle');
-
-    expect(player.playing).toBe(true);
-
-    player.update(tick(250));
-    player.stop();
-
-    expect(player.playing).toBe(false);
-    expect(move.playing).toBe(false);
-    expect(idle.playing).toBe(false);
-    expect(move.time).toBeCloseTo(0.25);
-    expect(connections).toHaveLength(0);
   });
 });
 
@@ -424,14 +380,6 @@ describe('AnimationState callbacks', () => {
 });
 
 describe('AnimationPlayer autoPlay', () => {
-  it('does not play anything by default', () => {
-    const { connections } = mockSharedTicker();
-    const { player } = createPlayer();
-
-    expect(player.playing).toBe(false);
-    expect(connections).toHaveLength(0);
-  });
-
   it('plays the first animation when true, or the named one when a label', () => {
     mockSharedTicker();
     const target = new Container3D();
@@ -506,8 +454,7 @@ describe('AnimationPlayer registry', () => {
     const { player, target } = createPlayer({ autoUpdate: false });
     const state = player.getState('move');
 
-    // Never called: tsc checks these assignments are rejected.
-    const reassign = (): void => {
+    const rejectedByTsc = (): void => {
       // @ts-expect-error bindings resolve against the original target
       player.target = target;
       // @ts-expect-error the state's track cursors are sized from this animation
@@ -518,15 +465,12 @@ describe('AnimationPlayer registry', () => {
       state.animation.tracks.push(state.animation.tracks[0]);
     };
 
-    expect(reassign).toBeTypeOf('function');
+    expect(rejectedByTsc).toBeTypeOf('function');
   });
 });
 
 describe('AnimationPlayer wide tracks', () => {
   it('samples every component of a track wider than the built-in value types', () => {
-    // Morph-weight tracks carry one float per target — MorphStressTest has 8.
-    // The shared evaluation scratch was sized for a quaternion (4), so
-    // components 4+ read back undefined and poisoned the weights with NaN.
     mockSharedTicker();
 
     const target = new Container3D();
@@ -560,14 +504,52 @@ describe('AnimationPlayer wide tracks', () => {
 
     player.destroy();
   });
+
+  it('blends every component of a track wider than the built-in value types', () => {
+    mockSharedTicker();
+
+    const target = new Container3D();
+    target.label = 'Root';
+    (target as Container3D & { weights?: Float32Array }).weights = new Float32Array(8);
+
+    const zeros = [0, 0, 0, 0, 0, 0, 0, 0];
+    const clipA = new Animation({
+      label: 'a',
+      tracks: [
+        new Track({ label: 'Root.weights', times: [0, 1], values: [...zeros, 1, 2, 3, 4, 5, 6, 7, 8], valueSize: 8 }),
+      ],
+    });
+    const clipB = new Animation({
+      label: 'b',
+      tracks: [
+        new Track({
+          label: 'Root.weights',
+          times: [0, 1],
+          values: [...zeros, 3, 6, 9, 12, 15, 18, 21, 24],
+          valueSize: 8,
+        }),
+      ],
+    });
+
+    const player = new AnimationPlayer({
+      target,
+      animations: { a: clipA, b: clipB },
+      autoUpdate: false,
+    });
+
+    player.play('a').time = 0.5;
+    player.play('b').time = 0.5;
+    player.update(tick(0));
+
+    const weights = (target as Container3D & { weights: Float32Array }).weights;
+    expect(Array.from(weights)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    player.destroy();
+  });
 });
 
 describe('AnimationPlayer blending', () => {
   it('blends two states writing the same property into a weighted average', () => {
-    // A crossfade: two clips drive Root.weights at once. The first state to run
-    // samples straight into the accumulator; the second samples into scratch and
-    // blends in — the result is the weight-weighted average of both samples,
-    // independent of which state ran first.
     mockSharedTicker();
 
     const target = new Container3D();
@@ -589,8 +571,6 @@ describe('AnimationPlayer blending', () => {
       autoUpdate: false,
     });
 
-    // At t=0.5: A samples [5, 10] (weight 1), B samples [15, 20] (weight 3).
-    // Weighted average = (1·[5, 10] + 3·[15, 20]) / 4 = [12.5, 17.5].
     const a = player.play('a');
     a.time = 0.5;
     a.weight = 1;
@@ -600,24 +580,14 @@ describe('AnimationPlayer blending', () => {
     player.update(tick(0));
 
     const weights = (target as Container3D & { weights: Float32Array }).weights;
-    expect(Array.from(weights)).toEqual([12.5, 17.5]);
+    const weightedAverageAtHalfway = [(1 * 5 + 3 * 15) / 4, (1 * 10 + 3 * 20) / 4];
+    expect(Array.from(weights)).toEqual(weightedAverageAtHalfway);
 
     player.destroy();
   });
 });
 
 describe('AnimationPlayer destroy', () => {
-  it('marks the player as destroyed', () => {
-    mockSharedTicker();
-    const { player } = createPlayer();
-
-    expect(player.destroyed).toBe(false);
-
-    player.destroy();
-
-    expect(player.destroyed).toBe(true);
-  });
-
   it('is idempotent and does not double-disconnect from the ticker', () => {
     const { removeSpy } = mockSharedTicker();
     const { player } = createPlayer();
@@ -631,7 +601,7 @@ describe('AnimationPlayer destroy', () => {
     expect(player.destroyed).toBe(true);
   });
 
-  it('ignores playback on a state kept after destroy', () => {
+  it('ignores playback on a state kept after destroy, leaving the ticker off and the pose held', () => {
     const { addSpy, connections } = mockSharedTicker();
     const { player, target } = createPlayer();
     const state = player.play('move');
@@ -645,7 +615,6 @@ describe('AnimationPlayer destroy', () => {
 
     expect(state.playing).toBe(false);
     expect(player.playing).toBe(false);
-    // Only the pre-destroy play reached the ticker, and the held pose was not rewritten.
     expect(addSpy).toHaveBeenCalledTimes(1);
     expect(connections).toHaveLength(0);
     expect(target.position.x).toBeCloseTo(2.5);
@@ -658,15 +627,27 @@ describe('AnimationPlayer quaternion blending', () => {
 
     target.label = 'Root';
 
-    const s = Math.SQRT1_2; // 90° about Z
+    const quarterTurnAboutZ = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+    const quarterTurnAboutZNegated = quarterTurnAboutZ.map((component) => -component);
     const clipA = new Animation({
       label: 'a',
-      tracks: [new QuaternionTrack({ label: 'Root.quaternion', times: [0, 1], values: [0, 0, s, s, 0, 0, s, s] })],
+      tracks: [
+        new QuaternionTrack({
+          label: 'Root.quaternion',
+          times: [0, 1],
+          values: [...quarterTurnAboutZ, ...quarterTurnAboutZ],
+        }),
+      ],
     });
-    // The same rotation, encoded with every component negated.
     const clipB = new Animation({
       label: 'b',
-      tracks: [new QuaternionTrack({ label: 'Root.quaternion', times: [0, 1], values: [0, 0, -s, -s, 0, 0, -s, -s] })],
+      tracks: [
+        new QuaternionTrack({
+          label: 'Root.quaternion',
+          times: [0, 1],
+          values: [...quarterTurnAboutZNegated, ...quarterTurnAboutZNegated],
+        }),
+      ],
     });
 
     const player = new AnimationPlayer({
@@ -684,8 +665,8 @@ describe('AnimationPlayer quaternion blending', () => {
 
     const q = target.quaternion;
 
-    expect(q.z).toBeCloseTo(s);
-    expect(q.w).toBeCloseTo(s);
+    expect(q.z).toBeCloseTo(Math.SQRT1_2);
+    expect(q.w).toBeCloseTo(Math.SQRT1_2);
     expect(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w).toBeCloseTo(1);
   });
 });

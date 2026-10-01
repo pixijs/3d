@@ -5,34 +5,32 @@ import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
 /** Maps WGSL inter-stage types to GLSL types */
 const INTERSTAGE_TO_GLSL: Record<InterStageType, string> = {
-  // Scalars
   f32: 'float',
   i32: 'int',
   u32: 'uint',
 
-  // Float vectors
   'vec2<f32>': 'vec2',
   'vec3<f32>': 'vec3',
   'vec4<f32>': 'vec4',
 
-  // Integer vectors
   'vec2<i32>': 'ivec2',
   'vec3<i32>': 'ivec3',
   'vec4<i32>': 'ivec4',
 
-  // Unsigned integer vectors
   'vec2<u32>': 'uvec2',
   'vec3<u32>': 'uvec3',
   'vec4<u32>': 'uvec4',
 };
 
-/** Reserved builtin names - these are NOT user inter-stage variables (use gl_* instead) */
+/** Inter-stage names that stand for WGSL builtins; GLSL code reads its own `gl_*` variables instead */
 const BUILTIN_NAMES = new Set(['position', 'frontFacing', 'sampleIndex', 'sampleMask']);
 
+/**
+ * Whether an inter-stage type must be `flat`: GLSL ES 3.00 and WGSL both reject interpolating an
+ * integer scalar or vector
+ * @param type - The inter-stage type
+ */
 function needsFlatQualifier(type: InterStageType): boolean {
-  // GLSL requires integer varyings to be declared 'flat' between stages.
-  // Applies to scalars and vectors of int/uint (i32/u32 in our type system).
-  // This mirrors the WGSL requirement and keeps cross-backend behavior consistent.
   return type === 'i32' || type === 'u32' || type.includes('<i32>') || type.includes('<u32>');
 }
 
@@ -40,7 +38,7 @@ function toGlslType(interStageType: InterStageType): string {
   const mapped = INTERSTAGE_TO_GLSL[interStageType];
   if (!mapped) {
     warn(`[compileInterStageGlsl] Unknown inter-stage type: "${interStageType}"`);
-    return 'vec4'; // fallback
+    return 'vec4';
   }
   return mapped;
 }
@@ -58,8 +56,9 @@ function warnInterStageConflict(name: string, newType: string, existingType: str
  */
 interface CompileInterStageGlslOptions {
   /**
-   * Whether to include explicit layout(location) declarations
-   * @default true (WebGL2 style)
+   * Whether to declare `layout(location = n)` on each variable, which GLSL ES 3.00 rejects on
+   * inter-stage variables; see `CompileGlslSourceOptions.useLocations`
+   * @default true
    */
   useLocations?: boolean;
 }
@@ -79,29 +78,12 @@ interface CompileInterStageGlslResult {
 /**
  * Compiles shader inter-stage variables from bits into GLSL declarations
  *
- * - Skips builtin names (use gl_Position, gl_FrontFacing, etc. directly)
- * - Deduplicates user inter-stage variables across bits (warns if types conflict)
- * - Supports explicit layout(location) for WebGL2
- * - Maps InterStageType (WGSL-style) to appropriate GLSL types
- * - Returns both vertex (`out`) and fragment (`in`) declarations
+ * Declares each variable once, as an `out` in the vertex stage and a matching `in` in the
+ * fragment stage, in the order the bits first name them. A later bit naming it with another type
+ * warns and keeps the first.
  *
- * GLSL builtins available (not declared, use directly):
- * - gl_Position (vec4) - vertex output
- * - gl_FrontFacing (bool) - fragment input
- * - gl_SampleID (int) - fragment input
- * - gl_SampleMaskIn (int[]) - fragment input
- * @example
- * ```ts
- * const { vertex, fragment } = compileInterStageGlsl(bits);
- *
- * // vertex:
- * // layout(location = 0) out vec3 vNormal;
- * // layout(location = 1) out vec2 vUV;
- *
- * // fragment:
- * // layout(location = 0) in vec3 vNormal;
- * // layout(location = 1) in vec2 vUV;
- * ```
+ * Names in `BUILTIN_NAMES` get no declaration. Of those, GLSL ES 3.00 has `gl_Position` and
+ * `gl_FrontFacing`; it has no equivalent of `sampleIndex` or `sampleMask`.
  * @param bits - Array of shader bits containing inter-stage definitions
  * @param options - Optional settings
  * @returns Object with vertex and fragment shader declarations
@@ -113,14 +95,12 @@ function compileInterStageGlsl(
 ): CompileInterStageGlslResult {
   const { useLocations = true } = options;
 
-  // Collect user inter-stage variables from all bits, deduplicating (skip builtins)
   const interStage = new Map<string, InterStageType>();
 
   for (const bit of bits) {
     if (!bit.interStage) continue;
 
     for (const [name, type] of Object.entries(bit.interStage)) {
-      // Skip builtins - they're implicit in GLSL (gl_Position, gl_FrontFacing, etc.)
       if (BUILTIN_NAMES.has(name)) continue;
 
       if (!interStage.has(name)) {
@@ -131,7 +111,6 @@ function compileInterStageGlsl(
     }
   }
 
-  // Generate vertex output declarations
   const vertexOut: string[] = [];
   let locationIndex = 0;
 
@@ -146,7 +125,6 @@ function compileInterStageGlsl(
     }
   }
 
-  // Generate fragment input declarations
   const fragmentIn: string[] = [];
   locationIndex = 0;
 

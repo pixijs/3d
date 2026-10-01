@@ -8,10 +8,10 @@ import type { TEXTURE_FORMATS } from 'pixi.js';
 export type ResourceKind = 'color' | 'depth';
 
 /**
- * Tiny opaque value identifying a render-graph resource
+ * Opaque value naming one texture in a {@link RenderGraph}
  *
- * `_id` indexes the graph's resource table; `_kind` keeps colour and depth
- * handles distinct in the type system.
+ * The graph hands these out and resolves them to textures each frame. `_kind` keeps colour and
+ * depth handles apart in the type system, and `_id` indexes the graph's resource table.
  * @category rendering
  * @advanced
  */
@@ -35,37 +35,37 @@ export type ColorHandle = ResourceHandle<'color'>;
 export type DepthHandle = ResourceHandle<'depth'>;
 
 /**
- * Descriptor for a graph-allocated transient
+ * The pool request for a graph-allocated transient, worked out again each frame
  *
- * Returned by the callback passed to {@link RenderGraph#createColor} /
- * {@link RenderGraph#createDepth}; the graph reallocates the backing
- * `TextureSource` only when a field changes. Uses pixi's `TEXTURE_FORMATS` so
- * it flows straight into `new TextureSource({ format })`.
+ * The graph builds one from {@link TransientTextureOptions}, or from a camera's render texture,
+ * and passes it to `TexturePool.getOptimalTexture` before the transient's first use each frame.
  * @internal
  */
 export interface ResourceDescriptor {
-  /** Requested texture width in pixels */
+  /** Content width in texels; the pooled texture may be wider */
   width: number;
-  /** Requested texture height in pixels */
+  /** Content height in texels; the pooled texture may be taller */
   height: number;
-  /** Texture format, forwarded to the `TextureSource` */
+  /** Texture format */
   format: TEXTURE_FORMATS;
-  /** Generate mipmaps on upload; default `false` */
+  /** Whether the texture has a mip chain, which the graph fills after the texture's last writer each frame */
   autoGenerateMipmaps?: boolean;
-  /** Texture sampling filter; default `'linear'` */
+  /** Texture sampling filter; the pool's default is `'linear'` */
   scaleMode?: 'nearest' | 'linear';
-  /** Optional debug label propagated to the `TextureSource` */
+  /** Debug label written onto the pooled source while the transient holds it */
   label?: string;
 }
 
 /**
- * Options for a graph-allocated texture — the shape every screen-space intermediate wants
+ * Options for a graph-allocated texture, such as a screen-space intermediate
  *
  * Reads like a pixi `TextureSourceOptions`: `width` and `height` are the logical size and
  * `resolution` multiplies them into texels. The engine supplies the defaults: the logical size
  * is the view's viewport and the resolution is the view's own, so `{}` is the physical viewport.
- * Viewport-sized textures are capped at the framebuffer and pooled in power-of-two buckets like
- * the built-in copies; an explicit size is allocated as asked.
+ *
+ * The texture comes from pixi's `TexturePool`. Its content is the size asked for, at the
+ * texture's origin, and the texture itself is rounded up to the next power of two, or to the
+ * canvas size when that fits and is smaller.
  * @category rendering
  * @advanced
  */
@@ -95,7 +95,7 @@ export interface TransientTextureOptions {
    */
   format?: TEXTURE_FORMATS;
   /**
-   * Generate mipmaps after each write
+   * Whether the texture has a mip chain, which the graph fills after the pass that last writes it each frame
    * @default false
    */
   autoGenerateMipmaps?: boolean;

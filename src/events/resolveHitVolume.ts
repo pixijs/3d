@@ -7,37 +7,36 @@ import type { Container3D } from '../scene/Container3D';
 import { getLocalBounds3D } from '../scene/utils/getLocalBounds3D';
 import type { HitVolume3D, HitVolume3DInput } from './HitResult3D';
 
-// Duck-typing rather than `instanceof Mesh3D`: the import chain
-//   Container3D → resolveHitVolume → Mesh3D → Container3D
-// creates a TDZ cycle (Mesh3D extends Container3D before Container3D's class
-// body finishes initialising). A property check has no such hazard.
 interface MeshLike {
   geometry: Geometry3D;
 }
 
+/**
+ * Whether `node` is a mesh, tested by its `geometry` rather than with `instanceof Mesh3D`
+ *
+ * `Mesh3D` imports this module, so importing it back would make an import cycle.
+ * @param node - Node to test.
+ * @returns Whether the node has a `Geometry3D`.
+ */
 function hasGeometry(node: Container3D): node is Container3D & MeshLike {
   return (node as Container3D & Partial<MeshLike>).geometry instanceof Geometry3D;
 }
 
 /**
- * Normalises a {@link HitVolume3DInput} to the shape stored on the node
+ * Turns a {@link HitVolume3DInput} into the shape the node is picked against
  *
- * - `'box'` → `node.geometry.bounds3D` for a `Mesh3D`, which is live and tracks geometry mutations. For a plain
- *   `Container3D` it is the subtree AABB computed *now* — a snapshot, since plain containers have no live bounds
- *   maintenance. Hidden descendants count, unlike `getLocalBounds()`, so an invisible collider mesh gives the group
- *   a volume and children hidden at assignment are covered once they show. Re-set `hitVolume` (or pass an explicit
- *   `Box`) if the subtree changes shape later.
- * - `'geometry'` → `node.geometry`. Warns and resolves to `null` on a plain `Container3D`, which has no geometry.
- * - Raw `Box` / `Sphere` / `Geometry3D` instance → stored as-is, except that a `Sphere` with a negative radius is
- *   empty and resolves to `null` with a warning.
- * - Any other object implementing {@link IHitVolume3D} (structural: `raycast` + `boundingRadiusSq`) → stored as-is.
- * - `null` → `null`.
+ * - `'box'`: a mesh's `geometry.bounds3D`, which follows edits to the geometry. A plain
+ *   `Container3D` has no bounds of its own, so it gets its subtree's bounds measured now, hidden
+ *   descendants included. Set `hitVolume` again if the subtree changes shape.
+ * - `'geometry'`: the mesh's geometry. A plain `Container3D` has none, so it warns.
+ * - A `Box`, `Sphere`, `Geometry3D` or other {@link IHitVolume3D}: stored as given. A `Sphere`
+ *   with a negative radius is empty, so it warns.
  *
- * Invalid input warns and resolves to `null` rather than throwing: a property setter shouldn't blow up an
- * assignment, and the node then falls back to its default shape, if any.
+ * Invalid input warns and resolves to `null` rather than throwing from a property setter; the
+ * node then uses its default shape, if it has one.
  * @param node - The node the volume is being set on; strings are resolved against it
  * @param input - The value assigned to `hitVolume`
- * @returns The stored shape, or `null` when there is no explicit shape
+ * @returns The shape to pick against, or `null` for none
  * @internal
  */
 export function resolveHitVolume(node: Container3D, input: HitVolume3DInput): HitVolume3D | null {
@@ -46,8 +45,6 @@ export function resolveHitVolume(node: Container3D, input: HitVolume3DInput): Hi
   if (typeof input === 'string') {
     if (input === 'box') {
       if (hasGeometry(node)) return node.geometry.bounds3D;
-      // A plain container has no geometry bounds, so the subtree AABB has to be computed here or the node never
-      // hits.
       return getLocalBounds3D(node, new Box(), false);
     }
     if (input === 'geometry') {

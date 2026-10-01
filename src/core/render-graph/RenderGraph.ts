@@ -42,9 +42,9 @@ const _contentSize = { width: 0, height: 0 };
  * Pixi's rule: texels = logical size × resolution. The logical size defaults to the view's
  * viewport (physical viewport over the target's resolution) and the resolution to the target's
  * own, so `{}` is the physical viewport and `resolution: 1` is one texel per logical pixel. The
- * size is the content size; the pool decides the texture it sits in, and the resulting `frame`
- * is what consumers map through. The single formula — the descriptor the executor acquires with
- * and {@link RenderGraph#sceneViewport} both come through here, so they cannot disagree.
+ * pool decides the texture this content sits in, and consumers map through the resulting `frame`.
+ * The descriptor a transient is acquired with and {@link RenderGraph#sceneViewport} both come
+ * through here, so they can't disagree.
  * @param options - The caller's transient texture options
  * @param s - The frame's render session
  * @param out - Receives the size; nothing else on it is touched
@@ -68,8 +68,8 @@ function transientContentSize<T extends { width: number; height: number }>(
 /**
  * Expand transient options into the per-frame descriptor the pool consumes
  *
- * Size comes from {@link transientContentSize}; fields left unset fall back to what the view's
- * target uses.
+ * Size comes from {@link transientContentSize}. An unset format falls back to the view target's,
+ * or `depth24plus-stencil8` for depth, and depth samples `'nearest'`.
  * @param type - Colour or depth; picks the default format, label and sampling
  * @param options - The caller's transient texture options
  */
@@ -106,18 +106,62 @@ interface ResolvedTarget {
   frame: Rectangle | null;
 }
 
+/**
+ * The render target a camera's passes draw into, and that target's content rect in physical
+ * pixels: what a copy of that camera's picture reads
+ *
+ * The graph keeps one per camera target and one for the scene pair, and reuses them across
+ * frames. `colorSource` and `depthSource` are the sources `target` was looked up under. A later
+ * call reuses `target` while both are unchanged.
+ * @internal
+ */
+export interface DrawTarget {
+  /** The render target the camera's passes draw into */
+  target: RenderTarget;
+  /** The target's content rect in physical pixels: a transient's content frame, or the view's rect on the screen */
+  readonly viewport: Rectangle;
+  /** Colour source `target` was looked up under, or `null` when the colour was released */
+  colorSource: TextureSource | null;
+  /** Depth source `target` was looked up under, or `null` when the depth was released */
+  depthSource: TextureSource | null;
+}
+
 /** Offscreen bind, in texels — `session.activeViewport` points here */
 const _activeViewport = new Rectangle();
 const _resolvedTarget: ResolvedTarget = { target: null, flipY: false, frame: null };
+/**
+ * Scratch key for a draw target's cache lookup, patched per lookup
+ *
+ * Its attachments go back to `Texture.EMPTY` after each lookup, so this module-level key never
+ * keeps a source alive.
+ */
+const _drawTargetKey: PassAttachments = {};
+const _drawTargetColors = [{ texture: Texture.EMPTY.source }];
+const _drawTargetDepth = { texture: Texture.EMPTY.source };
+
+/**
+ * Scale a logical frame to physical pixels, at least one pixel each way
+ * @param frame - The frame, in the texture's logical units.
+ * @param resolution - The texture's resolution.
+ * @param out - Where the physical rect is written.
+ * @returns `out`
+ */
+function toPhysicalRect(frame: Rectangle, resolution: number, out: Rectangle): Rectangle {
+  out.x = Math.round(frame.x * resolution);
+  out.y = Math.round(frame.y * resolution);
+  out.width = Math.max(1, Math.round(frame.width * resolution));
+  out.height = Math.max(1, Math.round(frame.height * resolution));
+  return out;
+}
 
 /**
  * What a camera with a render texture draws into, and where the picture ends up
  *
  * The passes write the target — a colour and depth transient pair sized from the texture —
- * and the graph copies it into the texture after the camera's last pass. The texture is
- * never an attachment, so a mesh in the same view can sample it while the camera draws: it
- * reads last frame's picture. Reached only through the builder's `targetColor` /
- * `targetDepth` and the executor's copy.
+ * and the graph copies it into the texture after the last pass that writes its colour. The
+ * texture is never an attachment, so a mesh in the same view can sample it while the camera
+ * draws: it reads last frame's picture. Passes reach the target through the builder's
+ * `targetColor` / `targetDepth`, and copies reach it through `RenderGraph._drawTarget`.
  * @internal
  */
 interface CameraTarget {
@@ -125,8 +169,10 @@ interface CameraTarget {
   color: ColorHandle;
   /** Depth paired with `color` */
   depth: DepthHandle;
-  /** The camera's {@link Camera3D#renderTexture}, imported: the copy's destination */
+  /** The camera's {@link Camera3D#renderTexture}, imported so the graph can generate its mipmaps after the copy */
   texture: ColorHandle;
+  /** `color` and `depth` as a render target, once a copy has looked it up */
+  draw: DrawTarget | null;
 }
 
 /**
@@ -134,15 +180,13 @@ interface CameraTarget {
  * (`imported`, resolved each frame via `getter`) or graph-allocated
  * (`transient`, acquired/released around its first and last use)
  *
- * `cachedTexture` and `cachedDepthView` are per-handle wrapper caches
- * invalidated by `TextureSource` identity — the outgoing wrapper is destroyed
- * on swap, never just dropped: each one holds a `resize` listener on its
- * source, and pooled transient sources outlive their wrappers, so a dropped
- * wrapper would stay pinned to the pool forever. A transient's wrapper
- * survives the per-frame release on purpose; the steady state re-acquires the
- * same pooled source and reuses the wrapper allocation-free. The depth view
- * exists because WebGPU's `texture_depth_2d` binding rejects a raw
- * depth-stencil source.
+ * `cachedTexture` wraps an imported bare source, and `cachedDepthView` is the depth-only view a
+ * depth handle binds through, since WebGPU's `texture_depth_2d` binding takes only the depth
+ * aspect of a depth-stencil texture. Each is rebuilt when its source changes, and the old one is
+ * destroyed rather than dropped: it listens on its source, and pooled sources outlive it, so a
+ * dropped wrapper would stay pinned to the pool. A transient's depth view survives the per-frame
+ * release on purpose: the steady state gets the same pooled source back and reuses the view
+ * without allocating.
  */
 type ResourceEntry =
   | {
@@ -172,9 +216,9 @@ type ResourceEntry =
 interface AddedPass {
   pass: GraphRenderPass;
   record: PassRecord;
-  /** Passes this one reads or follows in a write-after-write chain — set by `compile()` */
+  /** Passes this one reads after or writes after, set by `compile()` */
   dependsOn: AddedPass[];
-  /** Writes or produces an imported resource — seeds the refcount cull in `resolve()` */
+  /** Writes or produces an imported texture or a camera target, so `resolve()` keeps it and works back from it */
   isAnchored: boolean;
   /**
    * Cameras whose target is copied into their render texture after this pass renders — the
@@ -190,17 +234,16 @@ interface AddedPass {
    *
    * Rebuilt by `resolve()`. `execute()` generates for any of them whose source is flagged
    * `autoGenerateMipmaps`: the picture is complete, and nothing later in the frame has sampled
-   * it yet. That is the whole of mipmap generation in the graph — the flag on the texture is
-   * the declaration, and no pass says "mipmaps".
+   * it yet. Generating in the frame's own order puts it, on WebGPU, on the frame encoder between
+   * this write and the next read. That is the whole of mipmap generation in the graph — the flag
+   * on the texture is the declaration, and no pass says "mipmaps".
    */
   mipmapHandles: ColorHandle[];
   /**
    * Pre-built attachment shape for `_renderTargetCache.get`
    *
    * Shape is fixed at compile time; `texture` fields are patched each frame in
-   * `_resolveTarget`. `null` for transfer-only passes (no attachment
-   * writes) — the executor skips the target push and `pass.render()`
-   * self-manages.
+   * `_resolveTarget`. `null` for a pass with no attachments, which binds its own targets.
    */
   attachments: PassAttachments | null;
   /** Color handles parallel to `attachments.colors`, resolved per frame */
@@ -219,22 +262,17 @@ interface AddedPass {
   /**
    * Underlying source uid last bound to each `sampleHandles[j]`
    *
-   * When it changes — e.g. a pooled transient swaps instances as the viewport crosses
-   * a power-of-two bucket — the consuming pass is forced to rebuild, so a
-   * cached WebGPU render bundle can't keep sampling the stale (record-time)
-   * texture. Parallel to `sampleHandles`; `-1` = not yet bound.
+   * When it changes, `execute()` makes the pass re-record its WebGPU render bundles, which baked
+   * the old texture. A pooled transient changes texture when a resize moves its request to a
+   * different pool size: the next power of two, or the canvas size when that fits and is smaller.
+   * Parallel to `sampleHandles`; `-1` = not yet bound.
    */
   lastSampleSourceUids: number[];
   /**
-   * Cached `RenderTarget` from the last `_resolveTarget` call
+   * Cached `RenderTarget` from the last `_resolveTarget` call, which says when it is reused
    *
-   * Validated each frame by source-identity diff against the `texture` fields stored
-   * in `attachments` (which double as the previous-frame snapshot — see
-   * `_resolveTarget`). A mismatch (resize, swap-chain swap, transient
-   * realloc, filter target swap) re-queries `_renderTargetCache`. Also
-   * explicitly invalidated by `_invalidatePerPassTargets` when the global
-   * cache is mutated under a stable source identity (first-frame default
-   * depth materialisation, swap-chain reset).
+   * `compile()` clears it along with the attachment shape it was looked up by, and
+   * `_invalidatePerPassTargets` clears it when the render-target cache is reset.
    */
   cachedTarget: RenderTarget | null;
   /**
@@ -242,7 +280,7 @@ interface AddedPass {
    *
    * Compared against the graph-level `_resolveTick` that bumps each frame:
    * `candidateTick === tick` ⇔ pass survived this frame's `condition()`;
-   * `neededTick === tick` ⇔ pass survived the refcount cull. Stale marks
+   * `neededTick === tick` ⇔ pass survived the cull. Stale marks
    * from prior frames are naturally invalid against the new tick.
    */
   candidateTick: number;
@@ -252,8 +290,8 @@ interface AddedPass {
 /**
  * Construction options for {@link RenderGraph}
  *
- * The default-attachment getters are resolved each frame so the graph picks up
- * swap-chain / resize swaps transparently.
+ * The default-attachment getters run each frame, so the graph follows a resize or a new
+ * swap-chain texture by itself.
  * @category rendering
  * @advanced
  */
@@ -263,9 +301,11 @@ export interface RenderGraphOptions {
   /** Resolves the View's default (screen) depth attachment for the frame */
   defaultDepth: (session: RenderSession) => BindableTexture;
   /**
-   * Composite mode: describe the colour + depth transient the scene accumulates
-   * into (an output pass then blits it to the default target). Omit both for
-   * direct mode, where the scene targets *are* the default (screen) targets.
+   * Composite mode: the colour transient the scene draws into, which an output pass then draws
+   * onto the default target
+   *
+   * Omit it and {@link RenderGraphOptions#sceneDepth} for direct mode, where the scene draws
+   * straight into the default (screen) targets. Fixed for the graph's lifetime.
    */
   sceneColor?: TransientTextureOptions;
   /** Depth counterpart of {@link RenderGraphOptions#sceneColor} — provide both or neither */
@@ -273,13 +313,14 @@ export interface RenderGraphOptions {
 }
 
 /**
- * Resource-centric render graph
+ * The ordered list of passes a {@link View3D} renders, with the textures they read and write
  *
- * Passes declare reads/writes/samples via `setup(builder)`; the graph derives dependency edges,
- * validates hazards, and per frame culls passes whose outputs nobody observes.
+ * Each pass declares what it writes, reads and samples in `setup(builder)`. From that the graph
+ * orders passes, rejects a pass that reads what it writes, and each frame skips passes whose
+ * output nothing uses. It also hands out pooled textures for the length of their use and binds
+ * each pass's render target.
  *
- * Lifecycle: `addPass` → `compile()` (once) → per-frame `run(session)`
- * (`resolve` + `prepare` + `execute`).
+ * Lifecycle: `addPass` each pass, `compile()` once, then `run(session)` every frame.
  * @category rendering
  * @advanced
  */
@@ -287,21 +328,28 @@ export class RenderGraph {
   private readonly _resources: ResourceEntry[] = [];
   private readonly _passes: AddedPass[] = [];
 
-  /** Single recording builder shared across every pass's `setup()` call */
   private readonly _builder: PassBuilder;
 
-  /** Render targets keyed by attachment uids — reset on attachment-source-uid change */
+  /** Render targets keyed by attachment uids, reset when the default target's textures change */
   private readonly _renderTargetCache: RenderTargetCache = new RenderTargetCache();
 
   /**
-   * Reusable shape for seeding `session.defaultTarget` into the cache each
-   * frame; mutated in place by `_prepareDefaultTarget`
-   *
-   * EMPTY placeholders are overwritten with the live default-target sources before lookup.
+   * Key `_prepareDefaultTarget` seeds `session.defaultTarget` under, patched in place with the
+   * default target's live sources; the `Texture.EMPTY` placeholders never match a real source
    */
   private readonly _defaultCacheKey: PassAttachments = {
     colors: [{ texture: Texture.EMPTY.source }],
     depth: { texture: Texture.EMPTY.source },
+  };
+
+  /**
+   * `_defaultCacheKey` for a pass that only depth-tests against the default target; shares its
+   * attachment objects, so the per-frame source swap reaches both keys
+   */
+  private readonly _defaultCacheKeyReadOnlyDepth: PassAttachments = {
+    colors: this._defaultCacheKey.colors,
+    depth: this._defaultCacheKey.depth,
+    depthReadOnly: true,
   };
 
   /**
@@ -311,26 +359,28 @@ export class RenderGraph {
    */
   private readonly _cameraTargets = new Map<Camera3D, CameraTarget>();
 
-  /** Scratch for `resolve`'s back-to-front camera walk */
+  /** The scene pair as a render target, once a copy has looked it up: see `RenderGraph._drawTarget` */
+  private _sceneDrawTarget: DrawTarget | null = null;
+
   private readonly _camerasSeen = new Set<Camera3D>();
 
   /**
    * Ids of every camera target's colour transient
    *
    * Two things set a camera target apart from other transients. Its writers are anchored like
-   * writers of an imported resource: the executor copies it into the camera's texture, so its
-   * output is observed, just not through a pass access the refcount cull could see. And it binds
-   * with the outer binding's `flipY` rather than the composite reconciliation, so it is stored
-   * the way a render texture is and the copy lands the right way up.
+   * writers of an imported texture: the graph copies it into the camera's texture, so its output
+   * is used, just not through a pass access the cull could see. And it binds with the outer
+   * binding's `flipY` rather than the transient flip `execute` describes, so it is stored the way a
+   * render texture is and the copy lands the right way up.
    */
   private readonly _cameraTargetColors = new Set<number>();
 
   /**
-   * Canonical colour target scene passes write — what `b.targetColor` resolves to for a pass
+   * The colour scene passes draw into, and what {@link PassBuilder#targetColor} is for a pass
    * drawing the view
    *
-   * The scene pair is the default (screen) pair in direct mode, or a dedicated transient in
-   * composite mode (from `RenderGraphOptions.sceneColor`/`sceneDepth`). Fixed at construction.
+   * The default (screen) colour in direct mode, or a transient in composite mode
+   * ({@link RenderGraphOptions#sceneColor}). Fixed at construction.
    */
   public readonly sceneColor: ColorHandle;
   /** Depth target paired with {@link RenderGraph#sceneColor} */
@@ -347,26 +397,26 @@ export class RenderGraph {
   /** Depth attachment paired with {@link RenderGraph#defaultColor} */
   public readonly defaultDepth: DepthHandle;
 
-  /** Last frame's default-attachment uids; drives the cache reset on resize / swap-chain swap */
+  /** Last frame's default-attachment uids, or `-1` before the first; `_maybeResetRenderTargetCache` compares them */
   private _lastColorUid = -1;
   private _lastDepthUid = -1;
 
-  /** Passes that survived this frame's condition + refcount cull, in declaration order */
+  /** Passes that survived this frame's `condition` and cull, in declaration order */
   private readonly _activePasses: AddedPass[] = [];
 
-  /** Transient ids to acquire before pass `i`'s target push — rebuilt each `resolve()` */
+  /** Transient ids to acquire before pass `i` binds its target, rebuilt each `resolve()` */
   private readonly _acquireAt: number[][] = [];
 
   /** Transient ids to release after pass `i`'s `render()` returns — rebuilt each `resolve()` */
   private readonly _releaseAt: number[][] = [];
 
   /**
-   * Per-resource lifetime endpoints + first-writer index for the current
-   * frame, indexed by `handle._id` (dense ints starting at 0)
+   * Active-pass indices of each resource's first and last use, and first and last writer, this
+   * frame, indexed by `handle._id`
    *
-   * `-1` means "untouched this frame". Grown on demand to `_resources.length`,
-   * `fill(-1)` each `resolve()` — no per-frame object allocation. Consumed
-   * by the schedule emit loop in `resolve()` and by `_effectiveLoadOp`.
+   * `-1` means untouched this frame. Grown on demand to `_resources.length` and refilled with `-1`
+   * each `resolve()`, so nothing is allocated per frame. Use drives transient acquire and release,
+   * the first writer drives `_effectiveLoadOp`, and the last writer places mipmap generation.
    */
   private _firstUseByResId: Int32Array = new Int32Array(0);
   private _lastUseByResId: Int32Array = new Int32Array(0);
@@ -379,7 +429,7 @@ export class RenderGraph {
    * Bumped at the top of each `resolve()`
    *
    * Compared against per-pass `candidateTick` / `neededTick` for allocation-free membership
-   * checks during the cull. Safe-integer space; at 60fps, overflow is millennia away.
+   * checks during the cull. At 60 fps it stays a safe integer for millions of years.
    */
   private _resolveTick = 0;
 
@@ -388,35 +438,30 @@ export class RenderGraph {
   private readonly _resolveStack: AddedPass[] = [];
 
   /**
-   * Reused capture of the binding live at `execute` entry (filter surface /
-   * canvas, its frame, orientation, subresource)
+   * Reused capture of the binding live when `execute` starts: the canvas or a filter's texture, its
+   * frame, orientation and subresource
    *
-   * Replayed at exit so sibling 2D / other View3Ds inherit the exact original binding.
+   * Replayed when `execute` ends, so 2D content and other views drawn after this one land where
+   * they would have. `getBindState` captures it with no clear, so the replay never wipes the target.
    */
   private _savedBind?: BindOptions;
 
-  /** Re-entry guard for `destroy` */
   private _destroyed = false;
 
   constructor(opts: RenderGraphOptions) {
     this.defaultColor = this.importColor(opts.defaultColor);
     this.defaultDepth = this.importDepth(opts.defaultDepth);
-    // Composite (opts.sceneColor/Depth provided): the scene accumulates into its
-    // own transient and an output pass blits it to the default. Direct (omitted):
-    // the scene targets are the default (screen) targets. Fixed at construction.
     this.sceneColor = opts.sceneColor ? this.createColor(opts.sceneColor) : this.defaultColor;
     this.sceneDepth = opts.sceneDepth ? this.createDepth(opts.sceneDepth) : this.defaultDepth;
     this._sceneColorOptions = opts.sceneColor ?? null;
     this._builder = new PassBuilder(this);
   }
 
-  // --- Imported resources (anchors — their writers always survive the cull) ---
-
   /**
-   * Register an externally owned color texture
+   * Register an externally owned colour texture
    *
-   * The getter runs each frame so the graph follows texture-identity changes
-   * (resize / swap-chain reacquisition) without re-registration.
+   * The getter runs each frame, so the graph follows a resized or swapped texture without
+   * registering it again. A pass that writes an imported texture always survives the cull.
    * @param getter - Resolves the live texture for the frame.
    * @returns The handle for the imported colour resource.
    */
@@ -433,13 +478,12 @@ export class RenderGraph {
     return this._importResource('depth', getter) as DepthHandle;
   }
 
-  // --- Transient resources (graph-allocated, pooled within a frame) ---
-
   /**
-   * Register a graph-allocated color texture
+   * Register a graph-allocated colour texture
    *
-   * The descriptor runs each frame so the texture can follow a moving size; the graph
-   * reallocates only on descriptor change, and non-overlapping transients share pooled sources.
+   * Its size is worked out each frame, so it follows the viewport. The texture comes from pixi's
+   * `TexturePool` before the first pass that uses it and goes back after the last, so transients
+   * whose uses don't overlap can share one texture.
    * @param options - Size, resolution, format and label — see {@link TransientTextureOptions}.
    * @returns The handle for the transient colour resource.
    */
@@ -456,8 +500,6 @@ export class RenderGraph {
     return this._createTransient('depth', toDescribe('depth', options)) as DepthHandle;
   }
 
-  // --- Camera targets ---
-
   /**
    * The target a pass drawing from `camera` writes — what the builder seeds `targetColor` /
    * `targetDepth` with for a pass on a camera with a render texture — and the texture it is
@@ -466,7 +508,7 @@ export class RenderGraph {
    * The target is a pooled colour + depth pair described from the texture each frame, so a
    * resized or swapped texture is followed without a rebuild, in the texture's own format so
    * the copy is texel for texel. As a transient, its first writer clears it. The copy runs
-   * after the camera's last active pass (`resolve` finds it, `execute` does it).
+   * after the camera's last active pass that writes the colour (`resolve` finds it, `execute` does it).
    * @param camera - A camera with a render texture.
    * @returns The camera's target and texture handles.
    * @internal
@@ -500,6 +542,7 @@ export class RenderGraph {
         label: 'cameraTargetDepth',
       })) as DepthHandle,
       texture: this._importResource('color', () => camera.renderTexture!) as ColorHandle,
+      draw: null,
     };
     this._cameraTargetColors.add(target.color._id);
 
@@ -508,9 +551,69 @@ export class RenderGraph {
     return target;
   }
 
-  // --- Passes ---
+  /**
+   * The render target `camera`'s passes draw into, and that target's content rect: what a copy of
+   * that camera's picture reads
+   *
+   * A camera with a render texture draws into its camera target, and any other camera draws into
+   * the scene pair. The rect is the target's content frame in physical pixels, or the view's rect
+   * on the screen when the scene pair is the screen. It is the whole of that rect: a camera's own
+   * `viewport` doesn't narrow it. A copy reads from here, whatever is bound, so a pass on another
+   * target running in between can't redirect it.
+   *
+   * The graph looks the target up in the render-target cache under the pair's colour and depth,
+   * so it is the `RenderTarget` that a pass writing both of them binds. For the screen it is
+   * pixi's own target, not a second one around the same textures. That matters on WebGL, where a
+   * copy first resolves a multisampled source from that source's own buffers. Only the screen
+   * can be multisampled, and its buffers are the ones the draws filled. When the colour or the
+   * depth was already released this frame, the target leaves it out. That happens to the depth
+   * when the last pass that writes a camera's colour runs after the depth's last use. The graph
+   * repeats the lookup only when a source changes. It refreshes the rect on every call, because
+   * a pooled source can come back with a different content size.
+   * @param camera - The camera whose picture is copied, or `null` for the view's camera.
+   * @param session - The frame's render session.
+   * @returns The camera's draw target, reused across calls.
+   * @internal
+   */
+  public _drawTarget(camera: Camera3D | null, session: RenderSession): DrawTarget {
+    const cameraTarget = camera?.renderTexture ? this._cameraTarget(camera) : null;
+    const colorEntry = this._resources[(cameraTarget?.color ?? this.sceneColor)._id];
+    const depthEntry = this._resources[(cameraTarget?.depth ?? this.sceneDepth)._id];
+    const colorSource = this._liveSource(colorEntry, session);
+    const depthSource = this._liveSource(depthEntry, session);
 
-  /** Passes in declaration order — freshly materialised so callers can keep the result */
+    let draw = cameraTarget ? cameraTarget.draw : this._sceneDrawTarget;
+
+    if (draw === null || draw.colorSource !== colorSource || draw.depthSource !== depthSource) {
+      if (colorSource) _drawTargetColors[0].texture = colorSource;
+      if (depthSource) _drawTargetDepth.texture = depthSource;
+      _drawTargetKey.colors = colorSource ? _drawTargetColors : undefined;
+      _drawTargetKey.depth = depthSource ? _drawTargetDepth : undefined;
+      const target = this._renderTargetCache.get(_drawTargetKey);
+      _drawTargetColors[0].texture = Texture.EMPTY.source;
+      _drawTargetDepth.texture = Texture.EMPTY.source;
+
+      if (draw === null) {
+        draw = { target, viewport: new Rectangle(), colorSource, depthSource };
+        if (cameraTarget) cameraTarget.draw = draw;
+        else this._sceneDrawTarget = draw;
+      } else {
+        draw.target = target;
+        draw.colorSource = colorSource;
+        draw.depthSource = depthSource;
+      }
+    }
+
+    const colorTexture = colorEntry.kind === 'transient' ? colorEntry.texture : null;
+    const content = colorTexture ?? (depthEntry.kind === 'transient' ? depthEntry.texture : null);
+
+    if (content) toPhysicalRect(content.frame, content.source.resolution, draw.viewport);
+    else draw.viewport.copyFrom(session.viewport);
+
+    return draw;
+  }
+
+  /** Passes in declaration order, in a new array the caller can keep */
   public get passes(): GraphRenderPass[] {
     const out: GraphRenderPass[] = [];
     for (let i = 0; i < this._passes.length; i++) out.push(this._passes[i].pass);
@@ -590,24 +693,24 @@ export class RenderGraph {
     return pass;
   }
 
-  // --- Lifecycle ---
-
   /**
-   * Static analysis of every pass's accesses
+   * Works out, once, what each pass depends on and which render target it binds
    *
-   * Per pass:
-   *  - `dependsOn` — writer of any sampled / read / re-written handle id.
-   *  - `isAnchored` — writes or produces an imported resource, or a camera target the executor copies.
-   *  - `attachments` — reusable `PassAttachments` shape (or `null` for
-   *    transfer-only passes); per-frame `_resolveTarget` patches the
-   *    texture fields before cache lookup.
+   * Idempotent: it starts every pass afresh. A pass that writes a texture depends on the texture's
+   * previous writer. A pass that reads or samples one depends on every earlier writer, not just
+   * the last, because the last can drop out through its `condition`. The composite scene colour
+   * shows why: the depth clear, background, opaque and transparent passes all write it, and when a
+   * transmission pass with no glass drops out, a chain of writers would lose every writer before
+   * it. A pass that writes an imported texture or a camera target is one the cull keeps and works
+   * back from.
    *
-   * Read-edges resolve against the most-recent writer in declaration order
-   * (no snapshot reads). Throws if a pass both writes and samples/reads the
-   * same handle id.
+   * A pass's render target comes from its `writeColor`, `writeDepth` and `readDepthAttachment`
+   * declarations only, so a read-only attachment is always a depth.
+   *
+   * Throws if a pass both writes and reads or samples the same texture. A pass declares a handful
+   * of accesses, so that check scans them directly instead of building a Set.
    */
   public compile(): void {
-    // Reset compile-time state — compile() is idempotent.
     for (let i = 0; i < this._passes.length; i++) {
       const ap = this._passes[i];
       ap.dependsOn.length = 0;
@@ -618,23 +721,15 @@ export class RenderGraph {
       ap.sampleHandles.length = 0;
       ap.sampleSlots.length = 0;
       ap.lastSampleSourceUids.length = 0;
-      // The attachment shape is rebuilt below; the per-pass target cache
-      // is tied to it, so reset to force a clean lookup on the next frame.
       ap.cachedTarget = null;
     }
 
-    // Per-handle-id: every writer pass so far, in declaration order. A read
-    // depends on all of them (see the read-edge block), not just the last.
     const writersById: Record<number, AddedPass[]> = Object.create(null);
 
     for (let i = 0; i < this._passes.length; i++) {
       const ap = this._passes[i];
       const accesses = ap.record.accesses;
 
-      // One walk: dependency edges, anchoring, attachment shape, and the
-      // single-pass hazard check (same id written and read/sampled). Pass
-      // sizes are small, so the inline O(n²) hazard scan beats allocating
-      // a Set per pass.
       let hasAttachment = false;
       let depthReadOnly = false;
 
@@ -643,7 +738,6 @@ export class RenderGraph {
         const id = a.handle._id;
 
         if (a.mode === 'write_attachment' || a.mode === 'produce') {
-          // Write-after-write edge to the immediately preceding writer.
           const writers = writersById[id] ?? (writersById[id] = []);
           const prev = writers[writers.length - 1];
           if (prev && prev !== ap && !ap.dependsOn.includes(prev)) {
@@ -653,8 +747,6 @@ export class RenderGraph {
 
           if (this._resources[id].kind === 'imported' || this._cameraTargetColors.has(id)) ap.isAnchored = true;
         } else {
-          // sample / read / read_attachment — read-side edge + hazard check.
-          // Same id may not also be written in this pass.
           for (let k = 0; k < accesses.length; k++) {
             const b = accesses[k];
             if (k === j) continue;
@@ -666,12 +758,6 @@ export class RenderGraph {
             }
           }
 
-          // Read-after-write edges — depend on EVERY prior writer, not just the
-          // last. A multiply-written attachment (the composite scene colour:
-          // cleared by DepthClear, then drawn by Background / Opaque / Transparent)
-          // needs all its writers kept. The WAW chain alone severs when an
-          // intermediate writer is condition-culled (e.g. Transmission with no
-          // glass), dropping every writer upstream of it.
           const writers = writersById[id];
           if (writers) {
             for (let w = 0; w < writers.length; w++) {
@@ -680,8 +766,6 @@ export class RenderGraph {
             }
           }
 
-          // Pre-extract sample binds so the executor walks only the slots
-          // it actually has to set — most attachment-only passes have zero.
           if (a.mode === 'sample') {
             ap.sampleHandles.push(a.handle);
             ap.sampleSlots.push(a.slot!);
@@ -689,10 +773,6 @@ export class RenderGraph {
           }
         }
 
-        // Attachment shape — only `write_attachment` and `read_attachment`
-        // define the target. The builder only ever produces depth
-        // `read_attachment` (via `readDepthAttachment`), so the read path
-        // is depth-only by construction.
         if (a.mode === 'write_attachment') {
           hasAttachment = true;
           if (a.handle._kind === 'color') {
@@ -709,7 +789,6 @@ export class RenderGraph {
 
       if (!hasAttachment) continue;
 
-      // Build the reusable shape once; `texture` fields are patched per frame.
       const attachments: PassAttachments = {};
       if (ap.colorHandles.length > 0) {
         const colors: {
@@ -730,13 +809,10 @@ export class RenderGraph {
   }
 
   /**
-   * Run this frame: {@link RenderGraph#resolve}, {@link RenderGraph#prepareCameras},
-   * {@link RenderGraph#execute}
+   * Renders one frame: picks this frame's passes, builds the cameras they draw from, then draws them
    *
-   * The graph's three steps, in the only order they work in: pick the passes, build the cameras
-   * those passes need, draw. Everything that is true of the view whatever the pass list says is
-   * already settled before this is called: its own camera by the scene update, its lights and
-   * globals by the pipe's `prepareView`. The three stay public for tests that only cull.
+   * Everything that is true of the view whatever passes run is settled before this is called: its
+   * own camera by the scene update, its lights and globals by the pipe's `prepareView`.
    * @param session - The frame's render session.
    */
   public run(session: RenderSession): void {
@@ -746,24 +822,31 @@ export class RenderGraph {
   }
 
   /**
-   * Per-frame pass selection
+   * Picks this frame's passes and plans their textures
    *
-   *  1. Drop passes whose optional `condition(session)` returns false.
-   *  2. Refcount cull — keep only what's reachable backward through
-   *     `dependsOn` from anchored passes. Survivors are emitted in
-   *     declaration order.
+   *  1. Drops passes whose optional `condition(session)` returns false.
+   *  2. Keeps only the passes reachable backward through their dependencies from a pass that
+   *     writes an imported texture or a camera target, in declaration order. A dependency its
+   *     own `condition` dropped doesn't keep anything: its output isn't drawn this frame, and a
+   *     pass reading it sees whatever the texture last held.
    *
-   * Also builds the transient acquire/release schedule and the first-writer
-   * map for `_effectiveLoadOp`.
+   * It then plans the frame: where each transient is acquired and released, each texture's first
+   * writer, which decides between clearing and loading, and each colour's last writer, after which
+   * its mipmaps are generated.
+   *
+   * A camera's target is copied into its render texture after the last active pass that writes
+   * the camera's colour, and the texture's mipmaps are generated after that copy. That pass is the
+   * last point the colour is still allocated: a later pass of the camera that only reads its depth
+   * runs after the colour is released. A camera whose colour nothing writes this frame keeps its
+   * last picture.
    * @param session - The frame's render session.
+   * @internal
    */
   public resolve(session: RenderSession): void {
     this._activePasses.length = 0;
 
     const tick = ++this._resolveTick;
 
-    // Stage 1: condition() filter. Mark survivors with the frame's tick;
-    // membership in the candidate set is `ap.candidateTick === tick`.
     const candidates = this._resolveCandidates;
     candidates.length = 0;
     for (let i = 0; i < this._passes.length; i++) {
@@ -775,10 +858,6 @@ export class RenderGraph {
     }
     if (candidates.length === 0) return;
 
-    // Stage 2: refcount cull — flood-fill backward from anchored passes.
-    // A dependency that itself failed `condition()` doesn't extend the
-    // survival set (its output isn't produced; downstream consumers sample
-    // stale data this frame — caller's contract).
     const stack = this._resolveStack;
     stack.length = 0;
     for (let i = 0; i < candidates.length; i++) {
@@ -793,25 +872,17 @@ export class RenderGraph {
       const deps = ap.dependsOn;
       for (let i = 0; i < deps.length; i++) {
         const dep = deps[i];
-        // Skip deps that failed condition() or are already in the survival set.
         if (dep.candidateTick !== tick || dep.neededTick === tick) continue;
         dep.neededTick = tick;
         stack.push(dep);
       }
     }
 
-    // Emit survivors in declaration order.
     for (let i = 0; i < this._passes.length; i++) {
       const ap = this._passes[i];
       if (ap.neededTick === tick) this._activePasses.push(ap);
     }
 
-    // Lifetime schedule + writer maps. firstUse / lastUse drive transient
-    // acquire/release in `execute()` so non-overlapping handles can share pooled
-    // sources; firstWriterByResId drives the inferred loadOp in `_effectiveLoadOp`;
-    // lastWriterByResId places each colour handle's mipmap generation after its final
-    // writer. All persistent Int32Arrays indexed by `handle._id` (dense), `-1`
-    // for "untouched this frame".
     const n = this._activePasses.length;
     while (this._acquireAt.length < n) {
       this._acquireAt.push([]);
@@ -872,18 +943,17 @@ export class RenderGraph {
       if (last !== -1) this._activePasses[last].mipmapHandles.push(lastWrittenHandle[id]!);
     }
 
-    // A camera's target is copied into its texture after its last active pass, whichever that is
-    // this frame. Back to front, so the first sighting of a camera is that pass. The texture
-    // joins that pass's mipmap handles: the copy runs first, so mipmaps come from the picture.
     const seen = this._camerasSeen;
     seen.clear();
     for (let i = n - 1; i >= 0; i--) {
       const ap = this._activePasses[i];
       const camera = ap.pass.camera;
       if (!camera?.renderTexture || seen.has(camera)) continue;
+      const cameraTarget = this._cameraTarget(camera);
+      if (lastWriter[cameraTarget.color._id] !== i) continue;
       seen.add(camera);
       ap.copyCameras.push(camera);
-      ap.mipmapHandles.push(this._cameraTarget(camera).texture);
+      ap.mipmapHandles.push(cameraTarget.texture);
     }
   }
 
@@ -898,6 +968,7 @@ export class RenderGraph {
    * Runs before any render target is bound, so every camera reads the same winding off the same
    * binding. Call after {@link RenderGraph#resolve}, before {@link RenderGraph#execute}.
    * @param session - The frame's render session.
+   * @internal
    */
   public prepareCameras(session: RenderSession): void {
     uploadCamera(session.view3d.camera, session);
@@ -912,20 +983,40 @@ export class RenderGraph {
   }
 
   /**
-   * Walk active passes and dispatch them (target selection: `_resolveTarget`)
+   * Draws this frame's active passes in order
    *
-   * The graph borrows the live default-target binding and never touches pixi's
-   * render-target stack. Default-target passes (re)establish it with
-   * `bind(defaultSurface, NONE, frame)`: binding the framed surface lets pixi derive
-   * the inset viewport + projection from the filter frame, and idempotent `bind`
-   * lets many 3D insets weave into one open pass (keep-encoder-open). No clear —
-   * colour loads (it carries 2D) and per-view depth is reset by `DepthClearPass`'s
-   * draw, so a clear can't force a per-inset `beginRenderPass`.
+   * Before binding anything it captures pixi's current binding (the canvas, or a 2D filter's
+   * texture) and runs every pass's `prepare`; at the end it binds that capture again. It never
+   * pushes or pops pixi's render-target stack. For each pass it then:
+   *  1. Takes the transients the pass is first to use from pixi's `TexturePool`, relabelled so a
+   *     GPU capture names what each holds now.
+   *  2. Binds the pass's render target, unless it is already bound. A pass on the view's own
+   *     target binds the captured surface at the view camera's frame, and pixi works out the
+   *     inset viewport and projection from that. This bind never clears: the colour carries the 2D
+   *     content beneath, `DepthClearPass` resets the view's depth, and a clear would stop pixi
+   *     reusing the open WebGPU render pass, which is how several views over one surface share
+   *     one. Any other target binds at its texture's frame, with the clear its first writer asks
+   *     for; clearing the scene depth spends {@link RenderSession#needsDepthClear}.
+   *  3. Binds the textures the pass samples, before `render`, so the WebGPU bundles it records
+   *     capture them. When a sampled texture changes, as when a pooled transient comes back as a
+   *     different texture, the pass's bundles re-record.
+   *  4. Runs `render`. For a pass with its own camera and a target the graph bound, the GPU
+   *     viewport and `session.activeViewport` narrow to the camera's frame for the call, which
+   *     saves binding again; a camera whose frame lands nowhere skips the pass. A pass with no
+   *     attachments binds its own targets.
+   *  5. Copies camera targets into their render textures, generates mipmaps for the colours the
+   *     pass last wrote, and returns the transients it was last to use, so the pool's next request
+   *     of the same kind gets the same texture.
    *
-   * `session.activeTarget` records the live pass across passes; a self-managing pass
-   * that closes or diverts it (`CopyOpaquePass`, the shadow pass) nulls it so the
-   * next default-target pass re-establishes the binding.
+   * A transient binds with whichever `flipY` gives it the outer target's front-face winding:
+   * cameras are built for the outer target, and on WebGL a texture target carries a y flip of its
+   * own. A camera target binds with the outer `flipY` instead, so it is stored the way a render
+   * texture is and the copy lands upright.
+   *
+   * `session.activeTarget` records the bound target across passes. Whatever closes or moves the
+   * binding (a copy, the shadow pass, mipmap generation) clears it, so the next pass binds again.
    * @param session - The frame's render session.
+   * @internal
    */
   public execute(session: RenderSession): void {
     this._maybeResetRenderTargetCache(session);
@@ -934,27 +1025,13 @@ export class RenderGraph {
     const renderer = session.renderer as WebGLRenderer | WebGPURenderer;
     const pipe = renderer.renderPipes.view3d;
 
-    // The binding pixi had on entry (filter input texture / canvas, its frame and
-    // Y-orientation). Captured up front — a self-managing pass can divert the live
-    // binding mid-graph — and replayed at the end of the walk. Default-target passes
-    // bind its surface (not the bare RenderTarget) so pixi derives the viewport /
-    // projection from the filter frame. `_savedBind` is reused across frames;
-    // getBindState overwrites every field.
     const savedBind = (this._savedBind = renderer.renderTarget.getBindState(this._savedBind));
     const defaultSurface = savedBind.target;
     const defaultFlipY = !!savedBind.flipY;
 
-    // Winding reconciliation for transient binds. `prepareCamera` flips a camera's bound projection to
-    // match the *outer* target's front face (for a camera without a render texture), but composite scene
-    // passes draw into a non-root transient, which on WebGL carries its own inherent flip. So a transient
-    // binds with whichever `flipY` lands it on the outer's resolved winding, and culling stays consistent
-    // whatever the outer is.
     const outerInverted = renderer.renderTarget.isFrontFaceInverted(session.defaultTarget, defaultFlipY);
     const transientFlipY = outerInverted !== (renderer.type === RendererType.WEBGL);
 
-    // Prepare sweep: every active pass uploads its draw data before any render target is bound, so
-    // a cull compute can run with no render pass open. `prepareCameras` already built the cameras,
-    // so the frustums those culls read are this frame's.
     for (let i = 0; i < this._activePasses.length; i++) {
       this._activePasses[i].pass.prepare?.(session);
     }
@@ -963,8 +1040,6 @@ export class RenderGraph {
       const ap = this._activePasses[i];
       const { pass, record } = ap;
 
-      // Acquire firstUse transients before `_resolveTarget`, which reads their
-      // `.source` / `.frame` while patching the attachment shape.
       const toAcquire = this._acquireAt[i];
       for (let k = 0; k < toAcquire.length; k++) {
         const entry = this._resources[toAcquire[k]] as Extract<
@@ -972,10 +1047,7 @@ export class RenderGraph {
           { /** Narrows to the transient entry variant */ kind: 'transient' }
         >;
         const desc = entry.describe(session);
-        // The descriptor is a pool request as it stands: content size, format, mips, scale mode.
         const texture = TexturePool.getOptimalTexture(desc);
-        // Pooled sources are labelled by the pool that minted them; relabel to the current tenant
-        // so a capture names what the texture is holding now rather than where it came from.
         if (desc.label) texture.source.label = desc.label;
         entry.texture = texture;
       }
@@ -983,11 +1055,6 @@ export class RenderGraph {
       const { target, flipY, frame } = this._resolveTarget(ap, session, transientFlipY, defaultFlipY);
 
       if (target === session.defaultTarget) {
-        // Bind the framed surface (pixi derives viewport/projection from the filter
-        // frame), with the view camera's frame to narrow to the inset. No
-        // clear: colour loads, depth is reset by `DepthClearPass`'s draw — a clear
-        // would stop idempotent `bind` reusing the open pass and force a
-        // `beginRenderPass` per inset, breaking the weave.
         if (session.activeTarget !== target) {
           renderer.renderTarget.bind({
             target: defaultSurface,
@@ -999,11 +1066,6 @@ export class RenderGraph {
           session.activeViewport = session.viewport;
         }
       } else if (target !== null && target !== session.activeTarget) {
-        // A non-default attachment target: the composite scene colour/depth, an effect chain
-        // buffer, or a camera's target. Bind the texture's frame so the pass draws into the same
-        // sub-rect consumers map back through. A transient is non-root, so it binds with
-        // `transientFlipY` (WebGL winding reconciliation, see above); a camera target and an
-        // imported target keep the outer `defaultFlipY`.
         const clear = this._resolveClear(record, i);
         renderer.renderTarget.bind({
           target,
@@ -1011,39 +1073,22 @@ export class RenderGraph {
           frame: frame ?? undefined,
           flipY,
         });
-        // A bind that just load-op-cleared the scene depth satisfies the per-view
-        // depth reset — DepthClearPass spends the demand instead of re-clearing
-        // (see RenderSession.needsDepthClear). Scoped to the scene depth so a
-        // custom transient clearing its own depth can't falsely satisfy it.
         if ((clear & CLEAR.DEPTH) !== 0 && ap.depthHandle !== null && ap.depthHandle._id === this.sceneDepth._id) {
           session.needsDepthClear = false;
         }
         session.activeTarget = target;
         if (frame) {
           const resolution = (target.colorTexture?.source ?? target.depthStencilTexture!.source).resolution;
-          _activeViewport.x = Math.round(frame.x * resolution);
-          _activeViewport.y = Math.round(frame.y * resolution);
-          _activeViewport.width = Math.max(1, Math.round(frame.width * resolution));
-          _activeViewport.height = Math.max(1, Math.round(frame.height * resolution));
-          session.activeViewport = _activeViewport;
+          session.activeViewport = toPhysicalRect(frame, resolution, _activeViewport);
         }
       }
 
-      // Bind sample accesses after the target is set so bundles recorded
-      // inside `pass.render()` capture the right bind-group state.
-      // `sampleHandles` is pre-filtered at compile time; attachment-only
-      // passes loop zero times here.
       const sampleHandles = ap.sampleHandles;
       const sampleSlots = ap.sampleSlots;
       const lastSampleSourceUids = ap.lastSampleSourceUids;
       for (let j = 0; j < sampleHandles.length; j++) {
         const resolved = this._bindResource(sampleHandles[j], session);
         session.globalBindGroup.setResource(resolved, sampleSlots[j]);
-        // A cached WebGPU render bundle bakes this binding at record time. If
-        // the underlying source changed since last frame — a pooled transient
-        // swapping instances as the viewport crosses a power-of-two bucket —
-        // invalidate each batch's bundle for this consuming pass so it can't
-        // sample a stale texture. Draw commands stay valid. GL rebinds live.
         const r = resolved as {
           /** Present when the resolved binding is a `Texture` wrapper */
           source?: {
@@ -1066,11 +1111,6 @@ export class RenderGraph {
         }
       }
 
-      // A pass drawing from its own camera lands in that camera's frame. Save the bind rect,
-      // narrow the GPU viewport, then put both back. Bind already set the viewport; this is
-      // the bypass that avoids rebinding. Only for passes the executor bound a target for: a
-      // self-managing pass (a copy on a texture camera) owns its GPU work and may close the pass
-      // the viewport would be restored on.
       const passCamera = target !== null && pass.camera && pass.camera !== session.view3d.camera ? pass.camera : null;
       const passViewport = passCamera && cameraFrameToPhysicalViewport(passCamera, session, session.activeViewport);
 
@@ -1088,25 +1128,18 @@ export class RenderGraph {
         pipe.setViewport(restore);
       }
 
-      // A camera's target is complete once its last pass has drawn: copy it into the texture the
-      // scene samples. It is still bound, and `copyColor` reads the bound target's live rect,
-      // which is the whole of it.
       const copyCameras = ap.copyCameras;
       for (let k = 0; k < copyCameras.length; k++) {
-        pipe.copyColor(this._cameraTarget(copyCameras[k]).texture, session);
+        const camera = copyCameras[k];
+        pipe.copyColor(this._drawTarget(camera, session), camera.renderTexture!, session);
       }
 
-      // Every colour this pass finished writing is complete now, and nothing has sampled it
-      // yet: generate mipmaps for any whose source asks for them. In-band, so on WebGPU the
-      // generation is ordered on the frame encoder between this write and the next read.
       const mipmapHandles = ap.mipmapHandles;
       for (let k = 0; k < mipmapHandles.length; k++) {
         const handle = mipmapHandles[k];
         if (this._texture(handle, session).source.autoGenerateMipmaps) pipe.generateMips(handle, session);
       }
 
-      // Release lastUse transients after `pass.render()` so the LIFO can
-      // hand the slot to a later transient of the same descriptor.
       const toRelease = this._releaseAt[i];
       for (let k = 0; k < toRelease.length; k++) {
         const entry = this._resources[toRelease[k]] as Extract<
@@ -1118,20 +1151,17 @@ export class RenderGraph {
       }
     }
 
-    // Replay the entry binding so sibling 2D / other View3Ds inherit it exactly
-    // (target, frame, orientation — the capture is non-destructive, clear = NONE).
-    // Idempotent: a near-no-op unless a self-managing pass left the binding elsewhere.
     renderer.renderTarget.bind(savedBind);
     session.activeTarget = null;
   }
 
   /**
-   * Asks every pass to give back the GPU memory it can rebuild lazily (see
-   * {@link GraphRenderPass#unload}) — the shadow map above all
+   * Asks every pass to give back the GPU memory it can rebuild lazily, the shadow map above all;
+   * see {@link GraphRenderPass#unload}
    *
-   * The graph itself keeps nothing to free here: transients are acquired and released
-   * inside a single {@link RenderGraph#execute}, so between frames it holds no pool
-   * slot. Idempotent, and the graph keeps executing afterwards.
+   * The graph itself keeps nothing to free here: transients are acquired and released inside a
+   * single {@link RenderGraph#run}, so between frames it holds no pool slot. Idempotent, and the
+   * graph keeps rendering afterwards.
    */
   public unload(): void {
     if (this._destroyed) return;
@@ -1158,8 +1188,6 @@ export class RenderGraph {
 
     this._renderTargetCache.destroy();
 
-    // Graph-minted wrappers around shared/external sources — drop the wrappers
-    // without destroying the sources beneath them.
     for (let i = 0; i < this._resources.length; i++) {
       const entry = this._resources[i];
       if (entry.cachedTexture) {
@@ -1178,9 +1206,8 @@ export class RenderGraph {
     this._activePasses.length = 0;
     this._cameraTargets.clear();
     this._cameraTargetColors.clear();
+    this._sceneDrawTarget = null;
   }
-
-  // --- Internal ---
 
   /**
    * Resolve a handle to a `BindResource`
@@ -1204,12 +1231,14 @@ export class RenderGraph {
   }
 
   /**
-   * Resolve a handle to a live `Texture` wrapper
+   * Resolve a handle to its live `Texture`
    *
-   * Cached per handle and invalidated by `TextureSource` identity (resize / swap-chain swap /
-   * transient reallocation).
+   * A transient is the pooled texture it holds. An imported `Texture` is used as it is, frame and
+   * all, since a camera's render texture can be a frame of a larger source and its copy lands in
+   * that frame. An imported bare source is wrapped once per source.
    * @param handle - The resource to wrap
    * @param session - The frame's render session, for imported getters
+   * @internal
    */
   public _texture(handle: ResourceHandle, session: RenderSession): Texture {
     const entry = this._resources[handle._id];
@@ -1220,9 +1249,6 @@ export class RenderGraph {
       return entry.texture;
     }
     const imported = entry.getter(session);
-    // An imported `Texture` is used as it is, frame and all — a camera's render texture may be a
-    // frame of a larger source, and the copy lands in that frame. A bare source is wrapped
-    // once per source identity.
     if (imported instanceof Texture) return imported;
     const source = imported.source;
     if (!entry.cachedTexture || entry.cachedTexture.source !== source) {
@@ -1247,6 +1273,17 @@ export class RenderGraph {
       throw new Error('RenderGraph._resolveTarget: a transient attachment has not been allocated');
     }
     return entry.texture.source;
+  }
+
+  /**
+   * The source a resource holds right now, or `null` for a transient outside its lifetime
+   * @param entry - The resource.
+   * @param session - The frame's render session.
+   * @returns Its source, or `null` when unallocated.
+   */
+  private _liveSource(entry: ResourceEntry, session: RenderSession): TextureSource | null {
+    if (entry.kind === 'transient' && entry.texture === null) return null;
+    return this._attachmentSource(entry, session);
   }
 
   private _importResource(type: ResourceKind, getter: (s: RenderSession) => BindableTexture): ResourceHandle {
@@ -1279,36 +1316,21 @@ export class RenderGraph {
   /**
    * Pick the render target for this pass
    *
-   * Always writes `_resolvedTarget` — `null` target for transfer-only passes so a previous
-   * pass's target cannot leak. The executor skips the push when `target` is `null` and
-   * `pass.render()` self-manages.
+   * Always writes `_resolvedTarget`, with a `null` target for a pass with no attachments, so a
+   * previous pass's target can't leak into it; such a pass binds its own targets.
    *
-   * `frame` is the content rect of the first colour (else the first transient depth). A pass
-   * writes one content rect. Refreshed every call — a pooled source can come back with a
-   * different content size.
+   * `frame` is the content rect of the first colour, or else the first transient depth: a pass
+   * writes one content rect. It is refreshed every call, because a pooled source can come back
+   * with a different content size.
    *
-   * **Steady-state fast path.** `attachments` doubles as the previous-frame
-   * snapshot: its `texture` fields hold whatever sources `_attachmentSource()`
-   * returned last time, so the diff is just `prev !== current`. If nothing
-   * changed and `cachedTarget !== null`, the cached ref is reused —
-   * zero `_renderTargetCache` lookup, zero string allocation. This is the
-   * case 99% of frames hit: same swap-chain texture, same pooled
-   * transients, same Pixi filter intermediate. `frame` is still written.
-   *
-   * On first frame the EMPTY-placeholder `attachments` built in `compile()`
-   * mismatches the real source on every slot → falls through, populates
-   * `attachments` with real sources, fills `cachedTarget`. From then on
-   * the writes only fire on actual change, so the loop is read-only in
-   * the hit case.
-   *
-   * **Invalidation.** Source-identity diffs catch every real case — resize
-   * / swap-chain swap, transient pool clear, transient descriptor change,
-   * filter target toggle — so the steady-state path needs no external help.
-   * The first frame needs none either: the EMPTY-placeholder `attachments`
-   * from `compile()` mismatch the real sources and force the lookup. On a
-   * swap-chain / resize reset `_invalidatePerPassTargets` additionally drops
-   * the cached refs — not for correctness (every uid changed, so the diff
-   * already re-queries) but to release references to the torn-down targets.
+   * `attachments` doubles as last frame's snapshot: its `texture` fields hold the sources
+   * `_attachmentSource()` returned last time. When none changed and `cachedTarget` is set, the
+   * cached target is reused with no cache lookup and no key string, which is the steady state:
+   * same swap-chain texture, same pooled transients, same filter texture. The comparison catches
+   * a resize, a swap-chain swap, a pool clear, a descriptor change and a filter toggle, and the
+   * first frame, whose `Texture.EMPTY` placeholders from `compile()` match nothing. It misses a
+   * reset of the render-target cache, which destroys every target the cache created while pooled
+   * sources keep their identity, so `_invalidatePerPassTargets` drops the cached targets then.
    * @param ap - The pass whose attachments are resolved
    * @param session - The frame's render session
    * @param transientFlipY - `flipY` for a pooled attachment target.
@@ -1380,12 +1402,13 @@ export class RenderGraph {
    * the texture is `min + max`, so callers need nothing else to map content UV onto it. Pixi hands
    * its filters the same rect as `uInputClamp`.
    *
-   * Per input, because a transient created at a `resolution` other than the view's rounds into a
-   * different pool bucket than the view-sized ones do. Transients only: an effect's input is
-   * always one, and an imported source has no frame of its own to read.
+   * Per input, because a transient created at a `resolution` other than the view's rounds up to a
+   * different pooled texture size than the view-sized ones do. Transients only: an effect's input
+   * is always one, and an imported source has no frame of its own to read.
    * @param handle - The transient about to be sampled.
    * @param session - The frame's render session.
    * @param out - Four-element destination for the rect.
+   * @internal
    */
   public _inputClamp(handle: ResourceHandle, session: RenderSession, out: Float32Array): void {
     if (this._resources[handle._id].kind !== 'transient') {
@@ -1401,34 +1424,44 @@ export class RenderGraph {
   }
 
   /**
-   * Drop the cached `RenderTarget` ref on every pass
+   * Drop the cached `RenderTarget` ref on every pass and every draw target
    *
-   * Called only from the swap-chain / resize reset path in `_maybeResetRenderTargetCache`, after
-   * the global `_renderTargetCache` is torn down. The source-identity diff
-   * in `_resolveTarget` would re-query on its own there (every source uid
-   * changed), but clearing the refs explicitly stops the dropped targets
-   * from being retained via `cachedTarget`.
+   * Only `_maybeResetRenderTargetCache` calls this, after it resets the render-target cache. The
+   * reset destroys every target the cache created. A pooled source keeps its identity across the
+   * reset, so a pass or a draw target on pooled sources would pass its source check and keep a
+   * destroyed target.
    */
   private _invalidatePerPassTargets(): void {
     for (let i = 0; i < this._passes.length; i++) this._passes[i].cachedTarget = null;
+    for (const cameraTarget of this._cameraTargets.values()) cameraTarget.draw = null;
+    this._sceneDrawTarget = null;
   }
 
   /**
    * Materialise `session.defaultTarget`'s depth and register it in the render-target cache
    *
-   * Keyed by the live colour + depth sources so default-attachment passes resolve to pixi's own
-   * target rather than a parallel `RenderTarget` wrapping the same textures. Ensure the
-   * depth-stencil *before* seeding the key so it matches what `_resolveTarget` builds.
-   * `activeTarget` is left null — the first default-target pass establishes the binding in
-   * `execute`.
+   * Keyed by the live colour + depth sources, with and without read-only depth, so every
+   * default-attachment pass resolves to pixi's own target rather than a parallel `RenderTarget`
+   * wrapping the same textures: on WebGPU, initialising a second target over the canvas
+   * reconfigures its context, which destroys the swap-chain texture the frame has already drawn
+   * into. Ensure the depth-stencil *before* seeding the keys so they match what `_resolveTarget`
+   * builds. `activeTarget` is left null — the first default-target pass establishes the binding
+   * in `execute`. Re-seeds only when a source changed: the cache is emptied only on that same
+   * change, so an unchanged key is still registered.
    * @param session - The frame's render session, which owns the default target
    */
   private _prepareDefaultTarget(session: RenderSession): void {
     session.defaultTarget.ensureDepthStencilTexture();
 
-    this._defaultCacheKey.colors![0].texture = session.defaultTarget.colorTexture.source;
-    this._defaultCacheKey.depth!.texture = session.defaultTarget.depthStencilTexture!.source;
-    this._renderTargetCache.addToCache(this._defaultCacheKey, session.defaultTarget);
+    const color = session.defaultTarget.colorTexture.source;
+    const depth = session.defaultTarget.depthStencilTexture!.source;
+    const key = this._defaultCacheKey;
+    if (key.colors![0].texture === color && key.depth!.texture === depth) return;
+
+    key.colors![0].texture = color;
+    key.depth!.texture = depth;
+    this._renderTargetCache.addToCache(key, session.defaultTarget);
+    this._renderTargetCache.addToCache(this._defaultCacheKeyReadOnlyDepth, session.defaultTarget);
   }
 
   /**
@@ -1457,7 +1490,8 @@ export class RenderGraph {
   /**
    * Inferred loadOp for a write access
    *
-   * Rules in priority order:
+   * Only binds of targets other than the view's own default target use it, since `execute` never
+   * clears that one. Rules in priority order:
    *
    *  - subsequent writer (not the first of the frame) → `'load'` (never
    *    wipe a prior writer's output)
@@ -1482,6 +1516,10 @@ export class RenderGraph {
   /**
    * On a default-attachment uid change (swap-chain swap / filter target swap), tear down the
    * render-target cache
+   *
+   * A uid of `-1` means not seen yet. This runs before `_prepareDefaultTarget` creates the default
+   * depth, so the first frame sees no depth, and skipping comparisons against `-1` keeps that
+   * first appearance from reading as a swap.
    * @param session - The frame's render session, whose default attachments are compared with last frame's
    */
   private _maybeResetRenderTargetCache(session: RenderSession): void {
@@ -1489,17 +1527,10 @@ export class RenderGraph {
     const depthTex = session.defaultTarget.depthStencilTexture?.source;
     const colorUid = colorTex.uid;
     const depthUid = depthTex ? depthTex.uid : -1;
-    // `-1` is the "never observed yet" sentinel. This runs *before*
-    // `_prepareDefaultTarget` materialises the default depth, so frame 1
-    // sees `depthUid === -1`. Gating on `_last* !== -1` prevents that
-    // lazy-init transition from looking like a swap-chain change.
     const colorChanged = this._lastColorUid !== -1 && colorUid !== this._lastColorUid;
     const depthChanged = this._lastDepthUid !== -1 && depthUid !== this._lastDepthUid;
     if (colorChanged || depthChanged) {
       this._renderTargetCache.reset();
-      // The source-identity diff would catch this too (every source uid
-      // changed), but invalidating explicitly keeps the dropped global-cache
-      // entries from being held onto by `cachedTarget` refs.
       this._invalidatePerPassTargets();
     }
     this._lastColorUid = colorUid;
@@ -1510,11 +1541,12 @@ export class RenderGraph {
    * Repair any transient sample slot whose texture the pool has destroyed
    *
    * A pass that did not run this frame still owns slots in the view's global bind group, and the
-   * pool may prune the idle texture they point at (a canvas resize drops the buckets the old size
-   * was keeping). Pixi nulls such a slot; a depth view reports its source as destroyed. Either
-   * way the slot goes back to the placeholder it was built with, and on WebGPU the view's
-   * bundles re-record, since they baked the bind group that held the dead texture. Runs at
-   * execute start, before any bind; the steady state touches nothing.
+   * pool may destroy the idle texture they point at (a canvas resize destroys idle textures sized
+   * to the old canvas). Pixi nulls such a slot; a depth view reports its source as destroyed. Either
+   * way the slot goes back to its placeholder, a depth-only view for a depth slot and an empty
+   * source for a colour slot, and on WebGPU the view's bundles re-record, since they baked the
+   * bind group that held the dead texture. Runs at execute start, before any bind; the steady
+   * state touches nothing.
    * @param session - The frame's render session, whose global bind group is checked
    */
   private _repairDeadSampleSlots(session: RenderSession): void {
@@ -1526,7 +1558,6 @@ export class RenderGraph {
         if (a.mode !== 'sample' || this._resources[a.handle._id].kind !== 'transient') continue;
         const bound = session.globalBindGroup.getResource(a.slot!);
         if (bound !== null && !bound.destroyed) continue;
-        // Depth slots bind a `TextureView` (WebGPU `texture_depth_2d`); colour slots a raw source.
         const placeholder = a.handle._kind === 'depth' ? DEPTH_VIEW_PLACEHOLDER : Texture.EMPTY.source;
         session.globalBindGroup.setResource(placeholder, a.slot!);
         repaired = true;

@@ -8,17 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Shadow-morph: the cast shadow must TRACK the morph, not hold a base pose.
- *
- * Position-independent check. A caster over a floor has one morph target that
- * shoves it (and its shadow) far off-frame at weight 1. We diff the frame
- * weight0→weight1 twice: once with the caster casting a shadow, once with
- * casting off. The delta between those two diffs is the moving shadow's own
- * contribution — non-trivial only if the shadow followed the morph. A base-pose
- * shadow stays put at both weights, so it contributes nothing extra.
- */
-
 function diffPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -27,6 +16,15 @@ function diffPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   return n;
 }
 
+/**
+ * Counts the pixels that change when a morphed wall's weight goes from 0 to 1
+ *
+ * The camera looks down on a floor, and a low light throws the wall's long shadow toward the
+ * camera. The wall's one morph target shoves it 40 units along x, taking its shadow off the framed
+ * floor.
+ * @param preference - The backend to render with
+ * @param casts - Whether the wall casts its shadow
+ */
 async function diffOverMorph(preference: 'webgl' | 'webgpu', casts: boolean): Promise<number> {
   const W = 128;
   const app = await getApp({
@@ -36,11 +34,9 @@ async function diffOverMorph(preference: 'webgl' | 'webgpu', casts: boolean): Pr
   try {
     const view3d = new View3D({ width: W, height: W, shadowQuality: 'high' });
     app.stage.addChild(view3d);
-    // Top-down-ish camera so the floor (and the long cast shadow) fills the frame.
     view3d.camera.position.set(0, 6, 2.5);
     view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-    // Low, side-raking light → a long shadow stretched across the floor.
     const key = new DirectionalLight({ color: 0xffffff, intensity: 6, castShadow: true });
     key.rotation.set(-0.35, 0.0, 0);
     view3d.root.addChild(key);
@@ -53,9 +49,6 @@ async function diffOverMorph(preference: 'webgl' | 'webgpu', casts: boolean): Pr
     floor.rotation.set(-Math.PI / 2, 0, 0);
     view3d.root.addChild(floor);
 
-    // A wide, tall wall standing on the floor casts a long shadow toward the
-    // camera. Its morph target shoves the whole wall +40x at weight 1, so the
-    // long shadow sweeps off the framed floor. A base-pose shadow would not move.
     const P = new Float32Array([-2.5, 0, 0, 2.5, 0, 0, 2.5, 3, 0, -2.5, 3, 0]);
     const M = new Float32Array(P.length);
     for (let i = 0; i < P.length; i += 3) M[i] = 40;
@@ -87,9 +80,15 @@ async function diffOverMorph(preference: 'webgl' | 'webgpu', casts: boolean): Pr
   }
 }
 
+/**
+ * The pixels the moving shadow changes on its own: the change over the morph with the wall
+ * casting, minus the change with casting off
+ *
+ * A shadow that holds the base pose stays put at both weights and adds nothing, so a large count
+ * means the shadow followed the morph, wherever on screen it lands.
+ * @param preference - The backend to render with
+ */
 async function shadowContribution(preference: 'webgl' | 'webgpu'): Promise<number> {
-  // Frame change over the morph WITH the caster casting, minus the change with
-  // casting off — the remainder is the moving shadow's own contribution.
   const withShadow = await diffOverMorph(preference, true);
   const noShadow = await diffOverMorph(preference, false);
   return withShadow - noShadow;

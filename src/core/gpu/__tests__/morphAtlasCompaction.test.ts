@@ -9,12 +9,13 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// The morph bits turn an atlas-wide vertex id into a geometry-local one by subtracting the
-// `baseVertex` cached in that geometry's store row (lane 6). An atlas compaction moves the
-// base without dirtying a single mesh, so without a re-stamp the row keeps pointing at
-// where the geometry used to be and the surface deforms from the wrong vertices.
-
 const VERTS = 400;
+
+/**
+ * The geometry-row lane caching `baseVertex`, which the morph bits subtract from the atlas-wide
+ * vertex id; a stale one deforms the surface from the wrong vertices
+ */
+const BASE_VERTEX_LANE = 6;
 
 /** A strip of `VERTS` vertices — positions + normals + indices, so plain and morphed share an atlas. */
 function makeGeometry(morphed: boolean): Geometry3D {
@@ -38,7 +39,7 @@ function makeGeometry(morphed: boolean): Geometry3D {
 
 const getPipe = (app: Application<WebGPURenderer>): View3DPipeGpu => app.renderer.renderPipes.view3d;
 
-describe('morph geometry rows across an atlas compaction', () => {
+describe('morph geometry rows across an atlas compaction, which moves baseVertex without dirtying any mesh', () => {
   it('re-stamps the cached baseVertex when compaction slides the allocation', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'morph-atlas-compaction',
@@ -52,8 +53,7 @@ describe('morph geometry rows across an atlas compaction', () => {
 
       const pipe = getPipe(app);
 
-      // Pack a filler first so the morphed geometry lands above it and a later
-      // compaction has something to slide it down into.
+      /** Packed first, so the morphed geometry lands above it and a later compaction can slide it down */
       const filler = makeGeometry(false);
       pipe.atlasPool.allocate(filler);
 
@@ -70,22 +70,26 @@ describe('morph geometry rows across an atlas compaction', () => {
 
       const geomStore = pipe.geometryDataStoreBuffer;
       const rowBase = geometry._geometryDataIndex * GEOMETRY_DATA_STRIDE;
-      expect(geomStore.u32Data[rowBase + 6]).toBe(VERTS);
+      expect(geomStore.u32Data[rowBase + BASE_VERTEX_LANE]).toBe(VERTS);
 
-      // Free the filler, then add past the high watermark: the live set still fits, so
-      // `add` compacts instead of growing and the morphed allocation slides to the front.
       filler.destroy();
-      pipe.atlasPool.allocate(makeGeometry(false));
+      /** Past the high watermark, but the live set still fits, so the pool compacts instead of growing */
+      const pastHighWatermark = makeGeometry(false);
+      pipe.atlasPool.allocate(pastHighWatermark);
 
-      expect(alloc.baseVertex).toBe(0);
-      // Nothing has dirtied the mesh, so the row still carries the old base...
-      expect(geomStore.u32Data[rowBase + 6]).toBe(VERTS);
+      expect(alloc.baseVertex, 'the compaction slid the morphed allocation to the front').toBe(0);
+      expect(
+        geomStore.u32Data[rowBase + BASE_VERTEX_LANE],
+        'nothing dirtied the mesh, so the row keeps the old base',
+      ).toBe(VERTS);
 
       app.render();
 
-      // ...until the view notices the pool moved and re-stamps its morphed geometry.
-      expect(geomStore.u32Data[rowBase + 6]).toBe(0);
-      expect(geomStore.u32Data[rowBase + 6]).toBe(alloc.baseVertex);
+      expect(
+        geomStore.u32Data[rowBase + BASE_VERTEX_LANE],
+        'the view saw the pool move and re-stamped its morphed geometry',
+      ).toBe(0);
+      expect(geomStore.u32Data[rowBase + BASE_VERTEX_LANE]).toBe(alloc.baseVertex);
     } finally {
       app.destroy();
     }

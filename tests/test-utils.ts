@@ -1,6 +1,6 @@
 import '../src/index.ts';
 import { Application, Assets } from 'pixi.js';
-import type { ApplicationOptions, Renderer } from 'pixi.js';
+import type { ApplicationOptions, Renderer, WebGPURenderer } from 'pixi.js';
 import { describe, expect, test, vi } from 'vitest';
 import type { TestContext } from 'vitest';
 import { page, server } from 'vitest/browser';
@@ -19,6 +19,7 @@ export interface TestScene {
   create: (app: Application, context: TestContext) => Promise<void>;
 }
 
+/** Whether the tests run on GitHub Actions, whose GPU adapters are too unreliable for GPU-heavy tests */
 export const isCI = process.env.GITHUB_ACTIONS === 'true';
 
 /**
@@ -33,6 +34,24 @@ export function captureWarnings(run: () => void): string[] {
   } finally {
     spy.mockRestore();
   }
+}
+
+/**
+ * Renders one frame and fails the test if WebGPU raised a validation error while drawing it.
+ * WebGPU reports a bad submit (a destroyed buffer, a stale bind group) as an error on the
+ * device rather than a throw, so without this a broken frame passes. No-op check on WebGL.
+ */
+export async function expectCleanRender(app: Application<Renderer>): Promise<void> {
+  const device = (app.renderer as WebGPURenderer).gpu?.device;
+  if (!device) {
+    app.render();
+    return;
+  }
+
+  device.pushErrorScope('validation');
+  app.render();
+  const error = await device.popErrorScope();
+  expect(error?.message ?? null).toBe(null);
 }
 
 interface GetAppOptions {
@@ -75,6 +94,18 @@ export function readCanvasPixels(
   return context.getImageData(x, y, width, height).data;
 }
 
+/** Every error WebGPU reports for `code`, as `line:column message` */
+export async function wgslCompilationErrors(device: GPUDevice, code: string): Promise<string[]> {
+  device.pushErrorScope('validation');
+  const info = await device.createShaderModule({ code }).getCompilationInfo();
+  const scoped = await device.popErrorScope();
+  const errors = info.messages.filter((m) => m.type === 'error').map((m) => `${m.lineNum}:${m.linePos} ${m.message}`);
+
+  if (scoped) errors.push(scoped.message);
+
+  return errors;
+}
+
 async function compareScreenshot(
   data: Pick<TestScene, 'pixelMatch' | 'delay'> & { path: string; id: string; rendererType: string },
 ) {
@@ -90,10 +121,8 @@ async function compareScreenshot(
 
   await server.commands.removeFile(screenshot);
   if (res.diff > 0 && data.pixelMatch) {
-    // oxlint-disable-next-line jest/no-conditional-expect
     expect(res.diff).toBeLessThan(data.pixelMatch);
   } else {
-    // oxlint-disable-next-line jest/no-conditional-expect
     expect(res.result).toBe(true);
   }
 }
@@ -134,7 +163,6 @@ export function defineSceneTests(name: string, scene: TestScene): void {
       const runner = scene.only ? test.only : skipped ? test.skip : test;
 
       // Remote glTF models can be multi-MB; allow generous time for the network fetch.
-      // oxlint-disable-next-line jest/expect-expect
       runner(`${name} - ${renderer}`, { timeout: 30000 }, async (context) => {
         const app = await getApp({
           appOptions: {

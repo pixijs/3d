@@ -5,8 +5,7 @@ import type { PassBuilder } from './PassBuilder';
 /**
  * Contract for a pass added to the {@link RenderGraph}
  *
- * Satisfied structurally by the existing `RenderPass` base class in
- * `core/render-passes/RenderPass.ts`.
+ * {@link RenderPass} satisfies it, and so does a plain object with `name`, `setup` and `render`.
  * @category rendering
  * @advanced
  */
@@ -16,17 +15,18 @@ export interface GraphRenderPass {
   /** Optional human-readable explanation of what the pass contributes to the frame */
   readonly description?: string;
   /**
-   * Forward-pass render bit (indexes `drawLists`). Present on mesh-drawing
-   * passes; the graph uses it to invalidate that pass's cached WebGPU bundles
-   * when a sampled transient's source changes. Absent on passes that sample
-   * nothing (copy / background), so optional here.
+   * The pass's {@link RenderPassBit}, which keys its draw lists
+   *
+   * When a texture the pass samples changes, the graph re-records the pass's WebGPU render
+   * bundles. A pass that draws no meshes leaves it out or uses `0`.
    */
   readonly bit?: number;
   /**
-   * Camera this pass draws from, or `null`/absent to draw from the view's own
+   * Camera this pass draws from, or `null` or absent for the view's own
    *
-   * The executor narrows the GPU viewport to this camera's frame — and swaps the session's
-   * rects to match — for the duration of `render`.
+   * A camera with a render texture draws into a target of its own, which the graph copies into the
+   * texture. Any other camera draws into its frame within the view: the graph narrows the GPU
+   * viewport and `session.activeViewport` to it for the duration of `render`.
    */
   readonly camera?: Camera3D | null;
   /**
@@ -36,7 +36,11 @@ export interface GraphRenderPass {
    * @param {PassBuilder} builder - Access-declaration API scoped to this pass.
    */
   setup(builder: PassBuilder): void;
-  /** Optional prepare phase — GPU uploads before any target is bound; cameras are already built */
+  /**
+   * Optional upload step, run for every active pass before any render target is bound
+   *
+   * Cameras are already built, and no render pass is open, so a culling compute dispatch can run here.
+   */
   prepare?(session: RenderSession): void;
   /** Record the pass's rendering; runs per frame, after the graph has bound the target and sample-slot resources */
   render(session: RenderSession): void;
@@ -47,7 +51,7 @@ export interface GraphRenderPass {
    */
   condition?(session: RenderSession): boolean;
   /**
-   * Optional "give the memory back now" hook, forwarded by `RenderGraph.unload`
+   * Optional "give the memory back now" hook, forwarded by {@link RenderGraph#unload}
    *
    * Free whatever the pass can rebuild lazily (the shadow pass frees its map); anything
    * freed here must re-create itself on the next frame that needs it. Unlike `destroy`

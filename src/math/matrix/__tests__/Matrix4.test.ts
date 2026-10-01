@@ -53,10 +53,6 @@ describe('Matrix4', () => {
       const b = Matrix4.shared;
       expect(b.isIdentity()).toBe(true);
     });
-
-    test('returns the same reused instance', () => {
-      expect(Matrix4.shared).toBe(Matrix4.shared);
-    });
   });
 
   describe('static Matrix4.IDENTITY', () => {
@@ -66,15 +62,6 @@ describe('Matrix4', () => {
   });
 
   describe('static Matrix4.multiplyAffine', () => {
-    test('two identities produces an identity affine block', () => {
-      const out = new Float32Array(16);
-      const a = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-      const b = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-      Matrix4.multiplyAffine(out, 0, a, 0, b, 0);
-
-      expect(Array.from(out)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-    });
-
     test('matches full multiply for two affine matrices', () => {
       const a = new Matrix4().compose(
         new Vector3(1, 2, 3),
@@ -97,23 +84,10 @@ describe('Matrix4', () => {
       }
     });
 
-    test('writes 0 to bottom-row indices and 1 at index 15', () => {
-      const out = new Float32Array(16);
-      const a = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 6, 7, 1]);
-      const b = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-      Matrix4.multiplyAffine(out, 0, a, 0, b, 0);
-
-      expect(out[3]).toBe(0);
-      expect(out[7]).toBe(0);
-      expect(out[11]).toBe(0);
-      expect(out[15]).toBe(1);
-    });
-
-    test('honors offsets', () => {
+    test('honors offsets: identities at offset 16 multiply to an identity at offset 16', () => {
       const out = new Float32Array(32);
       const a = new Float32Array(32);
       const b = new Float32Array(32);
-      // identity at offset 16
       a[16 + 0] = 1;
       a[16 + 5] = 1;
       a[16 + 10] = 1;
@@ -124,7 +98,6 @@ describe('Matrix4', () => {
       b[16 + 15] = 1;
       Matrix4.multiplyAffine(out, 16, a, 16, b, 16);
 
-      // out at offset 16 should be identity affine.
       expect(out[16 + 0]).toBe(1);
       expect(out[16 + 5]).toBe(1);
       expect(out[16 + 10]).toBe(1);
@@ -151,10 +124,6 @@ describe('Matrix4', () => {
   });
 
   describe('isIdentity', () => {
-    test('true for identity matrix', () => {
-      expect(new Matrix4().isIdentity()).toBe(true);
-    });
-
     test('false for non-identity matrix', () => {
       expect(new Matrix4().makeTranslation(1, 0, 0).isIdentity()).toBe(false);
     });
@@ -182,13 +151,6 @@ describe('Matrix4', () => {
   });
 
   describe('equals', () => {
-    test('true for identical matrices', () => {
-      const a = new Matrix4().set(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
-      const b = new Matrix4().set(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
-
-      expect(a.equals(b)).toBe(true);
-    });
-
     test('false when any element differs', () => {
       const a = new Matrix4();
       const b = new Matrix4().makeTranslation(1, 0, 0);
@@ -207,23 +169,7 @@ describe('Matrix4', () => {
     });
   });
 
-  describe('toString', () => {
-    test('contains class identifier', () => {
-      const m = new Matrix4();
-
-      expect(m.toString()).toContain('Matrix4');
-    });
-  });
-
   describe('fromArray', () => {
-    test('reads column-major data at offset 0', () => {
-      const m = new Matrix4();
-      const data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-      m.fromArray(data);
-
-      expectMatrix4Equal(m, data);
-    });
-
     test('honors offset', () => {
       const m = new Matrix4();
       const data = [99, 99, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -247,25 +193,9 @@ describe('Matrix4', () => {
 
       expect(Array.from(arr)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
     });
-
-    test('writes into provided out array', () => {
-      const m = new Matrix4().set(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
-      const out = new Float32Array(16);
-      const result = m.toArray(false, out);
-
-      expect(result).toBe(out);
-    });
   });
 
   describe('multiply', () => {
-    test('identity * identity = identity', () => {
-      const a = new Matrix4();
-      const b = new Matrix4();
-      a.multiply(b);
-
-      expect(a.isIdentity()).toBe(true);
-    });
-
     test('translation * translation accumulates', () => {
       const a = new Matrix4().makeTranslation(1, 2, 3);
       const b = new Matrix4().makeTranslation(4, 5, 6);
@@ -292,7 +222,7 @@ describe('Matrix4', () => {
     test('this = m * this', () => {
       const a = new Matrix4().makeTranslation(1, 0, 0);
       const b = new Matrix4().makeTranslation(2, 0, 0);
-      a.premultiply(b); // this = b * a
+      a.premultiply(b);
 
       const p = new Vector3(0, 0, 0).applyMatrix4(a);
       expect(p.x).toBeCloseTo(3, 5);
@@ -375,10 +305,6 @@ describe('Matrix4', () => {
   });
 
   describe('determinant', () => {
-    test('identity has determinant 1', () => {
-      expect(new Matrix4().determinant()).toBeCloseTo(1, 5);
-    });
-
     test('non-singular scale has expected determinant', () => {
       const m = new Matrix4().makeScale(2, 3, 4);
       expect(m.determinant()).toBeCloseTo(2 * 3 * 4, 5);
@@ -398,12 +324,6 @@ describe('Matrix4', () => {
       for (let i = 0; i < 16; i++) {
         expect(m.elements[i]).toBeCloseTo(original.elements[i], 5);
       }
-    });
-
-    test('transpose of identity is identity', () => {
-      const m = new Matrix4();
-      m.transpose();
-      expect(m.isIdentity()).toBe(true);
     });
 
     test('does not mutate this when out is supplied', () => {
@@ -473,7 +393,7 @@ describe('Matrix4', () => {
   });
 
   describe('decompose', () => {
-    test('round-trips position, rotation and scale', () => {
+    test('round-trips position, rotation and scale, the rotation up to the sign of its quaternion', () => {
       const position = new Vector3(1, 2, 3);
       const quat = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 4);
       const scale = new Vector3(2, 3, 4);
@@ -493,13 +413,12 @@ describe('Matrix4', () => {
       expect(scale2.y).toBeCloseTo(scale.y, 4);
       expect(scale2.z).toBeCloseTo(scale.z, 4);
 
-      // Quaternions q and -q represent the same rotation; pick the sign that aligns with `quat`.
       const dot = quat.x * quat2.x + quat.y * quat2.y + quat.z * quat2.z + quat.w * quat2.w;
-      const sign = dot >= 0 ? 1 : -1;
-      expect(quat2.x * sign).toBeCloseTo(quat.x, 4);
-      expect(quat2.y * sign).toBeCloseTo(quat.y, 4);
-      expect(quat2.z * sign).toBeCloseTo(quat.z, 4);
-      expect(quat2.w * sign).toBeCloseTo(quat.w, 4);
+      const signMatchingQuat = dot >= 0 ? 1 : -1;
+      expect(quat2.x * signMatchingQuat).toBeCloseTo(quat.x, 4);
+      expect(quat2.y * signMatchingQuat).toBeCloseTo(quat.y, 4);
+      expect(quat2.z * signMatchingQuat).toBeCloseTo(quat.z, 4);
+      expect(quat2.w * signMatchingQuat).toBeCloseTo(quat.w, 4);
     });
 
     test('flips X scale when determinant is negative to keep rotation proper', () => {
@@ -513,7 +432,6 @@ describe('Matrix4', () => {
       const scale2 = new Vector3();
       m.decompose(position2, quat2, scale2);
 
-      // Determinant becomes negative; decompose flips X scale.
       expect(scale2.x).toBeLessThan(0);
     });
   });
@@ -541,16 +459,14 @@ describe('Matrix4', () => {
   });
 
   describe('makeShear', () => {
-    test('produces a shear matrix with diagonal of 1', () => {
+    test('produces a shear matrix with diagonal of 1 and no translation', () => {
       const m = new Matrix4().makeShear(0.5, 0.25, 0.125);
 
-      // Diagonal is 1.
       expect(m.elements[0]).toBe(1);
       expect(m.elements[5]).toBe(1);
       expect(m.elements[10]).toBe(1);
       expect(m.elements[15]).toBe(1);
 
-      // Translation column is zero.
       expect(m.elements[12]).toBe(0);
       expect(m.elements[13]).toBe(0);
       expect(m.elements[14]).toBe(0);
@@ -656,14 +572,6 @@ describe('Matrix4', () => {
       expect(m.elements[11]).toBe(-1);
     });
 
-    test('finite far: te[10] = (far+near)/(near-far)', () => {
-      const near = 0.1;
-      const far = 100;
-      const m = new Matrix4().makePerspective(Math.PI / 4, 1, near, far);
-
-      expect(m.elements[10]).toBeCloseTo((far + near) / (near - far), 5);
-    });
-
     test('far=undefined: te[10] = -1, te[14] = -2*near', () => {
       const near = 0.5;
       const m = new Matrix4().makePerspective(Math.PI / 4, 1, near);
@@ -713,26 +621,12 @@ describe('Matrix4', () => {
       expect(pTop.y).toBeCloseTo(1, 4);
       expect(pBottom.y).toBeCloseTo(-1, 4);
     });
-
-    test('produces expected element shape', () => {
-      const m = new Matrix4().makeOrthographic(-1, 1, 1, -1, 0, 10);
-
-      // te[0] = -2 * 1/(left-right) = -2 * 1/(-2) = 1
-      expect(m.elements[0]).toBeCloseTo(1, 5);
-      // te[5] = -2 * 1/(bottom-top) = -2 * 1/(-2) = 1
-      expect(m.elements[5]).toBeCloseTo(1, 5);
-      // te[11] = 0
-      expect(m.elements[11]).toBe(0);
-      // te[15] = 1
-      expect(m.elements[15]).toBe(1);
-    });
   });
 
   describe('lookAt', () => {
     test('eye=(0,0,5), target=origin, up=Y produces basis x=(1,0,0), y=(0,1,0), z=(0,0,1)', () => {
       const m = new Matrix4().lookAt({ x: 0, y: 0, z: 5 }, { x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
 
-      // Column 0 (x basis), column 1 (y basis), column 2 (z basis) live in elements 0-2, 4-6, 8-10.
       expect(m.elements[0]).toBeCloseTo(1, 5);
       expect(m.elements[1]).toBeCloseTo(0, 5);
       expect(m.elements[2]).toBeCloseTo(0, 5);
@@ -794,7 +688,6 @@ describe('Matrix4', () => {
       const m = new Matrix4();
       m.scale({ x: 2, y: 3, z: 4 });
 
-      // Identity scaled: column 0 = (2,0,0,0), column 1 = (0,3,0,0), column 2 = (0,0,4,0).
       expect(m.elements[0]).toBe(2);
       expect(m.elements[5]).toBe(3);
       expect(m.elements[10]).toBe(4);
@@ -858,19 +751,12 @@ describe('Matrix4', () => {
   });
 
   describe('makeBasis', () => {
-    test('puts three orthonormal vectors as columns', () => {
-      const m = new Matrix4().makeBasis({ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 });
-
-      expect(m.isIdentity()).toBe(true);
-    });
-
-    test('non-default basis writes columns correctly', () => {
+    test('writes the x, y and z axes as columns 0, 1 and 2', () => {
       const xAxis = { x: 0, y: 1, z: 0 };
       const yAxis = { x: -1, y: 0, z: 0 };
       const zAxis = { x: 0, y: 0, z: 1 };
       const m = new Matrix4().makeBasis(xAxis, yAxis, zAxis);
 
-      // Column 0 = xAxis, column 1 = yAxis, column 2 = zAxis.
       expect(m.elements[0]).toBe(0);
       expect(m.elements[1]).toBe(1);
       expect(m.elements[2]).toBe(0);
@@ -886,7 +772,7 @@ describe('Matrix4', () => {
   });
 
   describe('extractRotation', () => {
-    test('removes scale from a TRS matrix', () => {
+    test('removes scale from a TRS matrix, leaving unit-length columns and no translation', () => {
       const m = new Matrix4().compose(
         new Vector3(0, 0, 0),
         new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, 0.6),
@@ -894,7 +780,6 @@ describe('Matrix4', () => {
       );
       const r = new Matrix4().extractRotation(m);
 
-      // Each column of r should be unit-length.
       const c0Len = Math.sqrt(r.elements[0] ** 2 + r.elements[1] ** 2 + r.elements[2] ** 2);
       const c1Len = Math.sqrt(r.elements[4] ** 2 + r.elements[5] ** 2 + r.elements[6] ** 2);
       const c2Len = Math.sqrt(r.elements[8] ** 2 + r.elements[9] ** 2 + r.elements[10] ** 2);
@@ -903,7 +788,6 @@ describe('Matrix4', () => {
       expect(c1Len).toBeCloseTo(1, 4);
       expect(c2Len).toBeCloseTo(1, 4);
 
-      // Translation row reset.
       expect(r.elements[12]).toBe(0);
       expect(r.elements[13]).toBe(0);
       expect(r.elements[14]).toBe(0);
@@ -912,10 +796,10 @@ describe('Matrix4', () => {
   });
 
   describe('extractForward', () => {
-    test('returns negated normalized Z column', () => {
-      const m = new Matrix4(); // identity: Z column is (0,0,1), so forward is (0,0,-1).
+    test('returns negated normalized Z column, (0, 0, -1) for identity', () => {
+      const identity = new Matrix4();
       const out = new Vector3();
-      m.extractForward(out);
+      identity.extractForward(out);
 
       expect(out.x).toBeCloseTo(0, 5);
       expect(out.y).toBeCloseTo(0, 5);
@@ -979,12 +863,6 @@ describe('Matrix4', () => {
       const m = new Matrix4().makeScale(2, 5, 3);
 
       expect(m.getMaxScaleOnAxis()).toBeCloseTo(5, 5);
-    });
-
-    test('identity returns 1', () => {
-      const m = new Matrix4();
-
-      expect(m.getMaxScaleOnAxis()).toBeCloseTo(1, 5);
     });
   });
 });

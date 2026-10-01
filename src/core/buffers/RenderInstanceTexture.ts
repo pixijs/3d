@@ -1,37 +1,28 @@
 import { BufferImageSource, Texture } from 'pixi.js';
 
-import { DATA_TEXTURE_WIDTH } from './dataTextureLayout';
+import { DATA_TEXTURE_WIDTH, uploadTexelRange } from './dataTextureLayout';
 
-/** `rgba32float` texels: `[storeIndex, slotsLo, slotsHi, spare]` */
-const FLOATS_PER_INSTANCE = 4;
+/** `u32`s per `rg32uint` texel: the store index and the packed texture slots */
+const WORDS_PER_INSTANCE = 2;
 
 /**
- * A pass's compaction output as an `rgba32float` data texture — one texel per
- * drawn instance, holding the mesh store row to read and that instance's
- * packed texture slots, split into two exact 16-bit halves
+ * The instances a WebGL draw list draws, after culling, as an `rg32uint` data texture: one texel
+ * per instance, holding its mesh store row and its packed texture slots
  *
- * This is the WebGL form of the WebGPU `RenderInstanceBuffer`. Culling and
- * sorting produce a compacted, ordered survivor list whose rows are scattered
- * through the store, and WebGL2 has no `baseInstance` to point a draw at a
- * scattered slice, so the list has to be addressable from the shader:
- * `instanceFetchBitGl` reads texel `uInstanceBase + gl_InstanceID`, then reads
- * the store row it names.
+ * The WebGL form of `RenderInstanceBuffer`. Culling and sorting leave a list of survivors whose
+ * rows are scattered through the store, and WebGL2 has no `baseInstance` to start a draw partway
+ * into an instance buffer, so the shader looks the list up: `instanceFetchBitGl` reads texel
+ * `uInstanceBase + gl_InstanceID`, then the store row it names.
  *
- * The packed slots stay here rather than in the store because they map a
- * material's textures onto *this* pass's batch texture units, and passes batch
- * differently (the shadow pass doesn't batch textures at all). They ride as
- * two 16-bit halves because the raw u32 has slot combinations whose bit
- * pattern is a NaN, which a float texture fetch may canonicalise; small
- * integers survive exactly.
- *
- * Integer texture formats would avoid the split, but pixi's
- * `mapFormatToGlFormat` pairs `rgba32uint` with `gl.RGBA` instead of
- * `gl.RGBA_INTEGER`, so WebGL rejects the upload.
+ * The packed slots live here rather than in the store because they map a material's textures onto
+ * one pass's bind group, and passes batch differently; the shadow pass batches no textures. Both
+ * words are integers, so the format is an integer one: a float texture could flush or rewrite
+ * their bit patterns on fetch.
  * @internal
  */
 export class RenderInstanceTexture {
-  /** Texture-backing CPU words, padded to whole texture rows */
-  public data!: Float32Array;
+  /** The CPU texels, two `u32`s each, padded to whole texture rows */
+  public data!: Uint32Array;
 
   private _source!: BufferImageSource;
   private _texture!: Texture;
@@ -41,7 +32,7 @@ export class RenderInstanceTexture {
     this.ensureCapacity(initialCapacity);
   }
 
-  /** The bindable texture view over the index list */
+  /** The texture to bind */
   public get texture(): Texture {
     return this._texture;
   }
@@ -52,10 +43,9 @@ export class RenderInstanceTexture {
   }
 
   /**
-   * Ensures room for `instances` texels, reallocating and resizing on growth
+   * Makes room for `instances` texels, reallocating the array and resizing the texture to grow
    *
-   * Contents are not preserved: the compaction rewrites every used texel before
-   * each upload.
+   * Growth doesn't keep the contents: the compaction rewrites every texel in use before each upload.
    * @param instances - Instance count to make room for.
    */
   public ensureCapacity(instances: number): void {
@@ -68,14 +58,14 @@ export class RenderInstanceTexture {
     const width = Math.min(capacity, DATA_TEXTURE_WIDTH);
     const height = Math.ceil(capacity / width);
 
-    this.data = new Float32Array(width * height * FLOATS_PER_INSTANCE);
+    this.data = new Uint32Array(width * height * WORDS_PER_INSTANCE);
 
     if (!this._source) {
       this._source = new BufferImageSource({
         resource: this.data,
         width,
         height,
-        format: 'rgba32float',
+        format: 'rg32uint',
         scaleMode: 'nearest',
         alphaMode: 'no-premultiply-alpha',
         label: 'InstanceIndex',
@@ -90,27 +80,32 @@ export class RenderInstanceTexture {
     }
   }
 
-  /** Pushes the CPU texels to the GPU. Call after the compaction fill, before the draws that read it */
-  public upload(): void {
-    this._source.update();
+  /**
+   * Uploads the first `count` texels
+   *
+   * Call after the compaction fills them and before the draws that read them.
+   * @param count - Slots the draw list staged, one texel each. Every texel a draw reads sits inside that range.
+   */
+  public upload(count: number): void {
+    uploadTexelRange(this._source, 0, count);
   }
 
   /**
-   * Frees the GPU copy of the texture while keeping the CPU texels
+   * Frees the GPU copy of the texture and keeps the CPU texels
    *
-   * pixi re-creates it from `data` on the next bind; the next compaction fill
-   * rewrites the texels anyway. Idempotent.
+   * pixi re-creates it from `data` on the next bind, and the next compaction rewrites the texels
+   * anyway. Idempotent.
    */
   public unload(): void {
     this._source?.unload();
   }
 
-  /** Frees the texture and its source; drops the backing array. Idempotent */
+  /** Frees the texture and its source and drops the CPU array. Idempotent */
   public destroy(): void {
     if (!this._texture) return;
     this._texture.destroy(true);
     (this._texture as Texture | null) = null;
     (this._source as BufferImageSource | null) = null;
-    (this.data as Float32Array | null) = null;
+    (this.data as Uint32Array | null) = null;
   }
 }

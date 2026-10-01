@@ -9,13 +9,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * The BRDF lookup is made the first time a view has an environment, not at the first render.
- *
- * The scene includes a clearcoated sphere on purpose: with no environment its shader still
- * fetches the lookup, from the slot's placeholder, and has to draw all the same.
- */
-
 const SIZE = 64;
 
 /** The pipe's lookup texture, which is private */
@@ -32,7 +25,7 @@ function centreBrightness(canvas: HTMLCanvasElement): number {
 
 for (const preference of ['webgl', 'webgpu'] as const) {
   describe(`BRDF lookup (${preference})`, () => {
-    it('is not made until a view has an environment, and is made once', async () => {
+    it('is not made at the first render, only once a view has an environment, and is made once', async () => {
       const app = await getApp<Renderer>({
         id: `brdf-lut-lazy-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE, resolution: 1, backgroundColor: 0x000000 },
@@ -43,6 +36,10 @@ for (const preference of ['webgl', 'webgpu'] as const) {
         expect(app.renderer.type).toBe(preference === 'webgpu' ? RendererType.WEBGPU : RendererType.WEBGL);
         app.stage.addChild(view3d);
 
+        /**
+         * Clearcoated on purpose: with no environment its shader still fetches the lookup, from the
+         * slot's placeholder, and has to draw all the same
+         */
         const sphere = new Mesh3D({
           geometry: new SphereGeometry({ radius: 1 }),
           material: new Material3D({

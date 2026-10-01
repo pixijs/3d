@@ -1,10 +1,11 @@
 import type { ShaderBit } from '../../ShaderBit';
 
 /**
- * Reinhard tone mapping with gamma correction
+ * Reinhard tone mapping, `x / (x + 1)` per channel, then the display encode `srgbEncodeBit`
+ * describes
  *
- * The simplest curve: `color / (color + 1)`. Cheap, but can look washed out —
- * suited to quick prototyping and simple scenes.
+ * It is the cheapest curve. It halves an input of 1 and only nears white for very bright input, so
+ * scenes tend to look flat.
  * @internal
  */
 export const reinhardToneMappingBit: ShaderBit = {
@@ -13,10 +14,8 @@ export const reinhardToneMappingBit: ShaderBit = {
   gpu: {
     fragment: {
       end: `
-  // Reinhard tone mapping
   finalColor = finalColor / (finalColor + vec3<f32>(1.0));
 
-  // Gamma correction (linear → sRGB)
   finalColor = pow(finalColor, vec3<f32>(1.0 / 2.2));
 `,
     },
@@ -25,10 +24,8 @@ export const reinhardToneMappingBit: ShaderBit = {
   gl: {
     fragment: {
       end: `
-  // Reinhard tone mapping
   finalColor = finalColor / (finalColor + vec3(1.0));
 
-  // Gamma correction (linear → sRGB)
   finalColor = pow(finalColor, vec3(1.0 / 2.2));
 `,
     },

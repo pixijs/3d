@@ -176,7 +176,7 @@ describe('RenderGraphDebugger', () => {
     expect(snapshot.summary.textureCount).toBe(2);
   });
 
-  it('reports reuse and explains material, texture, shader, and pipeline rebuilds', () => {
+  it('reports reuse, explains material, texture, shader, and pipeline rebuilds, and counts a rebuild as a bundle recording although the bundle counter stays put', () => {
     const fixture = makeFixture();
     const debug = new RenderGraphDebugger({ view: fixture.view });
 
@@ -197,7 +197,6 @@ describe('RenderGraphDebugger', () => {
     mesh.material = material as unknown as Mesh3DData['material'];
     mesh._passCache[PASS_BIT].shader = {} as MeshPassCache['shader'];
     mesh._passCache[PASS_BIT].batchKey = 2;
-    // A rebuild moves the command list only; the result re-records without the bundle counter moving.
     fixture.passData.commandList.dirtyId++;
 
     const captured = debug.capture()!.batches[0].passes[0];
@@ -292,6 +291,12 @@ describe('RenderGraphDebugger', () => {
   });
 });
 
+/**
+ * A WebGPU view with one forward pass drawing two meshes from one batch
+ *
+ * The draw list and the pass's cull result share one args array, so the snapshot reads the same
+ * counts whichever of the two it picks.
+ */
 function makeFixture(): Fixture {
   const texture = makeTexture(30, 31, 'albedo');
   const geometry = {
@@ -307,8 +312,6 @@ function makeFixture(): Fixture {
     _slotByName: { baseColorTexture: 0 },
   } as unknown as Mesh3DData['material'];
   const meshes = [makeMesh(1, geometry, material), makeMesh(2, geometry, material)];
-  // The result's args alias the list's on this fixture: the cull rewrites counts in the same
-  // array the batcher built, as the WebGL path does and as an uncontested WebGPU result reads.
   const drawCalls = new Uint32Array([6, 2, 0, 0, 0]);
   const passData = {
     view: { count: 2, items: meshes, indices: new Uint32Array([0, 1]) },
@@ -347,7 +350,6 @@ function makeFixture(): Fixture {
     description: 'Draws the fixture scene workload.',
     bit: PASS_BIT,
     _forward: { bit: PASS_BIT, sort: 'key' },
-    // The snapshot reads the pass's backend off its pipe: WebGPU is where render bundles exist.
     pipe: { renderer: { type: RendererType.WEBGPU } },
     cullResults: { get: () => result },
     setup() {},

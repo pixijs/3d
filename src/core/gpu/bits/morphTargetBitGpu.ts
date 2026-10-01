@@ -2,36 +2,32 @@ import { GeometryDataStruct } from '../../shader/bits/shaderStructs';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * Blend-shape deformation for the WebGPU backend, applied before skinning
+ * Blend-shape deformation for WebGPU: adds each morph target's delta, scaled by its weight, to the
+ * vertex position, and in the `hasNormals` variant to the normal too, which it then renormalizes
  *
- * Sums `Σ delta_i × weight_i` into the vertex position — and, in the
- * `hasNormals` variant, the vertex normal — before the skinning bit runs, so a
- * skin matrix transforms the morphed values. Composed only when
- * `geometry.morphTargetCount > 0`; the normal variant is chosen when
- * `geometry.hasMorphNormals`. The `hasNormals` flag bakes the arena stride
- * (4 floats/target positions-only, 8 with normals) and the extra normal
- * fetch + renormalize.
+ * Runs in `vertexInput` after the position bit and before skinning, so the skin transforms the
+ * morphed values. `MaterialSystemGpu` adds it to a mesh that has a `morph`, picking the normal
+ * variant when `geometry.hasMorphNormals`. The loop runs to the geometry's target count, so one
+ * variant serves every count.
  *
- * Deltas and weights live in one `uMorphStorage: array<f32>` — a static delta
- * arena up front, fixed per-mesh weight slots behind it — see
- * `MorphStoreBuffer`. Four floats per delta (`xyz` + unused `w`); the
- * normal variant packs a second `xyzw` behind each position. The per-geometry
- * facts (delta base, target count, atlas base vertex) come from the
- * geometry-store row via `renderable.geometryDataIndex`; only the per-instance
- * weight offset rides the mesh row, and `0` there means "no morph slot" (real
- * offsets start past the arena), which gates the whole block — a mesh swapped
- * onto a morphed geometry without morph state renders base pose.
+ * Deltas and weights share `uMorphStorage`; `MorphStoreBuffer` lays it out. A delta is four floats
+ * (`xyz` and an unused `w`), and the normal variant stores the normal delta right after the
+ * position delta, so `stride` is 4 or 8 floats per target per vertex. The geometry's delta base,
+ * target count and atlas `baseVertex` come from its row in `uGeometryStorage`. Only the weight
+ * offset is per mesh, in `renderable.morphWeightIndex`. An offset of 0 means the mesh has no weight
+ * slot, since real offsets start past the delta arena, and the vertex keeps its base pose.
  *
- * `vid - baseVertex` recovers the geometry-local vertex id the delta arena is
- * indexed by, so morphed geometry atlases like any other (`baseVertex` is 0
- * for non-atlased geometry, whose vertex ids are already local).
+ * `vid - baseVertex` turns the atlas-wide vertex index into the geometry-local one the deltas are
+ * indexed by; geometry outside an atlas has a `baseVertex` of 0. The templates must pass
+ * `@builtin(vertex_index) vid`, as the material and shadow templates do.
  *
- * Requires `@builtin(vertex_index) vid` in the entry point — provided by the
- * material and shadow vertex templates.
- * @param hasNormals - Whether the morph deltas carry normals, packing a normal texel behind each position
+ * A weight of exactly 0 skips that target's reads. Weights are per instance, so every vertex of
+ * an instance takes the same branch, and a target left at 0 costs one compare.
+ * `morphTargetBitGl` is the WebGL twin.
+ * @param hasNormals - Whether the morph deltas carry normals, packing a normal delta behind each position delta
  */
 function createMorphTargetBitGpu(hasNormals: boolean): ShaderBit {
-  const stride = hasNormals ? 8 : 4; // floats per target per vertex (position texel, plus normal texel with normals)
+  const stride = hasNormals ? 8 : 4;
 
   return {
     name: hasNormals ? 'morphTargetNormal' : 'morphTarget',
@@ -53,9 +49,6 @@ function createMorphTargetBitGpu(hasNormals: boolean): ShaderBit {
           let morphDeltaBase = geometryData.morphDeltaBase + vidLocal * geometryData.morphTargetCount * ${stride}u;
           var morphedPosition = position.xyz;${hasNormals ? '\n          var morphedNormal = normal;' : ''}
           for (var morphIndex = 0u; morphIndex < geometryData.morphTargetCount; morphIndex = morphIndex + 1u) {
-            // Parked dials are exactly 0 — skip the delta fetch. Weights are
-            // per-instance, so the branch is wavefront-coherent: a scalar
-            // compare at worst, most of the loop's bandwidth at best.
             let weight = uMorphStorage[renderable.morphWeightIndex + morphIndex];
             if (weight != 0.0) {
               let deltaOffset = morphDeltaBase + morphIndex * ${stride}u;
@@ -92,7 +85,7 @@ function createMorphTargetBitGpu(hasNormals: boolean): ShaderBit {
 export const morphTargetBitGpu: ShaderBit = createMorphTargetBitGpu(false);
 
 /**
- * Blend-shape deformation that also accumulates NORMAL deltas (`geometry.hasMorphNormals`)
+ * Blend-shape deformation that also accumulates normal deltas (`geometry.hasMorphNormals`)
  * @internal
  */
 export const morphTargetNormalBitGpu: ShaderBit = createMorphTargetBitGpu(true);

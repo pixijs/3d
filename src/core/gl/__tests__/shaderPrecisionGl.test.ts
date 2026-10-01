@@ -10,23 +10,30 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// GLSL ES defaults `sampler2D` / `samplerCube` to lowp and fragment ints to mediump. Desktop and Apple
-// GPUs run everything at highp anyway, so no visual scene can catch a missing declaration, but Mali
-// honours the defaults: store fetches come back at half-float precision and uint bit maths breaks.
-// So assert on the sources every WebGL shader the engine compiles.
-
 interface CompiledShader {
   source: string;
   fragment: boolean;
 }
 
-const SAMPLER_TYPES = ['sampler2D', 'samplerCube', 'sampler2DArray', 'sampler2DArrayShadow'];
+const SAMPLER_TYPES = [
+  'sampler2D',
+  'usampler2D',
+  'isampler2D',
+  'samplerCube',
+  'sampler2DArray',
+  'sampler2DArrayShadow',
+];
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 }
 
-/** Returns what `source` uses at a precision below highp, or an empty list */
+/**
+ * Returns what `source` uses at a precision below highp, or an empty list
+ *
+ * Desktop and Apple GPUs run everything at highp, so no visual scene can catch a missing
+ * declaration; `GLSL_PRECISION_PRELUDE` in `glslPrecisionPlugin` says what Mali does instead.
+ */
 function lowPrecisionUses({ source, fragment }: CompiledShader): string[] {
   const code = stripComments(source);
   const problems: string[] = [];
@@ -54,7 +61,7 @@ function colourFace(r: number, g: number, b: number): Texture {
 }
 
 describe('WebGL shader precision', () => {
-  it('declares highp for every sampler type and for fragment int maths', async () => {
+  it('declares highp for every sampler type and for fragment int maths in the material, IBL, skybox, shadow, effect and output shaders', async () => {
     const compiled: CompiledShader[] = [];
     const proto = WebGL2RenderingContext.prototype;
     const descriptor = Object.getOwnPropertyDescriptor(proto, 'shaderSource') as PropertyDescriptor;
@@ -88,8 +95,6 @@ describe('WebGL shader precision', () => {
         },
       });
 
-      // Material, IBL (BRDF LUT + prefilter), skybox, shadow map, a depth-reading effect and the
-      // output composite all compile here.
       const view3d = new View3D({ width: 64, height: 64, environment: cube, passes: [new SsaoEffect()] });
       view3d.background = cube;
       app.stage.addChild(view3d);
@@ -111,11 +116,13 @@ describe('WebGL shader precision', () => {
     }
 
     const sources = compiled.map((shader) => shader.source).join('\n');
-    // Guard the coverage: each template this test exists for must actually have compiled.
-    expect(sources).toContain('vTextureSlots');
-    expect(sources).toContain('geometrySchlickGGX');
-    expect(sources).toContain('uOpaqueDepthTexture');
-    expect(compiled.some((shader) => /samplerCube/.test(stripComments(shader.source)))).toBe(true);
+    expect(sources, 'the material shader compiled').toContain('vTextureSlots');
+    expect(sources, 'the PBR lighting compiled').toContain('geometrySchlickGGX');
+    expect(sources, 'a depth-reading effect compiled').toContain('uOpaqueDepthTexture');
+    expect(
+      compiled.some((shader) => /samplerCube/.test(stripComments(shader.source))),
+      'a cube-map shader compiled',
+    ).toBe(true);
 
     const offenders = compiled
       .map((shader) => ({ problems: lowPrecisionUses(shader), head: shader.source.slice(0, 160) }))

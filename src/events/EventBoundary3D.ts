@@ -24,25 +24,24 @@ import { hitVolumeBoundingRadiusSq, intersectRayHitVolume } from './intersectRay
 import { ensurePick3D, TOKEN_NONE } from './Pointer3DEvent';
 
 /**
- * Pointer event types the View3D re-dispatches into the 3D scene
+ * Pointer event types the View passes into its 3D scene
  *
- * Listed explicitly so the hot path never string-prefix-matches. Each type gets its own listener
- * closure: pixi's alias dispatches (`mousedown`, `touchstart`, `rightup`, …) reuse one pooled event
- * object whose `type` still reads the primary name, so the emitter key, not `event.type`, names the
- * dispatch.
+ * Listed out so the hot path never matches string prefixes. Each type gets its own listener
+ * closure: pixi sends the alias events (`mousedown`, `touchstart`, `rightup`, …) on the same
+ * reused event object, whose `type` still reads the primary name, so only the emitter key names
+ * the dispatch.
  *
- * `pointerout` and `pointerover` are not forwarded to a picked node; they are the "pointer left /
- * entered the View" signals. `pointerout` flushes that pointer's 3D hover state, `pointerover` seeds
- * it on entry so hover events don't wait for the first `pointermove`. The hover family on 3D nodes is
- * synthesized from those two plus the move-driven diff, so the incoming 2D `mouseover` / `mouseout`
- * dispatches carry nothing new and are not registered.
+ * `pointerout` and `pointerover` aren't passed to a picked node. They mean the pointer left or
+ * entered the View: `pointerout` clears that pointer's 3D hover, and `pointerover` sets it on
+ * entry, so hover events don't wait for the first `pointermove`. The 3D hover events come from
+ * those two and the hover check on each move, so pixi's own `mouseover` and `mouseout` on the View
+ * add nothing and aren't listened to.
  *
- * `pointercancel` is deliberately absent, matching pixi 2D, whose event system never maps it: a
- * cancelled pointer is an abandoned press, and its record is reclaimed per
- * `POINTER_RECORD_STALE_MS`.
+ * `pointercancel` is left out because pixi never delivers it, in 2D either. A cancelled pointer is
+ * an abandoned press, and its record is swept once stale (`POINTER_RECORD_STALE_MS`).
  *
- * `wheel` and `globalpointermove` have their own listeners — `wheel` carries a `FederatedWheelEvent`,
- * and global moves fan out instead of walking a chain.
+ * `wheel` and `globalpointermove` have their own listeners: `wheel` carries a
+ * `FederatedWheelEvent`, and a global move goes to every interactive node instead of along a chain.
  */
 const POINTER_EVENT_TYPES = [
   'pointerdown',
@@ -55,6 +54,7 @@ const POINTER_EVENT_TYPES = [
   'click',
   'tap',
   'rightclick',
+  'contextmenu',
   'mousedown',
   'mouseup',
   'mousemove',
@@ -68,41 +68,35 @@ const POINTER_EVENT_TYPES = [
   'touchendoutside',
 ] as const;
 
-/** Event types forwarded into the 3D scene — the members of `POINTER_EVENT_TYPES` */
+/** The members of `POINTER_EVENT_TYPES` */
 type Forwarded3DPointerType = (typeof POINTER_EVENT_TYPES)[number];
 
 /**
- * Multi-click window, in milliseconds
+ * Window for counting repeat clicks, in milliseconds
  *
- * Same-target clicks inside it increment `detail` — 2D parity, and like 2D there is no positional
- * threshold.
+ * Clicks on the same target within it raise `detail`. As in 2D, there is no distance limit.
  */
 const MULTI_CLICK_INTERVAL_MS = 200;
 
 /**
- * Idle bound for per-pointer records, in milliseconds
+ * How long a pointer record can go without events before it is freed, in milliseconds
  *
- * A record that has seen no events for this long is reclaimed when a new pointer appears: browsers
- * that mint a fresh `pointerId` per touch (iOS Safari, Chrome Android) never reuse an id, and pixi
- * never delivers `pointercancel`, so a cancelled touch's record would otherwise pin its press-path
- * nodes forever. Generous, because a held-still press legitimately produces no events and must
- * survive other fingers tapping around it.
+ * The check runs when a new pointer appears. Browsers that give each touch a new `pointerId` (iOS
+ * Safari, Chrome Android) never reuse an id, and pixi never delivers `pointercancel`, so without
+ * it a cancelled touch's record would hold on to its press path forever. It is long because a
+ * press held still sends no events, and must survive other fingers tapping around it.
  */
 const POINTER_RECORD_STALE_MS = 60_000;
 
 /**
- * Event types the chain walk dispatches under
+ * Event types `_emit3DChain` dispatches under
  *
- * Every forwarded type except the `*upoutside` family, whose walk hard-codes its keys, plus the
- * synthesized hover pair and `wheel`.
+ * Every forwarded type except the `*upoutside` ones, whose walk names its own keys, plus
+ * `mouseover`, `mouseout` and `wheel`.
  */
 type Chained3DType = Exclude<Forwarded3DPointerType, `${string}outside`> | 'mouseover' | 'mouseout' | 'wheel';
 
-/**
- * Per-type emitter / on-handler keys used by the chain walk
- *
- * Precomputed for every `Chained3DType` so steady pointer traffic never concatenates strings.
- */
+/** Emitter and handler-property keys per `Chained3DType`, built once so dispatch never concatenates strings */
 const CHAIN_KEYS: Record<Chained3DType, { onKey: string; captureKey: string }> = Object.create(null);
 for (const type of [...POINTER_EVENT_TYPES, 'mouseover', 'mouseout', 'wheel'] as const) {
   if (type.endsWith('outside')) continue;
@@ -110,11 +104,11 @@ for (const type of [...POINTER_EVENT_TYPES, 'mouseover', 'mouseout', 'wheel'] as
 }
 
 /**
- * The `eventemitter3` internal listener record
+ * A listener as `eventemitter3` stores it internally
  *
  * The dispatcher reads `_events` directly, as 2D's `EventBoundary._notifyListeners` does, because
- * `emit` runs a node's whole listener array unconditionally and so cannot honor
- * `stopImmediatePropagation` between a node's own listeners.
+ * `emit` always runs a node's whole listener list and so can't honour `stopImmediatePropagation`
+ * between a node's own listeners.
  */
 interface EmitterListener {
   fn: (event: FederatedMouseEvent) => void;
@@ -130,18 +124,17 @@ interface EmitterInternal {
 type WritableTypeEvent = FederatedMouseEvent & { type: string };
 
 /**
- * Invokes `node`'s listeners for `key` — the 2D-parity port of `EventBoundary._notifyListeners`
+ * Calls `node`'s listeners for `key`, a port of 2D's `EventBoundary._notifyListeners`
  *
- * `once` listeners are removed before being called and, on the array path only, the loop stops as
- * soon as `propagationImmediatelyStopped` is set. The single-listener fast path skips that flag
- * check, replicating the 2D quirk where a lone listener still fires after a same-node immediate stop.
+ * `once` listeners are removed before they run. With several listeners, the loop stops once
+ * `propagationImmediatelyStopped` is set. A lone listener skips that check, so it still runs after
+ * an immediate stop earlier on the same node, as in 2D. The node is read as a plain emitter, as 2D
+ * does, because keys built at dispatch time aren't in the typed `Container3DEvents` map.
  * @param node - Node whose listeners are notified.
  * @param key - Emitter key to fire (`'pointerdown'`, `'pointerdowncapture'`, an alias type, …).
  * @param event - The live federated event, already carrying its 3D fields.
  */
 function notifyListeners3D(node: Container3D, key: string, event: FederatedMouseEvent): void {
-  // Dispatch-time string keys are not in the typed `Container3DEvents` surface, so it is bypassed
-  // here, as 2D's `_notifyListeners` does.
   const emitter = node as unknown as EventEmitter;
   const listeners = (node as unknown as EmitterInternal)._events[key];
   if (!listeners) return;
@@ -156,22 +149,26 @@ function notifyListeners3D(node: Container3D, key: string, event: FederatedMouse
   }
 }
 
-// Per-pick stamp for the clip-prefilter memo on ancestors (`_clipRayStamp`). Module-global and
-// monotonic so stamps never collide across boundaries — a node reparented into another View can't
-// present a stale stamp that happens to match that View's own counter.
+/**
+ * Number of the current pick, for the clip memo on ancestors (`_clipRayStamp`)
+ *
+ * Shared by every View and only ever increasing, so a node moved into another View can't carry an
+ * old stamp that happens to match.
+ */
 let _clipPickStamp = 0;
 
-// DOM `Event.eventPhase` values (mirrored by pixi's `FederatedEvent`), stamped on the event while a
-// 3D chain walk is in flight.
+/** DOM `Event.CAPTURING_PHASE`, as pixi's `FederatedEvent` uses it; set during a 3D capture pass */
 const CAPTURING_PHASE = 1;
+/** DOM `Event.AT_TARGET`; set while a 3D node is told as the target */
 const AT_TARGET = 2;
+/** DOM `Event.BUBBLING_PHASE`; set during a 3D bubble pass */
 const BUBBLING_PHASE = 3;
 
 /**
- * Reads a node's on-handler for a dispatch-time key (`'onpointerdown'`, …)
+ * Reads a node's handler property for a key built at dispatch time (`'onpointerdown'`, …)
  *
- * The handlers are declared on `Container3D` with their precise event types; this widens the read to
- * the callable shape the dispatcher can invoke with the live federated event.
+ * `Container3D` declares each handler with its exact event type; this widens the read to a
+ * function the dispatcher can call with the live federated event.
  * @param node - Node to read the handler from.
  * @param onKey - Handler property name.
  * @returns The handler, or `null` / `undefined` when the node has none.
@@ -185,9 +182,13 @@ function onHandlerOf(
   )[onKey];
 }
 
-// One check per process: 3D deliberately ignores pixi's renderer-wide eventMode default (an
-// interactive default would put the whole scene on the pick list), and says so once. Registered
-// with the global reset seam so a full engine reset re-arms it.
+/**
+ * Whether a View has warned that the renderer's `eventMode` default doesn't apply to 3D nodes
+ *
+ * 3D ignores that default on purpose, since an interactive default would put the whole scene on
+ * the pick list, and says so once per process. `GlobalResourceRegistry.release()` clears it, so a
+ * full reset warns again.
+ */
 let _warnedDefaultEventMode = false;
 GlobalResourceRegistry.register({
   clear: () => {
@@ -195,7 +196,7 @@ GlobalResourceRegistry.register({
   },
 });
 
-/** Multi-click history for one button of one pointer — the source of the 3D `detail` count */
+/** Repeat-click count for one button of one pointer, which the 3D `detail` reports */
 interface Click3DHistory {
   clickCount: number;
   target: Container3D | null;
@@ -203,69 +204,65 @@ interface Click3DHistory {
 }
 
 /**
- * Per-pointer multi-click history, stored on the View outside the pointer records
+ * One pointer's click counts, kept on the boundary apart from the pointer records
  *
- * Records are reclaimed on the final release or View exit, but 2D's click counting survives those
- * (its tracking data is never dropped), so a double-click's second tap must find the first tap's
- * count here. Entries whose newest click is older than `MULTI_CLICK_INTERVAL_MS` can no longer
- * extend any count, and are swept when a new pointer's entry is allocated so id-minting browsers
- * don't accumulate one per touch.
+ * A record is freed on the final release or when the pointer leaves the View, but 2D never drops
+ * its click counts, so the second tap of a double tap has to find the first tap's count here. An
+ * entry whose last click is older than `MULTI_CLICK_INTERVAL_MS` can't raise any count, so it is
+ * swept when a new pointer's entry is made; browsers that give each touch a new `pointerId` then
+ * don't pile up one entry per tap.
  */
 interface ClickHistory3D {
   byButton: (Click3DHistory | null)[];
-  /** `performance.now()` of the most recent counted click */
+  /** `performance.now()` of the last counted click */
   lastClickTime: number;
 }
 
 /**
- * Per-pointer interaction state keyed by `pointerId` — the 3D analogue of 2D's `TrackingData`
+ * What the boundary tracks for one pointer, keyed by `pointerId`; 2D keeps the same in its
+ * `TrackingData`
  *
- * Paths are root-first node arrays (`[root3D, …, target]`), the equivalent of 2D's stored
- * `composedPath()`: they survive scene mutations, and `findMountedTarget3D` later recovers the
- * deepest still-mounted node. Records and their arrays are pooled — steady pointer traffic allocates
- * nothing.
+ * Paths are root-first node arrays (`[root3D, …, target]`), like the `composedPath()` 2D stores.
+ * They survive changes to the scene, and `findMountedTarget3D` later finds the deepest node still
+ * in place. Records and their arrays are pooled, so steady pointer traffic allocates nothing.
  */
 interface PointerRecord3D {
   /**
-   * Press propagation path per button, `null` when that button isn't held
+   * Press path per button, `null` while that button isn't held
    *
-   * An empty array records a press on the viewport itself (empty-space press), so the release can
-   * still resolve its click target — the View.
+   * An empty array is a press on empty space, so the release can still find its click target: the
+   * View.
    */
   pressPathByButton: (Container3D[] | null)[];
-  /** Number of non-`null` `pressPathByButton` entries — gates record teardown */
+  /** Number of held buttons, the non-`null` entries of `pressPathByButton`; the record is kept while any are */
   heldPressCount: number;
-  /** Path of the node this pointer hovers, `null` when nothing is hovered */
+  /** Path of the node this pointer is over, `null` when it is over nothing */
   overPath: Container3D[] | null;
-  /**
-   * `timeStamp` of the last event that touched this record — the staleness
-   * bound for the orphaned-record sweep (see `POINTER_RECORD_STALE_MS`)
-   */
+  /** `timeStamp` of the last event for this pointer, checked against `POINTER_RECORD_STALE_MS` */
   lastEventTime: number;
   /**
-   * Click target resolved by the release reconciliation, consumed by the
-   * click-family dispatches that follow the `pointerup`
+   * Click target the release worked out, for the click events that follow the `pointerup`
    *
-   * `null` means the click belongs to the View itself (no 3D chain is emitted).
+   * `null` means the click belongs to the View itself, and no 3D chain runs.
    */
   clickTarget3D: Container3D | null;
-  /** `detail` for the 3D click chain — the per-3D-target count, not pixi's per-View count */
+  /** `detail` for the 3D click events: the count for the 3D target, not pixi's count for the View */
   clickDetail: number;
   /**
-   * `nativeEvent` of the release that produced the click stash
+   * `nativeEvent` of the release that set `clickTarget3D` and `clickDetail`
    *
-   * Pixi's click clone shares it with the `pointerup`, so a matching token proves the arriving click
-   * belongs to this release; anything else must not consume the stash.
+   * Pixi's click event shares it with the `pointerup`, so a match proves an arriving click belongs
+   * to this release; no other click may use them.
    */
   clickToken: unknown;
 }
 
 /**
- * Resolves the deepest node of a stored path that is still mounted where it was recorded
+ * Finds the deepest node of a stored path that is still where it was recorded, as 2D's
+ * `findMountedTarget` does
  *
- * Each entry's `parent` must still point at the previous entry — the 3D port of 2D's
- * `findMountedTarget`. Lets a release or hover flush reach the mounted parent of a node removed
- * mid-interaction.
+ * Each entry's `parent` must still be the entry before it. This lets a release or a hover change
+ * reach the nearest ancestor still in place when a node was removed mid-interaction.
  * @param path - Root-first path captured when the interaction began.
  * @returns The deepest still-mounted node, or `null` for an empty path (a press on the viewport
  * itself).
@@ -281,23 +278,20 @@ function findMountedTarget3D(path: Container3D[]): Container3D | null {
 }
 
 /**
- * The 3D counterpart of pixi.js's `EventBoundary`
+ * Pointer events for one {@link View3D}, the 3D counterpart of pixi.js's `EventBoundary`
  *
- * One boundary is created per {@link View3D} by the View's constructor and lives at `view3d.events`.
- * It owns every piece of interaction state for that View — the flat pick list, per-pointer records,
- * hover and press paths, multi-click histories — and translates the federated pointer events pixi
- * delivers to the View into capture / at-target / bubble dispatches along the picked node's 3D parent
- * chain.
+ * Each View makes one, at `view3d.events`. Pixi's event system still delivers events to the View
+ * as a 2D object. The View answers pixi's hit test by casting a ray into its scene, and this
+ * boundary then sends each event to the picked node and its 3D ancestors, with capture, target and
+ * bubble phases as in 2D. It also tracks hover, presses and click counts per pointer.
  *
- * Pixi's 2D `EventBoundary` remains the event source: the View hit-tests through `_containsPoint`
- * (its `containsPoint` override) and re-enters here through the listeners the constructor registers.
- * Those are plain-key listeners, and pixi notifies a target's `on*` handler and its `*capture`
- * listeners before the plain ones. So the 3D dispatch runs before every user-level
- * `view3d.on('pointerdown', …)` listener, but after a `view3d.onpointerdown` handler or a
- * `view3d.on('pointerdowncapture', …)` listener — those two read the 3D fields as a miss.
+ * You rarely need it directly: set {@link IFederatedContainer3D#eventMode | eventMode} on nodes
+ * and listen on them. It holds the settings that apply to the whole View. The View's own `on*`
+ * handlers and `*capture` listeners run before the 3D dispatch; {@link Event3DFields} explains
+ * what they see.
  * @example
  * ```ts
- * // Interaction on a 3D node reads the same as it does in 2D.
+ * // Events on a 3D node work as they do in 2D.
  * mesh.eventMode = 'static';
  * mesh.cursor = 'pointer';
  * mesh.on('pointertap', (e) => console.log(e.hit3D?.point)); // world-space hit point
@@ -314,33 +308,33 @@ export class EventBoundary3D {
   private readonly _view: View3D;
 
   /**
-   * Flat list of every pick-participating `Container3D` in this View: attached, no barrier ancestor
-   * (`eventMode: 'none'` or `interactiveChildren: false` — see `getAncestorPickState`), and
-   * either `eventMode` static / dynamic / auto or a volume-bearing `'passive'` node under an
-   * interactive ancestor
+   * The pick list: every node in this View that a pick tests
    *
-   * Non-interactive entries (auto and passive) are ray-tested but resolve their nearest interactive
-   * ancestor as the event target, and are skipped by per-node notifications such as the global-move
-   * fan-out. Maintained at mutation time — the `eventMode` / `hitVolume` setters, their subtree
-   * cascades, and scene-graph attach / detach — so there is no scene-graph walk at pick time; each
-   * node's membership is its `_pickIndex`, its slot in this list. Order is unspecified: a removal
-   * swap-fills the freed slot with the last entry.
+   * A node is on it when it is attached, no ancestor is a barrier (`eventMode: 'none'` or
+   * `interactiveChildren: false`, see `getAncestorPickState`), and either its `eventMode` is
+   * `'static'`, `'dynamic'` or `'auto'`, or it is `'passive'` with a volume under an interactive
+   * ancestor.
+   *
+   * Hits on `'auto'` and `'passive'` entries go to their nearest interactive ancestor, and
+   * per-node notifications such as global moves skip them. The list changes when the scene does
+   * (the `eventMode`, `interactiveChildren` and `hitVolume` setters, and attach and detach), so a
+   * pick never walks the scene. Each node's `_pickIndex` is its slot. The order is unspecified: a
+   * removal moves the last entry into the freed slot.
    * @internal
    */
   public _interactiveList: Container3D[] = [];
 
   /**
-   * Whether interactive 3D nodes receive `globalpointermove` on every pointer move anywhere on the
-   * canvas
+   * Whether interactive 3D nodes hear `globalpointermove` on every pointer move over the canvas
    *
-   * The standard tool for drags that keep tracking after the pointer leaves the object; the
-   * `globalmousemove` / `globaltouchmove` aliases come with it. Mirrors 2D's
-   * `EventBoundary.enableGlobalMoveEvents`, and additionally requires pixi's own global-move feature
-   * to be on, since the View receives the fan-out source event from the 2D system.
+   * The usual tool for a drag that keeps tracking after the pointer leaves the object;
+   * `globalmousemove` and `globaltouchmove` come with it. It matches 2D's
+   * `EventBoundary.enableGlobalMoveEvents`, and also needs pixi's own global moves on (the
+   * `eventFeatures.globalMove` renderer option), since the View gets each move from pixi.
    * @remarks
-   * - Each interactive node is notified exactly once per move, in registration order — unspecified,
-   *   so don't rely on it.
-   * - Cost is O(interactive nodes) per move; turn it off when unused in crowded scenes.
+   * - Each interactive, visible node hears each move once, in no particular order.
+   * - It costs time per interactive node on every move; turn it off in crowded scenes that don't
+   *   use it.
    * @default true
    */
   public enableGlobalMoveEvents = true;
@@ -349,40 +343,38 @@ export class EventBoundary3D {
   private _dynamicPickCount = 0;
 
   /**
-   * Number of attached nodes in this View with an explicit `hitVolume` (`_hitVolumeInput !== null`)
+   * Number of attached nodes in this View with a `hitVolume` set (`_hitVolumeInput !== null`)
    *
-   * Explicit volumes clip their descendants (see {@link Container3D#hitVolume}), so while this is 0
-   * the pick loop skips all clip work beyond this one counter check. Maintained by the `hitVolume`
-   * setter (attached `null` ↔ non-`null` transitions) and by `View3D._attach` / `_detach` for volumes
-   * carried in or out with a subtree.
+   * Those volumes clip their descendants (see {@link Container3D#hitVolume}), so while this is 0 a
+   * pick does no clip work beyond checking it. The `hitVolume` setter keeps it up to date while a
+   * node is attached, and `View3D._attach` and `_detach` count the volumes a subtree brings in or
+   * takes out.
    * @internal
    */
   public _clipVolumeCount = 0;
 
   /**
-   * The event target resolved by the most recent `containsPoint` call — the hit node itself, or its
-   * nearest interactive ancestor when the ray struck a non-interactive (`'auto'` / `'passive'`)
-   * node — or `null` on viewport miss
+   * The event target the last hit test found: the node hit, or its nearest interactive ancestor
+   * when the node isn't interactive (`'auto'` or `'passive'`); `null` over empty space
    *
-   * Single-slot on purpose: pixi hit-tests immediately before each dispatch, so this is always
-   * coherent with the event in flight. Per-pointer state lives in `_pointerRecords`.
+   * One slot is enough: pixi hit-tests right before each dispatch, so it always matches the event
+   * in flight. Per-pointer state lives in `_pointerRecords`.
    * @internal
    */
   public _currentPick3D: Container3D | null = null;
 
   /**
-   * The user-set shape restricting the View's interactive region, in View-local 2D space — the body
-   * of {@link View3D#hitArea}, or `null` when unset
+   * The shape set as {@link View3D#hitArea}, in View-local 2D space, or `null`
    * @internal
    */
   public _hitAreaShape: IHitArea | null = null;
 
   /**
-   * The hit area the View actually hands to pixi while `_hitAreaShape` is set
+   * The hit area the View gives pixi while `_hitAreaShape` is set
    *
-   * Pixi's `hitTestFn` short-circuits on a truthy `hitArea` without ever calling `containsPoint`, so
-   * the 3D pick refresh has to ride the one hook that still runs — `hitPruneFn`'s
-   * `hitArea.contains` — hence the shape test and the pick refresh live in this one object.
+   * Pixi's `hitTestFn` returns early for a container with a `hitArea` and never calls
+   * `containsPoint`, so the 3D pick has to run from the one hook that still does:
+   * `hitArea.contains`, called from `hitPruneFn`. This object tests the shape, then runs the pick.
    * @internal
    */
   public readonly _hitAreaProxy: IHitArea = {
@@ -396,49 +388,42 @@ export class EventBoundary3D {
     },
   };
 
-  /** Per-pointer interaction records (hover, press paths), keyed by `pointerId` */
+  /** Per-pointer records (hover, press paths), keyed by `pointerId` */
   private readonly _pointerRecords = new Map<number, PointerRecord3D>();
 
-  /** Recycled records — steady-state pointer traffic allocates nothing */
+  /** Freed records, reused so steady pointer traffic allocates nothing */
   private readonly _recordPool: PointerRecord3D[] = [];
 
-  /** Recycled path arrays backing press / hover paths */
+  /** Freed path arrays, reused for press and hover paths */
   private readonly _pathPool: Container3D[][] = [];
 
-  /** Multi-click histories keyed by `pointerId` — these outlive the pointer records */
+  /** Click counts keyed by `pointerId`; they outlive the pointer records */
   private readonly _clickHistories = new Map<number, ClickHistory3D>();
 
-  /** Recycled `ClickHistory3D` entries */
+  /** Freed `ClickHistory3D` entries */
   private readonly _clickHistoryPool: ClickHistory3D[] = [];
 
   /**
-   * Validity token + pick of the last `pointermove` dispatched through this View
+   * `nativeEvent` and pick of the last `pointermove` this View dispatched
    *
-   * `_dispatchGlobalMove` re-derives the fan-out's 3D fields from these instead of trusting the pooled
-   * event's shared field storage, which any View3D on the stage may have written last.
+   * `_dispatchGlobalMove` takes the 3D fields from these rather than from the event's own field
+   * storage, which any View3D on the stage may have written last.
    */
   private _movePickToken: unknown = TOKEN_NONE;
   private _movePick3D: Container3D | null = null;
 
-  /**
-   * The view's own cursor, shown on viewport miss
-   *
-   * Stored here rather than via `super.cursor`: pixi's `Container.cursor` is type-only (no runtime
-   * property), so a super-assignment would plant an own data property on the instance that permanently
-   * shadows the `cursor` accessors below.
-   */
+  /** The View's own cursor, shown over empty space; set through {@link View3D#cursor} */
   private _cursorFallback: Cursor | (string & {}) | undefined;
 
   /**
-   * The pick behind `_currentPick3D` — the hit the last `_containsPoint` ray cast produced, copied
-   * into every event the dispatcher stamps for it
+   * The hit behind `_currentPick3D`, from the last `_containsPoint` ray cast, copied into each
+   * event dispatched for it
    *
-   * `raycast` fills its own result object instead, so a `raycast` call inside a listener cannot
-   * change what the rest of that event's dispatches report.
+   * `raycast` fills a new object instead, so calling it from a listener can't change what the
+   * rest of that event's dispatches report.
    */
   private readonly _lastHit: RaycastHit3D = createRaycastHit3D();
 
-  /** Scratch ray, matrices and hit result for picking — a pool of one per View3D */
   private readonly _scratchWorldRay = new Ray();
   private readonly _scratchGlobal = new Vector2();
   private readonly _scratchLocalRay = new Ray();
@@ -446,44 +431,49 @@ export class EventBoundary3D {
   private readonly _scratchWorldPoint = new Vector3();
   private readonly _scratchCenter = new Vector3();
   private readonly _scratchHit: HitResult3D = createHitResult3D();
-  // Dedicated clip scratch: the prefilter runs between the candidate's broadphase and narrowphase,
-  // and the containment walk runs while `_scratchWorldPoint` holds the winner's hit point — neither
-  // may clobber the pick loop's own scratch state.
+  /**
+   * Scratch for the clip tests, apart from the pick loop's own
+   *
+   * The clip prefilter runs between a candidate's broadphase and its exact test, and the
+   * containment test runs while `_scratchWorldPoint` holds the winner's hit point, so neither may
+   * overwrite the pick loop's scratch.
+   */
   private readonly _scratchClipRay = new Ray();
   private readonly _scratchClipPoint = new Vector3();
 
+  /**
+   * Makes the View hit-testable and adds the listeners that carry its events into the scene
+   *
+   * The View starts `'static'`; `_changeDynamicCount` makes it `'dynamic'` while any 3D node is,
+   * so pixi's ticker picks again under a still pointer. The listeners are added here, before any
+   * user code can add its own, so they run first among the View's plain listeners
+   * (`eventemitter3` calls them in the order they were added) and fill in the 3D fields before
+   * user listeners read them. Each type gets its own closure, as `POINTER_EVENT_TYPES` explains.
+   * `wheel` goes straight to the current pick, which pixi's hit test has already found, with no
+   * per-pointer tracking, as in 2D. `globalpointermove` reaches the View on every move over the
+   * canvas, from pixi's `all()`, and is passed on to every interactive 3D node.
+   * @param view - The View this boundary serves.
+   */
   constructor(view: View3D) {
     this._view = view;
 
-    // Make the View hit-testable by pixi's EventBoundary. Static by default; registering an
-    // `eventMode: 'dynamic'` 3D node upgrades the View to dynamic so the ticker re-picks animated
-    // content under a stationary pointer.
     view.eventMode = 'static';
 
-    // Install the 3D dispatcher for each forwarded event type. Registered here so it always fires
-    // first among the plain-key listeners (eventemitter3 fires them in registration order), letting
-    // it write the event's 3D fields before any user-level `view.on(type, …)` listener runs; the
-    // View's own `on*` handler and `*capture` listeners precede it (see the class doc). The type is
-    // bound into each closure because
-    // pixi's alias dispatches deliver the pooled event under the alias emitter key while `event.type`
-    // keeps the primary name.
     for (const type of POINTER_EVENT_TYPES) {
       view.on(type, (event: FederatedPointerEvent) => this._dispatch3DEvent(type, event));
     }
-    // Wheel is 2D-parity simple: one propagation from the hit target, no tracking, no cursor
-    // interaction. The pick already ran in `_containsPoint`.
     view.on('wheel', (event: FederatedWheelEvent) => this._forwardToPick(event, 'wheel', this._currentPick3D));
-    // Global moves are a fan-out, not a chain dispatch: pixi's `all()` notifies the View on every
-    // pointermove anywhere on the canvas, and the boundary re-broadcasts to every interactive 3D node.
     view.on('globalpointermove', (event: FederatedPointerEvent) => this._dispatchGlobalMove(event));
   }
 
   /**
-   * Releases every retained `Container3D` reference — per-pointer records, click histories, the pick
-   * caches and the flat pick list
+   * Drops every `Container3D` this boundary holds: pointer records, click counts, the cached picks
+   * and the pick list
    *
-   * Called by {@link View3D#destroy}; the boundary itself owns no GPU or DOM resources, and the
-   * dispatch listeners live on the View's emitter, which the View's own destroy removes.
+   * {@link View3D#destroy} calls it after detaching the scene's nodes. The View's root is never
+   * detached, so it can still be on the pick list; every node left there gets its `_pickIndex`
+   * reset, or it could never register with another View. The boundary owns no GPU or DOM
+   * resources, and its listeners live on the View, whose own destroy removes them.
    * @internal
    */
   public destroy(): void {
@@ -492,8 +482,6 @@ export class EventBoundary3D {
     this._clickHistoryPool.length = 0;
     this._recordPool.length = 0;
     this._pathPool.length = 0;
-    // Reset each node's list slot: the View is destroyed without detaching its scene, and a stale
-    // slot would make the node unregistrable in another View.
     const list = this._interactiveList;
     for (let i = 0; i < list.length; i++) list[i]._pickIndex = -1;
     list.length = 0;
@@ -505,14 +493,10 @@ export class EventBoundary3D {
   }
 
   /**
-   * CSS cursor for the View, forwarding the picked 3D node's own cursor — the body of
-   * {@link View3D#cursor}
+   * The body of {@link View3D#cursor}: the picked node's cursor, or the View's own when nothing is
+   * picked or the node's cursor is `null`
    *
-   * Pixi reads `e.target.cursor` to update the canvas CSS cursor and `e.target` stays the View3D
-   * through 2D dispatch, so the picked node's cursor has to flow through here. `_currentPick3D` is
-   * coherent with the hit test pixi runs immediately before reading the cursor. Reads fall back to the
-   * View's own cursor on a viewport miss, so a 3D node whose {@link Container3D#cursor} is `null`
-   * shows the View's cursor, where bare 2D would coerce to `'default'`.
+   * The pick is always fresh here, because pixi reads the cursor right after its hit test.
    * @returns The picked node's cursor, or the View's own when nothing is picked.
    */
   public get cursor(): Cursor | (string & {}) | undefined {
@@ -520,7 +504,7 @@ export class EventBoundary3D {
   }
 
   /**
-   * Sets the View's own fallback cursor, shown on viewport miss
+   * Sets the View's own cursor, shown when nothing is picked
    * @param value - Cursor the View shows when no 3D node is picked.
    */
   public set cursor(value: Cursor | (string & {}) | undefined) {
@@ -530,18 +514,24 @@ export class EventBoundary3D {
   /**
    * The body of {@link View3D#containsPoint}
    *
-   * Pixi calls it for every pointer event after `worldTransform.applyInverse(globalPoint, localPoint)`,
-   * so `(x, y)` is in View3D's local 2D space — the same space `updateBounds` places
-   * `bounds.minX/maxX` in. It runs the 3D ray cast and caches the picked Container3D on
-   * `_currentPick3D`; a viewport miss still resolves to View3D itself as the event target.
+   * Pixi calls it during its hit test with the point already mapped by
+   * `worldTransform.applyInverse`, so `(x, y)` is in the View's local 2D space, where
+   * `updateBounds` places the View. It casts the 3D ray and keeps the picked node in
+   * `_currentPick3D`; over empty space the View itself is still the event target.
+   *
+   * It maps the point back to global space with the same `worldTransform` to build the ray, and
+   * casts with `skipUpdate`, so the ray and the nodes it is tested against all use the transforms
+   * from the last render, and the user picks what they see.
+   *
+   * The renderer-default warning is checked here rather than in the constructor, because the
+   * renderer, which sets that default, is usually created after the scene, and always before the
+   * first hit test.
    * @param x - View3D-local x.
    * @param y - View3D-local y.
    * @returns Whether the point falls inside the View's 2D rect.
    * @internal
    */
   public _containsPoint(x: number, y: number): boolean {
-    // Checked here rather than at construction: the renderer (which sets the global) usually inits
-    // after scenes are built, and by the first hit test it definitely has.
     if (!_warnedDefaultEventMode && EventSystem.defaultEventMode !== undefined) {
       _warnedDefaultEventMode = true;
       if (EventSystem.defaultEventMode !== 'passive') {
@@ -557,10 +547,6 @@ export class EventBoundary3D {
       return false;
     }
 
-    // Undo the boundary's global -> local mapping with the same cached matrix, recovering
-    // `event.global` for `screenToRay`. `skipUpdate` keeps the whole pick on last-render transforms,
-    // consistent with the node worldTransforms the ray is tested against, so the user picks what they
-    // see.
     const view = this._view;
     view.worldTransform.apply(this._scratchGlobal.set(x, y), this._scratchGlobal);
     view.screenToRay(this._scratchGlobal, this._scratchWorldRay, true);
@@ -572,8 +558,8 @@ export class EventBoundary3D {
   /**
    * Tests View3D-local `(x, y)` against the View's 2D rect
    *
-   * `updateBounds` places local 2D at `minX = -anchor.x * width`, so adding `anchor * size` puts the
-   * origin at the View's top-left.
+   * `updateBounds` puts the View's left edge at `-anchor.x * width`, so adding `anchor * size`
+   * moves the origin to the View's top-left corner.
    * @param x - View3D-local x.
    * @param y - View3D-local y.
    * @returns Whether the point is inside the rect.
@@ -588,11 +574,7 @@ export class EventBoundary3D {
   }
 
   /**
-   * Ray-casts at a 2D global point and returns the closest hit — the body of {@link View3D#raycast}
-   *
-   * `View3D#raycast` documents the full contract: camera-relative `distance`, last-render transforms,
-   * hidden nodes skipped, and hits on non-interactive (`'auto'` / `'passive'`) nodes reported against
-   * their interactive ancestor.
+   * The body of {@link View3D#raycast}, which documents what it does
    * @param position - 2D global point to cast through (the space of `event.global`).
    * @returns The closest hit, or `null` on a miss or when the point falls outside the View's 2D rect.
    */
@@ -607,16 +589,13 @@ export class EventBoundary3D {
   }
 
   /**
-   * Registers a node on the flat pick list, folding a `'dynamic'` mode into the View's dynamic-node
-   * count
+   * Puts a node on the pick list, counting it if it is `'dynamic'`
    *
-   * Called from the `Container3D.eventMode` / `interactiveChildren` / `hitVolume` setters, their
-   * subtree cascades, and the `_attach` cascade — for nodes below no barrier that are registered by
-   * their own mode (static / dynamic / auto) or are `'passive'` volume-bearing nodes under an
-   * interactive ancestor. No-op when the node is already
-   * registered: `_pickIndex`, owned by this pair of methods, keeps every path idempotent. Only a
-   * node registered by its own mode can be `'dynamic'`; implicit registrations never touch the
-   * dynamic count.
+   * Called by the `eventMode`, `interactiveChildren` and `hitVolume` setters, their subtree
+   * updates, and `View3D._attach`, for nodes under no barrier whose own mode is `'static'`,
+   * `'dynamic'` or `'auto'`, or which are `'passive'` with a volume under an interactive ancestor.
+   * Does nothing for a node already on the list: `_pickIndex`, which only this method and
+   * `_removeInteractive` write, makes every call safe to repeat.
    * @param node - Node joining the pick list.
    * @internal
    */
@@ -627,16 +606,16 @@ export class EventBoundary3D {
   }
 
   /**
-   * Removes a node from the pick list and clears any cached pick state pointing at it — the mirror
-   * of `_addInteractive`
+   * Takes a node off the pick list and clears any cached pick of it; the inverse of
+   * `_addInteractive`
    *
-   * The last entry is swapped into the freed slot, so a removal is O(1) whatever the list size and
-   * tearing down a large registered subtree stays linear. That is why list order is unspecified.
-   * Called from the same paths as `_addInteractive`; a no-op for nodes not on the list.
+   * The last entry moves into the freed slot, so a removal is O(1) however long the list is, and
+   * removing a large subtree stays linear; that is why the order is unspecified. Called from the
+   * same places as `_addInteractive`, and does nothing for a node not on the list.
    * @param node - Node leaving the pick list.
-   * @param wasDynamic - The mode the node was registered under. The `eventMode` setter passes this
-   * explicitly, since the node's `_eventMode` has already changed by the time this runs; other callers
-   * rely on the default, which reads the current mode.
+   * @param wasDynamic - Whether the node was `'dynamic'` when it was counted. The `eventMode` setter
+   * passes it because the node's mode has already changed by then; other callers use the default,
+   * the current mode.
    * @internal
    */
   public _removeInteractive(node: Container3D, wasDynamic: boolean = node._eventMode === 'dynamic'): void {
@@ -654,12 +633,11 @@ export class EventBoundary3D {
   }
 
   /**
-   * Tracks how many registered 3D nodes are `eventMode: 'dynamic'` and mirrors that onto the View's
-   * own 2D `eventMode`
+   * Counts the `'dynamic'` nodes on the pick list and sets the View's own 2D `eventMode` to match
    *
-   * Pixi's EventsTicker then drives synthetic pointermoves — re-picks under a stationary pointer —
-   * only while some 3D content needs them. Only the static ↔ dynamic pair is auto-managed; a user-set
-   * `'none'` / `'passive'` on the View is respected.
+   * While any 3D node is `'dynamic'`, the View is too, so pixi's `EventsTicker` sends pointer moves
+   * under a still pointer and the scene is picked again. The View only switches between `'static'`
+   * and `'dynamic'`; a `'none'` or `'passive'` you set on it stays.
    * @param delta - Change in the dynamic-node count.
    * @internal
    */
@@ -673,14 +651,13 @@ export class EventBoundary3D {
   }
 
   /**
-   * Drops `node` from the current-pick cache when it leaves interaction — detached, or made
+   * Forgets `node` as the current pick when it stops taking part, because it was detached or made
    * non-interactive
    *
-   * Cleared silently: no `pointerout` is synthesised, since emitting events from a scene mutation
-   * would be surprising. Press and hover paths in the per-pointer records are deliberately left
-   * alone — they store full root-first paths precisely so a later release or hover flush can resolve
-   * the deepest still-mounted ancestor via `findMountedTarget3D`, matching 2D's unmounted-target
-   * handling.
+   * No `pointerout` is sent: events fired by a change to the scene would be surprising. The press
+   * and hover paths in the pointer records stay as they are on purpose. They hold whole paths, so
+   * a later release or hover change still reaches the deepest ancestor still in place through
+   * `findMountedTarget3D`, as 2D does for removed targets.
    * @param node - Node leaving interaction.
    * @internal
    */
@@ -690,21 +667,31 @@ export class EventBoundary3D {
   }
 
   /**
-   * The core pick loop
+   * Finds the closest hit along a world-space ray among the nodes on the pick list
    *
-   * Iterates the flat interactive list, transforms the world ray into each node's local space, calls
-   * `intersectRayHitVolume` and tracks the closest hit, whose world-space details land in `out`.
+   * It runs on every pointer event, so each node goes through the cheap checks first:
    *
-   * Depth-sorting and the reported distance are done in **world space**: the ray transformed into a
-   * node's local space has its direction renormalised (so the per-volume `t` is in that node's local
-   * units), which would mis-sort nodes of differing scale and report scaled distances. Each hit point
-   * is converted to world instead, and true world distances compared.
+   * 1. Its shape: the `hitVolume` if set, else the default, such as a mesh's bounding box. A plain
+   *    container has none and is skipped, as a 2D `Container` without a `hitArea` is.
+   * 2. Visibility: a node that is hidden, or under a hidden ancestor, neither hits nor blocks, as
+   *    in 2D. `_worldVisible` comes from the last transform pass, like the matrices used below.
+   * 3. Broadphase: the ray against a sphere around the node's world position that encloses its
+   *    shape, all in squared distances, so a miss costs no matrix inverse and no ray transform.
+   * 4. Clip prefilter, only while some node in the View has a `hitVolume`: a node can't hit inside
+   *    a clipping ancestor the ray misses. `clipStamp` is new for each pick, or `0` while clipping
+   *    is off, so each ancestor's ray test is shared by all its descendants.
+   * 5. The exact test, in the node's local space.
+   * 6. Distance, in world space. The local ray's direction is renormalised, so its `t` is in that
+   *    node's local units; comparing those would sort nodes of different scale wrongly. Each hit
+   *    point goes back to world space and the true distances are compared.
+   * 7. The target, last, because it walks the ancestors: `_resolvePickTarget` applies barriers,
+   *    passes a non-interactive hit to its interactive ancestor, and tests the hit point against
+   *    clipping ancestors. A hit with no target is skipped and blocks nothing.
    *
-   * Ancestor clipping (explicit `hitVolume`s clip their descendants, see {@link Container3D#hitVolume})
-   * runs in two phases, both skipped entirely while `_clipVolumeCount` is 0: a memoized conservative
-   * ray-vs-clip-volume prefilter before each candidate's narrowphase (`_passesClipPrefilter`), and an
-   * exact containment test on the winning hit point inside `_resolvePickTarget`. A clipped candidate
-   * is skipped without occluding, like any pruned subtree.
+   * The winner's surface data belongs to the node that was struck (`bestSurfaceNode`), which is
+   * not the reported target for a non-interactive hit. Its normal goes to world space through the
+   * inverse-transpose of that node's world matrix, which keeps it right under non-uniform scale;
+   * `transpose` writes into scratch and leaves the cached inverse alone.
    * @param worldRay - The pick ray, in world space.
    * @param out - Hit to fill with the winner, `target` included, on success; untouched on a miss.
    * @returns Whether the ray hit anything.
@@ -714,40 +701,24 @@ export class EventBoundary3D {
     const ox = worldRay.origin.x;
     const oy = worldRay.origin.y;
     const oz = worldRay.origin.z;
-    // One stamp per pick: each clip ancestor is ray-tested at most once, however many descendants it
-    // covers. 0 = clipping inactive.
     const clipStamp = this._clipVolumeCount > 0 ? ++_clipPickStamp : 0;
 
     let bestDistance = Infinity;
     let bestNode: Container3D | null = null;
-    // The node the winning ray test actually struck. Usually `bestNode`; for an `'auto'` hit it is the
-    // auto node while `bestNode` is the reported interactive ancestor — surface data (localPoint,
-    // normal space) belongs to the struck node.
     let bestSurfaceNode: Container3D | null = null;
     let bestHasSurface = false;
 
     for (let i = 0; i < list.length; i++) {
       const node = list[i];
-      // Explicit hitVolume, else the node's default shape (a Mesh3D's live geometry AABB). Interactive
-      // plain containers have no default — they are bubble-only targets, matching a 2D Container
-      // without a hitArea.
       const volume = node._hitVolumeResolved ?? node._getDefaultHitVolume();
       if (!volume) continue;
-      // Hidden nodes neither pick nor occlude — mirrors pixi 2D hit-testing, which skips invisible
-      // subtrees. `worldVisible` is the 0|1 mask resolved by the transform pass (ancestors included),
-      // so this carries the same last-frame contract as the world matrices used below.
       if (node._worldVisible === 0) continue;
 
-      // Broadphase: reject against a conservative world-space bounding sphere centred on the node's
-      // world translation. Squared space throughout, so missed nodes fall out with no matrix inverse
-      // and no ray transform; a pass still runs the exact test below.
       const wt = node.worldTransform.elements;
       this._scratchCenter.set(wt[12], wt[13], wt[14]);
       const radiusSq = hitVolumeBoundingRadiusSq(volume) * node._getWorldScaleSq();
       if (worldRay.distanceSqToPoint(this._scratchCenter) > radiusSq) continue;
 
-      // Clip prefilter: when the ray misses any clip ancestor's volume outright, no point on the
-      // candidate can be contained in it — skip before paying for the narrowphase.
       if (clipStamp !== 0 && !this._passesClipPrefilter(node, worldRay, clipStamp)) continue;
 
       worldRay.applyMatrix4(node._getInverseWorldTransform(), this._scratchLocalRay);
@@ -755,8 +726,6 @@ export class EventBoundary3D {
       const t = intersectRayHitVolume(this._scratchLocalRay, volume, this._scratchHit);
       if (t < 0) continue;
 
-      // Sort on true world distance; see the method doc for why the per-volume `t` values can't be
-      // compared directly.
       this._scratchHit.point.applyAffineMatrix4(node.worldTransform, this._scratchWorldPoint);
       const dx = this._scratchWorldPoint.x - ox;
       const dy = this._scratchWorldPoint.y - oy;
@@ -764,10 +733,6 @@ export class EventBoundary3D {
       const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (distance >= bestDistance) continue;
 
-      // Target resolution last: the O(depth) ancestor walk (pruning, `'auto'` redirection and exact
-      // clip containment on the hit point) runs only for candidates that beat the current best. A node
-      // whose target resolves to `null` (pruned subtree, clipped hit, or `'auto'` with no interactive
-      // ancestor) is skipped without occluding.
       const target = this._resolvePickTarget(node, this._scratchWorldPoint);
       if (!target) continue;
 
@@ -785,9 +750,6 @@ export class EventBoundary3D {
 
     if (!bestNode) return false;
 
-    // Surface normal: local → world via the normal matrix (inverse-transpose of the world matrix), so
-    // it stays correct under non-uniform scale. `transpose` writes into a scratch and leaves the
-    // node's cached inverse untouched.
     if (bestHasSurface) {
       bestSurfaceNode!._getInverseWorldTransform().transpose(this._scratchNormalMatrix);
       out.normal.transformDirection(this._scratchNormalMatrix);
@@ -800,25 +762,25 @@ export class EventBoundary3D {
   }
 
   /**
-   * Resolves the event target a pick on `node` would report, while enforcing ancestor pruning
+   * Finds the event target a hit on `node` reports, applying the barriers above it
    *
-   * Walks the full parent chain checking `interactiveChildren` and `eventMode: 'none'` — either one on
-   * any ancestor makes the node non-pickable, as in 2D — and, for a non-interactive (`'auto'` or
-   * implicitly registered `'passive'`) node, records the nearest interactive ancestor along the way.
-   * The barrier checks are redundant by construction — barriers unregister their subtrees at mutation
-   * time — but they are winner-gated and cheap, and they turn any future registration bookkeeping bug
-   * into wasted work instead of a wrong pick. Falls out cheaply on the typical shallow scene.
+   * Walks every ancestor. An `interactiveChildren: false` or `eventMode: 'none'` ancestor rules
+   * the node out, as in 2D. For a non-interactive node (`'auto'`, or a `'passive'` node on the list
+   * because of its volume), it also notes the nearest interactive ancestor. The barrier checks never
+   * fail while the pick list is right, since a barrier takes its subtree off it. They stay because
+   * they only run for a hit that beats the best so far, so they are cheap, and a bug in the pick
+   * list then costs time instead of picking the wrong node.
    *
-   * With a `worldPoint`, the same single pass also enforces ancestor clipping: the hit point must lie
-   * inside every explicit clip volume on the chain (`_clipContains`), or the pick resolves to `null` —
-   * skipped without occluding. Only the pick loop passes a point; point-less call sites (the
-   * global-move fan-out) never hit-test and so never clip, matching 2D's broadcast.
+   * Given a `worldPoint`, the same walk applies clipping: the point must be inside every `hitVolume`
+   * set above the node (`_clipContains`), or the hit has no target and is skipped without blocking.
+   * Only the pick loop passes a point. The global-move fan-out passes none, since it doesn't
+   * hit-test, so it never clips, like 2D's broadcast.
    * @param node - Node the ray struck.
    * @param worldPoint - World-space hit point to containment-test against clip ancestors, or `null`
    * to skip clipping.
    * @returns `node` itself when it is interactive, its nearest interactive ancestor when it is not,
-   * or `null` when pruned or clipped — including a non-interactive node with no interactive ancestor
-   * at all, since 2D likewise hit-tests such nodes only under an interactive ancestor.
+   * or `null` when ruled out or clipped. A non-interactive node with no interactive ancestor gets
+   * `null` too, since 2D only hit-tests such nodes under an interactive ancestor.
    */
   private _resolvePickTarget(node: Container3D, worldPoint: Vector3 | null = null): Container3D | null {
     const clip = worldPoint !== null && this._clipVolumeCount > 0;
@@ -834,19 +796,18 @@ export class EventBoundary3D {
   }
 
   /**
-   * Conservative per-candidate clip test, memoized per pick — the broadphase of ancestor clipping
+   * Whether the ray enters every clipping volume above `node`, the cheap first half of clipping
    *
-   * Walks the candidate's parent chain; each ancestor with an explicit volume is ray-tested **once
-   * per pick** in its own local space, with the verdict cached on the ancestor under `clipStamp`
-   * (`_clipRayStamp` / `_clipRayHit`), so a clip volume covering many descendants costs one test.
-   * A miss on any clip ancestor rejects the candidate — no local point of the candidate's volume can
-   * lie inside a volume the ray never enters.
+   * Each ancestor with a `hitVolume` is ray-tested once per pick, in its own local space, and the
+   * result is kept on it under `clipStamp` (`_clipRayStamp`, `_clipRayHit`), so a volume above many
+   * descendants costs one test. If the ray misses any of them, no hit on `node` can be inside it.
+   * `applyMatrix4` renormalises the local ray's direction, so `intersectSphereT`, which needs a
+   * unit direction, works under any ancestor scale.
    *
-   * Shape handling matches the exact containment rule: `Box` and `Sphere` by their analytic ray
-   * tests, `Geometry3D` by its `bounds3D` AABB (containment is AABB-based too, so per-triangle work
-   * here would be waste), and a custom {@link IHitVolume3D} always passes — its only clip test is
-   * `containsPoint` at winner time, since its `raycast` may legitimately miss from inside an
-   * unbounded volume.
+   * Each shape is tested the way containment treats it: `Box` and `Sphere` exactly, a `Geometry3D`
+   * by its `bounds3D` box, since containment uses the box too. An {@link IHitVolume3D} always
+   * passes: it is only clipped by `containsPoint` on the winning hit, because its `raycast` may
+   * miss from inside an unbounded volume.
    * @param node - The candidate about to be narrowphase-tested.
    * @param worldRay - The pick ray, in world space.
    * @param clipStamp - This pick's memo stamp.
@@ -860,8 +821,6 @@ export class EventBoundary3D {
         if (cur._clipRayStamp !== clipStamp) {
           cur._clipRayStamp = clipStamp;
           const localRay = worldRay.applyMatrix4(cur._getInverseWorldTransform(), this._scratchClipRay);
-          // `applyMatrix4` renormalises the direction, so the unit-direction contract of
-          // `intersectSphereT` holds under any ancestor scale.
           if (volume instanceof Box) {
             cur._clipRayHit = localRay.intersectBoxT(volume) !== -1;
           } else if (volume instanceof Sphere) {
@@ -880,13 +839,13 @@ export class EventBoundary3D {
   }
 
   /**
-   * Exact clip containment of a world-space point in one ancestor's explicit volume
+   * Whether a world-space point is inside one ancestor's clipping volume
    *
-   * The point is brought into the ancestor's local space via its cached inverse-world. `Box` and
-   * `Sphere` test exactly; `Geometry3D` tests its `bounds3D` AABB — point-in-open-mesh is ill-defined
-   * and per-triangle containment is not mobile-viable; a custom {@link IHitVolume3D} clips through
-   * its optional `containsPoint`, and never clips without one. An explicit input that resolved to no
-   * shape (`_hitVolumeResolved === null`) doesn't clip either.
+   * The point goes into the ancestor's local space through its cached inverse world matrix. `Box`
+   * and `Sphere` test exactly. A `Geometry3D` tests its `bounds3D` box: whether a point is inside an
+   * open mesh isn't well defined, and testing every triangle would be too slow on mobile. An
+   * {@link IHitVolume3D} clips through its optional `containsPoint`, and never without it. A
+   * `hitVolume` that resolved to no shape doesn't clip either.
    * @param ancestor - Ancestor whose explicit volume clips.
    * @param worldPoint - World-space hit point to test.
    * @returns Whether the point lies inside the ancestor's clip volume.
@@ -902,43 +861,76 @@ export class EventBoundary3D {
   }
 
   /**
-   * First-registered plain-key listener for every forwarded pointer event type
+   * Carries one pointer event into the 3D scene; the View's first plain listener for every type in
+   * `POINTER_EVENT_TYPES`
    *
-   * Runs before any user-level `view.on(type, …)` listener so it can populate the event's 3D fields
-   * and re-emit the event along the picked node's 3D parent chain. The View's `on*` handler and
-   * `*capture` listeners run earlier (pixi's notify order) and see the fields as a miss.
+   * It runs before any user `view.on(type, …)` listener, so it fills in the event's 3D fields and
+   * dispatches along the picked node's 3D chain first. The View's `on*` handler and `*capture`
+   * listeners run earlier still, in pixi's order, and read the fields as `null`.
    *
-   * Interaction state is tracked per pointer (see `PointerRecord3D`): hover diffs, press paths
-   * (per button) and multi-click counts are keyed by `event.pointerId`, so simultaneous touches — and
-   * simultaneous buttons of one mouse — never disturb each other. Records are pooled; a record is
-   * reclaimed on the final outside release, on `pointerout` while no press is held, or by the
-   * staleness sweep once abandoned (see `POINTER_RECORD_STALE_MS`). Multi-click history lives
-   * outside the records (see `ClickHistory3D`) so `detail` counting spans record teardowns, as
-   * 2D's never-dropped tracking data does.
+   * State is kept per pointer (`PointerRecord3D`): hover path, press path per button, click target.
+   * Simultaneous touches, and simultaneous buttons of one mouse, never disturb each other. A record
+   * is freed on the final release outside the View, on `pointerout` with no button held, or once
+   * stale. Click counts live outside the records (`ClickHistory3D`), so they outlast them, as 2D's
+   * do.
    *
-   * Release semantics mirror 2D's `mapPointerUp`: `pointerup` propagates from the release pick first;
-   * then, when the (mounted) press target isn't in the release chain, `pointerupoutside` and its
-   * legacy alias are notified per node from the press target up to — excluding — the nearest common
-   * ancestor; that ancestor becomes the click target, and the click family (`click` / `rightclick` /
-   * `tap` / `pointertap`) is re-rooted there rather than at whatever node the release happened to land
-   * on. This reconciliation runs during the primary `pointerup` dispatch, so the legacy `mouseup` /
-   * `touchend` chains arrive after the upoutside walk, where 2D dispatches them before it.
+   * By type:
    *
-   * `pointercancel` never reaches this dispatcher — pixi's federated layer doesn't deliver it (see
-   * `POINTER_EVENT_TYPES`); a cancelled pointer's record is bounded by the `pointerout` sweep,
-   * pointer-id reuse on the next press, and the staleness sweep for browsers that never reuse ids.
+   * - `pointerout`: the pointer left the View, for another 2D element or off the canvas. Pixi won't
+   *   hit-test this View for it again, so the hover check on moves can't see the change, and the
+   *   hover is cleared here, in 2D's `mapPointerOut` order: `pointerout` bubbles from the hovered
+   *   node, then each node up to the root gets `pointerleave`, with the mouse aliases for mouse and
+   *   pen. A held button keeps the record, so a later `*upoutside` still finds the pressed node.
+   * - `pointerover`: the pointer entered the View, onto the canvas or from another 2D element,
+   *   always right after a fresh hit test. The hover is set now, in 2D's `mapPointerOver` order
+   *   (`pointerover` bubbling, then `pointerenter` up to the root), rather than on the first move.
+   * - `pointerdown`: stores the press path for the button, replacing one already held, as 2D does.
+   *   A press on empty space stores an empty path, so the release still knows a press happened. A
+   *   new press also drops the click target left by the last release.
+   * - `pointermove`: notes this move's pick for the global-move fan-out (`_movePickToken`), which
+   *   must never trust fields another View wrote on the shared event. Then it compares the hover
+   *   with the pointer's record, since pixi's own comparison only sees 2D nodes. The stored path goes
+   *   through `findMountedTarget3D`, so a hovered node removed from the scene hands over to its
+   *   nearest ancestor still in place, as in 2D. On a change, the order is 2D's: `pointerout`,
+   *   `pointerleave`, `pointerover`, `pointerenter`, each with its mouse alias for mouse and pen.
+   *   Leave only runs when the pointer fully left the old node, not when it moved onto one of its
+   *   descendants. Enter runs unless the new node is an ancestor of the old one, like 2D's
+   *   `didPointerEnter` check. `target3D` is set to the node each pair is about, while `hit3D` stays
+   *   the new pick.
+   * - `pointerup`: sends `pointerup` along the release chain, then settles the press with
+   *   `_reconcileRelease`. The chain is captured before any listener runs, like the `composedPath()`
+   *   2D caches, so a listener that changes the scene can't change which nodes count as released
+   *   over, for the upoutside walk or the click target.
+   * - `pointerupoutside`: pixi found the release outside the View, on another 2D element or off the
+   *   canvas, so no hit test ran and there is no pick: no `pointerup` and no click, only the
+   *   upoutside walk, up to the root since there is no release chain to stop at, as in 2D.
+   * - `mouseupoutside`, `rightupoutside`, `touchendoutside`: ignored. The upoutside walk already
+   *   told each node with its alias, in 2D's per-node order.
+   * - `click`, `rightclick`, `tap`, `pointertap`: sent to the click target the release worked out,
+   *   the nearest common ancestor of press and release, not to whatever is under the pointer, so a
+   *   press that slides off a node doesn't click the node it ends on. The stored target only applies
+   *   when its token is this event's `nativeEvent`, which pixi's click shares with its `pointerup`.
+   *   `hit3D` stays the release pick, even when the click goes to an ancestor or the View. `detail`
+   *   is swapped for the 3D target's own count during the chain, because pixi counted clicks on the
+   *   View. A click that resolved to the View runs no 3D chain, and the View's listeners see
+   *   `target3D` as `null`. A click with no tracked press goes to the current pick.
+   * - The other aliases (`mousedown`, `touchmove`, `mouseup`, …): the primary event already updated
+   *   the state, so they only run their chain at the current pick.
+   * - `contextmenu`: tied to no press or hover, so it goes to whatever the pointer is over now.
+   *
+   * A listener that stops propagation in a main chain also silences the View's own listeners
+   * (`_stopViewPropagation`). For `pointerout` and `pointerover` only the primary chain counts, not
+   * the mouse alias or the enter and leave walks, as in 2D.
+   *
+   * Pixi never delivers `pointercancel`. A cancelled pointer's record is freed by `pointerout`, by
+   * the next press with the same id, or by the stale-record sweep for browsers that never reuse
+   * ids.
    * @param type - Emitter key the dispatch arrived under, which for pixi's alias dispatches differs
    * from `event.type`.
    * @param event - The live pooled federated event.
    */
   private _dispatch3DEvent(type: Forwarded3DPointerType, event: FederatedPointerEvent): void {
     switch (type) {
-      // The pointer left the View — moved onto another 2D element or off the canvas. Pixi won't
-      // hit-test us again for this pointer, so the move-driven hover diff can never observe the
-      // change: flush this pointer's hover here — `pointerout` bubbling from the hovered node, then
-      // `pointerleave` per node all the way to root3D, with the mouse aliases for mouse/pen (2D's
-      // `mapPointerOut` shape). Held presses keep the record alive, so a later `*upoutside` still
-      // routes the release back to the press target.
       case 'pointerout': {
         const record = this._pointerRecords.get(event.pointerId);
         let stopped = false;
@@ -961,16 +953,10 @@ export class EventBoundary3D {
           this._writeFields(event, null, null);
         }
         this._currentPick3D = null;
-        // A 3D stop in the primary `pointerout` chain (not the mouse alias or the leave walk) silences
-        // the View like every other main dispatch — this *is* the View's own out event.
         if (stopped) this._stopViewPropagation(event);
         return;
       }
 
-      // The pointer entered the View — pixi dispatches `pointerover` at the View both on canvas entry
-      // and when the pointer slides in from another 2D element, always right after a fresh hit test.
-      // Seed this pointer's hover immediately (`pointerover` bubbling, then `pointerenter` per node up
-      // to root3D — 2D's `mapPointerOver` shape) instead of waiting for the first `pointermove`.
       case 'pointerover': {
         const pick = this._currentPick3D;
         if (!pick) {
@@ -985,8 +971,6 @@ export class EventBoundary3D {
         this._emitEnterLeaveWalk(event, pick, null, true, isMouse);
         if (record.overPath) this._releasePath(record.overPath);
         record.overPath = this._capturePath(pick);
-        // As for `pointerout` above: a stop in the primary chain silences the View; the alias and
-        // enter walk don't count (2D parity).
         if (stopped) this._stopViewPropagation(event);
         return;
       }
@@ -995,14 +979,10 @@ export class EventBoundary3D {
         const pick = this._currentPick3D;
         const record = this._getPointerRecord(event.pointerId, event.timeStamp);
         const button = event.button ?? 0;
-        // Overwrite semantics match 2D: a re-down on a held button replaces the stored path. A miss
-        // stores the empty path — the press belongs to the viewport itself and the release must know a
-        // press happened.
         const prevPath = record.pressPathByButton[button];
         if (prevPath) this._releasePath(prevPath);
         else record.heldPressCount++;
         record.pressPathByButton[button] = pick ? this._capturePath(pick) : this._acquirePath();
-        // A new press invalidates any click stash from the previous release.
         record.clickToken = TOKEN_NONE;
         this._forwardToPick(event, type, pick);
         return;
@@ -1010,40 +990,25 @@ export class EventBoundary3D {
 
       case 'pointermove': {
         const pick = this._currentPick3D;
-        // Anchor for the global-move fan-out: proof that this native event's pick ran on *this* View.
-        // The fan-out must never trust field storage another View sharing the pooled event may have
-        // written.
         this._movePickToken = event.nativeEvent;
         this._movePick3D = pick;
         let record = this._pointerRecords.get(event.pointerId);
         if (!record && pick) record = this._getPointerRecord(event.pointerId, event.timeStamp);
         if (record) {
           record.lastEventTime = event.timeStamp;
-          // Hover diff against this pointer's own record — pixi's composedPath diff only sees 2D
-          // nodes, so cross-3D-node hover transitions need our help. The stored path resolves through
-          // `findMountedTarget3D`, so a hover target detached mid-hover flushes via its mounted
-          // ancestor (2D parity).
           const prev = record.overPath ? findMountedTarget3D(record.overPath) : null;
           if (prev !== pick) {
-            // 2D hover-change order: `pointerout` (bubbling) → `pointerleave` (per node) →
-            // `pointerover` (bubbling) → `pointerenter` (per node), each pointer chain followed by its
-            // mouse alias for mouse/pen. `target3D` is written before each family so handlers read the
-            // node the chain is about; `hit3D` is the new pick throughout — what the pointer is over now.
             const isMouse = event.pointerType === 'mouse' || event.pointerType === 'pen';
             if (prev) {
               this._writeFields(event, prev, pick);
               this._emit3DChain(event, 'pointerout', prev);
               if (isMouse) this._emit3DChain(event, 'mouseout', prev);
-              // Leave fires only when the old target is fully exited — not when the pointer moved down
-              // into one of its descendants.
               if (!this._isInChain(prev, pick)) this._emitEnterLeaveWalk(event, prev, pick, false, isMouse);
             }
             if (pick) {
               this._writeFields(event, pick, pick);
               this._emit3DChain(event, 'pointerover', pick);
               if (isMouse) this._emit3DChain(event, 'mouseover', pick);
-              // Enter fires unless the new pick is an ancestor of the old target: child → parent moves
-              // enter nothing, matching 2D's `didPointerEnter` probe.
               if (!prev || !this._isInChain(pick, prev)) this._emitEnterLeaveWalk(event, pick, prev, true, isMouse);
             }
             if (record.overPath) this._releasePath(record.overPath);
@@ -1055,11 +1020,6 @@ export class EventBoundary3D {
       }
 
       case 'pointerup': {
-        // 2D release order: `pointerup` propagates along the release path first, then the press
-        // reconciliation (upoutside walk + click target) runs against the stored press path. The
-        // release chain is frozen before any listener runs — the 3D analogue of 2D's cached
-        // `composedPath()` — so a `pointerup` listener mutating the scene cannot change which nodes
-        // count as "on the release chain" for the upoutside walk and the click target.
         const pick = this._currentPick3D;
         const releasePath = pick ? this._capturePath(pick) : null;
         let stopped = false;
@@ -1071,17 +1031,11 @@ export class EventBoundary3D {
         return;
       }
 
-      // The 2D layer resolved this release outside the View (off-canvas or on another 2D element): no
-      // `pointerup`, no click — only the upoutside walk, which runs from the press target all the way
-      // to root3D since there is no release chain to stop at (2D parity).
       case 'pointerupoutside':
-        // No hit test ran on this View for the release, so there is no pick to report.
         this._writeFields(event, null, null);
         this._reconcileRelease(event, null, false);
         return;
 
-      // Per-node legacy aliases were already interleaved into the primary `pointerupoutside` walk,
-      // matching 2D's per-node notify order — these View-level re-notifications carry nothing new.
       case 'mouseupoutside':
       case 'rightupoutside':
       case 'touchendoutside':
@@ -1091,23 +1045,13 @@ export class EventBoundary3D {
       case 'rightclick':
       case 'tap':
       case 'pointertap': {
-        // Route the click family at the target resolved by the release reconciliation (the
-        // press/release common ancestor), not at whatever sits under the pointer — a slide-off release
-        // must not click the node it happened to end on. The stash is validated against `nativeEvent`:
-        // pixi's click clone shares it with the `pointerup` that produced the click.
         const record = this._pointerRecords.get(event.pointerId);
         if (record && record.clickToken === event.nativeEvent) {
           const target = record.clickTarget3D;
-          // `hit3D` is the release pick whatever the click resolved to: a click re-rooted at an
-          // ancestor, or at the View itself, still says what the pointer released over.
           this._writeFields(event, target, this._currentPick3D);
           if (!target) {
-            // The click resolved to the View itself (empty-viewport press, or a press/release pair
-            // with no common 3D node) — no 3D chain; the View's own listeners see `target3D` null.
             return;
           }
-          // 3D multi-click count: pixi computed `detail` with the View as the click target; the 3D
-          // chain must see the per-3D-target count.
           const originalDetail = event.detail;
           event.detail = record.clickDetail;
           let stopped: boolean;
@@ -1119,14 +1063,10 @@ export class EventBoundary3D {
           if (stopped) this._stopViewPropagation(event);
           return;
         }
-        // No tracked press behind this click (dispatched without a preceding down/up pair) — degrade
-        // to a pass-through on the current pick.
         this._forwardToPick(event, type, this._currentPick3D);
         return;
       }
 
-      // Legacy alias dispatches of an action the primary handler already tracked — re-emit the chain
-      // under the alias key, no state changes.
       case 'mousedown':
       case 'rightdown':
       case 'touchstart':
@@ -1137,17 +1077,21 @@ export class EventBoundary3D {
       case 'touchend':
         this._forwardToPick(event, type, this._currentPick3D);
         return;
+
+      case 'contextmenu':
+        this._forwardToPick(event, type, this._currentPick3D);
+        return;
     }
   }
 
   /**
-   * Writes the event's 3D fields for `pick` and, on a hit, re-emits the event along the picked node's
+   * Writes the event's 3D fields for `pick` and, on a hit, runs the event along the picked node's
    * 3D chain
    *
-   * The View-propagation stop is applied when a 3D listener halted the chain (see
-   * `_stopViewPropagation`). On a miss the fields are still written, so View3D's own listeners — an
-   * "empty viewport" click handler, say — read `target3D === null` rather than a stale value left on
-   * the pooled event.
+   * If a 3D listener stopped the chain, the View's own listeners are silenced too
+   * (`_stopViewPropagation`). On a miss the fields are still written, so the View's own listeners,
+   * such as a "click on empty space" handler, read `target3D` as `null` rather than a value left
+   * on the reused event.
    * @param event - The live pooled federated event.
    * @param type - Emitter key to dispatch under.
    * @param pick - Node to dispatch at, or `null` for a viewport miss.
@@ -1158,19 +1102,31 @@ export class EventBoundary3D {
   }
 
   /**
-   * Release-side press reconciliation — the 3D port of the tail of 2D's `mapPointerUp` /
-   * `mapPointerUpOutside`
+   * Settles the press when a pointer is released, as the end of 2D's `mapPointerUp` and
+   * `mapPointerUpOutside` does
    *
-   * Consumes the press path stored for the released button, emits the `pointerupoutside` walk when the
-   * (mounted) press target isn't on the release chain, and — for in-View releases — resolves and
-   * stashes the click target plus its per-target `detail` for the click-family dispatches that follow.
+   * Takes the press path stored for the released button. When the pressed node, or its nearest
+   * ancestor still in place, isn't on the release chain, it runs the upoutside walk. The click
+   * target is the nearest common ancestor of press and release: the pressed node itself when the
+   * release landed on it or inside it, and `null`, meaning the View, which is an ancestor of every
+   * 3D node, when there is none. A press on empty space always ends there, so no 3D node gets that
+   * click. For a release inside the View, it stores the click target and its count for the click
+   * events that follow.
    *
-   * Membership runs against the frozen `releasePath` snapshot, never live parent pointers: 2D tests
-   * against the release event's cached `composedPath()`, so `pointerup` listeners mutating the scene
-   * must not be able to spawn phantom upoutsides or move the click target.
+   * Membership is tested against the release chain captured before `pointerup` ran, never against
+   * live parents: 2D tests against the release event's cached `composedPath()`, so a `pointerup`
+   * listener that changes the scene can't cause stray upoutside events or move the click target.
+   *
+   * It runs during the `pointerup` dispatch, so the `mouseup` and `touchend` chains arrive after
+   * the upoutside walk; 2D sends them before it.
+   *
+   * After the last button is released outside the View, the record is freed at once: nothing can
+   * use it again, since 2D sends no click after an outside release. A release inside the View
+   * keeps it, because the pointer is still over the View and the click is about to read it;
+   * `pointerout` frees it later.
    * @param event - The release event.
    * @param releasePath - Release chain frozen before the `pointerup` chain dispatched (root-first,
-   * `[root3D, …, releasePick]`), or `null` when the release didn't hit a 3D node — empty viewport, or
+   * `[root3D, …, releasePick]`), or `null` when the release didn't hit a 3D node: empty viewport, or
    * the 2D layer resolved the release outside the View.
    * @param insideView - Whether the release landed on the View, and so can produce a click.
    */
@@ -1190,9 +1146,6 @@ export class EventBoundary3D {
     record.heldPressCount--;
     this._releasePath(pressPath);
 
-    // The click target is the nearest common ancestor of press and release — the press target itself
-    // when the release landed on it (or under it). `null` stands for the View, the implicit ancestor
-    // of every 3D node; an empty-space press resolves here, so no 3D node gets the click.
     let clickTarget = pressTarget;
     if (pressTarget && (releasePath === null || !releasePath.includes(pressTarget))) {
       clickTarget = this._emitUpOutsideWalk(event, pressTarget, releasePath);
@@ -1203,29 +1156,29 @@ export class EventBoundary3D {
       record.clickDetail = clickTarget ? this._countClick(event.pointerId, button, clickTarget) : 0;
       record.clickToken = event.nativeEvent;
     } else if (record.heldPressCount === 0) {
-      // Final release with the pointer outside the View: nothing can reference this record again (2D
-      // dispatches no click after an outside release), so reclaim it now. In-View releases keep the
-      // record — the pointer is still over the View and the click stash is about to be consumed; the
-      // record falls to the `pointerout` sweep later.
       this._freePointerRecord(event.pointerId, record);
     }
   }
 
   /**
-   * Emits `pointerupoutside` from `pressTarget` up to, and excluding, the first ancestor on the frozen
-   * release path
+   * Sends `pointerupoutside` from `pressTarget` up to, not including, the first ancestor on the
+   * release chain
    *
-   * The per-pointer-type legacy alias is interleaved per node exactly as 2D does. Bubble-only: each
-   * node is notified directly at `BUBBLING_PHASE` — its on-handler first, then plain-key listeners, no
-   * capture pass. Propagation stops are never checked between nodes, but an immediate stop mutes the
-   * remaining nodes' multi-listener batches through `notifyListeners3D` (both 2D parity). `target3D`
-   * names the press target for the walk and is restored after; `hit3D` stays the release pick — what
-   * the pointer released over, if anything.
+   * Each node gets the alias for the pointer type right after, as in 2D. Only interactive nodes
+   * are told, like 2D's `notifyTarget`. There is no capture pass: each node is told directly in the
+   * bubble phase, its handler property first, then its listeners. A propagation stop is never
+   * checked between nodes, but an immediate stop silences the rest of each node's listener list
+   * through `notifyListeners3D`, both as in 2D. `target3D` names the pressed node during the walk
+   * and is restored after; `hit3D` stays the release pick, what the pointer was released over.
+   *
+   * The walk's target is the pressed node, not the end of a chain, so `composedPath()` is worked
+   * out fresh on each call, as in 2D. `event.path` is saved and restored only so it doesn't keep a
+   * 3D array after the walk.
    * @param event - The release event.
    * @param pressTarget - Deepest still-mounted node of the stored press path.
    * @param releasePath - Frozen release chain, or `null` when the release didn't hit a 3D node.
-   * @returns The first ancestor on the release path — the click target — or `null` when the walk
-   * exhausts the chain, meaning the click belongs to the View.
+   * @returns The first ancestor on the release path, which is the click target, or `null` when the
+   * walk reaches the root, meaning the click belongs to the View.
    */
   private _emitUpOutsideWalk(
     event: FederatedPointerEvent,
@@ -1250,8 +1203,6 @@ export class EventBoundary3D {
     const originalCurrent = event.currentTarget;
     const originalTarget3D = storage.target;
     const originalCurrent3D = storage.currentTarget;
-    // The walk's target is the press target, not a chain end, so `composedPath()` recomputes live per
-    // call (2D parity) — the save/restore only stops it caching a 3D array past the walk.
     const originalPath = event.path;
     const originalPhase = event.eventPhase;
     const originalStopped = event.propagationStopped;
@@ -1265,7 +1216,6 @@ export class EventBoundary3D {
     let cur: Container3D | null = pressTarget;
     try {
       while (cur && (releasePath === null || !releasePath.includes(cur))) {
-        // Mirror 2D's notifyTarget gate: only interactive nodes fire.
         if (cur.isInteractive()) {
           event.currentTarget = cur as unknown as FederatedPointerEvent['currentTarget'];
           storage.currentTarget = cur;
@@ -1310,12 +1260,12 @@ export class EventBoundary3D {
   }
 
   /**
-   * Multi-click counter, at 2D parity
+   * Counts repeat clicks, as 2D does
    *
-   * A click on the same 3D target within `MULTI_CLICK_INTERVAL_MS` increments the count,
-   * anything else resets it to 1. No positional threshold — 2D has none either. History is keyed by
-   * `pointerId` in per-View storage, not on the pooled pointer record, so it survives record teardown:
-   * a tap's `pointerout` frees the record, and the double-tap that follows must still count 2.
+   * A click on the same 3D target within `MULTI_CLICK_INTERVAL_MS` raises the count; anything else
+   * resets it to 1. There is no distance limit, in 2D either. Counts are kept by `pointerId` on the
+   * boundary, not on the pointer record, so they outlast it: a tap's `pointerout` frees the record,
+   * and the tap after it must still count 2.
    * @param pointerId - Pointer the click belongs to.
    * @param button - Button that was released.
    * @param target - Resolved 3D click target.
@@ -1345,11 +1295,10 @@ export class EventBoundary3D {
   }
 
   /**
-   * Reclaims click histories older than the multi-click window
+   * Frees click counts older than `MULTI_CLICK_INTERVAL_MS`
    *
-   * They can no longer extend any count, so dropping them is invisible. Runs only when a new pointer's
-   * history is allocated, so browsers that mint a fresh `pointerId` per touch don't accumulate one
-   * entry per tap.
+   * They can't raise any count, so dropping them changes nothing. It only runs when a new pointer's
+   * entry is made, so browsers that give each touch a new `pointerId` don't keep one entry per tap.
    * @param now - Current `performance.now()`.
    */
   private _sweepClickHistories(now: number): void {
@@ -1371,13 +1320,13 @@ export class EventBoundary3D {
   }
 
   /**
-   * Silences the View's own listeners after a 3D listener stopped the main dispatch chain
+   * Silences the View's own listeners after a 3D listener stopped a main chain
    *
-   * View3D is an ancestor of every 3D node, so it must go quiet too — but pixi only checks
-   * `propagationStopped` *between* 2D targets, and the View's own user listeners sit in the same
-   * emitter batch as this dispatcher. Setting `propagationImmediatelyStopped` as well makes pixi's
-   * listener loop skip the remainder of that batch. The caveat is that this silences *every*
-   * View-level listener for the event; one registered ahead of the others cannot be exempted.
+   * The View is an ancestor of every 3D node, so it has to go quiet too. But pixi only checks
+   * `propagationStopped` between 2D targets, and the View's own listeners are in the same listener
+   * list as this dispatcher, so `propagationImmediatelyStopped` is set as well, which makes pixi
+   * skip the rest of that list. That silences every listener on the View for this event; none can
+   * be exempted.
    * @param event - Event to mark as stopped.
    */
   private _stopViewPropagation(event: FederatedMouseEvent): void {
@@ -1386,11 +1335,10 @@ export class EventBoundary3D {
   }
 
   /**
-   * Returns the record for `pointerId`, creating one — or reviving it from the pool — when absent
+   * Returns the record for `pointerId`, taking one from the pool or making one when there is none
    *
-   * A new pointer is also the sweep point for abandoned records: on browsers that never reuse touch
-   * pointerIds, a cancelled touch's record can only be reclaimed here, since pixi never delivers
-   * `pointercancel`.
+   * A new pointer is also when stale records are swept: on browsers that never reuse touch ids, a
+   * cancelled touch's record can only be freed here, since pixi never delivers `pointercancel`.
    * @param pointerId - Pointer to look up.
    * @param now - The event's `timeStamp`, stamped onto the record.
    * @returns The live record for this pointer.
@@ -1450,18 +1398,10 @@ export class EventBoundary3D {
     this._recordPool.push(record);
   }
 
-  /**
-   * Pops a pooled path array, allocating on first use
-   * @returns An empty array ready to hold a propagation path.
-   */
   private _acquirePath(): Container3D[] {
     return this._pathPool.pop() ?? [];
   }
 
-  /**
-   * Clears a path array and returns it to the pool
-   * @param path - Array to reclaim.
-   */
   private _releasePath(path: Container3D[]): void {
     path.length = 0;
     this._pathPool.push(path);
@@ -1484,11 +1424,11 @@ export class EventBoundary3D {
   }
 
   /**
-   * Stamps the event's 3D fields for a dispatch, and the validity token that makes them readable
+   * Writes the event's 3D fields for a dispatch, with the token that makes them readable
    * @param event - Event to write into.
    * @param target - Node to report as `target3D`: the dispatch target, or `null` when the event
    * belongs to the View itself.
-   * @param pick - The View's pick for this event — the node `_lastHit` describes — reported as
+   * @param pick - The View's pick for this event, the node `_lastHit` describes, reported as
    * `hit3D`; `null` when the ray struck nothing or no ray was cast, so `hit3D` reads `null`.
    */
   private _writeFields(event: FederatedMouseEvent, target: Container3D | null, pick: Container3D | null): void {
@@ -1500,38 +1440,36 @@ export class EventBoundary3D {
   }
 
   /**
-   * Runs a full three-phase dispatch of `type` along `from`'s 3D chain, exactly as 2D's `propagate`
-   * does
+   * Dispatches `type` along `from`'s 3D chain in three phases, as 2D's `propagate` does
    *
-   * Capture (root → parent-of-target, under the `'${type}capture'` emitter key), at-target (both
-   * keys), then bubble (plain key) — maintaining `event.eventPhase` throughout and honoring a
-   * propagation stop between nodes. Per node, 2D's `notifyTarget` shape applies: non-interactive nodes
-   * are walked but silent, and the node's `'on' + type` handler runs before its emitter listeners in
-   * every phase, so an ancestor's on-handler fires in both the capture and bubble passes (2D quirk,
-   * kept for parity). Listeners are delivered through `notifyListeners3D`, so
-   * `stopImmediatePropagation` is honored *between a node's own listeners* — including between the
-   * capture-key and plain-key sets at the target — with 2D's single-listener fast-path quirk intact.
-   * An unused capture pass costs one property read and one map lookup per ancestor.
+   * Capture runs from the root to the target's parent under the `'${type}capture'` key, then the
+   * target gets both keys, then bubble runs back up under the plain key. `event.eventPhase` is set
+   * throughout, and a propagation stop is honoured between nodes. Each node is handled as in 2D's
+   * `notifyTarget`: non-interactive nodes are passed over silently, and a node's handler property
+   * runs before its listeners in every phase, so an ancestor's handler runs in both the capture and
+   * bubble passes. Listeners go through `notifyListeners3D`, so an immediate stop is honoured
+   * between a node's own listeners, including between the capture and plain lists at the target,
+   * with 2D's single-listener exception. An unused capture pass costs one property read and one map
+   * lookup per ancestor.
    *
-   * The chain is snapshotted into a pooled root-first array before any listener runs, so mid-dispatch
-   * reparenting can't corrupt the walk — the 3D analogue of 2D's frozen `composedPath`. The snapshot
-   * is installed as `event.path` for the duration of the walk, so a listener calling `composedPath()`
-   * reads the exact frozen chain being dispatched rather than triggering pixi's live-`.parent`
-   * recompute (which allocates and would reflect mid-dispatch reparents).
+   * The chain is copied into a pooled root-first array before any listener runs, so moving nodes
+   * mid-dispatch can't break the walk, like the `composedPath` 2D caches. The copy is set as
+   * `event.path` for the walk, so a listener's `composedPath()` returns that exact chain instead of
+   * pixi working it out again from live parents, which would allocate and see any moves.
    *
-   * For the duration of the walk `event.target` / `event.currentTarget` / `event.type` /
-   * `event.eventPhase` are set to 3D values and restored afterwards, so handlers see correct values
-   * and pixi's continued 2D dispatch isn't disturbed. Propagation flags are reset at entry — each call
-   * is a distinct dispatch, a synthesised `pointerover` being independent of the `pointermove` that
-   * triggered it — and restored on exit, so a stop inside a synthesised chain can't leak into the
-   * surrounding 2D dispatch.
+   * During the walk, `event.target`, `currentTarget`, `type` and `eventPhase` hold 3D values, and
+   * they are restored after, so pixi's own 2D dispatch carries on undisturbed. `currentTarget3D`
+   * follows `currentTarget`, which is typed as a 2D `Container`, so the 3D storage holds the typed
+   * node. The propagation flags are cleared at the start, since each call is its own dispatch (a
+   * `pointerover` sent on a move doesn't depend on that `pointermove`), and restored at the end,
+   * so a stop inside a sent chain can't leak into the 2D dispatch around it.
    * @param event - The live pooled federated event.
    * @param type - Emitter key to dispatch under.
-   * @param from - Node at the end of the chain — the dispatch target.
-   * @param frozenPath - Chain snapshot pre-captured by the caller, who keeps ownership and releases
-   * it. The release flow shares one snapshot between its dispatch and its reconciliation.
+   * @param from - Node at the end of the chain, the dispatch target.
+   * @param frozenPath - Chain captured by the caller, who keeps and frees it. The release shares
+   * one captured chain between its dispatch and `_reconcileRelease`.
    * @returns Whether a listener stopped the chain. Callers dispatching the *main* event apply
-   * `_stopViewPropagation` with it; synthesised chains ignore it.
+   * `_stopViewPropagation` with it; chains they send of their own ignore it.
    */
   private _emit3DChain(
     event: FederatedMouseEvent,
@@ -1539,8 +1477,6 @@ export class EventBoundary3D {
     from: Container3D,
     frozenPath?: Container3D[] | null,
   ): boolean {
-    // `currentTarget3D` tracks `event.currentTarget` through the walk — the cast-written
-    // `currentTarget` is statically typed `Container`, so the typed hop lives in the 3D storage.
     const storage = ensurePick3D(event);
     const e = event as WritableTypeEvent;
     const originalType = e.type;
@@ -1578,8 +1514,6 @@ export class EventBoundary3D {
         }
       }
 
-      // 2D's notifyTarget fires both the capture-key and plain-key listener sets at AT_TARGET, and an
-      // immediate stop in the first set mutes the second's array path.
       if (!stopped && from.isInteractive()) {
         event.eventPhase = AT_TARGET;
         event.currentTarget = from as unknown as FederatedMouseEvent['currentTarget'];
@@ -1620,22 +1554,27 @@ export class EventBoundary3D {
   }
 
   /**
-   * The non-bubbling enter/leave walk shared by the hover diff, the View-entry seed and the View-exit
-   * flush
+   * Sends `pointerenter` or `pointerleave`, which don't bubble, to each node from `from` upwards;
+   * shared by the hover check on moves, entering the View and leaving it
    *
-   * Notifies `pointerenter` or `pointerleave` — plus the `mouseenter` / `mouseleave` alias for
-   * mouse/pen, interleaved per node exactly as 2D does — walking up from `from`:
+   * For mouse and pen, each node gets `mouseenter` or `mouseleave` right after, as in 2D. The walk
+   * goes up from `from`:
    *
-   * - enter: up to, and excluding, `boundary` (the previous hover target), or all the way to root3D
-   *   when `boundary` is `null` (first hover / View entry).
-   * - leave: up to, and excluding, the first ancestor on `boundary`'s chain (the node the pointer is
-   *   still over), all the way to root3D when `boundary` is `null` (the pointer left the View).
+   * - enter: up to, not including, `boundary` (the old hover target), or to the root when
+   *   `boundary` is `null` (first hover, or entering the View).
+   * - leave: up to, not including, the first ancestor on `boundary`'s chain (the node the pointer is
+   *   still over), or to the root when `boundary` is `null` (the pointer left the View).
    *
-   * Each node is notified as its own target at `AT_TARGET` phase, so its `*capture` listeners fire
-   * alongside the plain ones (2D quirk), with the node's on-handler first. Propagation stops are never
-   * checked between nodes, but an immediate stop mutes the remaining nodes' multi-listener batches
-   * through `notifyListeners3D` (both 2D parity). The event's dispatch state — including the `target3D`
-   * field, which tracks the notified node — is restored afterwards.
+   * Only interactive nodes are told, like 2D's `notifyTarget`. Each is told as its own target in
+   * the `AT_TARGET` phase, so its `*capture` listeners run with the plain ones, after its handler
+   * property, as in 2D. A propagation stop is never checked between nodes, but an immediate stop
+   * silences the rest of each node's listener list through `notifyListeners3D`, both as in 2D.
+   * The event's dispatch state, including `target3D`, which follows the node being told, is
+   * restored after.
+   *
+   * Each node is its own target, so there is no fixed chain, and `composedPath()` is worked out
+   * fresh for each node, as in 2D. `event.path` is saved and restored only so it doesn't keep a 3D
+   * array after the walk.
    * @param event - The live pooled federated event.
    * @param from - Node the walk starts at.
    * @param boundary - Node the walk stops below, or `null` to walk to root3D.
@@ -1661,9 +1600,6 @@ export class EventBoundary3D {
     const originalType = e.type;
     const originalTarget = event.target;
     const originalCurrent = event.currentTarget;
-    // No frozen chain here — each visited node is its own target, so a listener's `composedPath()`
-    // recomputes live per node (2D parity). The save/restore only stops that recompute from caching a
-    // 3D array on the pooled event past the walk.
     const originalPath = event.path;
     const originalPhase = event.eventPhase;
     const originalStopped = event.propagationStopped;
@@ -1678,7 +1614,6 @@ export class EventBoundary3D {
     let cur: Container3D | null = from;
     try {
       while (cur && (enter ? cur !== boundary : !this._isInChain(cur, boundary))) {
-        // Mirror 2D's notifyTarget gate: only interactive nodes fire.
         if (cur.isInteractive()) {
           storage.target = cur;
           storage.currentTarget = cur;
@@ -1711,23 +1646,25 @@ export class EventBoundary3D {
   }
 
   /**
-   * Fan-out for `globalpointermove` and its pointer-type alias, fed by pixi's own global-move
-   * broadcast to the View
+   * Sends `globalpointermove` and its alias for the pointer type to every interactive node, on
+   * each global move pixi sends the View
    *
-   * Every interactive node — in registration order, non-interactive (`'auto'` / `'passive'`) entries
-   * and pruned or hidden subtrees excluded — is notified exactly once per type, directly, with no
-   * chain walk: `eventPhase` is forced
-   * to `BUBBLING_PHASE` so capture listeners never receive global moves (2D parity), and each node
-   * gets its on-handler before its listeners. Unlike 2D, interactive ancestors of the hit target are
-   * *not* notified twice, which is an acknowledged 2D bug. Nodes with no global-move listener or
-   * on-handler are skipped before any per-node work, so with nothing listening — the common case — the
-   * fan-out costs a couple of property reads per node.
+   * Every interactive node in the list, skipping `'auto'` and `'passive'` entries and nodes that
+   * are hidden or under a barrier, is told once per type, directly, with no chain. The phase is
+   * set to `BUBBLING_PHASE`, so capture listeners never get global moves, as in 2D, and each node's
+   * handler property runs before its listeners. 2D tells interactive ancestors of the hit target
+   * twice, because its `hitTestMoveRecursive` collects them twice; here each node hears it once.
+   * A node with no global-move listener or handler is skipped before any other check, and that
+   * can't be seen from outside, since the skipped checks only decide whether its missing listeners
+   * would run. So with nothing listening, the usual case, the fan-out costs a few property reads
+   * per node rather than an ancestor walk (`_resolvePickTarget`) each.
    *
-   * The 3D fields are written once for the whole fan-out, from this View's own record of the move
-   * (`_movePickToken` / `_movePick3D`): the pooled event and its field storage are shared by every
-   * View3D on the stage, so a token match alone could be another View's write — world-space data from
-   * a different camera. When the move never crossed this View there is no ray and the fields read as a
-   * miss.
+   * The 3D fields are written once for the whole fan-out, from this View's own note of the move
+   * (`_movePickToken`, `_movePick3D`). Every View3D on the stage shares the event object and its
+   * field storage, so a matching token alone could be another View's write, with world-space data
+   * from another camera. When the move didn't go through this View there is no ray, and the fields
+   * read `null`. `event.target` is left alone, as 2D's `all()` keeps its 2D hit target; the 3D pick,
+   * if any, is on `target3D`.
    * @param event - The global move event pixi broadcast to the View.
    */
   private _dispatchGlobalMove(event: FederatedPointerEvent): void {
@@ -1750,8 +1687,6 @@ export class EventBoundary3D {
       aliasOnKey = 'onglobalmousemove';
     }
 
-    // `event.target` is left untouched, as 2D's `all()` keeps the 2D hit target; the 3D pick, when
-    // there is one, is on `target3D`.
     const e = event as WritableTypeEvent;
     const originalType = e.type;
     const originalCurrent = event.currentTarget;
@@ -1767,10 +1702,6 @@ export class EventBoundary3D {
     try {
       for (let i = 0; i < list.length; i++) {
         const node = list[i];
-        // Deaf-node fast path: without any global-move listener or on-handler there is nothing to
-        // deliver, so the pruning checks below — `_resolvePickTarget` is an O(depth) ancestor walk —
-        // must not run. Skipping them is unobservable: they only decide whether the absent listeners
-        // would have been notified.
         const nodeEvents = (node as unknown as EmitterInternal)._events;
         if (
           nodeEvents.globalpointermove === undefined &&

@@ -2,19 +2,14 @@ import { assertBitIdentity } from './bitRegistry';
 import type { ShaderBit } from './ShaderBit';
 import type { ShaderBitTemplate } from './ShaderBitTemplate';
 
-/** Monotonic ids for custom templates — see `ShaderDescriptor._updateKeys` */
+/** The id the next template gets in shader cache keys */
 let nextTemplateUid = 0;
 
 /**
- * Options for creating a {@link ShaderDescriptor}
+ * Options for a {@link ShaderDescriptor}: the {@link ShaderBit}s a shader is built from
  *
- * A descriptor tells the engine which {@link ShaderBit}s to compose into
- * a complete shader program. Think of bits as lego bricks and the
- * descriptor as the instruction sheet that says which bricks to use.
- *
- * Most materials use the same bits for both WebGPU and WebGL. When they
- * differ (e.g. backend-specific lighting or IBL bits), provide separate
- * `bitsGpu` and `bitsGl` arrays.
+ * Each backend takes its own list, because a few bits exist for one backend only. Most lists name
+ * the same bits.
  * @category rendering
  * @advanced
  */
@@ -31,45 +26,47 @@ export interface ShaderDescriptorOptions {
   bitsGl?: ShaderBit[];
   /** Custom shader template; the render pass's default template when omitted */
   template?: ShaderBitTemplate;
-  /** WGSL specialization constant overrides (e.g. `{ OUTLINE_WIDTH: 0.1 }`) */
+  /**
+   * Values for the bits' specialization constants, such as `{ OUTLINE_WIDTH: 0.1 }`
+   *
+   * WebGPU sets them on the pipeline and WebGL bakes them into the GLSL. Each distinct set of
+   * values compiles its own shader.
+   */
   overrides?: Record<string, number>;
   /**
-   * Whether the backend's global bit (lights, fog and scene globals at bind group 0) is
-   * auto-prepended at compile time
+   * Whether the compiler adds the backend's global bit: the lights, fog and other view-wide values
+   * in the `global` bind group
    *
-   * Defaults to `true`, so custom passes only declare what's unique to them. Set `false` for
-   * passes that supply their own global-level bindings — e.g. the shadow pass declares a lean
-   * `global` group of its own and would crash if the full global bit were merged in.
+   * Set `false` when the bits declare a `global` group of their own, as the shadow pass does.
+   * @default true
    */
   includeGlobal?: boolean;
   /**
-   * Whether the camera bit (the camera's position, matrices and viewport UV scale at bind
-   * group 1) is auto-prepended at compile time
+   * Whether the compiler adds the camera bit: the camera's position and matrices in the `camera`
+   * bind group
    *
-   * Defaults to `true`; every mesh-drawing template binds the camera group. Set `false` only
-   * for a template that declares no `camera` group at all — a template that declares one but
-   * gets no bit for it fails at compile, naming this flag.
+   * Set `false` only for a template with no `camera` group. A template that lists one but gets no
+   * bit for it fails to compile, with an error naming this flag.
+   * @default true
    */
   includeCamera?: boolean;
 }
 
 /**
- * Describes how a material's shader is assembled from composable {@link ShaderBit}s
+ * The {@link ShaderBit}s a shader is built from, per backend, with its template and overrides
  *
- * Each material has a primary descriptor (set via the `descriptor` constructor
- * option) that defines its main rendering shader. Materials can also provide
- * additional descriptors for custom render passes (shadow, outline, etc.)
- * via the `passes` option.
+ * A material's `descriptor` option sets the bits of its main shader. Its `passes` option gives
+ * each extra render pass, such as an outline, a descriptor of its own, keyed by pass name, as
+ * options or as a built descriptor.
+ *
+ * The renderer adds the global and camera bits, and the bits a mesh needs, such as skinning, so a
+ * material lists only its own.
  * @example
  * ```ts
- * // Simple material — same bits for GPU and GL
  * new BaseMaterial3D({
  *   descriptor: { bitsGpu: [myBit], bitsGl: [myBit] },
  * });
  *
- * // Material with a custom outline pass — keyed by the pass's `name`.
- * // The `shaderDescriptor` field accepts a plain options object (auto-wrapped) or a
- * // pre-built {@link ShaderDescriptor}.
  * new BaseMaterial3D({
  *   descriptor: { bitsGpu: [myBit], bitsGl: [myBit] },
  *   passes: {
@@ -92,7 +89,7 @@ export class ShaderDescriptor {
   public bitsGl: ShaderBit[];
   /** Custom shader template; the render pass's default template when omitted */
   public template?: ShaderBitTemplate;
-  /** WGSL specialization constant overrides */
+  /** Values for the bits' specialization constants; see {@link ShaderDescriptorOptions#overrides} */
   public overrides?: Record<string, number>;
   /** See {@link ShaderDescriptorOptions#includeGlobal} */
   public includeGlobal?: boolean;
@@ -100,12 +97,12 @@ export class ShaderDescriptor {
   public includeCamera?: boolean;
 
   /**
-   * Pre-computed cache key fragment for the GPU bits
+   * This descriptor's part of the WebGPU shader cache key
    * @internal
    */
   public keyGpu!: string;
   /**
-   * Pre-computed cache key fragment for the GL bits
+   * This descriptor's part of the WebGL shader cache key
    * @internal
    */
   public keyGl!: string;
@@ -121,7 +118,9 @@ export class ShaderDescriptor {
   }
 
   /**
-   * Updates bits, template, and overrides in place and recomputes cache keys
+   * Replaces every field from `options`, as the constructor would, and recomputes the cache keys
+   *
+   * A field `options` leaves out goes back to its default.
    * @param options - The new descriptor contents
    * @returns This descriptor, for chaining
    */
@@ -137,11 +136,14 @@ export class ShaderDescriptor {
     return this;
   }
 
+  /**
+   * Rebuilds both cache keys from the bit names, the override values and the template's id
+   *
+   * Bit names stand for the bits in the key, so each bit's claim to its name is checked first, and
+   * a second bit with the same name throws here rather than get the first bit's shader. A template
+   * stands in by identity, which holds because its fields are readonly.
+   */
   private _updateKeys(): void {
-    // Bit names ARE the cache identity, so verify each one is globally
-    // unique (a stamped-flag fast path after a bit's first check). A
-    // genuine collision throws here — before the key can mis-serve a
-    // cached shader.
     for (let i = 0; i < this.bitsGpu.length; i++) assertBitIdentity(this.bitsGpu[i]);
     for (let i = 0; i < this.bitsGl.length; i++) assertBitIdentity(this.bitsGl[i]);
 
@@ -156,9 +158,6 @@ export class ShaderDescriptor {
       keyGl += `[${overrideKey}]`;
     }
 
-    // A custom template changes the compiled output for the same bit list,
-    // so it must participate in the key. Identity (lazy uid) is enough —
-    // templates are module constants, not a user-extension surface.
     if (this.template) {
       const uid = (this.template._uid ??= nextTemplateUid++);
       keyGpu += `|tpl:${uid}`;

@@ -11,6 +11,14 @@ import type { ParticleDeclaredValues } from '../../../scene/particles/utils/part
  * One value every particle gets, a pair each particle draws between, or a
  * function called per particle with the system's random source and the slot
  * index. Pairs of points draw per component, so two corners make a box.
+ * @example
+ * ```ts
+ * sparks.spawn(10, {
+ *   life: 2,
+ *   size: [0.1, 0.4],
+ *   startRotation: (rng: () => number) => rng() * Math.PI * 2,
+ * });
+ * ```
  * @category extras:particles
  * @standard
  */
@@ -18,6 +26,12 @@ export type ParticleSpawnValue<V> = V | readonly [V, V] | ((rng: () => number, i
 
 /**
  * The overrides every system accepts, whatever bits it composes
+ * @example
+ * ```ts
+ * const impact: ParticleSpawnBuiltInOverrides = { position: hit.point, life: [0.2, 0.5], color: 'white' };
+ *
+ * sparks.spawn(12, impact);
+ * ```
  * @category extras:particles
  * @standard
  */
@@ -25,24 +39,62 @@ export interface ParticleSpawnBuiltInOverrides {
   /**
    * Where to put this spawn
    *
-   * You're placing it yourself, so the emitter's own position is left out and
-   * the shape contributes only its scatter around this point:
-   * `spawn(3, { position: wheel })` with a `ConeShape` still gives you three
-   * jittered particles at the wheel. The cone still points the way the emitter
-   * is rotated.
+   * The point stands in for the emitter's transform: the shape adds its own
+   * offset around it, unrotated and unscaled. The direction still follows the
+   * emitter's rotation.
+   * @example
+   * ```ts
+   * dust.spawn(3, { position: { x: wheel.x, y: 0, z: wheel.z } });
+   * ```
    */
   position?: ParticleSpawnValue<PointData3D>;
-  /** Initial velocity, replacing `speed` along the shape's direction */
+  /**
+   * Initial velocity, replacing `speed` along the shape's direction
+   * @example
+   * ```ts
+   * sparks.spawn(1, { velocity: { x: 0, y: 6, z: 0 } });
+   * ```
+   */
   velocity?: ParticleSpawnValue<PointData3D>;
-  /** Lifetime in seconds */
+  /**
+   * Lifetime in seconds
+   * @example
+   * ```ts
+   * sparks.spawn(4, { life: [0.5, 1] });
+   * ```
+   */
   life?: ParticleSpawnValue<number>;
-  /** Starting world-space diameter */
+  /**
+   * Starting world-space diameter
+   * @example
+   * ```ts
+   * sparks.spawn(4, { size: 0.5 });
+   * ```
+   */
   size?: ParticleSpawnValue<number>;
-  /** Starting spin angle about the view axis, in radians */
+  /**
+   * Starting spin angle about the view axis, in radians
+   * @example
+   * ```ts
+   * leaves.spawn(6, { startRotation: (rng: () => number) => rng() * Math.PI });
+   * ```
+   */
   startRotation?: ParticleSpawnValue<number>;
-  /** Starting tint. One per batch: a `ColorSource` can itself be an array, so a pair would be ambiguous */
+  /**
+   * Starting tint. One per batch: a `ColorSource` can itself be an array, so a pair would be ambiguous
+   * @example
+   * ```ts
+   * sparks.spawn(8, { color: 'red' });
+   * ```
+   */
   color?: ColorSource;
-  /** Starting opacity */
+  /**
+   * Starting opacity
+   * @example
+   * ```ts
+   * smoke.spawn(8, { alpha: [0.3, 0.6] });
+   * ```
+   */
   alpha?: ParticleSpawnValue<number>;
 }
 
@@ -54,6 +106,13 @@ export interface ParticleSpawnBuiltInOverrides {
  * built with `space: 'local'`. Any attribute the system's
  * `extraBits` declare is accepted under its own name, shaped by its format, and
  * typed exactly when the bit was declared with `satisfies ShaderBit`.
+ * @example
+ * ```ts
+ * const windBit = { name: 'wind', attributes: { aWind: 'float32x3' } } satisfies ShaderBit;
+ * const leaves = new ParticleSystem3D({ extraBits: [windBit] });
+ *
+ * leaves.spawn(10, { aWind: { x: 1, y: 0, z: 0 }, life: 4 });
+ * ```
  * @category extras:particles
  * @standard
  */
@@ -85,6 +144,6 @@ export interface ParticleSystemValues {
   aAlphaEnd?: number;
   /** End-of-life tint as linear `{ x, y, z, w }`, with `colorEnd` */
   aColorEnd?: PointData4D;
-  /** Rotation rate, with `spin` */
+  /** Rotation rate in radians per second, with `spin` */
   aSpin?: number;
 }

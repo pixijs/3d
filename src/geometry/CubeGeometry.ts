@@ -6,6 +6,11 @@ import { clampSegments } from './utils/clampSegments';
 
 /**
  * Options for {@link CubeGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<CubeGeometryOptions> = { width: 2, height: 1, depth: 1 };
+ * const brick = new CubeGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
@@ -13,31 +18,61 @@ export interface CubeGeometryOptions extends Geometry3DOptions {
   /**
    * The full extent of the cube along the local X axis
    * @default 1
+   * @example
+   * ```ts
+   * const plank = new CubeGeometry({ width: 4, height: 0.1 });
+   * ```
    */
   width: number;
   /**
    * The full extent of the cube along the local Y axis
    * @default 1
+   * @example
+   * ```ts
+   * const pillar = new CubeGeometry({ height: 5 });
+   * ```
    */
   height: number;
   /**
    * The full extent of the cube along the local Z axis
    * @default 1
+   * @example
+   * ```ts
+   * const wall = new CubeGeometry({ width: 10, height: 3, depth: 0.2 });
+   * ```
    */
   depth: number;
   /**
    * Subdivision count along the X axis; applied to the front, back, top and bottom faces
+   *
+   * Floored, and clamped to a minimum of 1.
    * @default 1
+   * @example
+   * ```ts
+   * const ribbed = new CubeGeometry({ width: 4, widthSegments: 16 });
+   * ```
    */
   widthSegments: number;
   /**
    * Subdivision count along the Y axis; applied to the front, back, left and right faces
+   *
+   * Floored, and clamped to a minimum of 1.
    * @default 1
+   * @example
+   * ```ts
+   * const tower = new CubeGeometry({ height: 8, heightSegments: 8 });
+   * ```
    */
   heightSegments: number;
   /**
    * Subdivision count along the Z axis; applied to the top, bottom, left and right faces
+   *
+   * Floored, and clamped to a minimum of 1.
    * @default 1
+   * @example
+   * ```ts
+   * const corridor = new CubeGeometry({ depth: 20, depthSegments: 20 });
+   * ```
    */
   depthSegments: number;
 }
@@ -45,10 +80,11 @@ export interface CubeGeometryOptions extends Geometry3DOptions {
 /**
  * A box geometry with six axis-aligned faces, centered on the origin
  *
- * The cube spans `[-width/2, +width/2]`, `[-height/2, +height/2]`, `[-depth/2, +depth/2]` so its bounds
- * are exactly the half-extents. Each face has its own vertices with a constant per-face normal (`+X`,
- * `-X`, `+Y`, `-Y`, `+Z`, `-Z`); vertices are not shared across faces, which keeps the lighting hard-edged.
- * Per-face UVs run from (0, 0) at the bottom-left to (1, 1) at the top-right of that face.
+ * The box measures `width`, `height` and `depth` along X, Y and Z. Each face has its own vertices
+ * with a constant normal (`+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`); no vertex is shared between faces,
+ * which keeps the lighting hard-edged. Each face's UVs run from (0, 0) at its bottom-left to (1, 1)
+ * at its top-right. As on a default {@link PlaneGeometry}, `v` grows upward, so an image texture
+ * shows upside down on the side faces.
  * @example
  * ```ts
  * const cube = new CubeGeometry({
@@ -66,7 +102,13 @@ export interface CubeGeometryOptions extends Geometry3DOptions {
  * @standard
  */
 export class CubeGeometry extends Geometry3D {
-  /** Default options for {@link CubeGeometry} */
+  /**
+   * Default options for {@link CubeGeometry}
+   * @example
+   * ```ts
+   * CubeGeometry.defaultOptions.width = 2;
+   * ```
+   */
   public static defaultOptions: CubeGeometryOptions = {
     ...Geometry3D.defaultOptions,
     width: 1,
@@ -184,7 +226,6 @@ export class CubeGeometry extends Geometry3D {
       offsets.idx = idxOffset;
     };
 
-    // Front face (z+)
     addFace(
       [
         [-halfW, -halfH, halfD],
@@ -199,7 +240,6 @@ export class CubeGeometry extends Geometry3D {
       heightSegments,
     );
 
-    // Back face (z-)
     addFace(
       [
         [halfW, -halfH, -halfD],
@@ -214,7 +254,6 @@ export class CubeGeometry extends Geometry3D {
       heightSegments,
     );
 
-    // Top face (y+)
     addFace(
       [
         [-halfW, halfH, halfD],
@@ -229,7 +268,6 @@ export class CubeGeometry extends Geometry3D {
       depthSegments,
     );
 
-    // Bottom face (y-)
     addFace(
       [
         [-halfW, -halfH, -halfD],
@@ -244,7 +282,6 @@ export class CubeGeometry extends Geometry3D {
       depthSegments,
     );
 
-    // Right face (x+)
     addFace(
       [
         [halfW, -halfH, halfD],
@@ -259,7 +296,6 @@ export class CubeGeometry extends Geometry3D {
       heightSegments,
     );
 
-    // Left face (x-)
     addFace(
       [
         [-halfW, -halfH, -halfD],
@@ -274,8 +310,6 @@ export class CubeGeometry extends Geometry3D {
       heightSegments,
     );
 
-    // Cube bounds are exactly the half-extents — pass them in to skip the
-    // base class's full position scan.
     const bounds3D =
       resolvedOptions.bounds3D ?? new Box(new Vector3(-halfW, -halfH, -halfD), new Vector3(halfW, halfH, halfD));
 

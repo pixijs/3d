@@ -1,10 +1,14 @@
 import { GlobalResourceRegistry, warn } from 'pixi.js';
 
+/**
+ * Keys that have already warned
+ *
+ * Page-global engine state, so it's registered with `GlobalResourceRegistry`: a full engine reset
+ * (`renderer.destroy({ releaseGlobalResources: true })`, or the per-file test reset) clears it
+ * alongside the shared pools and re-arms every warn.
+ */
 const seen = new Set<string>();
 
-// The dedupe set is page-global engine state, so a full engine reset
-// (`renderer.destroy({ releaseGlobalResources: true })`, or the per-file test
-// reset) re-arms every warn alongside the shared pools.
 GlobalResourceRegistry.register({ clear: () => seen.clear() });
 
 /**
@@ -12,7 +16,8 @@ GlobalResourceRegistry.register({ clear: () => seen.clear() });
  *
  * Keeps warns whose trigger state persists frame-to-frame from flooding the
  * console.
- * @param key - dedupe key; the first call per key warns, later calls are no-ops
+ * @param key - dedupe key, shared by the whole page rather than kept per object: the first call
+ * with it warns and every later call is a no-op, whoever makes it
  * @param args - forwarded to pixi.js's `warn`
  * @internal
  */

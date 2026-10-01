@@ -24,9 +24,7 @@ function colorFace(r: number, g: number, b: number): Texture {
 }
 
 /**
- * Exercises the Background (skybox) pass — which no other scene covers, because
- * `view3d.background` is null everywhere else, so the pass is culled before it
- * ever compiles or draws.
+ * Exercises the Background pass with a cubemap skybox.
  *
  * A per-face-coloured cubemap behind a small opaque cube: the skybox fills the
  * frame (Background draws at the far plane, depth-write off) and the cube

@@ -6,7 +6,6 @@ import type { Scene3DNode } from '../assets/Scene3DDescriptor';
 import { Scene3DSource } from '../assets/Scene3DSource';
 import type { Geometry3D } from '../geometry/Geometry3D';
 import type { BaseMaterial3D } from '../materials/BaseMaterial3D';
-import { Material3D } from '../materials/pbr/Material3D';
 import type { Destroy3DOptions } from '../utils/Destroy3DOptions';
 import { BatchedMesh3D } from './BatchedMesh3D';
 import { Camera3D } from './cameras/Camera3D';
@@ -19,8 +18,11 @@ import { Mesh3D } from './Mesh3D';
 import { Skeleton } from './Skeleton';
 
 /**
- * Gathers the distinct materials worn by the meshes under `node`, so each is unloaded once. A nested
- * `Model3D` child is not descended into: its own `unload` already handled its materials during the walk.
+ * Gathers the distinct materials of the meshes and batch slots under `node`, so each is unloaded
+ * once
+ *
+ * A nested `Model3D` isn't descended into: its own `unload` already handled its materials during
+ * the walk.
  * @param node - Subtree root to walk.
  * @param out - Receives each distinct material.
  */
@@ -56,50 +58,77 @@ function collectMaterials(node: Container3D, out: Set<BaseMaterial3D>): void {
  * @standard
  */
 export interface Model3DOptions extends Container3DOptions {
-  /** The shared source to build the scene graph from; required */
+  /**
+   * The loaded file to build the model from; required
+   * @example
+   * ```ts
+   * const robot = new Model3D({ source: await Assets.load<Scene3DSource>('robot.glb') });
+   * ```
+   */
   source: Scene3DSource;
   /**
-   * Name of the scene to instantiate
+   * Name of the scene to build, one of the keys of {@link Scene3DSource#scene}
    *
-   * Defaults to the source's default scene (glTF `scene`, or the first scene when the file
-   * names none). Names match `Scene3DSource.scene` keys.
+   * Left out, it's the file's default scene, or its first scene when the file names no default.
+   * A name the file doesn't have also falls back to the default.
+   * @example
+   * ```ts
+   * const showroom = new Model3D({ source, scene: 'Showroom' });
+   * ```
    */
   scene?: string;
   /**
-   * Whether the instantiated meshes cast shadows
+   * Whether the model's meshes cast shadows
    * @default true
+   * @example
+   * ```ts
+   * const grass = new Model3D({ source, castShadow: false });
+   * ```
    */
   castShadow?: boolean;
   /**
-   * Whether the instantiated meshes receive shadows
+   * Whether the model's meshes receive shadows
    * @default true
+   * @example
+   * ```ts
+   * const lamp = new Model3D({ source, receiveShadow: false });
+   * ```
    */
   receiveShadow?: boolean;
   /**
-   * Whether the created animation player uses `Ticker.shared` for playback
+   * Whether the model's {@link Model3D#player | player} advances on `Ticker.shared`
    *
-   * Set to `false` when driving playback manually via `AnimationPlayer.update`.
+   * Set it to `false` to call {@link AnimationPlayer#update} from your own loop.
    * @default true
+   * @example
+   * ```ts
+   * const robot = new Model3D({ source, autoUpdate: false });
+   *
+   * app.ticker.add((ticker) => robot.player?.update(ticker));
+   * ```
    */
   autoUpdate?: boolean;
   /**
-   * Animation the created animation player starts on construction
+   * Animation the model starts playing once built
    *
-   * `true` plays the source's first animation, and a string plays the animation with that label.
-   * Ignored when the source has no animations.
+   * `true` plays the file's first animation, and a string plays the animation with that label.
+   * Ignored when the file has no animations.
    * @default false
+   * @example
+   * ```ts
+   * const robot = new Model3D({ source, autoPlay: 'Idle' });
+   * ```
    */
   autoPlay?: boolean | string;
 }
 
 /**
- * The `Model3D` object is a `Container3D` instantiated from a shared {@link Scene3DSource}
+ * A {@link Container3D} built from a loaded glTF file, a {@link Scene3DSource}
  *
- * It owns the scene-graph nodes (meshes, lights, cameras, empties) produced by walking the
- * source's hierarchy descriptor, plus the `AnimationPlayer` and `Skeleton`s needed to drive them.
- *
- * `Model3D` instances are cheap; the heavy data (geometries, materials, textures) lives on the
- * shared source. Spawn many models from one source for crowds, props, or repeated assets.
+ * It builds the file's scene as nodes: meshes, lights, cameras and empty containers, with a
+ * {@link Skeleton} for each skin and an {@link AnimationPlayer} when the file has animations.
+ * Geometry, materials and textures stay on the source and are shared, so a model is cheap: build
+ * as many from one source as you need for crowds, props or repeated assets.
  * @example
  * ```ts
  * import { Assets } from 'pixi.js';
@@ -127,11 +156,9 @@ export class Model3D extends Container3D {
   /**
    * Default {@link Model3DOptions} merged under every constructor call
    *
-   * `new Model3D(opts)` resolves as `{ ...Model3D.defaultOptions, ...opts }`. Mutate to change the
-   * defaults process-wide.
-   *
-   * `source` and `scene` have no meaningful default (the source's default scene is picked when
-   * `scene` is omitted) and are intentionally absent here.
+   * `new Model3D(opts)` resolves as `{ ...Model3D.defaultOptions, ...opts }`, ignoring options set
+   * to `undefined`. Mutate to change the defaults process-wide. `source` and `scene` have no
+   * default here.
    * @example
    * ```ts
    * Model3D.defaultOptions.castShadow = false;
@@ -146,53 +173,65 @@ export class Model3D extends Container3D {
   };
 
   /**
-   * The shared `Scene3DSource` this model was instantiated from
-   *
-   * Useful for spawning more instances (`new Model3D(model.source)`) and for tooling that
-   * needs to trace a model back to its origin asset.
+   * The source this model was built from, shared with every other model built from it
+   * @example
+   * ```ts
+   * const twin = new Model3D(robot.source);
+   * ```
    */
   public readonly source: Scene3DSource;
 
   /**
-   * Animation player driving this model's `Skeleton`s and direct `Container3D` channels
-   *
-   * Present only when the source contains at least one animation clip.
+   * Plays the file's animations on this model; `undefined` when the file has none
+   * @example
+   * ```ts
+   * robot.player?.play('Walk');
+   * ```
    */
   public player?: AnimationPlayer;
 
   /**
-   * Skeletons created from the source's skin descriptors
-   *
-   * One entry per `Scene3DSkin`, in source order. Empty when the model has no skinned meshes.
+   * One {@link Skeleton} per skin in the file, in file order; empty when it has none
+   * @example
+   * ```ts
+   * const skeleton = robot.skeletons[0];
+   * const head = skeleton.indexOf('Head');
+   * ```
    */
   public skeletons: Skeleton[] = [];
 
   /**
-   * Cameras created from the source's camera nodes, in the order the scene graph was built
+   * The cameras in the built scene, in the order they were built; empty when the file has none
    *
-   * Each one sits in this model's scene graph at its authored transform. Install one with
-   * `view.camera = model.cameras[0]`; {@link View3D.from} does that for you. Empty when the file
-   * has no cameras.
+   * Each sits in the model's scene graph where the file placed it. Make one the view's camera with
+   * `view.camera = model.cameras[0]`; {@link View3D.from} does that for you.
+   * @example
+   * ```ts
+   * if (model.cameras.length > 0) view3d.camera = model.cameras[0];
+   * ```
    */
   public cameras: Camera3D[] = [];
 
   /**
-   * Builds the model's scene graph from a shared source
+   * Builds the model's nodes, skeletons and animation player from a source
    *
-   * Walks the source's hierarchy descriptor, instantiates the scene graph (meshes, lights,
-   * cameras, empties), constructs one `Skeleton` per skin, and attaches an `AnimationPlayer`
-   * when the source has animations.
+   * Each bone starts at its node's pose in the file, so a bone that no animation drives keeps its
+   * rest pose; tools such as gltfpack drop the channels of bones that never move. A bone with no
+   * mesh below it isn't built as a node: it lives only in its skeleton. Anything else below such a
+   * bone, such as a light or an empty, is moved up to the nearest node that is built, so it
+   * doesn't follow the bone.
    *
-   * Joint nodes are not materialized as `Container3D`s; their transforms live on the `Skeleton`
-   * and are applied during skinning. Their non-joint descendants are hoisted to the nearest
-   * non-joint ancestor.
+   * A skinned mesh whose skin names no skeleton root is moved to the model's root and its own
+   * transform is ignored, as glTF requires (§3.7.3.2): its joints already carry the whole
+   * transform. A file with no scenes builds its first node.
+   *
+   * `hitVolume`, `width`, `height`, `depth` and `parent` are applied last, once the model is
+   * built, since they measure or attach the finished model.
    * @param options - The source to build from, or {@link Model3DOptions} with it.
    */
   constructor(options: Model3DOptions | Scene3DSource) {
     if (options instanceof Scene3DSource) options = { source: options };
 
-    // Held back until the model is built: `hitVolume` shorthands and `width` / `height` / `depth`
-    // measure the instantiated nodes, and attaching to a live `parent` must see a finished model.
     const {
       source,
       scene: sceneName,
@@ -218,16 +257,19 @@ export class Model3D extends Container3D {
     const descriptor = source._descriptor;
     const skeletons = this.skeletons;
 
-    // Map from GLTF Node Index -> Animation Target
+    /** What each glTF node index animates: its built node, or a bone of a skeleton */
     const nodeMap: Record<number, AnimationTarget> = {};
 
-    // Skinned meshes, detached from the glTF hierarchy and parented to the model
-    // root once the graph is built (see `createNode`).
+    /** Skinned meshes taken out of the glTF hierarchy, added to the model root once it's built */
     const skinnedRoots: Container3D[] = [];
 
-    // glTF node indices of those detached meshes. A detached mesh has its node
-    // transform suppressed, so it must never drive a container bone — even when it
-    // also appears in a skin's `skeletonNodes` (a mesh node that parents joints).
+    /**
+     * The glTF node indices of the meshes in `skinnedRoots`
+     *
+     * Their node transform is ignored, so one must never drive a bone, even a mesh node that is
+     * also a skeleton node because it parents joints: it would overwrite the bone's rest pose
+     * with identity.
+     */
     const detachedSkinnedNodes = new Set<number>();
 
     if (descriptor.skins) {
@@ -243,9 +285,6 @@ export class Model3D extends Container3D {
 
         if (!s.skeletonNodes) return;
 
-        // Seed each bone's local TRS from its glTF node and map it back to the
-        // original node index. Without the TRS seed, bones whose channels are
-        // pruned by tools like gltfpack render at identity and break bind pose.
         for (let i = 0; i < s.skeletonNodes.length; i++) {
           const gltfNodeIndex = s.skeletonNodes[i];
           const node = descriptor.nodes?.[gltfNodeIndex];
@@ -283,9 +322,15 @@ export class Model3D extends Container3D {
       const materialIndices = nodeData.materials || [];
       const skeleton = nodeData.skin !== undefined ? skeletons[nodeData.skin] : undefined;
 
-      // One weights array shared by every primitive of this mesh, so a single
-      // 'weights' animation channel (or manual edit) drives them together.
       const targetCount = primitives[0]?.morphTargetCount ?? 0;
+      /**
+       * One weights array for every primitive of the mesh, since glTF morphs them all by the same
+       * weights (§3.7.2.2)
+       *
+       * A mesh with several primitives becomes a container of meshes, and the container carries
+       * the array as `weights` too, so the node's `weights` animation channel binds there and
+       * reaches every primitive.
+       */
       let weights: Float32Array | undefined;
       if (targetCount > 0) {
         weights = new Float32Array(targetCount);
@@ -295,7 +340,7 @@ export class Model3D extends Container3D {
       const makeMesh = (geometry: Geometry3D, i: number) =>
         new Mesh3D({
           geometry,
-          material: source.materials[materialIndices[i] ?? 0] || source.materials[0] || new Material3D({}),
+          material: source.materials[materialIndices[i]],
           skeleton,
           castShadow,
           receiveShadow,
@@ -308,20 +353,23 @@ export class Model3D extends Container3D {
 
       primitives.forEach((geometry, i) => container.addChild(makeMesh(geometry, i)));
 
-      // Expose the shared weights on the wrapper so a node-level 'weights'
-      // animation channel binds here; the array is the same reference each
-      // child mesh reads, so updates propagate to all primitives.
       if (weights) (container as Container3D & { /** @internal */ weights?: Float32Array }).weights = weights;
 
       return container;
     };
 
+    /**
+     * Builds the light a node names
+     *
+     * `type` picks the class and `createNode` sets the label from the node. Each kind gets
+     * only the options it declares.
+     * @param nodeData - The node holding the light
+     */
     const createLight = (nodeData: Scene3DNode): Container3D => {
       const lightData = descriptor.lights?.[nodeData.light!];
 
       if (!lightData) return new Container3D();
 
-      // `type` picks the class and the node supplies the label; each kind takes only the options it declares.
       const { type, color, intensity, range, coneAngle, penumbra } = lightData;
 
       if (type === 0) return new DirectionalLight({ color, intensity });
@@ -331,13 +379,18 @@ export class Model3D extends Container3D {
       return new Container3D();
     };
 
+    /**
+     * Builds the camera a node names and records it in {@link Model3D#cameras}
+     *
+     * glTF gives the vertical field of view in radians and leaves `zfar` out for an infinite
+     * projection (§3.10.3.2). `Camera3D` takes degrees and falls back to its default far plane.
+     * @param nodeData - The node holding the camera
+     */
     const createCamera = (nodeData: Scene3DNode): Container3D => {
       const cameraData = descriptor.cameras?.[nodeData.camera!];
 
       if (!cameraData) return new Container3D();
 
-      // glTF stores the vertical field of view in radians and leaves `far` out for an infinite
-      // projection; Camera3D takes degrees and falls back to its default far plane.
       const camera = new Camera3D({ fov: cameraData.fov * RAD_TO_DEG, near: cameraData.near, far: cameraData.far });
 
       this.cameras.push(camera);
@@ -345,6 +398,14 @@ export class Model3D extends Container3D {
       return camera;
     };
 
+    /**
+     * Builds a node and its subtree, returning what its parent should add
+     *
+     * A node the loader marked as a joint, a bone with no mesh below it, builds nothing and
+     * returns its children's nodes for its parent to adopt; its transform lives in the skeleton.
+     * A detached skinned mesh returns nothing and waits in `skinnedRoots`.
+     * @param index - glTF node index
+     */
     const createNode = (index: number): Container3D[] => {
       const nodeData = descriptor.nodes?.[index];
 
@@ -352,9 +413,6 @@ export class Model3D extends Container3D {
 
       const childContainers = nodeData.children?.flatMap(createNode) ?? [];
 
-      // Joints live in the Skeleton, not the scene graph. Hoist any visible
-      // descendants up to the nearest non-joint ancestor — the joint's own
-      // transform is already applied through bone matrices during skinning.
       if (nodeData.isJoint) return childContainers;
 
       let container: Container3D;
@@ -369,14 +427,16 @@ export class Model3D extends Container3D {
         container = new Container3D();
       }
 
-      // When a skin omits glTF `skeleton`, its joint matrices are collected in
-      // model space (full chain to root), and the shader applies
-      // `modelMatrix * skinMatrix`. Keeping the mesh in its glTF position would
-      // double-apply that chain, so it is detached to the model root (below) with
-      // its own node transform ignored, per the glTF spec, leaving `modelMatrix`
-      // as only the scene-level framing transform. Skins that DO specify a
-      // skeleton root are bounded, so their meshes keep their node transform.
       const skin = nodeData.skin !== undefined ? descriptor.skins?.[nodeData.skin] : undefined;
+      /**
+       * Whether this is a mesh deformed by a skin that names no glTF `skeleton` root
+       *
+       * Such a skin's joint matrices run up to the model root, and the shader applies
+       * `modelMatrix * skinMatrix`. Left where the file put it, the mesh would apply that chain
+       * twice, so it moves to the model root with its own node transform ignored, as glTF requires
+       * (§3.7.3.2), leaving `modelMatrix` as the model's own transform. A skin that names a root
+       * has joint matrices measured from that root, and its meshes keep their node transform.
+       */
       const detachSkinned = skin?.skeletonToModelRoot === true && nodeData.geometry !== undefined;
 
       if (!detachSkinned) {
@@ -418,7 +478,6 @@ export class Model3D extends Container3D {
         });
       }
     } else if (descriptor.nodes) {
-      // No scene defined (glTF without `scenes`): treat the first node as the root.
       if (descriptor.nodes.length > 0) {
         const nodes = createNode(0);
         if (nodes.length) this.addChild(...nodes);
@@ -427,12 +486,6 @@ export class Model3D extends Container3D {
 
     if (skinnedRoots.length) this.addChild(...skinnedRoots);
 
-    // Shared ancestor nodes kept in the scene graph (above) double as skeleton
-    // bones. Their transforms may be animated on the scene-graph container, so
-    // bind each such bone to its container; the skeleton re-reads the animated
-    // local TRS each frame instead of staying frozen at the bind pose. Detached
-    // skinned meshes are skipped: their node transform is suppressed, so driving a
-    // bone from one would overwrite its bind pose with identity.
     if (descriptor.skins) {
       for (let skinIdx = 0; skinIdx < descriptor.skins.length; skinIdx++) {
         const skeleton = skeletons[skinIdx];
@@ -472,8 +525,12 @@ export class Model3D extends Container3D {
   }
 
   /**
-   * Builds a `Model3D` from a shared source; the same as `new Model3D({ ...options, source })`
-   * @param source - The source to instantiate from.
+   * Builds a `Model3D` from a source; the same as `new Model3D({ ...options, source })`
+   * @example
+   * ```ts
+   * const robot = Model3D.from(source, { castShadow: false, autoPlay: 'Idle' });
+   * ```
+   * @param source - The source to build from.
    * @param options - Per-instance overrides; see {@link Model3DOptions}.
    * @returns The instantiated model
    */
@@ -482,18 +539,19 @@ export class Model3D extends Container3D {
   }
 
   /**
-   * Give back everything this model put on the GPU — for a model that is out of rotation for a
-   * while. Runs {@link Container3D.unload | the subtree walk} for the geometry, then unloads
-   * each distinct material found under it, which is what frees the textures. A nested model
-   * unloads its own materials during the walk, so they are not collected again here.
+   * Frees the GPU memory of this model's geometry, materials and textures, for a model out of use
+   * for a while
    *
-   * Nothing here is destructive: every mesh keeps its vertex data and every texture its source
-   * image, so re-adding the model (or rendering it again) re-uploads and renders it identically
-   * after one frame's work.
+   * {@link Container3D.unload} frees the geometry under it, then each material under it is
+   * unloaded once, which frees its textures. A nested model unloads its own materials during that
+   * walk, so they aren't collected again here.
    *
-   * A material shared with meshes outside this model is unloaded all the same — see
-   * {@link BaseMaterial3D.unload} for what that means for the other holders (they re-upload on
-   * next use). Same for geometry shared with another model.
+   * Nothing is lost: every mesh keeps its vertex data and every texture its image, so rendering the
+   * model again uploads everything and draws the same image.
+   *
+   * Geometry and materials are often shared with other models from the same source, and they're
+   * unloaded all the same; the other models upload them again when they next draw. See
+   * {@link BaseMaterial3D.unload}.
    * @example
    * ```ts
    * view.root.removeChild(robot);
@@ -511,15 +569,20 @@ export class Model3D extends Container3D {
   }
 
   /**
-   * Tears down this model
+   * Destroys this model, its animation player and its skeletons
    *
-   * Stops and disposes the {@link Model3D.player | player} (releasing its `Ticker.shared`
-   * listener) and destroys every owned {@link Skeleton} (freeing each skeleton's GPU buffer),
-   * then runs {@link Container3D.destroy | super.destroy} to detach and recurse.
+   * The player stops and leaves `Ticker.shared`. The skeletons are destroyed whatever the flags;
+   * they hold no GPU memory, so a skinned mesh you keep from the model still draws. The nodes, cameras
+   * included, follow `children` as on any {@link Container3D}; the {@link Model3D#cameras | cameras}
+   * list is emptied either way.
    *
-   * The shared {@link Model3D.source | source} is never destroyed — many models can reference the
-   * same source. By default the owned scene-graph nodes' geometry / material / textures (which also
-   * live on the shared source) are left intact; pass the matching flags to cascade their destruction.
+   * The {@link Model3D#source | source} is never destroyed, since other models can share it. Its
+   * geometry, materials and textures stay too, unless you pass the matching flags along with
+   * `children`.
+   * @example
+   * ```ts
+   * robot.destroy({ children: true });
+   * ```
    * @param options - Teardown flags; see {@link Destroy3DOptions}.
    */
   public override destroy(options?: Destroy3DOptions): void {
@@ -528,13 +591,8 @@ export class Model3D extends Container3D {
     this.player?.destroy();
     this.player = undefined;
 
-    // Skeletons are freed unconditionally (not gated on `children`): a skeleton's
-    // `buffer` is never bound to the render path — skinning reads the View's
-    // BonePit via `_bonePitIndex`, which copies the CPU `worldMatrix` — so a
-    // detached-but-retained skinned mesh does not use-after-free here.
     for (const skeleton of this.skeletons) skeleton.destroy();
     this.skeletons.length = 0;
-    // The cameras are destroyed by the subtree walk below; only the index is released here.
     this.cameras.length = 0;
 
     super.destroy(options);

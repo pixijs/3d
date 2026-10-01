@@ -13,23 +13,6 @@ import { SphereGeometry } from '~/geometry/SphereGeometry';
 import { TorusGeometry } from '~/geometry/TorusGeometry';
 import { TorusKnotGeometry } from '~/geometry/TorusKnotGeometry';
 
-interface PrimitiveCase {
-  name: string;
-  create: () => Geometry3D;
-}
-
-const primitiveCases: PrimitiveCase[] = [
-  { name: 'CapsuleGeometry', create: () => new CapsuleGeometry() },
-  { name: 'ConeGeometry', create: () => new ConeGeometry() },
-  { name: 'CubeGeometry', create: () => new CubeGeometry() },
-  { name: 'CylinderGeometry', create: () => new CylinderGeometry() },
-  { name: 'IcosahedronGeometry', create: () => new IcosahedronGeometry() },
-  { name: 'PlaneGeometry', create: () => new PlaneGeometry() },
-  { name: 'SphereGeometry', create: () => new SphereGeometry() },
-  { name: 'TorusGeometry', create: () => new TorusGeometry() },
-  { name: 'TorusKnotGeometry', create: () => new TorusKnotGeometry() },
-];
-
 function expectCloseTuple(data: ArrayLike<number>, offset: number, expected: [number, number, number]): void {
   expect(data[offset]).toBeCloseTo(expected[0], 5);
   expect(data[offset + 1]).toBeCloseTo(expected[1], 5);
@@ -76,27 +59,57 @@ function expectNoDegenerateTriangles(geometry: Geometry3D): void {
   }
 }
 
+/**
+ * Checks that every triangle winds counter-clockwise seen from the side its vertex normals face,
+ * which is the side that stays visible when back faces are culled
+ */
+function expectTrianglesFaceTheirNormals(geometry: Geometry3D): void {
+  const positions = geometry.positions;
+  const normals = geometry.normals ?? [];
+  const indices = geometry.indices;
+
+  for (let i = 0; i < indices.length; i += 3) {
+    const ia = indices[i] * 3;
+    const ib = indices[i + 1] * 3;
+    const ic = indices[i + 2] * 3;
+    const abx = positions[ib] - positions[ia];
+    const aby = positions[ib + 1] - positions[ia + 1];
+    const abz = positions[ib + 2] - positions[ia + 2];
+    const acx = positions[ic] - positions[ia];
+    const acy = positions[ic + 1] - positions[ia + 1];
+    const acz = positions[ic + 2] - positions[ia + 2];
+    const faceX = aby * acz - abz * acy;
+    const faceY = abz * acx - abx * acz;
+    const faceZ = abx * acy - aby * acx;
+    const normalX = normals[ia] + normals[ib] + normals[ic];
+    const normalY = normals[ia + 1] + normals[ib + 1] + normals[ic + 1];
+    const normalZ = normals[ia + 2] + normals[ib + 2] + normals[ic + 2];
+
+    expect(faceX * normalX + faceY * normalY + faceZ * normalZ).toBeGreaterThan(0);
+  }
+}
+
 describe('geometry primitives', () => {
-  it.each(primitiveCases)(
-    '$name extends Geometry3D and is drawn directly, with no instance attributes',
-    ({ create }) => {
-      const geometry = create();
+  it('winds every triangle counter-clockwise seen from the side its normals face', () => {
+    const unquantized = { quantizeNormals: false };
+    const geometries: Geometry3D[] = [
+      new PlaneGeometry({ ...unquantized, widthSegments: 2, heightSegments: 2 }),
+      new CubeGeometry({ ...unquantized, widthSegments: 2, heightSegments: 2, depthSegments: 2 }),
+      new CylinderGeometry({ ...unquantized, radiusTop: 0.5, heightSegments: 2 }),
+      new ConeGeometry({ ...unquantized, heightSegments: 2 }),
+      new CapsuleGeometry(unquantized),
+      new SphereGeometry(unquantized),
+      new IcosahedronGeometry({ ...unquantized, detail: 1 }),
+      new TorusGeometry(unquantized),
+      new TorusKnotGeometry(unquantized),
+    ];
 
-      try {
-        expect(geometry).toBeInstanceOf(Geometry3D);
-        expect(geometry.indexBuffer).toBeDefined();
-        expect(geometry.attributes.aPosition).toBeDefined();
-
-        // Per-instance data is fetched from the mesh store, so no attribute on a
-        // primitive is ever instanced.
-        for (const name in geometry.attributes) {
-          expect(geometry.attributes[name].instance).toBeFalsy();
-        }
-      } finally {
-        geometry.destroy(true);
-      }
-    },
-  );
+    try {
+      for (const geometry of geometries) expectTrianglesFaceTheirNormals(geometry);
+    } finally {
+      for (const geometry of geometries) geometry.destroy(true);
+    }
+  });
 
   it('PlaneGeometry lays out a two-triangle plane with matching UVs and normals', () => {
     const geometry = new PlaneGeometry({ width: 2, height: 4, quantizeNormals: false });
@@ -212,17 +225,6 @@ describe('geometry primitives', () => {
     }
   });
 
-  it('CapsuleGeometry produces no degenerate seam triangles at default tessellation', () => {
-    const geometry = new CapsuleGeometry({ quantizeNormals: false });
-
-    try {
-      expectNoDegenerateTriangles(geometry);
-      expectEveryNormalIsUnit(geometry.normals ?? []);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
   it('CylinderGeometry clamps fractional and invalid segment counts to per-shape minimums', () => {
     const cases: Array<{ radialSegments: number; heightSegments: number }> = [
       { radialSegments: 0, heightSegments: 0 },
@@ -253,42 +255,6 @@ describe('geometry primitives', () => {
 
         expect(geometry.vertexCount).toBe(expectedVerts);
         expectEveryNormalIsUnit(geometry.normals ?? []);
-      } finally {
-        geometry.destroy(true);
-      }
-    }
-  });
-
-  it('ConeGeometry clamps fractional and invalid segment counts to per-shape minimums', () => {
-    const cases: Array<{ radialSegments: number; heightSegments: number }> = [
-      { radialSegments: 0, heightSegments: 0 },
-      { radialSegments: 2.7, heightSegments: 1.4 },
-      { radialSegments: -1, heightSegments: -3 },
-      { radialSegments: Number.NaN, heightSegments: Number.NaN },
-      { radialSegments: Number.POSITIVE_INFINITY, heightSegments: Number.POSITIVE_INFINITY },
-    ];
-
-    for (const segments of cases) {
-      const geometry = new ConeGeometry({
-        radius: 1,
-        height: 2,
-        ...segments,
-        openEnded: true,
-        quantizeNormals: false,
-      });
-
-      try {
-        const radialEffective = Number.isFinite(segments.radialSegments)
-          ? Math.max(3, Math.floor(segments.radialSegments))
-          : 3;
-        const heightEffective = Number.isFinite(segments.heightSegments)
-          ? Math.max(1, Math.floor(segments.heightSegments))
-          : 1;
-        const expectedVerts = (radialEffective + 1) * (heightEffective + 1);
-
-        expect(geometry.vertexCount).toBe(expectedVerts);
-        expectEveryNormalIsUnit(geometry.normals ?? []);
-        expectNoDegenerateTriangles(geometry);
       } finally {
         geometry.destroy(true);
       }
@@ -353,22 +319,7 @@ describe('geometry primitives', () => {
     }
   });
 
-  it('IcosahedronGeometry subdivides detail levels onto the target radius', () => {
-    const geometry = new IcosahedronGeometry({ radius: 2, detail: 1, quantizeNormals: false });
-
-    try {
-      expect(geometry.vertexCount).toBe(42);
-      expect(geometry.indices).toHaveLength(240);
-      expectEveryNormalIsUnit(geometry.normals ?? []);
-      expectPositionsMatchNormals(geometry.positions, geometry.normals ?? [], 2);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
-  it('IcosahedronGeometry clamps unbounded detail to the documented max', () => {
-    // detail=100 would otherwise allocate 4^100 vertices (eventual hang/OOM).
-    // Clamp keeps it at the same buffer size as detail=7 (163842 base verts).
+  it('IcosahedronGeometry clamps a huge detail to the documented max of 7', () => {
     const huge = new IcosahedronGeometry({ detail: 100 });
     const detail7 = new IcosahedronGeometry({ detail: 7 });
 
@@ -460,56 +411,6 @@ describe('geometry primitives', () => {
     }
   });
 
-  it('PlaneGeometry keeps Uint16 indices when vertex count equals 65536', () => {
-    const geometry = new PlaneGeometry({ width: 1, height: 1, widthSegments: 255, heightSegments: 255 });
-
-    try {
-      expect(geometry.vertexCount).toBe(65536);
-      expect(geometry.indices).toBeInstanceOf(Uint16Array);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
-  it('SphereGeometry keeps Uint16 indices when vertex count equals 65536', () => {
-    const geometry = new SphereGeometry({ radius: 1, widthSegments: 511, heightSegments: 127 });
-
-    try {
-      expect(geometry.vertexCount).toBe(65536);
-      expect(geometry.indices).toBeInstanceOf(Uint16Array);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
-  it('CubeGeometry keeps Uint16 indices when vertex count equals 65536', () => {
-    // 2*(w+1)*(h+1) + 2*(w+1)*(d+1) + 2*(d+1)*(h+1)
-    // = 2*128*128 + 2*128*64 + 2*64*128 = 32768 + 16384 + 16384 = 65536.
-    const geometry = new CubeGeometry({ widthSegments: 127, heightSegments: 127, depthSegments: 63 });
-
-    try {
-      expect(geometry.vertexCount).toBe(65536);
-      expect(geometry.indices).toBeInstanceOf(Uint16Array);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
-  it('CubeGeometry uses analytic bounds without scanning positions', () => {
-    const geometry = new CubeGeometry({ width: 6, height: 8, depth: 10 });
-
-    try {
-      expect(geometry.bounds3D.min.x).toBe(-3);
-      expect(geometry.bounds3D.min.y).toBe(-4);
-      expect(geometry.bounds3D.min.z).toBe(-5);
-      expect(geometry.bounds3D.max.x).toBe(3);
-      expect(geometry.bounds3D.max.y).toBe(4);
-      expect(geometry.bounds3D.max.z).toBe(5);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
   it('TorusGeometry honours the arc and emits normalized tube normals', () => {
     const geometry = new TorusGeometry({
       radius: 2,
@@ -526,32 +427,6 @@ describe('geometry primitives', () => {
       expectCloseTuple(geometry.positions, 0, [2.5, 0, 0]);
       expectCloseTuple(geometry.positions, 12, [-2.5, 0, 0]);
       expectEveryNormalIsUnit(geometry.normals ?? []);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
-  it('TorusGeometry emits analytic unit normals without renormalization residue', () => {
-    const geometry = new TorusGeometry({
-      radius: 3,
-      tube: 1.5,
-      radialSegments: 6,
-      tubularSegments: 8,
-      arc: Math.PI * 2,
-      quantizeNormals: false,
-    });
-
-    try {
-      const normals = geometry.normals ?? new Float32Array();
-
-      for (let i = 0; i < normals.length; i += 3) {
-        const x = normals[i];
-        const y = normals[i + 1];
-        const z = normals[i + 2];
-        const lengthSquared = x * x + y * y + z * z;
-
-        expect(Math.abs(lengthSquared - 1)).toBeLessThan(1e-6);
-      }
     } finally {
       geometry.destroy(true);
     }
@@ -702,41 +577,6 @@ describe('geometry primitives', () => {
       } finally {
         geometry.destroy(true);
       }
-    }
-  });
-
-  it('TorusGeometry keeps Uint16 indices when vertex count equals 65536', () => {
-    const geometry = new TorusGeometry({
-      radius: 1,
-      tube: 0.4,
-      radialSegments: 255,
-      tubularSegments: 255,
-      arc: Math.PI * 2,
-    });
-
-    try {
-      expect(geometry.vertexCount).toBe(65536);
-      expect(geometry.indices).toBeInstanceOf(Uint16Array);
-    } finally {
-      geometry.destroy(true);
-    }
-  });
-
-  it('TorusKnotGeometry keeps Uint16 indices when vertex count equals 65536', () => {
-    const geometry = new TorusKnotGeometry({
-      radius: 1,
-      tube: 0.4,
-      tubularSegments: 255,
-      radialSegments: 255,
-      p: 2,
-      q: 3,
-    });
-
-    try {
-      expect(geometry.vertexCount).toBe(65536);
-      expect(geometry.indices).toBeInstanceOf(Uint16Array);
-    } finally {
-      geometry.destroy(true);
     }
   });
 

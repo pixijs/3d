@@ -5,9 +5,6 @@ import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { Container3D } from '~/scene/Container3D';
 import { View3D } from '~/scene/View3D';
 
-// Pins the documented divergence: the renderer-wide eventMode default applies to 2D
-// containers only. 3D nodes always default to 'passive' — an interactive global default
-// would put the entire scene on the pick list — and the boundary warns once about it.
 describe("renderer eventMode default — 2D honors it, 3D stays 'passive'", () => {
   let app: Application;
 

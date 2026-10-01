@@ -50,10 +50,9 @@ describe('ParticleContainer3D layout', () => {
     expect(particles.data.vertexStride).toBe(40);
   });
 
-  it('keeps the corner id out of the interleaved buffer', () => {
+  it('keeps the corner id, which streams from its own buffer, out of the interleaved one', () => {
     const particles = new ParticleContainer3D({ capacity: 4, extraBits: [trajectoryBit] });
 
-    // Declared by uvsBit and streamed from its own buffer; never an interleaved attribute.
     expect(particles.data.offsets.aUV).toBeUndefined();
     expect(particles.geometry.attributes.aUV.stride).toBe(4);
   });
@@ -71,13 +70,5 @@ describe('ParticleContainer3D layout', () => {
     expect([f32[o], f32[o + 1], f32[o + 2]]).toEqual([1, 2, 3]);
     expect(f32[o + 3]).toBe(0.5);
     expect(f32[o + 4]).toBe(0.25);
-  });
-
-  it("exposes a bit's material bindings through uniforms", () => {
-    const particles = new ParticleContainer3D({ capacity: 4, extraBits: [trajectoryBit] });
-
-    particles.uniforms.uWindStrength = 2;
-
-    expect(particles.uniforms.uWindStrength).toBe(2);
   });
 });

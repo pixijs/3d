@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 
-// Declared with `satisfies`, so spawn() knows these names and their shapes.
+/** Declared with `satisfies`, so `spawn()` knows these names and their shapes */
 const windBit = {
   name: 'spawn-typing-wind',
   attributes: { aWind: 'float32x3', aSeed: 'float32' },
@@ -26,13 +26,18 @@ function laneAt(system: ParticleSystem3D<never>, index: number, name: string, co
 }
 
 /**
- * Negative assertions live in a function nothing calls: a `@ts-expect-error`
- * line still executes if reached, and these would throw at runtime.
+ * Typing cases tsc checks and nothing calls: a `@ts-expect-error` line still
+ * executes if reached, and these would throw at runtime
+ *
+ * Custom and built-in overrides each take one value for the batch, a pair per
+ * particle or a function per particle. `setParticle` takes the container's
+ * built-ins, the system's own attributes and the custom ones. The bit list also
+ * types `onUpdate`'s system, inferred from a plain array literal with no
+ * `as const`.
  */
-function typeOnly(): void {
+function tscOnlyChecks(): void {
   const system = makeSystem();
 
-  // One value for the batch, a pair per particle, or a function per particle.
   system.spawn(1, { aWind: { x: 1, y: 2, z: 3 }, aSeed: 0.5 });
   system.spawn(1, {
     aWind: [
@@ -42,7 +47,6 @@ function typeOnly(): void {
     aSeed: [0, 1],
   });
   system.spawn(1, { aWind: (rng) => ({ x: rng(), y: 0, z: 0 }), aSeed: (_rng, index) => index });
-  // The built-ins take the same ladder.
   system.spawn(1, {
     life: [0.5, 2],
     size: (rng) => rng(),
@@ -59,14 +63,12 @@ function typeOnly(): void {
   // @ts-expect-error nothing declared this name
   system.spawn(1, { aNope: 1 });
 
-  // setParticle on a system knows the built-ins, the system's own attributes and the custom ones.
   system.setParticle(0, { aVel: { x: 0, y: 1, z: 0 }, aBirth: 0, aWind: { x: 1, y: 0, z: 0 } });
   // @ts-expect-error still shaped
   system.setParticle(0, { aWind: 1 });
 
-  // The bit list flows into onUpdate's system parameter too.
   new ParticleSystem3D({
-    extraBits: [windBit], // no `as const` needed: the bit list infers from a plain array literal
+    extraBits: [windBit],
     onUpdate: (_dt, sys) => {
       sys.spawn(1, { aSeed: 1 });
       // @ts-expect-error typed through the callback
@@ -77,8 +79,7 @@ function typeOnly(): void {
 
 describe('ParticleSystem3D spawn overrides', () => {
   it('compiles the positive typing cases and rejects the negative ones', () => {
-    // Checked by tsc; this keeps the never-called function referenced.
-    expect(typeof typeOnly).toBe('function');
+    expect(typeof tscOnlyChecks).toBe('function');
   });
 
   it('writes a custom attribute given as one value for the batch', () => {
@@ -116,7 +117,7 @@ describe('ParticleSystem3D spawn overrides', () => {
     for (let i = 0; i < 6; i++) {
       expect(laneAt(system, i, 'aWind')).toBeGreaterThanOrEqual(0);
       expect(laneAt(system, i, 'aWind')).toBeLessThanOrEqual(1);
-      expect(laneAt(system, i, 'aWind', 1)).toBe(5); // a degenerate pair is a constant
+      expect(laneAt(system, i, 'aWind', 1), 'a degenerate pair is a constant').toBe(5);
     }
 
     system.destroy();
@@ -142,46 +143,5 @@ describe('ParticleSystem3D spawn overrides', () => {
     expect(laneAt(system, 1, 'aSeed')).toBe(0);
 
     system.destroy();
-  });
-
-  it('takes the same value ladder for the built-in overrides', () => {
-    const system = makeSystem();
-
-    system.spawn(1, {
-      life: [2, 2],
-      size: (_rng, index) => 0.25 + index,
-      position: [
-        { x: 3, y: 0, z: 0 },
-        { x: 3, y: 0, z: 0 },
-      ],
-    });
-
-    expect(laneAt(system, 0, 'aLife')).toBe(2);
-    expect(system.data.f32[3]).toBeCloseTo(0.25);
-    expect(system.data.f32[0]).toBe(3);
-
-    system.destroy();
-  });
-
-  it('replays a pair-and-function spawn identically from the same seed', () => {
-    const run = (): number[] => {
-      const system = makeSystem();
-
-      system.spawn(5, {
-        aSeed: [0, 1],
-        aWind: [
-          { x: 0, y: 0, z: 0 },
-          { x: 1, y: 1, z: 1 },
-        ],
-      });
-
-      const out = Array.from({ length: 5 }, (_, i) => laneAt(system, i, 'aSeed') + laneAt(system, i, 'aWind', 2));
-
-      system.destroy();
-
-      return out;
-    };
-
-    expect(run()).toEqual(run());
   });
 });

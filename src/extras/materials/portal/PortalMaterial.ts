@@ -8,15 +8,27 @@ import { portalBit } from './portalBit';
 
 /**
  * Constructor options for {@link PortalMaterial}
+ *
+ * `baseColor` tints the feed.
+ * @example
+ * ```ts
+ * const glassPortal: PortalMaterialOptions = { texture: feed, baseColor: 0xbfdcff };
+ * const material = new PortalMaterial(glassPortal);
+ * ```
  * @category extras:materials
  * @standard
  */
 export interface PortalMaterialOptions extends BaseMaterial3DOptions {
   /**
-   * The feed this portal shows — a render texture the size of the view
+   * The feed this portal shows, a render texture the size of the view
    *
    * Swap it later through `material.textures.portal`. Left out, the slot starts on
    * `Texture.WHITE` and the quad reads as a flat white panel until a feed arrives.
+   * @example
+   * ```ts
+   * const feed = RenderTexture.create({ width: view3d.width, height: view3d.height });
+   * const material = new PortalMaterial({ texture: feed });
+   * ```
    */
   texture?: Texture;
 }
@@ -32,48 +44,70 @@ export interface PortalData extends MaterialData {
 }
 
 /**
- * The texture slots {@link PortalMaterial}'s derivation walk produces
+ * Texture slots of a {@link PortalMaterial}, reached through its `textures`
+ * @example
+ * ```ts
+ * const material = new PortalMaterial();
+ * const slots: PortalMaterialTextures = material.textures;
+ *
+ * slots.portal = feed;
+ * ```
  * @category extras:materials
  * @standard
  */
 export interface PortalMaterialTextures extends MaterialTextures {
-  /** The feed rendered by the portal camera */
+  /**
+   * The feed the portal shows
+   * @example
+   * ```ts
+   * portal.material.textures.portal = nextFeed;
+   * ```
+   */
   portal: Texture;
 }
 
 /**
  * Unlit surface that shows a render-texture feed at the viewer's own screen position
  *
- * The quad becomes an opening rather than a picture: because each fragment samples the feed
- * where it sits on screen, the far side stays put as the viewer moves, and the seam at the frame
- * lines up. Pair it with a `PortalPass`, which renders the feed from a camera mirrored through
- * the portal pair — but the material needs nothing from that pass beyond a texture, so it serves
- * a mirror or a fixed security feed just as well.
+ * The quad reads as an opening rather than a picture. Each fragment samples the feed where it
+ * sits on screen, so the far side stays put as the viewer moves and lines up with the frame. Pair
+ * it with a {@link PortalPass}, which renders the feed from a camera mirrored through the portal
+ * pair. The material needs nothing from that pass but a texture, so a planar mirror's feed works
+ * just as well.
  *
- * Unlit and untone-mapped by definition: the feed is a finished frame, already lit and already
- * through the view's tone curve. Single-sided on purpose — a portal is only an opening from the
- * side it faces, and back-face culling is what says so.
+ * It skips lighting and tone mapping, because the feed is a finished frame that the view already
+ * lit and tone-mapped. It is single-sided on purpose: a portal is only an opening from the side
+ * it faces, and back-face culling enforces that.
  *
- * Draws the right way up on the canvas on both backends. One known gap: a View3D drawn into a
- * render texture on WebGL (inside a pixi filter, or `renderer.extract`) shows the far side
- * upside down — see {@link portalBit} for why.
+ * It draws the right way up on the canvas on both backends. One known gap: a View3D drawn into a
+ * render texture on WebGL (inside a pixi filter, or `renderer.extract`) shows the far side upside
+ * down. {@link portalBit} explains why.
  * @example
  * ```ts
- * const feed = RenderTexture.create({ width: view.width, height: view.height });
- * const portal = new Mesh3D({
+ * const feed = RenderTexture.create({ width: view3d.width, height: view3d.height });
+ * const entry = new Mesh3D({
  *   geometry: new PlaneGeometry({ width: 3, height: 4 }),
  *   material: new PortalMaterial({ texture: feed }),
  * });
+ *
+ * view3d.passes = [new PortalPass({ entry, exit, texture: feed })];
  * ```
  * @see {@link portalBit} For the screen-position sampling and its per-backend Y handling.
  * @category extras:materials
  * @standard
  */
 export class PortalMaterial extends BaseMaterial3D<PortalData, PortalMaterialTextures> {
-  /** The feed carries the view's tone curve already — running it twice would crush the highlights */
+  /**
+   * Off, because the feed already went through the view's tone curve and a second pass would
+   * crush its highlights
+   * @advanced
+   */
   public override toneMapped = false;
 
-  /** Nothing to light: the surface is a window onto an already-lit frame */
+  /**
+   * Off, because the surface is a window onto a frame that is already lit
+   * @advanced
+   */
   public override lit = false;
 
   constructor(options: PortalMaterialOptions = {}) {

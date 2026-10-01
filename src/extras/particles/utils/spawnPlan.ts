@@ -159,7 +159,12 @@ export function storeFor(format: string): number {
  * @internal
  */
 export interface SpawnContext {
-  /** The system's random source */
+  /**
+   * The system's random source
+   *
+   * Always `seededRandom`, with a random seed when none was given: `Math.random` allocates on
+   * every call, and a spawn draws about eight times per particle.
+   */
   rng: () => number;
   /** The system's `[min, max]` spread table */
   spreads: Float32Array;

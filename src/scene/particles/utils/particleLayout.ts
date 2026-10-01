@@ -11,10 +11,11 @@ import type { PointData4D } from '../../../math/vector/PointData4D';
 const POSITION_BYTES = 12;
 
 /**
- * Declared attributes that never live in the interleaved particle buffer
+ * Declared attributes the layout doesn't place in declaration order
  *
  * `aUV` is the per-corner id and streams from its own shared buffer;
- * `aPosition` is placed by the layout itself so it always leads the vertex.
+ * `aPosition` is placed by the layout itself so it always leads the vertex. Each
+ * still takes one of the {@link MAX_VERTEX_ATTRIBUTES} slots.
  * @internal
  */
 const NOT_INTERLEAVED = new Set(['aUV', 'aPosition']);
@@ -50,7 +51,7 @@ export interface ParticleAttribute {
 
 /**
  * The attributes the composed bits declare, resolved into where each lives in
- * a vertex — see {@link buildParticleLayout}
+ * a vertex; see {@link buildParticleLayout}
  * @internal
  */
 interface ParticleLayout {
@@ -131,7 +132,6 @@ export function buildParticleLayout(declared: Record<string, VertexFormat>): Par
 
   attributes.aPosition = resolveParticleAttribute('aPosition', 'float32x3', 0);
 
-  // The corner id and the position each take a slot of their own.
   let count = NOT_INTERLEAVED.size;
 
   for (const [name, format] of Object.entries(declared)) {

@@ -7,16 +7,20 @@ import { multiplyQuaternionData, Quaternion } from './Quaternion';
 import type { QuaternionData } from './Quaternion';
 
 /**
- * The `ObservableQuaternion` object represents a rotation in 3D space using `(x, y, z, w)`
+ * A {@link Quaternion} that tells an observer when it changes
  *
- * It mirrors the API of {@link Quaternion} but invokes an observer callback whenever its
- * components change, making it suitable for transform rotation where change detection drives
- * downstream updates.
+ * It is the type of a node's {@link Container3D#quaternion | quaternion}: a change is how the node
+ * learns to rebuild its transform. It has the same methods as {@link Quaternion}. Each in-place method
+ * notifies the observer at most once, and not at all when no component changed. Given an `out`
+ * target, a method writes there and leaves this quaternion and its observer alone.
+ * @example
+ * ```ts
+ * const up = { x: 0, y: 1, z: 0 };
  *
- * Math operations follow the unified mutating-default pattern: `a.multiply(b)` mutates `a` in
- * place; `a.multiply(b, out)` writes the result into `out` instead. In-place mutations route
- * through {@link ObservableQuaternion#set} so the observer fires exactly once per call. When `out`
- * is a different target, this quaternion's observer is not fired.
+ * app.ticker.add((ticker) => {
+ *   coin.quaternion.setFromAxisAngle(up, (ticker.lastTime / 1000) * spinSpeed);
+ * });
+ * ```
  * @see {@link Quaternion} For the non-observable counterpart
  * @see {@link Observer} For the observer interface
  * @category maths
@@ -24,24 +28,30 @@ import type { QuaternionData } from './Quaternion';
  */
 export class ObservableQuaternion implements QuaternionData {
   /** @ignore */
-  public _x: number;
+  public _x = 0;
   /** @ignore */
-  public _y: number;
+  public _y = 0;
   /** @ignore */
-  public _z: number;
+  public _z = 0;
   /** @ignore */
-  public _w: number;
+  public _w = 0;
 
   /** Object whose `_onUpdate` callback is invoked when this quaternion changes */
   private readonly _observer: Observer<ObservableQuaternion>;
 
-  /** The x component; assigning a different value fires the observer */
+  /**
+   * The x component; assigning a different value notifies the observer
+   * @example
+   * ```ts
+   * const axisX = node.quaternion.x / Math.sqrt(1 - node.quaternion.w ** 2);
+   * ```
+   */
   get x(): number {
     return this._x;
   }
 
   /**
-   * Sets the x component; fires the observer only when the value changes
+   * Sets the x component
    * @param value - New x component
    */
   set x(value: number) {
@@ -51,13 +61,19 @@ export class ObservableQuaternion implements QuaternionData {
     }
   }
 
-  /** The y component; assigning a different value fires the observer */
+  /**
+   * The y component; assigning a different value notifies the observer
+   * @example
+   * ```ts
+   * const axisY = node.quaternion.y / Math.sqrt(1 - node.quaternion.w ** 2);
+   * ```
+   */
   get y(): number {
     return this._y;
   }
 
   /**
-   * Sets the y component; fires the observer only when the value changes
+   * Sets the y component
    * @param value - New y component
    */
   set y(value: number) {
@@ -67,13 +83,19 @@ export class ObservableQuaternion implements QuaternionData {
     }
   }
 
-  /** The z component; assigning a different value fires the observer */
+  /**
+   * The z component; assigning a different value notifies the observer
+   * @example
+   * ```ts
+   * const axisZ = node.quaternion.z / Math.sqrt(1 - node.quaternion.w ** 2);
+   * ```
+   */
   get z(): number {
     return this._z;
   }
 
   /**
-   * Sets the z component; fires the observer only when the value changes
+   * Sets the z component
    * @param value - New z component
    */
   set z(value: number) {
@@ -83,13 +105,19 @@ export class ObservableQuaternion implements QuaternionData {
     }
   }
 
-  /** The w component; assigning a different value fires the observer */
+  /**
+   * The w component; assigning a different value notifies the observer
+   * @example
+   * ```ts
+   * const angle = 2 * Math.acos(node.quaternion.w);
+   * ```
+   */
   get w(): number {
     return this._w;
   }
 
   /**
-   * Sets the w component; fires the observer only when the value changes
+   * Sets the w component
    * @param value - New w component
    */
   set w(value: number) {
@@ -117,8 +145,10 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Sets the components of this quaternion
-   *
-   * The observer fires once if any component changes.
+   * @example
+   * ```ts
+   * door.quaternion.set(0, Math.SQRT1_2, 0, Math.SQRT1_2);
+   * ```
    * @param x - The x component
    * @param y - The y component
    * @param z - The z component
@@ -139,8 +169,10 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Copies `q` into this quaternion
-   *
-   * The observer fires once if any component changes.
+   * @example
+   * ```ts
+   * door.quaternion.copyFrom(closedRotation);
+   * ```
    * @param q - The quaternion to copy from
    * @returns This quaternion for chaining
    */
@@ -158,6 +190,10 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Copies this quaternion into `target` and returns it
+   * @example
+   * ```ts
+   * door.quaternion.copyTo(closedRotation);
+   * ```
    * @param target - The quaternion to copy into
    * @returns The given `target`
    */
@@ -171,20 +207,26 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Creates a new `ObservableQuaternion` with the same values
+   * Creates a copy of this quaternion that notifies `observer`, or this quaternion's own observer when
+   * left out
    *
-   * The clone reuses this instance's observer unless `observer` is provided explicitly.
+   * A clone of a node's `quaternion` that keeps the node as its observer marks the node for a transform
+   * update on every change without turning it. For a plain copy, use
+   * `new Quaternion().copyFrom(node.quaternion)`.
    * @param observer - Observer for the clone; defaults to this instance's observer
    * @returns The new quaternion
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- observer-linked copy; plain copies use Quaternion#copyFrom
   public clone(observer?: Observer<ObservableQuaternion>): ObservableQuaternion {
     return new ObservableQuaternion(observer ?? this._observer, this._x, this._y, this._z, this._w);
   }
 
   /**
-   * Resets this quaternion to identity `(0, 0, 0, 1)`
-   *
-   * The observer fires once if any component changes.
+   * Resets this quaternion to identity `(0, 0, 0, 1)`, no rotation
+   * @example
+   * ```ts
+   * crate.quaternion.identity();
+   * ```
    * @returns This quaternion for chaining
    */
   public identity(): this {
@@ -193,6 +235,10 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Returns true when `x`, `y`, `z` and `w` match `q` exactly (no epsilon tolerance)
+   * @example
+   * ```ts
+   * const closed = door.quaternion.equals(closedRotation);
+   * ```
    * @param q - The quaternion to compare with
    * @returns Whether all components match
    */
@@ -201,9 +247,14 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from Euler angles in XYZ order (radians)
+   * Sets this quaternion from Euler angles in radians, in the XYZ order of
+   * {@link Container3D#rotation}
+   * @example
+   * ```ts
+   * door.quaternion.setFromEuler({ x: 0, y: openAngle, z: 0 });
+   * ```
    * @param rotation - The Euler angles as `(x, y, z)` radians
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromEuler(rotation: PointData3D, out: QuaternionData = this): this {
@@ -218,10 +269,14 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from a unit-length `axis` and `angle` in radians
+   * Sets this quaternion to a turn of `angle` radians around the unit-length `axis`
+   * @example
+   * ```ts
+   * wheel.quaternion.setFromAxisAngle({ x: 1, y: 0, z: 0 }, distanceDriven / wheelRadius);
+   * ```
    * @param axis - The unit-length rotation axis
    * @param angle - The rotation angle in radians
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromAxisAngle(axis: PointData3D, angle: number, out: QuaternionData = this): this {
@@ -236,12 +291,16 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from rotation matrix `m`
+   * Sets this quaternion to the rotation in `m`
    *
-   * Assumes the upper-left 3x3 of `m` is a pure rotation (unscaled). Use
-   * {@link ObservableQuaternion#setFromScaledRotationMatrix} for matrices with scale.
+   * The upper-left 3x3 of `m` must be a pure rotation, with no scale. Use
+   * {@link ObservableQuaternion#setFromScaledRotationMatrix} for a matrix with scale.
+   * @example
+   * ```ts
+   * securityCamera.quaternion.setFromRotationMatrix(new Matrix4().lookAt(eye, target, up));
+   * ```
    * @param m - The rotation matrix to extract from
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromRotationMatrix(m: Matrix4, out: QuaternionData = this): this {
@@ -256,11 +315,13 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from a TRS-composed matrix that may carry per-axis scale
-   *
-   * Strips column scales inline before extraction.
-   * @param m - The TRS matrix to extract from
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * Sets this quaternion to the rotation in `m`, a transform that may also scale each axis
+   * @example
+   * ```ts
+   * debris.quaternion.setFromScaledRotationMatrix(wreck.worldTransform);
+   * ```
+   * @param m - The transform to extract from
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromScaledRotationMatrix(m: Matrix4, out: QuaternionData = this): this {
@@ -275,12 +336,16 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion to the rotation that takes unit-length `vFrom` to unit-length `vTo`
+   * Sets this quaternion to the shortest turn that takes unit-length `vFrom` to unit-length `vTo`
    *
-   * Antiparallel inputs (where `vFrom = -vTo`) pick an arbitrary perpendicular axis.
+   * {@link Quaternion#setFromUnitVectors} covers opposite vectors.
+   * @example
+   * ```ts
+   * tree.quaternion.setFromUnitVectors({ x: 0, y: 1, z: 0 }, groundNormal);
+   * ```
    * @param vFrom - The unit-length start direction
    * @param vTo - The unit-length end direction
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromUnitVectors(vFrom: PointData3D, vTo: PointData3D, out: QuaternionData = this): this {
@@ -296,6 +361,10 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Returns the dot product of this quaternion and `q`
+   * @example
+   * ```ts
+   * const facingTarget = Math.abs(turret.quaternion.dot(aimRotation)) > 0.99999;
+   * ```
    * @param q - The other quaternion
    * @returns The dot product
    */
@@ -304,18 +373,26 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Returns the angle in radians between this quaternion and `q`
+   * Returns the angle of the turn from this rotation to `q`
    *
    * Both quaternions are assumed unit-length.
+   * @example
+   * ```ts
+   * if (turret.quaternion.angleTo(aimRotation) < 0.01) fire();
+   * ```
    * @param q - The other quaternion
-   * @returns The angle in radians
+   * @returns The angle in radians, from 0 to π
    */
   public angleTo(q: QuaternionData): number {
     return 2 * Math.acos(Math.abs(clamp(this.dot(q), -1, 1)));
   }
 
   /**
-   * Returns the magnitude (length) of this quaternion as a 4D vector
+   * Returns the length of this quaternion as a 4D vector, 1 for a rotation
+   * @example
+   * ```ts
+   * if (Math.abs(ship.quaternion.magnitude() - 1) > 1e-6) ship.quaternion.normalize();
+   * ```
    * @returns The magnitude
    */
   public magnitude(): number {
@@ -323,9 +400,13 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Returns the squared magnitude of this quaternion
+   * Returns the squared length of this quaternion
    *
-   * Cheaper than {@link ObservableQuaternion#magnitude} for comparisons.
+   * Cheaper than {@link ObservableQuaternion#magnitude} and enough to check for drift.
+   * @example
+   * ```ts
+   * if (Math.abs(ship.quaternion.magnitudeSquared() - 1) > 1e-6) ship.quaternion.normalize();
+   * ```
    * @returns The squared magnitude
    */
   public magnitudeSquared(): number {
@@ -333,10 +414,14 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Normalizes this quaternion to unit length
+   * Scales this quaternion to unit length, undoing the drift of repeated multiplies
    *
-   * Zero-magnitude quaternions become identity.
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * A zero quaternion becomes identity.
+   * @example
+   * ```ts
+   * ship.quaternion.multiply(roll).normalize();
+   * ```
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public normalize(out: QuaternionData = this): this {
@@ -368,11 +453,15 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Inverts this quaternion
+   * Inverts this rotation, so it turns the other way
    *
-   * Equivalent to {@link ObservableQuaternion#conjugate} for unit-length quaternions, which this
-   * method assumes.
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * Computes the {@link ObservableQuaternion#conjugate | conjugate}, which is the inverse of a unit
+   * quaternion.
+   * @example
+   * ```ts
+   * turret.quaternion.inverse(parentToTurret);
+   * ```
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public inverse(out: QuaternionData = this): this {
@@ -380,8 +469,14 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion to its conjugate (negates the imaginary part)
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * Negates `x`, `y` and `z`, leaving `w`, which reverses a unit quaternion's turn
+   *
+   * The same as {@link ObservableQuaternion#inverse} for a unit quaternion.
+   * @example
+   * ```ts
+   * const reverseTurn = door.quaternion.conjugate(new Quaternion());
+   * ```
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public conjugate(out: QuaternionData = this): this {
@@ -395,9 +490,16 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Multiplies this quaternion by `q` (`this = this * q`)
+   * Multiplies this quaternion by `q` (`this = this * q`), turning the node by `q` around its own axes
+   *
+   * {@link Quaternion#multiply} explains the order.
+   * @example
+   * ```ts
+   * roll.setFromAxisAngle(forwardAxis, rollSpeed * dt);
+   * ship.quaternion.multiply(roll);
+   * ```
    * @param q - The quaternion to multiply by
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public multiply(q: QuaternionData, out: QuaternionData = this): this {
@@ -412,9 +514,15 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Pre-multiplies this quaternion by `q` (`this = q * this`)
+   * Pre-multiplies this quaternion by `q` (`this = q * this`), turning the node by `q` around its
+   * parent's axes
+   * @example
+   * ```ts
+   * spin.setFromAxisAngle(worldUp, spinSpeed * dt);
+   * globe.quaternion.premultiply(spin);
+   * ```
    * @param q - The quaternion to pre-multiply by
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public premultiply(q: QuaternionData, out: QuaternionData = this): this {
@@ -429,12 +537,14 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Spherically interpolates between this quaternion and `qb` by `t` in `[0, 1]`
-   *
-   * Always picks the shorter arc.
+   * Blends from this rotation toward `qb` by `t`, turning at an even rate the shorter way round
+   * @example
+   * ```ts
+   * turret.quaternion.slerp(aimRotation, 1 - Math.exp(-turnRate * dt));
+   * ```
    * @param qb - The quaternion to interpolate towards
    * @param t - The interpolation factor in `[0, 1]`
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public slerp(qb: QuaternionData, t: number, out: QuaternionData = this): this {
@@ -450,8 +560,10 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Reads `x`, `y`, `z`, `w` from `array` starting at `offset`
-   *
-   * The observer fires once if any component changes.
+   * @example
+   * ```ts
+   * crates.forEach((crate: Container3D, i: number) => crate.quaternion.fromArray(savedRotations, i * 4));
+   * ```
    * @param array - The array to read from
    * @param offset - The offset into `array` to read at
    * @returns This quaternion for chaining
@@ -464,6 +576,10 @@ export class ObservableQuaternion implements QuaternionData {
    * Writes this quaternion's values into `array` starting at `offset`
    *
    * Allocates a new array when one is not supplied.
+   * @example
+   * ```ts
+   * crates.forEach((crate: Container3D, i: number) => crate.quaternion.toArray(savedRotations, i * 4));
+   * ```
    * @param array - The array to write into; a new array when omitted
    * @param offset - The offset into `array` to write at
    * @returns The written array
@@ -479,6 +595,10 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Returns a string representation of this quaternion
+   * @example
+   * ```ts
+   * console.log(ship.quaternion.toString());
+   * ```
    * @returns A string in the form `[pixi-3d/math:ObservableQuaternion x=0 y=0 z=0 w=1]`
    */
   public toString(): string {

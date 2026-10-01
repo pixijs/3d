@@ -6,18 +6,14 @@ import { linearToSrgb, writeLinearRgb } from '../BaseMaterial3D';
 import type { MaterialData } from './createMaterialDataClass';
 
 /**
- * How one runtime prop of a feature-props object binds to the packed material data
+ * How one prop of a feature-props object reaches the material
  *
- * - `lane` — one float of a packed vec field (`clearcoatParams[1]`).
- * - `scalar` — a whole scalar struct field; delegates to the generated
- *   {@link MaterialData} accessor (which compare-skips and marks dirty).
- * - `colour` — the first three lanes of a vec field. Follows the
- *   `Container.tint` convention: the setter takes any colour source (decoded
- *   to linear light via `writeLinearRgb`), the getter returns the
- *   canonical hex number. Linear channel values live in `material.data`.
- * - `texture` — a named texture slot, dispatched through the material so the
- *   batcher's texture cache key is invalidated. A `readonly` texture is fixed
- *   at construction (its slot may not exist) and so exposes no setter.
+ * - `lane`: one float of a vector field, such as `clearcoatParams[1]`.
+ * - `scalar`: a whole scalar field, through the generated {@link MaterialData} accessor.
+ * - `colour`: the first three lanes of a vector field. Like `Container.tint`, it takes any colour
+ *   source and reads back as a hex number; the field holds the colour in linear light.
+ * - `texture`: a named texture slot, written through `material.textures`. A `readonly` one gets
+ *   no setter, because its slot is fixed at construction and may not exist.
  * @internal
  */
 type FeaturePropBinding =
@@ -26,29 +22,22 @@ type FeaturePropBinding =
   | { kind: 'colour'; field: string }
   | { kind: 'texture'; slot: string; readonly?: boolean };
 
-/**
- * Name-keyed binding schema consumed by `createFeaturePropsClass`
- * @internal
- */
 type FeaturePropsSchema = Record<string, FeaturePropBinding>;
 
 /**
- * Build a feature-props class from a binding schema
+ * Build the class behind a runtime feature-props object, such as `material.clearcoat`
  *
- * The generated class is the runtime mirror of a construction option group
- * (`material.clearcoat.roughness = 0.2`). Accessors live on the prototype
- * (plain getter/setter dispatch, no Proxy traps), so property access JITs
- * like any ordinary object; instances hold only the material/data refs and
- * pre-sliced colour views.
+ * Each prop becomes a getter and setter on the prototype, so props read like plain fields and an
+ * instance holds only its material, data and colour views. The schema is keyed by the props
+ * interface, so a missing or misspelt binding is a compile error rather than a write that never
+ * reaches the material.
  *
- * The schema is keyed by the props interface, so a missing or misspelled
- * binding is a compile error — a typo would otherwise fail silently (writes
- * land on a plain own property and never reach the packed data).
+ * Lane setters compare against `Math.fround(value)`. Vector fields are float32 views, which round
+ * what they store, so an inexact number like 0.3 would never match and every write would queue an
+ * upload.
  *
- * The material constructs one instance per feature group it was built with;
- * absence of the group object *is* the feature lock.
+ * A material builds one instance per feature group it was constructed with.
  * @param schema - One binding per prop of the props interface `T`
- * @returns A constructor producing bound props objects for a material
  * @internal
  */
 export function createFeaturePropsClass<T>(
@@ -61,13 +50,11 @@ export function createFeaturePropsClass<T>(
   ][];
 
   class FeatureProps {
-    /** Owning material — texture props dispatch through it */
     public readonly _material: BaseMaterial3D;
-    /** The material's packed data object; value props write here */
     public readonly _data: MaterialData;
-    /** Pre-sliced 3-wide linear-light write views, one per colour prop */
+    /** Each colour prop's three lanes, cut once at construction */
     public readonly _colours: Record<string, Float32Array> = Object.create(null);
-    /** Canonical hex per colour prop — the tint-convention read-back */
+    /** The hex value each colour prop reads back */
     public readonly _tints: Record<string, number> = Object.create(null);
 
     constructor(material: BaseMaterial3D) {
@@ -94,8 +81,6 @@ export function createFeaturePropsClass<T>(
           },
           set(this: FeatureProps, value: number) {
             const view = this._data[field] as Float32Array;
-            // Vector fields are always float32 views, which round what they store. Compare against
-            // the rounded value or an inexact number like 0.3 never matches.
             if (view[lane] === Math.fround(value)) return;
             view[lane] = value;
             this._material.update();
@@ -135,10 +120,6 @@ export function createFeaturePropsClass<T>(
             return this._material.textures[slot];
           },
         };
-        // A `readonly` texture is fixed at construction — e.g. its presence
-        // selects a shader variant, so the slot may not exist and
-        // `material.textures` is sealed. It gets no setter; reading an absent
-        // slot returns `undefined`. Mutable textures keep their setter.
         if (!binding.readonly) {
           descriptor.set = function (this: FeatureProps, value: Texture): void {
             this._material.textures[slot] = value;

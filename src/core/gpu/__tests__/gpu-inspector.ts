@@ -1,21 +1,9 @@
-/**
- * A tiny WebGPU inspector for tests. Wraps a `GPUDevice`'s command-encoder API
- * so a test can observe what the renderer drives the GPU to do during a render —
- * the structural view a pixel screenshot can't give (e.g. "did these insets weave
- * into one render pass, or begin a pass each?").
- *
- * Today it tallies render-pass begins. It's intentionally a thin, extensible shim:
- * to watch more of the API (draws, copies, …) wrap the relevant method inside
- * `createCommandEncoder` / the returned encoder the same way.
- *
- * The device + encoder are taken structurally, so the inspector wraps only the
- * methods it watches — no `any`.
- */
-
+/** The part of a `GPUCommandEncoder` the inspector wraps */
 interface EncoderLike {
   beginRenderPass: (...args: unknown[]) => unknown;
 }
 
+/** The part of a `GPUDevice` the inspector wraps, typed structurally so it needs no `any` */
 interface DeviceLike {
   createCommandEncoder: (...args: unknown[]) => EncoderLike;
 }
@@ -36,6 +24,10 @@ export interface GpuInspector {
  * Install the inspector on `device` (e.g. `renderer.gpu.device`). Every command
  * encoder it creates from now on tallies its `beginRenderPass` calls. Call
  * `restore()` when done.
+ *
+ * It shows a test what a render drove the GPU to do, which a screenshot can't, such as whether
+ * several insets drew into one render pass or began one each. To watch more of the API, wrap
+ * another encoder method the same way and add its count to `GpuTally`.
  */
 export function inspectGpuDevice(device: unknown): GpuInspector {
   const dev = device as DeviceLike;

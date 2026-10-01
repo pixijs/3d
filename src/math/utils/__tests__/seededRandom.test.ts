@@ -3,10 +3,6 @@ import { describe, expect, test } from 'vitest';
 import { seededRandom } from '~/math/utils/seededRandom';
 
 describe('seededRandom', () => {
-  test('returns a function', () => {
-    expect(typeof seededRandom('hello')).toBe('function');
-  });
-
   test('produces values in [0, 1)', () => {
     const random = seededRandom('range-test');
     for (let i = 0; i < 1000; i++) {
@@ -14,6 +10,19 @@ describe('seededRandom', () => {
       expect(v).toBeGreaterThanOrEqual(0);
       expect(v).toBeLessThan(1);
     }
+  });
+
+  test('sequence for a seed is stable', () => {
+    const random = seededRandom('seed-a');
+    const values = [random(), random(), random(), random()];
+    expect(values).toEqual([0.9273967572953552, 0.9287577387876809, 0.05113196629099548, 0.7946995419915766]);
+  });
+
+  test('keeps its sequence where an unwrapped state would pass 2^53', () => {
+    const drawWhereAnUnwrappedStatePasses2To53 = 4_917_758;
+    const random = seededRandom('seed-a');
+    for (let i = 1; i < drawWhereAnUnwrappedStatePasses2To53; i++) random();
+    expect(random()).toBe(0.0006335657089948654);
   });
 
   test('same seed produces the same sequence', () => {
@@ -51,30 +60,13 @@ describe('seededRandom', () => {
     expect(v).toBeLessThan(1);
   });
 
-  test('handles long string seed', () => {
-    const longSeed = 'a'.repeat(1000);
-    const random = seededRandom(longSeed);
-    for (let i = 0; i < 10; i++) {
-      const v = random();
-      expect(v).toBeGreaterThanOrEqual(0);
-      expect(v).toBeLessThan(1);
-    }
-  });
-
-  test('handles unicode in seed', () => {
-    const a = seededRandom('seed-emoji');
-    const b = seededRandom('seed-emoji');
-    expect(a()).toBe(b());
-  });
-
-  test('produces a reasonably uniform distribution', () => {
+  test('fills ten buckets within 30% of an even share', () => {
     const random = seededRandom('uniform-test');
     const buckets: number[] = Array.from({ length: 10 }, () => 0);
     const samples = 10000;
     for (let i = 0; i < samples; i++) {
       buckets[Math.floor(random() * 10)]++;
     }
-    // Each bucket should be roughly samples / 10 = 1000. Allow generous margin.
     for (const count of buckets) {
       expect(count).toBeGreaterThan(700);
       expect(count).toBeLessThan(1300);

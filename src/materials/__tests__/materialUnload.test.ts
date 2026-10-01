@@ -1,6 +1,6 @@
-import { getApp } from '@test-utils';
+import { expectCleanRender, getApp } from '@test-utils';
 import { CanvasSource, Graphics, Texture } from 'pixi.js';
-import type { Application, Renderer, TextureSource, WebGPURenderer } from 'pixi.js';
+import type { Application, Renderer, TextureSource } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { ContainerTexture } from '~/core/textures/ContainerTexture';
@@ -99,19 +99,6 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-/** Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL). */
-async function renderCatchingValidationErrors(app: Application<Renderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? (app.renderer as WebGPURenderer).gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  device.pushErrorScope('validation');
-  app.render();
-  return device.popErrorScope();
-}
-
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`material unload (${preference})`, () => {
     async function withApp(id: string, run: (app: Application<Renderer>) => Promise<void> | void): Promise<void> {
@@ -138,12 +125,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('leaves the shared engine default textures alone', async () => {
+    it('leaves alone the process-wide default textures its unfilled slots fall back to', async () => {
       await withApp('material-unload-defaults', (app) => {
         const { shared, texture } = buildScene(app);
 
-        // The material's unfilled slots fall back to these process-wide singletons, which
-        // views bind directly — unloading one would evict it from under them.
         const defaults = [Texture.WHITE, NORMAL_MAP].filter((fallback) => shared._textures.includes(fallback));
         expect(defaults.length).toBeGreaterThan(0);
 
@@ -170,15 +155,12 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         shared.unload();
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
         expect(residency(texture.source)).toBeGreaterThan(0);
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
       });
     });
 
-    // A source with no CPU resource (a render target: ContainerSource, RenderTexture) comes back
-    // from unload empty, so the material would sample black until its owner renders it again.
     it('leaves a render-target-backed texture loaded and unloads the image-backed one beside it', async () => {
       await withApp('material-unload-rendered-source', async (app) => {
         const { view3d, left, right, texture } = buildScene(app);
@@ -203,8 +185,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(residency(rendered.source)).toBeGreaterThan(0);
         expect(residency(texture.source)).toBe(0);
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
       });
     });

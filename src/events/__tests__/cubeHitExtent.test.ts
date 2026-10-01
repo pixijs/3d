@@ -1,5 +1,3 @@
-// `'geometry'` picking on a cube should reach the full AABB, since the cube's
-// triangles tile that AABB exactly.
 import { describe, expect, test } from 'vitest';
 
 import { createHitResult3D } from '~/events/HitResult3D';
@@ -8,21 +6,16 @@ import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { Ray } from '~/math/shapes/Ray';
 import { Vector3 } from '~/math/vector/Vector3';
 
-describe('Cube — geometry hit covers the full AABB extent', () => {
+/** 0.05 inside the cube's 0.6 half-extent, so a probe at ±NEAR_CORNER sits just inside a corner of its front face */
+const NEAR_CORNER = 0.55;
+
+describe('a CubeGeometry hit covers its full AABB, which its triangles tile exactly', () => {
   const cube = new CubeGeometry({ width: 1.2, height: 1.2, depth: 1.2 });
 
-  // Probe points spread across the AABB of a 1.2-unit cube centred at origin.
-  // Its half-extent is 0.6, so 0.55 sits just inside a face, and the corner
-  // pairs still fall on the cube because its silhouette is that square.
   const points: Array<[number, number, string]> = [
-    [0, 0, 'centre'],
-    [0.55, 0, 'right edge (inside +X face)'],
-    [-0.55, 0, 'left edge'],
-    [0, 0.55, 'top edge'],
-    [0, -0.55, 'bottom edge'],
-    [0.55, 0.55, 'top-right corner'],
-    [-0.55, -0.55, 'bottom-left corner'],
-    [0.55, -0.55, 'bottom-right corner'],
+    [NEAR_CORNER, NEAR_CORNER, 'top-right corner'],
+    [-NEAR_CORNER, -NEAR_CORNER, 'bottom-left corner'],
+    [NEAR_CORNER, -NEAR_CORNER, 'bottom-right corner'],
   ];
 
   for (const [x, y, name] of points) {

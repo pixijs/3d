@@ -12,16 +12,18 @@ export class UnstableList<T> {
   private _indexKey: keyof T;
 
   /**
-   * Creates a list that tracks indices under `indexKey`
-   * @param indexKey - The property name on the object where the index should
-   * be stored. The object should initialize this property to -1.
+   * @param indexKey - Property on each item where the list keeps that item's index, `-1` while the
+   * item is not in the list. Items must start it at `-1`, because `remove` trusts any index of 0 or
+   * more. An item that sits in several lists needs one property per list.
    */
   constructor(indexKey: keyof T) {
     this._indexKey = indexKey;
   }
 
   /**
-   * Adds an item to the list and updates its index property
+   * Appends `item` and writes its index onto it
+   *
+   * Does not check for duplicates: adding an item twice leaves a copy that `remove` can't reach.
    * @param item - the item to append
    */
   public add(item: T): void {
@@ -30,8 +32,8 @@ export class UnstableList<T> {
   }
 
   /**
-   * Removes an item from the list in O(1) time using swap-and-pop
-   * @param item - the item to remove; its index property is reset to -1
+   * Removes `item` and resets its index to -1; a no-op when the index is already -1
+   * @param item - the item to remove
    */
   public remove(item: T): void {
     const index = (item as any)[this._indexKey] as number;

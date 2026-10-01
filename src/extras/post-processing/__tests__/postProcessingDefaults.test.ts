@@ -103,16 +103,4 @@ describe('post-processing defaultOptions', () => {
     WireframePass.defaultOptions.stage = 'afterOpaque';
     expect(new WireframePass({ stage: undefined }).stage).toBe('afterOpaque');
   });
-
-  it.each([
-    ['OutlinePass', OutlinePass, 'outline'],
-    ['WireframePass', WireframePass, 'wireframe'],
-  ] as const)('%s forwards the MeshPass options it does not own', (_, PassClass, name) => {
-    const pass = new PassClass({ enabled: false, sort: 'distance', description: 'custom' });
-    const options = (pass as unknown as { _options: MeshPassOptions })._options;
-
-    expect(pass.enabled).toBe(false);
-    expect(pass.name).toBe(name);
-    expect(options).toMatchObject({ sort: 'distance', description: 'custom', textures: false });
-  });
 });

@@ -7,67 +7,100 @@ import type { Container3D } from './Container3D';
 /**
  * Constructor options for {@link Skeleton}
  *
- * The first three fields are structural (no meaningful default) and must be supplied; `labels`
- * is optional and falls back to {@link Skeleton.defaultOptions}.
+ * A {@link Model3D} builds its skeletons from the file's skins, so you only need these to rig a
+ * mesh in code. Nodes are numbered from 0, parents before children. `labels` falls back to
+ * {@link Skeleton.defaultOptions}.
+ * @example
+ * ```ts
+ * const inverseBindMatrices = new Float32Array(32);
  *
- * Normally produced by the `Model3D` constructor from a parsed glTF skin — application
- * code rarely constructs `SkeletonOptions` directly.
+ * inverseBindMatrices.set(new Matrix4().elements, 0);
+ * inverseBindMatrices.set(new Matrix4().makeTranslation(0, -1, 0).elements, 16);
+ *
+ * const options: SkeletonOptions = {
+ *   parent: new Int16Array([-1, 0]),
+ *   joints: new Int16Array([0, 1]),
+ *   inverseBindMatrices,
+ *   labels: ['base', 'tip'],
+ * };
+ * ```
  * @category scene
  * @standard
  */
 export interface SkeletonOptions {
-  /** Parent-index per node (`-1` for roots); length determines `nodeCount` */
+  /**
+   * Parent of each node, as a node index, or `-1` for a root; its length is the node count
+   *
+   * A parent must come before its children.
+   * @example
+   * ```ts
+   * const chain = new Skeleton({ parent: new Int16Array([-1, 0, 1]), joints, inverseBindMatrices });
+   * ```
+   */
   parent: Int16Array;
-  /** Node indices that are skinning joints; length determines `jointCount` */
+  /**
+   * The nodes that are joints, as node indices; its length is the joint count
+   *
+   * A skinned geometry's `joints` attribute indexes this list, not the nodes, as glTF's `JOINTS_0`
+   * does. Nodes left out only carry the joints below them.
+   * @example
+   * ```ts
+   * const arm = new Skeleton({
+   *   parent: new Int16Array([-1, 0, 1]),
+   *   joints: new Int16Array([1, 2]),
+   *   inverseBindMatrices,
+   * });
+   * ```
+   */
   joints: Int16Array;
-  /** Packed `mat4` inverse-bind matrices, one per joint (length = `16 * jointCount`) */
+  /**
+   * One column-major 4x4 matrix per joint, in `joints` order, taking a vertex from the bind pose
+   * into the joint's space
+   * @example
+   * ```ts
+   * const inverseBindMatrices = new Float32Array(32);
+   *
+   * inverseBindMatrices.set(new Matrix4().elements, 0);
+   * inverseBindMatrices.set(new Matrix4().makeTranslation(0, -1, 0).elements, 16);
+   * ```
+   */
   inverseBindMatrices: Float32Array;
-  /** Optional node labels, indexed by node index, for {@link Skeleton.indexOf} lookups and debugging */
+  /**
+   * A label for each node, in node order, so {@link Skeleton#indexOf | indexOf} can find it
+   * @example
+   * ```ts
+   * const tail = new Skeleton({ parent, joints, inverseBindMatrices, labels: ['base', 'tip'] });
+   * const tip = tail.indexOf('tip');
+   * ```
+   */
   labels?: string[];
 }
 
 /**
- * A `Skeleton` is the rigging data for a skinned {@link Mesh3D}
+ * The bones of a skinned {@link Mesh3D}, and their pose
  *
- * It holds the joint hierarchy, the per-frame pose (local TRS per node), the resulting
- * per-joint world matrices uploaded to the GPU, and the inverse-bind
- * matrices used to skin vertices from bind-pose to current pose.
+ * A {@link Model3D} builds one per skin in its file and gives it to every mesh that skin deforms,
+ * so you rarely build one yourself. The bones are numbered nodes: the joints that deform the mesh,
+ * plus the nodes above them. Each node's local position, rotation and scale sit in the flat arrays
+ * {@link Skeleton#localPosition | localPosition}, {@link Skeleton#localRotation | localRotation}
+ * and {@link Skeleton#localScale | localScale}.
  *
- * Skeletons are owned by a {@link Model3D} (typically built by
- * the `Model3D` constructor from a glTF skin) and referenced from one or more
- * {@link Mesh3D} via `mesh.skeleton`. Each frame the View's skinning pass
- * calls {@link Skeleton.updateWorld} on dirty skeletons, which rebuilds
- * world matrices from the local TRS arrays and uploads them through
- * `BonePit` into the global bone-matrix arena.
+ * To pose a bone, write into those arrays and set {@link Skeleton#dirty | dirty}, or call
+ * {@link Skeleton#setLocalTRS | setLocalTRS}, which does both. The view recomputes a dirty
+ * skeleton's matrices before it draws. A playing animation rewrites the bones it drives on every
+ * update, so a change you make to one of those lasts only until then.
  *
- * Packed TRS layout (authoritative pose state, all node-indexed):
- * - {@link Skeleton.localPosition} — 3 floats per node (`tx, ty, tz`)
- * - {@link Skeleton.localRotation} — 4 floats per node (quaternion `x, y, z, w`)
- * - {@link Skeleton.localScale}    — 3 floats per node (`sx, sy, sz`, default 1)
- *
- * Output matrices:
- * - {@link Skeleton.worldMatrix}        — `BONE_MATRIX_FLOATS` floats per **joint**, three rows
- *   of four. Copied into the `BonePit` by whichever View3D renders this skeleton; the
- *   skeleton itself owns no GPU resource.
- * - {@link Skeleton.inverseBindMatrices} — 16 floats per joint, column-major (immutable, from
- *   bind pose)
- *
- * Mutating any pose value must set {@link Skeleton.dirty} so the next
- * skinning pass picks up the change; the helper {@link Skeleton.setLocalTRS}
- * does this for you.
+ * A skeleton holds no GPU memory. The view copies its matrices into one buffer it shares between
+ * every skeleton it draws.
  * @example
  * ```ts
- * // Skeletons are usually built for you:
- * const scene = new Model3D(gltfSource);
- * const skeleton = scene.skeletons[0];
- *
- * // Pose a bone (rotate joint "spine" 30 degrees around Y):
- * const i = skeleton.indexOf('spine');
+ * const skeleton = robot.skeletons[0];
+ * const head = skeleton.indexOf('Head');
  * const half = Math.PI / 12;
- * skeleton.setLocalTRS(i, 0, 0, 0, 0, Math.sin(half), 0, Math.cos(half));
  *
- * // Manual updateWorld is only needed if you bypass the View's skinning pass:
- * skeleton.updateWorld();
+ * // Set the head's local rotation to 30 degrees around Y.
+ * skeleton.localRotation.set([0, Math.sin(half), 0, Math.cos(half)], head * 4);
+ * skeleton.dirty = true;
  * ```
  * @see {@link Mesh3D} For the renderable that references a Skeleton.
  * @see {@link SkeletonOptions} For constructor options.
@@ -78,100 +111,151 @@ export class Skeleton {
   /**
    * Default {@link SkeletonOptions} merged under every constructor call
    *
-   * `new Skeleton(opts)` resolves as `{ ...Skeleton.defaultOptions, ...opts }`.
-   *
-   * The structural fields (`parent`, `joints`, `inverseBindMatrices`) have
-   * no meaningful default and must always be supplied per instance, so this
-   * starts empty; override here to change the default `labels` process-wide.
+   * `new Skeleton(opts)` resolves as `{ ...Skeleton.defaultOptions, ...opts }`, ignoring options
+   * set to `undefined`. It starts empty: `parent`, `joints` and `inverseBindMatrices` belong to
+   * each skeleton, which leaves only `labels`.
+   * @advanced
    */
   public static defaultOptions: Partial<SkeletonOptions> = {};
 
-  /** Total number of nodes in the hierarchy (joints + intermediate nodes) */
-  public readonly nodeCount: number;
-  /** Number of skinning joints (a subset of nodes) */
-  public readonly jointCount: number;
+  /** Number of nodes: the joints plus the nodes above them */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  public readonly nodeCount: number = 0;
+  /** Number of joints, the nodes that deform the mesh */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  public readonly jointCount: number = 0;
 
-  /** Parent-index per node (`-1` for roots); length is `nodeCount` */
+  /**
+   * Parent of each node, as a node index, or `-1` for a root
+   *
+   * A {@link Model3D} shares it with every model built from the same source, so don't write into
+   * it.
+   * @example
+   * ```ts
+   * const shoulder = skeleton.parent[skeleton.indexOf('UpperArm')];
+   * ```
+   */
   public readonly parent: Int16Array;
-  /** Node indices that are skinning joints; length is `jointCount` */
+  /**
+   * The node index of each joint
+   *
+   * A {@link Model3D} shares it with every model built from the same source, so don't write into
+   * it.
+   * @example
+   * ```ts
+   * const handJoint = skeleton.joints.indexOf(skeleton.indexOf('Hand'));
+   * ```
+   */
   public readonly joints: Int16Array;
 
   /**
-   * Inverse-bind matrices for skinning, one packed `mat4` per joint (length `16 * jointCount`)
+   * One column-major 4x4 matrix per joint, taking a vertex from the bind pose into the joint's space
    *
-   * Captured at bind time and immutable thereafter.
+   * A {@link Model3D} shares it with every model built from the same source, so don't write into
+   * it.
+   * @advanced
    */
   public readonly inverseBindMatrices: Float32Array;
 
-  /** Local-pose translation per node: 3 floats (`tx, ty, tz`) × `nodeCount` */
+  /**
+   * Local position of each node, three floats per node: `x, y, z`
+   *
+   * Set {@link Skeleton#dirty | dirty} after writing into it.
+   * @example
+   * ```ts
+   * const hips = skeleton.indexOf('Hips') * 3;
+   *
+   * skeleton.localPosition[hips + 1] -= 0.2;
+   * skeleton.dirty = true;
+   * ```
+   */
   public readonly localPosition: Float32Array;
-  /** Local-pose rotation per node: 4-float quaternion (`x, y, z, w`) × `nodeCount` */
+  /**
+   * Local rotation of each node, a four-float quaternion per node: `x, y, z, w`
+   *
+   * Set {@link Skeleton#dirty | dirty} after writing into it.
+   * @example
+   * ```ts
+   * const jaw = skeleton.indexOf('Jaw') * 4;
+   *
+   * skeleton.localRotation.set([Math.sin(open / 2), 0, 0, Math.cos(open / 2)], jaw);
+   * skeleton.dirty = true;
+   * ```
+   */
   public readonly localRotation: Float32Array;
-  /** Local-pose scale per node: 3 floats (`sx, sy, sz`) × `nodeCount`; defaults to 1 */
+  /**
+   * Local scale of each node, three floats per node: `x, y, z`
+   *
+   * Set {@link Skeleton#dirty | dirty} after writing into it.
+   * @example
+   * ```ts
+   * const head = skeleton.indexOf('Head') * 3;
+   *
+   * skeleton.localScale.fill(1.5, head, head + 3);
+   * skeleton.dirty = true;
+   * ```
+   */
   public readonly localScale: Float32Array;
 
   /**
-   * Skinning matrices for JOINTS only — `12 * jointCount` floats, three rows of four per joint
+   * The skinning matrix of each joint, as three rows of four floats, in joint order
    *
-   * Each entry is the joint's world matrix times its inverse bind, row-major:
-   * `[m00 m01 m02 m03][m10 m11 m12 m13][m20 m21 m22 m23]`. The affine fourth row `(0, 0, 0, 1)`
-   * isn't stored. This is the buffer uploaded to the GPU each frame.
+   * A joint's skinning matrix is its posed matrix times its inverse bind, row-major:
+   * `[m00 m01 m02 m03][m10 m11 m12 m13][m20 m21 m22 m23]`. The bottom row is always
+   * `(0, 0, 0, 1)`, so it isn't stored. {@link Skeleton#updateWorld | updateWorld} fills it, and
+   * the view copies it to the GPU.
+   * @advanced
    */
   public readonly worldMatrix: Float32Array;
 
   /**
-   * Set to `true` when any local TRS has been mutated since the last {@link Skeleton.updateWorld}
+   * Whether the local pose changed since the last {@link Skeleton#updateWorld | updateWorld}
    *
-   * Public update protocol: callers that write directly into the TRS arrays must set this flag
-   * themselves; {@link Skeleton.setLocalTRS} sets it for you. `updateWorld` clears it.
+   * Set it after writing into the local arrays; {@link Skeleton#setLocalTRS | setLocalTRS} and
+   * animations set it for you. While it's `false`, the view skips recomputing the matrices.
+   * @example
+   * ```ts
+   * skeleton.localScale.fill(1.5, head * 3, head * 3 + 3);
+   * skeleton.dirty = true;
+   * ```
    */
   public dirty = true;
 
   /**
-   * Index of this skeleton's slot within the View's `BonePit`. `-1` until assigned
+   * Base index of this skeleton's matrices in the bone pit of the view drawing it; `-1` until
+   * first drawn
    * @internal
    */
   public _bonePitIndex = -1;
   /**
-   * Last-seen `BonePit` tick — used to detect arena reallocations
+   * The bone pit tick this skeleton was last added on, so a skeleton shared by several meshes is
+   * copied into the pit once a frame
    * @internal
    */
   public _bonePitTick = -1;
 
-  /**
-   * Re-entry guard for {@link Skeleton.destroy}; prevents double-freeing the GPU buffer
-   * @internal
-   */
   private _destroyed = false;
 
-  /**
-   * Lookup table from node label to node index, built when `labels` was supplied
-   * @internal
-   */
   private readonly _labelToIndex!: Record<string, number>;
   /**
-   * World matrices for ALL nodes (`16 * nodeCount` floats). Used
-   * as the scratch surface for the hierarchy walk in {@link Skeleton.updateWorld};
-   * the public {@link Skeleton.worldMatrix} extracts only joint slots from it.
-   * @internal
+   * Posed matrices of every node, 16 floats each, which {@link Skeleton#updateWorld} builds in
+   * one pass and then multiplies by the inverse binds into {@link Skeleton#worldMatrix}
    */
   private readonly _nodeWorldMatrix: Float32Array;
 
   /**
-   * Bones that mirror a kept scene-graph container. When a skin omits glTF
-   * `skeleton`, the collected skeleton includes shared ancestor nodes that also
-   * anchor visible geometry; those stay in the scene graph and may be animated
-   * there, so each such bone re-reads its container's local TRS before the world
-   * sweep (see {@link Skeleton.updateWorld}). Empty for the common case (bounded
-   * skeletons), so it costs nothing then.
+   * Bones that follow a scene-graph container; see {@link Skeleton#bindContainerBone}
+   *
+   * Empty for most skeletons, so it costs nothing then.
    * @internal
    */
   private readonly _containerBones: { boneIndex: number; src: Container3D }[] = [];
 
   /**
-   * Constructs a new `Skeleton`
+   * Creates a skeleton with every node at the identity pose: no translation or rotation, and a
+   * scale of 1
    *
-   * Normally called by the `Model3D` constructor; application code rarely instantiates skeletons directly.
+   * A {@link Model3D} builds its own; build one to rig a mesh in code.
    * @param options - Construction options; see {@link SkeletonOptions}.
    */
   constructor(options: SkeletonOptions) {
@@ -193,7 +277,6 @@ export class Skeleton {
     this._nodeWorldMatrix = new Float32Array(this.nodeCount * 16);
     this.worldMatrix = new Float32Array(this.jointCount * BONE_MATRIX_FLOATS);
 
-    // Identity pose: quat w = 1, scale = 1, world matrices identity.
     for (let i = 0; i < this.nodeCount; i++) {
       this.localRotation[i * 4 + 3] = 1;
       this.localScale[i * 3 + 0] = 1;
@@ -214,12 +297,17 @@ export class Skeleton {
   }
 
   /**
-   * Resolves a node label to its node index
+   * Returns the index of the node with a label
    *
-   * Requires that `labels` was supplied at construction time.
+   * A {@link Model3D} labels each node with its name in the file, or `node_<n>` for an unnamed
+   * one, where `n` is the node's index in the file.
+   * @example
+   * ```ts
+   * const head = skeleton.indexOf('Head');
+   * ```
    * @param label - Node label to look up
    * @returns The node index for `label`
-   * @throws {Error} When `label` is not in the label table.
+   * @throws {Error} When no node has `label`, or the skeleton was built without `labels`.
    */
   public indexOf(label: string): number {
     const idx = this._labelToIndex[label];
@@ -228,11 +316,17 @@ export class Skeleton {
   }
 
   /**
-   * Writes a full local TRS pose for node `i` and marks the skeleton dirty
+   * Sets a node's local position, rotation and scale, and marks the skeleton dirty
    *
-   * Scale defaults to `1` per axis when omitted. The quaternion is taken as-is
-   * (no normalisation) — pass a unit quaternion.
-   * @param i - Node index (use {@link Skeleton.indexOf} to resolve from a label)
+   * Scale defaults to 1 on each axis, so leaving it out resets any scale the node had. The
+   * rotation is used as given, without normalizing, so pass a unit quaternion.
+   * @example
+   * ```ts
+   * const tip = tail.indexOf('tip');
+   *
+   * tail.setLocalTRS(tip, 0, 1, 0, 0, 0, Math.sin(bend / 2), Math.cos(bend / 2));
+   * ```
+   * @param i - Node index; {@link Skeleton#indexOf | indexOf} finds it from a label
    * @param tx - Translation X
    * @param ty - Translation Y
    * @param tz - Translation Z
@@ -240,9 +334,9 @@ export class Skeleton {
    * @param qy - Rotation quaternion Y
    * @param qz - Rotation quaternion Z
    * @param qw - Rotation quaternion W
-   * @param sx - Scale X (default `1`)
-   * @param sy - Scale Y (default `1`)
-   * @param sz - Scale Z (default `1`)
+   * @param sx - Scale X
+   * @param sy - Scale Y
+   * @param sz - Scale Z
    */
   public setLocalTRS(
     i: number,
@@ -277,17 +371,21 @@ export class Skeleton {
   }
 
   /**
-   * Rebuilds world matrices from the local TRS arrays and uploads
-   * {@link Skeleton.worldMatrix} to the GPU
+   * Recomputes {@link Skeleton#worldMatrix | worldMatrix} from the local pose, if the skeleton is
+   * dirty
    *
-   * No-op when `dirty` is false.
+   * The view calls it every frame for each skeleton it draws, so call it yourself only to read
+   * `worldMatrix` before the next render. Bones bound with
+   * {@link Skeleton#bindContainerBone | bindContainerBone} copy their containers' transforms
+   * first, which can make the skeleton dirty.
    *
-   * Assumes `parent` is ordered parent-before-child so a single forward
-   * sweep produces correct world matrices. For each joint the GPU-bound
-   * matrix is computed as `nodeWorld * inverseBindMatrix`.
+   * One pass over the nodes builds each node's matrix from its parent's, which is why a parent
+   * must come before its children. The multiply that applies a joint's inverse bind reads only the
+   * top three rows of each matrix, so an inverse bind whose bottom row isn't `0, 0, 0, 1`, which
+   * glTF forbids, can't distort the skin.
+   * @advanced
    */
   public updateWorld(): void {
-    // Guarded here rather than inside: the sync is too large for V8 to inline, so an empty call still costs.
     if (this._containerBones.length !== 0) this._syncContainerBones();
 
     if (!this.dirty) return;
@@ -312,9 +410,6 @@ export class Skeleton {
     for (let j = 0; j < this.jointCount; j++) {
       const nodeIndex = this.joints[j];
 
-      // Joint matrix = nodeWorld * inverseBindMatrix, stored as three rows of four.
-      // The multiply reads only the twelve informative lanes of each operand, so a
-      // non-affine inverse bind from a malformed asset is neutralised here.
       Matrix4.multiplyAffineTo3x4(
         this.worldMatrix,
         j * BONE_MATRIX_FLOATS,
@@ -329,24 +424,37 @@ export class Skeleton {
   }
 
   /**
-   * Binds bone `boneIndex` to a scene-graph container so the bone tracks the
-   * container's (possibly animated) local transform
+   * Makes a node follow a scene-graph container's local position, rotation and scale
    *
-   * Called by the `Model3D` constructor for shared ancestor nodes kept in both the scene graph and
-   * the skeleton.
-   * @param boneIndex - Local skeleton node index to drive from `src`
-   * @param src - The container whose local TRS this bone mirrors
+   * A {@link Model3D} does this for nodes that are both bones and containers: a node above the
+   * joints that also holds meshes, which stays in the scene graph. Moving or animating the
+   * container then moves the skin. The node keeps following the container until the skeleton is
+   * destroyed.
+   * @example
+   * ```ts
+   * skeleton.bindContainerBone(skeleton.indexOf('Armature'), armature);
+   * ```
+   * @param boneIndex - Index of the node that follows `src`
+   * @param src - The container to follow
+   * @advanced
    */
   public bindContainerBone(boneIndex: number, src: Container3D): void {
     this._containerBones.push({ boneIndex, src });
   }
 
   /**
-   * Copies each bound container's local TRS into the bone arrays, marking the
-   * skeleton dirty only when a value actually changed
+   * Copies each bound container's local TRS into the bone arrays, marking the skeleton dirty only
+   * when a value changed
    *
    * The translation comes from the local matrix, so an `origin` reaches the skin. A stale matrix is
    * rebuilt here, since the transform pass skips hidden nodes.
+   *
+   * The bone arrays hold float32, so the quaternion and scale are compared against their rounded
+   * values: a float64 such as 0.1 never equals its stored copy, which would rebuild a still
+   * skeleton every frame. The matrix translation is float32 already.
+   *
+   * {@link Skeleton#updateWorld} checks for bound containers before calling this, because it is
+   * too large for V8 to inline and even an empty call costs.
    */
   private _syncContainerBones(): void {
     const bones = this._containerBones;
@@ -368,9 +476,6 @@ export class Skeleton {
       const lr = this.localRotation;
       const ls = this.localScale;
 
-      // The bone arrays hold float32, so compare the quaternion and scale against their rounded
-      // values: a float64 like 0.1 never equals its stored copy, which would rebuild a still skeleton
-      // every frame. The matrix translation is float32 already.
       if (
         lp[pi] !== t[12] ||
         lp[pi + 1] !== t[13] ||
@@ -399,12 +504,17 @@ export class Skeleton {
   }
 
   /**
-   * Releases this skeleton's references and its bone-pit reservation
+   * Stops the nodes following their containers, without destroying the containers
    *
-   * Drops the shared container-bone references without destroying them. Shared bind data
-   * ({@link Skeleton.inverseBindMatrices}, {@link Skeleton.parent},
-   * {@link Skeleton.joints}) originates from the source descriptor and is left
-   * intact. Idempotent — a second call is a no-op.
+   * The bind data ({@link Skeleton#inverseBindMatrices | inverseBindMatrices},
+   * {@link Skeleton#parent | parent} and {@link Skeleton#joints | joints}) belongs to the source the
+   * skeleton came from and stays. A {@link Model3D} destroys its own skeletons. Calling it again
+   * does nothing.
+   * @example
+   * ```ts
+   * tailMesh.destroy();
+   * tail.destroy();
+   * ```
    */
   public destroy(): void {
     if (this._destroyed) return;
@@ -417,9 +527,8 @@ export class Skeleton {
   }
 
   /**
-   * Builds a `mat4` from node `i`'s local TRS into `outMat` at
-   * offset `i * 16`. Inlines the quat→mat3 expansion to avoid intermediate
-   * matrices.
+   * Builds node `i`'s local matrix from its TRS into `outMat` at offset `i * 16`, expanding the
+   * quaternion inline so no intermediate matrix is made
    * @param i - Node index
    * @param outMat - Receives the matrix at offset `i * 16`
    * @internal

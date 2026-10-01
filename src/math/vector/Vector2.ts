@@ -4,36 +4,49 @@ import type { Matrix3 } from '../matrix/Matrix3';
 import { clamp } from '../utils/clamp';
 
 /**
- * The `Vector2` object represents a location in a two-dimensional coordinate system or a generic
- * two-component vector
+ * A point or direction in 2D, such as a UV coordinate, a screen position or stick input
  *
- * `x` and `y` are positions on the corresponding axes. Math operations follow the unified
- * mutating-default pattern: `a.add(b)` mutates `a`; `a.add(b, out)` writes the result into `out`
- * without mutating `a`.
+ * Math methods change the vector they're called on and return it, so calls chain. Pass an `out`
+ * point as the last argument to write the result there instead and leave this one as it is;
+ * {@link Vector3} explains why to reuse `out` points in code that runs every frame. Where a method
+ * takes a point, any pixi.js `PointData` works, such as a pixi `Point` or a plain `{ x, y }` object.
  * @example
  * ```ts
- * const a = new Vector2(1, 2);
- * const b = new Vector2(3, 4);
+ * const input = new Vector2(stick.x, stick.y);
  *
- * a.add(b); // mutates `a`, returns `a`
- *
- * const out = new Vector2();
- * a.add(b, out); // writes a + b into `out`, leaves `a` unchanged
+ * if (input.magnitudeSquared() > 1) input.normalize();
+ * player.position.x += input.x * speed * dt;
+ * player.position.z += input.y * speed * dt;
  * ```
  * @category maths
  * @standard
  */
 export class Vector2 implements PointLike {
-  /** Position of the point on the x axis */
+  /**
+   * The x component
+   * @example
+   * ```ts
+   * cursor.x = event.global.x;
+   * ```
+   */
   public x = 0;
-  /** Position of the point on the y axis */
+  /**
+   * The y component
+   * @example
+   * ```ts
+   * cursor.y = event.global.y;
+   * ```
+   */
   public y = 0;
 
   /**
-   * A static `Vector2` reset to `(0, 0)` on every access
+   * A static `Vector2` reset to `(0, 0)` on every access, for a result used straight away
    *
    * > [!IMPORTANT] This vector is shared and temporary. Do not store references to it.
-   * @returns The shared scratch vector
+   * @example
+   * ```ts
+   * const dragged = Vector2.shared.copyFrom(event.global).distanceTo(dragStart) > dragThreshold;
+   * ```
    */
   static get shared(): Vector2 {
     _shared.x = 0;
@@ -44,8 +57,8 @@ export class Vector2 implements PointLike {
 
   /**
    * Creates a new `Vector2`
-   * @param x - Position on the x axis
-   * @param y - Position on the y axis
+   * @param x - The x component
+   * @param y - The y component
    */
   constructor(x = 0, y = 0) {
     this.x = x;
@@ -53,9 +66,14 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Sets the vector to a new x, y position
-   * @param x - Position on the x axis
-   * @param y - Position on the y axis, defaults to `x`
+   * Sets the x and y components
+   * @example
+   * ```ts
+   * uvOffset.set(0.5, 0);
+   * tiling.set(4); // (4, 4)
+   * ```
+   * @param x - The x component
+   * @param y - The y component, defaults to `x`
    * @returns This vector, for chaining
    */
   public set(x = 0, y = x): this {
@@ -67,6 +85,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Copies x, y from the given point into this vector
+   * @example
+   * ```ts
+   * dragStart.copyFrom(event.global);
+   * ```
    * @param p - The point to copy from
    * @returns This vector, for chaining
    */
@@ -79,6 +101,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Copies this vector's x, y into the given point
+   * @example
+   * ```ts
+   * cursor.copyTo(crosshair.position);
+   * ```
    * @param p - The point to copy into
    * @returns The given point with values updated
    */
@@ -90,6 +116,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Checks if another point is equal to this vector
+   * @example
+   * ```ts
+   * if (!cursor.equals(lastCursor)) updateHover(cursor);
+   * ```
    * @param p - The point to check
    * @returns `true` when `x` and `y` both match exactly (no epsilon tolerance)
    */
@@ -99,6 +129,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Creates a copy of this vector
+   * @example
+   * ```ts
+   * const dragStart = cursor.clone();
+   * ```
    * @returns A new `Vector2` with the same component values
    */
   public clone(): Vector2 {
@@ -107,6 +141,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Returns a readable string representation of this vector
+   * @example
+   * ```ts
+   * console.log(cursor.toString());
+   * ```
    * @returns A string describing the vector's components
    */
   public toString(): string {
@@ -115,6 +153,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Reads `x`, `y` from `array` starting at `offset`
+   * @example
+   * ```ts
+   * uv.fromArray(uvs, vertexIndex * 2);
+   * ```
    * @param array - The array to read from
    * @param offset - The index of the first component
    * @returns This vector, for chaining
@@ -130,6 +172,10 @@ export class Vector2 implements PointLike {
    * Writes this vector's values into `array` starting at `offset`
    *
    * Allocates a new array when one is not supplied.
+   * @example
+   * ```ts
+   * uv.toArray(uvs, vertexIndex * 2);
+   * ```
    * @param array - The array to write into
    * @param offset - The index to write the first component at
    * @returns The array the values were written into
@@ -143,6 +189,11 @@ export class Vector2 implements PointLike {
 
   /**
    * Adds `v` to this vector
+   * @example
+   * ```ts
+   * scroll.add(scrollStep);
+   * anchor.add(labelOffset, labelPosition);
+   * ```
    * @param v - The point to add
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -156,6 +207,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Subtracts `v` from this vector
+   * @example
+   * ```ts
+   * cursor.subtract(dragStart, dragDelta);
+   * ```
    * @param v - The point to subtract
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -168,7 +223,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Component-wise multiplies this vector by `v`
+   * Multiplies each component of this vector by the matching component of `v`
+   * @example
+   * ```ts
+   * uv.multiply(tiling);
+   * ```
    * @param v - The point to multiply by
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -182,6 +241,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Multiplies each component of this vector by the scalar `s`
+   * @example
+   * ```ts
+   * input.multiplyScalar(speed * dt, step);
+   * ```
    * @param s - The scalar to multiply by
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -194,7 +257,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Component-wise divides this vector by `v`
+   * Divides each component of this vector by the matching component of `v`
+   * @example
+   * ```ts
+   * pixel.divide({ x: texture.width, y: texture.height }, uv);
+   * ```
    * @param v - The point to divide by
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -208,6 +275,10 @@ export class Vector2 implements PointLike {
 
   /**
    * Divides each component of this vector by the scalar `s`
+   * @example
+   * ```ts
+   * thumbOffset.divideScalar(stickRadius, stick);
+   * ```
    * @param s - The scalar to divide by
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -217,7 +288,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Adds `v * s` to this vector
+   * Adds `v * s` to this vector, such as a speed times the frame time
+   * @example
+   * ```ts
+   * uvOffset.addScaledVector(scrollSpeed, dt);
+   * ```
    * @param v - The point to scale and add
    * @param s - The scalar to multiply `v` by
    * @param out - The target to write the result into, defaults to this vector
@@ -231,7 +306,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Negates each component of this vector
+   * Negates each component of this vector, reversing its direction
+   * @example
+   * ```ts
+   * hitDirection.negate(knockback);
+   * ```
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
    */
@@ -243,7 +322,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Component-wise minimum of this vector and `v`
+   * Sets each component to the smaller of this vector's and `v`'s
+   * @example
+   * ```ts
+   * selectionMin.min(cursor);
+   * ```
    * @param v - The point to compare with
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -256,7 +339,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Component-wise maximum of this vector and `v`
+   * Sets each component to the larger of this vector's and `v`'s
+   * @example
+   * ```ts
+   * selectionMax.max(cursor);
+   * ```
    * @param v - The point to compare with
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -269,9 +356,13 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Component-wise clamp of this vector between `min` and `max`
+   * Clamps each component of this vector between the matching components of `min` and `max`
    *
    * Assumes `min <= max` componentwise.
+   * @example
+   * ```ts
+   * cursor.clamp(minimapMin, minimapMax, minimapMarker);
+   * ```
    * @param min - The lower bound per component
    * @param max - The upper bound per component
    * @param out - The target to write the result into, defaults to this vector
@@ -285,9 +376,13 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Normalizes this vector to unit length
+   * Scales this vector to unit length, keeping its direction
    *
-   * Zero-magnitude vectors are left unchanged.
+   * A zero vector stays zero.
+   * @example
+   * ```ts
+   * input.normalize();
+   * ```
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
    */
@@ -301,10 +396,14 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Rescales this vector so its magnitude equals `length`
+   * Scales this vector so its length equals `length`, keeping its direction
    *
-   * Zero-magnitude vectors are left unchanged.
-   * @param length - The target magnitude
+   * A zero vector stays zero.
+   * @example
+   * ```ts
+   * dashDirection.setLength(dashDistance, dashOffset);
+   * ```
+   * @param length - The target length
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
    */
@@ -318,25 +417,38 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Computes the magnitude (length) of this vector
-   * @returns The magnitude
+   * Computes the length of this vector
+   * @example
+   * ```ts
+   * const stickTilt = stick.magnitude();
+   * ```
+   * @returns The length
    */
   public magnitude(): number {
     return Math.sqrt(this.x * this.x + this.y * this.y);
   }
 
   /**
-   * Computes the squared magnitude of this vector
+   * Computes the squared length of this vector
    *
-   * Cheaper than `magnitude()` for length comparisons.
-   * @returns The squared magnitude
+   * Cheaper than {@link Vector2#magnitude}, since it skips the square root, and enough to compare
+   * lengths.
+   * @example
+   * ```ts
+   * if (stick.magnitudeSquared() < deadZone * deadZone) stick.set(0);
+   * ```
+   * @returns The squared length
    */
   public magnitudeSquared(): number {
     return this.x * this.x + this.y * this.y;
   }
 
   /**
-   * Computes the Euclidean distance from this vector to `v`
+   * Computes the distance from this point to `v`
+   * @example
+   * ```ts
+   * if (cursor.distanceTo(dragStart) > dragThreshold) startDrag();
+   * ```
    * @param v - The point to measure to
    * @returns The distance
    */
@@ -348,7 +460,13 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Computes the squared Euclidean distance from this vector to `v`
+   * Computes the squared distance from this point to `v`
+   *
+   * Cheaper than {@link Vector2#distanceTo} and enough to compare distances.
+   * @example
+   * ```ts
+   * const hovered = cursor.distanceToSquared(button.center) < button.radius * button.radius;
+   * ```
    * @param v - The point to measure to
    * @returns The squared distance
    */
@@ -361,7 +479,14 @@ export class Vector2 implements PointLike {
 
   /**
    * Computes the dot product of this vector and `v`
-   * @param v - The other point
+   *
+   * For unit vectors it's the cosine of the angle between them: 1 when they point the same way, 0 at
+   * right angles and -1 when opposite.
+   * @example
+   * ```ts
+   * const targetIsAhead = heading.dot(toTarget) > 0;
+   * ```
+   * @param v - The other vector
    * @returns The dot product
    */
   public dot(v: PointData): number {
@@ -369,25 +494,45 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Computes the angle of this vector with respect to the positive x-axis
-   * @returns The angle in radians
+   * Computes the angle from the +x axis to this vector, turning toward +y
+   * @example
+   * ```ts
+   * cursor.subtract(arrow.position, toCursor);
+   * arrow.rotation = toCursor.angle();
+   * ```
+   * @returns The angle in radians, from -π to π
    */
   public angle(): number {
     return Math.atan2(this.y, this.x);
   }
 
   /**
-   * Computes the z-component of the 3D cross product of `this` and `v` (treating both as having
-   * `z = 0`)
-   * @param v - The other point
-   * @returns The z-component of the cross product
+   * Computes `x * v.y - y * v.x`, the z of the 3D cross product with both vectors at `z = 0`
+   *
+   * Its sign tells which way to turn from this vector to `v`: positive is the way +x turns toward +y
+   * (counter-clockwise when y points up, clockwise on a pixi screen, where y points down), negative
+   * the other way, and zero when they are parallel.
+   * @example
+   * ```ts
+   * const turnDirection = Math.sign(heading.cross(toTarget));
+   * ```
+   * @param v - The other vector
+   * @returns The z of the cross product
    */
   public cross(v: PointData): number {
     return this.x * v.y - this.y * v.x;
   }
 
   /**
-   * Applies a {@link Matrix3} (column-major) to this vector
+   * Transforms this point by `m` as a 2D transform: rotation, scale and translation
+   *
+   * The matrix's bottom row is not used, so there is no divide.
+   * @example
+   * ```ts
+   * const uvTransform = new Matrix3().setUvTransform(0.25, 0, 2, 2, 0, 0.5, 0.5);
+   *
+   * uv.applyMatrix3(uvTransform);
+   * ```
    * @param m - The matrix to apply
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -403,7 +548,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Rotates this vector around the origin by `angle` radians
+   * Rotates this vector around the origin by `angle` radians, turning +x toward +y
+   * @example
+   * ```ts
+   * stick.rotate(-cameraYaw, moveDirection);
+   * ```
    * @param angle - The rotation angle in radians
    * @param out - The target to write the result into, defaults to this vector
    * @returns The vector the result was written into
@@ -420,7 +569,11 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Rotates this vector around `center` by `angle` radians
+   * Rotates this point around `center` by `angle` radians, turning +x toward +y
+   * @example
+   * ```ts
+   * moon.rotateAround(planet, orbitSpeed * dt);
+   * ```
    * @param center - The point to rotate around
    * @param angle - The rotation angle in radians
    * @param out - The target to write the result into, defaults to this vector

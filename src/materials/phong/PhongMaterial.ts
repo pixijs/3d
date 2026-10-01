@@ -21,8 +21,12 @@ import { phongSpecularTextureBit } from './bits/phongSpecularTextureBit';
 /**
  * Options for {@link PhongMaterial}
  *
- * Core Blinn-Phong fields are flat; `emissive` is a gated feature group whose presence enables
- * the feature — the same shape as {@link Material3D}'s option groups.
+ * Passing the `emissive` group turns the glow on, as on {@link Material3D}.
+ * @example
+ * ```ts
+ * const options: PhongMaterialOptions = { baseColor: 0x8a5a2b, shininess: 12 };
+ * const wood = new PhongMaterial(options);
+ * ```
  * @category materials
  * @standard
  */
@@ -30,115 +34,168 @@ export interface PhongMaterialOptions extends Omit<BaseMaterial3DOptions, 'descr
   /**
    * Specular tint (rgb)
    *
-   * The default is a restrained dielectric highlight. Fresnel lifts the tint toward white at
-   * grazing angles, so a black tint doesn't remove the highlight —
-   * {@link PhongMaterialOptions#specularStrength} does.
+   * The default gives a faint highlight. Fresnel lifts the tint toward white at grazing angles, so
+   * a black tint doesn't remove the highlight; {@link PhongMaterialOptions#specularStrength} does.
    * @default 0x111111
+   * @example
+   * ```ts
+   * const metalish = new PhongMaterial({ baseColor: 0x333333, specularColor: 0xcccccc });
+   * ```
    */
   specularColor?: ColorSource;
   /**
-   * Blinn-Phong specular exponent — higher is a tighter highlight
+   * Specular exponent: higher gives a smaller, sharper highlight
+   *
+   * Values below 1 act as 1.
    * @default 30
+   * @example
+   * ```ts
+   * const glossy = new PhongMaterial({ shininess: 120 });
+   * ```
    */
   shininess?: number;
   /**
-   * Whole-lobe specular scale (Fresnel rim included) — 0 removes the highlight
+   * Scales the whole highlight, Fresnel rim included; 0 removes it
    * @default 1
+   * @example
+   * ```ts
+   * const chalk = new PhongMaterial({ specularStrength: 0 });
+   * ```
    */
   specularStrength?: number;
-  /** Grayscale texture (red channel) modulating specular strength */
+  /**
+   * Map whose red channel scales `specularStrength` per texel
+   *
+   * Pass it here to have one; afterwards it can be swapped through `material.textures.specular`.
+   * @example
+   * ```ts
+   * const tiles = new PhongMaterial({ baseColorTexture: tilesTexture, specularTexture: groutMask });
+   * ```
+   */
   specularTexture?: Texture;
-  /** Tangent-space normal map; needs geometry UVs, and tangents are preferred */
+  /**
+   * Tangent-space normal map
+   *
+   * Needs UVs on the geometry, and uses its tangents when it has them. Can also be assigned later
+   * through `material.textures.normal`.
+   * @example
+   * ```ts
+   * const stone = new PhongMaterial({ baseColorTexture: stoneTexture, normalTexture: stoneNormals });
+   * ```
+   */
   normalTexture?: Texture;
   /**
-   * Normal-map tangent-space xy scale
-   *
-   * No-op without a normal map.
+   * Strength of the normal map's bumps; no effect without a map
    * @default 1
+   * @example
+   * ```ts
+   * const subtle = new PhongMaterial({ normalTexture: stoneNormals, normalScale: 0.4 });
+   * ```
    */
   normalScale?: number;
   /**
-   * Self-illumination — colour, strength, and an optional map
+   * The material's own glow; passing the group turns it on
    *
-   * `strength` above 1 lifts past white for HDR/bloom. Runtime control via
-   * {@link PhongMaterial#emissive}.
+   * Change it later through {@link PhongMaterial#emissive}.
+   * @example
+   * ```ts
+   * const screen = new PhongMaterial({ emissive: { texture: screenTexture, strength: 2 } });
+   * ```
    */
   emissive?: EmissiveOptions;
 }
 
 /**
- * The packed data shape `phongMaterialBit` (plus the gated feature bits) produces
+ * The fields of {@link PhongMaterial#data}
  *
- * `baseColor` / `specularColor` / `shininess` / `specularStrength` / `alphaCutoff` are always
- * present; the rest exist only on the matching feature variant.
+ * `emissive` and `emissiveStrength` exist only on a material built with an `emissive` group; the
+ * rest always do.
  * @category materials
  * @advanced
  */
 export interface PhongData extends MaterialData {
-  /** Linear-light base colour */
+  /** Base colour in linear light, alpha in the last lane */
   baseColor: Float32Array;
-  /** Linear-light specular tint (rgb) */
+  /** Specular tint in linear light */
   specularColor: Float32Array;
-  /** Blinn-Phong specular exponent */
+  /** Specular exponent */
   shininess: number;
-  /** Whole-lobe specular scale */
+  /** Scale on the whole highlight */
   specularStrength: number;
-  /** Alpha-mask cutoff threshold */
+  /** Cutoff for `alphaMode: 'mask'` */
   alphaCutoff: number;
-  /** Normal-map tangent-space xy scale */
+  /** Strength of the normal map's bumps */
   normalScale: number;
-  /** Linear-light emissive colour — present on the emissive feature variant */
+  /** Glow colour in linear light */
   emissive?: Float32Array;
-  /** Emissive strength multiplier — present on the emissive feature variant */
+  /** Multiplier on the glow */
   emissiveStrength?: number;
 }
 
 /**
- * The texture slots PhongMaterial's derivation walk produces
+ * The texture slots of a {@link PhongMaterial}, as `material.textures`
  *
- * `baseColor` and `normal` always exist (the normal slot is reserved even without a map — the
- * pipe gates its sampling); `specular` / `emissive` exist iff their option was constructed in.
+ * `baseColor` and `normal` always exist. `specular` and `emissive` exist only when the material
+ * was built with `specularTexture` or an `emissive` group.
+ * @example
+ * ```ts
+ * const material = new PhongMaterial({ specularTexture: shineMask });
+ * material.textures.specular = otherShineMask;
+ * ```
  * @category materials
  * @standard
  */
 export interface PhongMaterialTextures extends MaterialTextures {
-  /** Base colour map */
+  /**
+   * Base colour map
+   * @example
+   * ```ts
+   * material.textures.baseColor = await Assets.load('bricks.png');
+   * ```
+   */
   baseColor: Texture;
-  /** Tangent-space normal map — the slot is always reserved; sampling is gated on a real map */
+  /**
+   * Tangent-space normal map; holds a flat map until you assign one
+   * @example
+   * ```ts
+   * material.textures.normal = await Assets.load('bricks-normal.png');
+   * ```
+   */
   normal: Texture;
-  /** Grayscale specular-strength map — present iff constructed with `specularTexture` */
+  /**
+   * Map whose red channel scales the highlight; only on a material built with `specularTexture`
+   * @example
+   * ```ts
+   * material.textures.specular = wetPatches;
+   * ```
+   */
   specular?: Texture;
-  /** Emissive map — present iff constructed with the `emissive` group */
+  /**
+   * Glow map; only on a material built with an `emissive` group
+   * @example
+   * ```ts
+   * material.textures.emissive = await Assets.load('lit-windows.png');
+   * ```
+   */
   emissive?: Texture;
 }
 
 /**
- * Blinn-Phong material
+ * A Blinn-Phong material: diffuse shading plus a specular highlight
  *
- * A classic diffuse + specular surface model — cheaper than {@link Material3D}
- * and easy to art-direct. Diffuse is PI-normalized Lambert; specular is a
- * normalized half-vector highlight with a Fresnel-Schlick tint (see
- * `phongLightingBit`). It shares the
- * engine's PI / tone-mapping conventions, so a Phong mesh reads at the same
- * brightness as a PBR one under the same lights.
+ * Cheaper than {@link Material3D} and easy to art-direct: `shininess` sets the size of the
+ * highlight and `specularColor` its tint. It follows the engine's lighting conventions, so a Phong
+ * mesh and a PBR mesh read at the same brightness under the same lights.
  *
- * Texture maps the material samples itself (specular, emissive) are
- * feature-gated: the bit and its texture slot exist only when that option is
- * supplied, so an untextured material samples nothing extra. The normal map
- * is pipe-gated instead — its slot is always reserved, and the sample + TBN
- * compile in only once a real map is assigned.
+ * It takes direct lights, ambient lights and the view's `environment`. A cube map or hemisphere
+ * adds diffuse fill only: highlights come from direct lights alone, so use {@link Material3D} for
+ * surfaces that should reflect their surroundings.
  *
- * Lit by direct lights, `AmbientLight`, and the view's `environment`: a
- * `Hemisphere` or cubemap contributes diffuse ambient through the env-source
- * contract — pure ALU for a hemisphere, a single roughest-mip fetch for a
- * cubemap. There is no specular environment response (highlights come from
- * direct lights only); use {@link Material3D} for reflective surfaces.
+ * The specular and emissive maps cost nothing unless you pass them at construction. The normal map
+ * can be assigned at any time; until there is one, no normal mapping is compiled in.
  *
- * Custom surface extensions compose via `extraBits` (see
- * {@link BaseMaterial3DOptions#extraBits}). They sit after the feature bits
- * and before `phongLightingBit`, so `material`-slot code sees the
- * post-base-colour `albedo` / `alpha` and `end`-slot code runs after lighting
- * but before the view's tone-mapping bit.
+ * `extraBits` run after the material's own maps and before lighting, so they see the textured
+ * `albedo` and `alpha`. Their `end` code runs after lighting and before tone mapping.
  * @example
  * ```ts
  * const material = new PhongMaterial({
@@ -152,17 +209,24 @@ export interface PhongMaterialTextures extends MaterialTextures {
  */
 export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextures> {
   /**
-   * Runtime emissive props (`color` / `strength` / `texture`)
-   *
-   * Present iff constructed with the `emissive` group — absence is the feature lock, exactly as
-   * on {@link Material3D}.
+   * Runtime glow controls; present only when the material was built with an `emissive` group
+   * @example
+   * ```ts
+   * const lantern = new PhongMaterial({ emissive: { color: 0xffaa33 } });
+   * lantern.emissive!.strength = 3;
+   * ```
    */
   public readonly emissive?: EmissiveProps;
 
-  /** Construction-fixed feature bits (specular texture / emissive) */
+  /**
+   * The specular-map and emissive bits this material was built with
+   *
+   * The constructor derives the layout from them and {@link PhongMaterial#getPrimaryDescriptor}
+   * compiles the same list, so the two can't drift.
+   */
   private readonly _featureBits: ShaderBit[] = [];
 
-  /** Canonical hex of the specular tint — `Container.tint`-style read-back */
+  /** Hex value `specularColor` reads back */
   private _specularColorTint = 0x111111;
 
   constructor(options: PhongMaterialOptions = {}) {
@@ -170,13 +234,6 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
 
     super(options);
 
-    // Maps the material samples itself (specular, emissive) are gated: no bit
-    // means no fetch in the compiled shader. The normal slot is always
-    // reserved — the pipe owns that sampling and already gates it on the slot
-    // being a real map, so reserving costs nothing per fragment and keeps the
-    // texture-count batch bucket stable across mapped/unmapped materials.
-    // extraBits' own `textures` declarations resolve from the name-keyed
-    // `textures` option, making texture-sampling extra bits first-class.
     const textures: Record<string, Texture | undefined> = {
       baseColor: options.baseColorTexture,
       normal: normalTexture ?? NORMAL_MAP,
@@ -191,15 +248,8 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
       this._featureBits.push(emissiveBit);
     }
 
-    // Must mirror the struct/slot-bearing bits of `getPrimaryDescriptor` (the
-    // env-source bit joins there too, but is header-only — no struct fields,
-    // no texture slots, so it stays out of the derivation). uvTransformBit
-    // declares no textures but DOES declare struct fields — it's
-    // unconditional, so the struct snapshot taken here always covers
-    // everything the descriptor will compile.
     this._deriveLayoutFromBits([phongMaterialBit, uvTransformBit, ...this._featureBits, ...this._extraBits], textures);
 
-    // Seed the packed state — writes land straight in upload memory.
     this.shininess = options.shininess ?? 30;
     this.specularStrength = options.specularStrength ?? 1;
     this.specularColor = options.specularColor ?? 0x111111;
@@ -212,19 +262,18 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   }
 
   /**
-   * Descriptors cached per env-source bit name
-   *
-   * One entry per env kind (default / hemisphere / cube) seen across the views that render this
-   * material; reset whenever `_variantDirty` flips. Same pattern as {@link Material3D}: keying on
-   * the bit name lets views sharing an env kind share one descriptor, and entries never leak per
-   * view.
+   * Descriptors keyed by the name of the view's environment bit, so views with the same kind of
+   * environment share one; cleared when the variant goes stale
    */
   private _descriptorByEnvKey: Record<string, ShaderDescriptor> = Object.create(null);
 
   /**
-   * Builds (or returns the cached) primary-pass shader recipe for a view's environment kind
-   * @param view - View whose environment source selects the descriptor variant
-   * @returns The shader descriptor compiled for the primary pass
+   * The shader descriptor for a view, cached per kind of environment
+   *
+   * The environment bit only supplies `sampleEnvironment`, with no struct field or texture, so
+   * every kind of environment fits the layout derived at construction.
+   * @param view - View whose environment picks the descriptor
+   * @advanced
    */
   public override getPrimaryDescriptor(view: View3D): ShaderDescriptor {
     if (this._variantDirty) {
@@ -236,9 +285,6 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
     let descriptor = this._descriptorByEnvKey[envBit.name];
     if (descriptor) return descriptor;
 
-    // envBit provides `sampleEnvironment`, consumed by phongLightingBit's
-    // ambient term. Header-only — it adds no struct fields or texture slots,
-    // so the construction-derived layout holds across every env kind.
     const bits: ShaderBit[] = [phongMaterialBit, envBit, uvTransformBit];
     for (let i = 0; i < this._featureBits.length; i++) bits.push(this._featureBits[i]);
     for (let i = 0; i < this._extraBits.length; i++) bits.push(this._extraBits[i]);
@@ -251,13 +297,21 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
     return descriptor;
   }
 
-  /** Blinn-Phong specular exponent — higher is a tighter highlight */
+  /**
+   * Specular exponent: higher gives a smaller, sharper highlight
+   *
+   * Values below 1 act as 1.
+   * @example
+   * ```ts
+   * material.shininess = 80;
+   * ```
+   */
   public get shininess(): number {
     return this.data.shininess;
   }
 
   /**
-   * Writes the exponent straight through to the packed material data
+   * Sets the specular exponent
    * @param value - Specular exponent; higher values tighten the highlight
    */
   public set shininess(value: number) {
@@ -265,18 +319,21 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   }
 
   /**
-   * Scales the whole specular lobe, Fresnel rim included — the dial to fade or kill the highlight
+   * Scales the whole highlight, Fresnel rim included; 0 removes it
    *
-   * `specularColor` alone can't remove it (Fresnel lifts any tint toward white at grazing angles,
-   * so black still leaves a rim); 0 here truly does. The specular texture multiplies on top of
-   * this.
+   * `specularColor` alone can't remove it: Fresnel lifts any tint toward white at grazing angles,
+   * so even black leaves a rim. A specular map multiplies on top of this.
+   * @example
+   * ```ts
+   * material.specularStrength = 0.5;
+   * ```
    */
   public get specularStrength(): number {
     return this.data.specularStrength;
   }
 
   /**
-   * Writes the multiplier straight through to the packed material data
+   * Sets the scale on the whole highlight
    * @param value - Scale on the whole specular lobe; 0 removes the highlight
    */
   public set specularStrength(value: number) {
@@ -284,17 +341,21 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   }
 
   /**
-   * Scalar bump-strength multiplier for the normal map
+   * Strength of the normal map's bumps
    *
-   * Mirrors glTF's `normalTextureInfo.scale`. Default 1 is a no-op; so is any value while no
-   * normal map is assigned.
+   * Matches glTF's `normalTextureInfo.scale`. 1 leaves the map as authored, and no value has an
+   * effect without a map.
+   * @example
+   * ```ts
+   * material.normalScale = 2;
+   * ```
    */
   public get normalScale(): number {
     return this.data.normalScale;
   }
 
   /**
-   * Writes the multiplier straight through to the packed material data
+   * Sets the strength of the normal map's bumps
    * @param value - Multiplier on the normal map's tangent-space xy; 1 is a no-op
    */
   public set normalScale(value: number) {
@@ -302,17 +363,19 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   }
 
   /**
-   * Specular tint (rgb)
-   *
-   * `Container.tint` semantics: set any {@link ColorSource} (sRGB-decoded to linear), read back
-   * the canonical hex number.
+   * Specular tint (rgb); takes any {@link ColorSource} and reads back a hex number, like
+   * `Container.tint`
+   * @example
+   * ```ts
+   * material.specularColor = 'white';
+   * ```
    */
   public get specularColor(): number {
     return this._specularColorTint;
   }
 
   /**
-   * Accepts any {@link ColorSource}; sRGB-decoded to linear before packing
+   * Sets the specular tint
    * @param value - Display-space specular tint
    */
   public set specularColor(value: ColorSource) {
@@ -326,11 +389,14 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   }
 
   /**
-   * Releases this material's owned CPU state, then the per-env descriptor cache, the feature-bit
-   * list, and the emissive props
+   * Frees the material for good
    *
-   * Idempotent.
-   * @param options - Destroy options, forwarded to {@link BaseMaterial3D#destroy}
+   * Its textures stay alive unless `options` asks for them. Calling it again does nothing.
+   * @param options - Whether to destroy the textures too, as {@link BaseMaterial3D#destroy} takes them
+   * @example
+   * ```ts
+   * mesh.material.destroy();
+   * ```
    */
   public override destroy(options?: TypeOrBool<TextureDestroyOptions>): void {
     if (this.destroyed) return;

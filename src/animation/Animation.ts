@@ -2,39 +2,104 @@ import type { Track } from './tracks/Track';
 
 /**
  * Options for creating an animation
+ * @example
+ * ```ts
+ * const options: AnimationOptions = {
+ *   label: 'bob',
+ *   tracks: [
+ *     new Vector3Track({ label: 'Crate.position', times: [0, 0.5, 1], values: [0, 0, 0, 0, 1, 0, 0, 0, 0] }),
+ *   ],
+ * };
+ * ```
  * @category animation
  * @standard
  */
 export interface AnimationOptions {
-  /** Label an {@link AnimationPlayer} registers this animation under */
+  /**
+   * Label {@link AnimationPlayer#addAnimations} registers this animation under when given an array
+   * @example
+   * ```ts
+   * player.addAnimations([new Animation({ label: 'wave', tracks })]);
+   * player.play('wave');
+   * ```
+   */
   label: string;
   /**
-   * Keyframe tracks evaluated by the animation
-   *
-   * Tracks are expected to use sorted keyframe times. When `duration` is not
-   * supplied, the duration is derived from the last keyframe of each track.
+   * Tracks the animation plays, each driving one property
+   * @example
+   * ```ts
+   * const shake = new Animation({
+   *   label: 'shake',
+   *   tracks: [new NumberTrack({ label: 'Camera.x', times: [0, 0.1, 0.2], values: [0, 0.2, 0] })],
+   * });
+   * ```
    */
   tracks?: readonly Track[];
-  /** Duration in seconds; calculated from the tracks when omitted */
+  /**
+   * Length in seconds; left out, it is the time of the last keyframe across all tracks
+   *
+   * Set it past the last keyframe to hold the final pose before the animation loops.
+   * @example
+   * ```ts
+   * const blink = new Animation({
+   *   label: 'blink',
+   *   tracks: [
+   *     new Vector3Track({ label: 'Eyelid.scale', times: [0, 0.1, 0.2], values: [1, 1, 1, 1, 0.1, 1, 1, 1, 1] }),
+   *   ],
+   *   duration: 4,
+   * });
+   * ```
+   */
   duration?: number;
 }
 
 /**
- * A reusable animation made up of keyframe tracks
+ * A named set of keyframe tracks, holding no playback state
  *
- * `Animation` stores sampled animation data only. Playback state, looping,
- * blending, and target binding are handled by {@link AnimationPlayer} and
- * {@link AnimationState}.
+ * A {@link Model3D} loaded from glTF comes with its animations already registered on its
+ * {@link Model3D#player | player}. Build one yourself to animate in code, then register it on an
+ * {@link AnimationPlayer}. One animation can play on many players at once; each player keeps its
+ * own {@link AnimationState} for it.
+ * @example
+ * ```ts
+ * const crate = new Container3D({ label: 'Crate' });
+ * const bob = new Animation({
+ *   label: 'bob',
+ *   tracks: [
+ *     new Vector3Track({ label: 'Crate.position', times: [0, 0.5, 1], values: [0, 0, 0, 0, 1, 0, 0, 0, 0] }),
+ *   ],
+ * });
+ *
+ * const player = new AnimationPlayer({ target: crate, animations: [bob], autoPlay: 'bob' });
+ * ```
  * @category animation
  * @standard
  */
 export class Animation {
-  /** Label used for lookup by animation players */
+  /**
+   * Label {@link AnimationPlayer#addAnimations} registers this animation under when given an array
+   * @example
+   * ```ts
+   * player.addAnimations([bob]);
+   * player.play(bob.label);
+   * ```
+   */
   public label: string;
-  /** Keyframe tracks evaluated when this animation is played */
+  /**
+   * Tracks this animation plays
+   * @advanced
+   */
   public readonly tracks: readonly Track[];
-  /** Duration in seconds */
-  public duration: number;
+  /**
+   * Length in seconds
+   * @example
+   * ```ts
+   * const walk = player.getAnimation('walk')!;
+   *
+   * player.getState(walk).gotoAndStop(walk.duration / 2);
+   * ```
+   */
+  public duration = 0;
 
   /**
    * @param options - Label, tracks, and optional explicit duration for the animation

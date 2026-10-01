@@ -1,13 +1,15 @@
 import type { TypedArray } from 'pixi.js';
 
 /**
- * Normalizes a float to the integer range of the given typed array constructor
+ * Converts a float to the integer that stands for it in a normalized integer array, such as a
+ * `Uint8Array` of vertex colours
  *
- * Floats in `[0, 1]` (`[-1, 1]` for signed types) map to the symmetric integer range (snorm convention for signed types). Float arrays are
- * returned unchanged.
- * @param value - The float value to normalize
- * @param array - The typed array whose component type determines the integer range
- * @returns The normalized integer value
+ * Unsigned types map `[0, 1]` onto `[0, max]` and signed types map `[-1, 1]` onto `[-max, max]`,
+ * where `max` is the type's largest value. A `Float32Array` keeps the value as it is. Any other
+ * array type, such as `Float64Array`, throws.
+ * @param value - The float to convert
+ * @param array - Array whose type sets the integer range; only its type is read
+ * @returns The integer to store
  * @category maths
  * @advanced
  */
@@ -33,12 +35,14 @@ export function normalize(value: number, array: TypedArray): number {
 }
 
 /**
- * Denormalizes an integer value of the given typed array to a float
+ * Converts an integer read from a normalized integer array back to the float it stands for, the
+ * reverse of {@link normalize}
  *
- * Integers map to `[0, 1]` (`[-1, 1]` for signed types). Float arrays are returned unchanged.
- * @param value - The integer value to denormalize
- * @param array - The typed array whose component type determines the integer range
- * @returns The denormalized float value
+ * Signed results clamp at `-1`, since a signed type's lowest value lies one step past `-max`. A
+ * `Float32Array` keeps the value as it is. Any other array type, such as `Float64Array`, throws.
+ * @param value - The integer to convert
+ * @param array - Array whose type sets the integer range; only its type is read
+ * @returns The float, in `[0, 1]` for unsigned types and `[-1, 1]` for signed ones
  * @category maths
  * @advanced
  */

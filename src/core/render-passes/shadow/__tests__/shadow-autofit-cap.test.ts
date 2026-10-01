@@ -1,4 +1,4 @@
-import { getApp, isCI } from '@test-utils';
+import { captureWarnings, getApp, isCI } from '@test-utils';
 import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +21,9 @@ const OVER_CAP = 300;
  * Ground + auto-fit sun (`castShadow: true`, no shadow options). `instanceCount > 0` adds a
  * BatchedMesh3D cluster of shadow-casting cubes spanning roughly ±5 around the origin —
  * each instance counts toward the auto-measure cap individually.
+ *
+ * The `castShadow: false` ground is attached first and is 400 units wide, so a gather that
+ * wrongly includes it grows the box to the ground's bounding sphere and trips the large-box warn.
  */
 function buildScene(
   app: Application<Renderer>,
@@ -30,7 +33,7 @@ function buildScene(
   app.stage.addChild(view3d);
 
   const ground = new Mesh3D({
-    geometry: new PlaneGeometry({ width: 80, height: 80 }),
+    geometry: new PlaneGeometry({ width: 400, height: 400 }),
     material: new Material3D({ baseColor: 0x888888, metallic: 0, roughness: 0.85 }),
     castShadow: false,
   });
@@ -67,12 +70,81 @@ function buildScene(
   return { view3d, sun, batched };
 }
 
-// The auto-fit contract: under the cap the box re-measures every frame (content just works);
-// over it the box freezes at the fitted bounds with a one-time warn, stops tracking scene
-// changes, and fitShadowBounds() is the app's explicit one-shot re-measure. CI's GPU adapters
-// are unreliable, so — like the scene suite — this runs locally.
+/** Half the diagonal of a unit cube: how far its bounding sphere reaches from its centre */
+const CASTER_RADIUS = Math.sqrt(3) / 2;
+
+/** A unit-cube shadow caster at `x` on the ground line */
+function addCaster(view3d: View3D, x: number): Mesh3D {
+  const caster = new Mesh3D({
+    geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
+    material: new Material3D({ baseColor: 0xc06c4a, metallic: 0, roughness: 0.5 }),
+    castShadow: true,
+  });
+  caster.position.set(x, 0, 0);
+  view3d.root.addChild(caster);
+  return caster;
+}
+
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe.skipIf(isCI)(`shadow auto-fit caster cap (${preference})`, () => {
+    it('a castShadow:false mesh attached first is outside the auto-fit box from the first frame', async () => {
+      const app = await getApp<Renderer>({
+        id: `shadow-autofit-first-frame-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE },
+      });
+      try {
+        const { view3d, sun } = buildScene(app, 0);
+        addCaster(view3d, -3);
+
+        const warnings = captureWarnings(() => app.render());
+
+        expect(sun._autoShadowBounds!.max.x).toBeLessThan(0);
+        expect(sun._autoShadowBounds!.min.x).toBeGreaterThan(-4);
+        expect(warnings.some((w) => w.includes('spans a large scene'))).toBe(false);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('a caster attached later is inside the box on the frame it first renders', async () => {
+      const app = await getApp<Renderer>({
+        id: `shadow-autofit-add-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE },
+      });
+      try {
+        const { view3d, sun } = buildScene(app, 0);
+        addCaster(view3d, -3);
+        app.render();
+
+        addCaster(view3d, 30);
+        app.render();
+
+        expect(sun._autoShadowBounds!.max.x).toBeCloseTo(30 + CASTER_RADIUS, 1);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('a removed caster leaves the box on the frame after removal', async () => {
+      const app = await getApp<Renderer>({
+        id: `shadow-autofit-remove-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE },
+      });
+      try {
+        const { view3d, sun } = buildScene(app, 0);
+        const casterA = addCaster(view3d, -3);
+        addCaster(view3d, 30);
+        app.render();
+
+        view3d.root.removeChild(casterA);
+        app.render();
+
+        expect(sun._autoShadowBounds!.min.x).toBeCloseTo(30 - CASTER_RADIUS, 1);
+      } finally {
+        app.destroy();
+      }
+    });
+
     it('under the cap, the box follows a moved caster with no app call', async () => {
       const app = await getApp<Renderer>({
         id: `shadow-autofit-live-${preference}`,
@@ -80,15 +152,8 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
       try {
         const { view3d, sun } = buildScene(app, 0);
-        const caster = new Mesh3D({
-          geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
-          material: new Material3D({ baseColor: 0xc06c4a, metallic: 0, roughness: 0.5 }),
-          castShadow: true,
-        });
-        caster.position.set(-3, 0, 0);
-        view3d.root.addChild(caster);
+        const caster = addCaster(view3d, -3);
 
-        app.render();
         app.render();
         expect(sun._autoShadowBoundsFrozen).toBe(false);
         expect(sun._autoShadowBounds!.max.x).toBeLessThan(0);
@@ -111,33 +176,26 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       try {
         const { view3d, sun } = buildScene(app, OVER_CAP);
 
-        // Gather 1 holds a candidate; gather 2 (membership settled) freezes it.
         app.render();
-        app.render();
-        expect(sun._autoShadowBoundsFrozen).toBe(true);
-        // The freeze notice is a page-global `warnOnce`: the first backend in this
-        // file logs it, the second finds it already consumed.
+        expect(sun._autoShadowBoundsFrozen, 'the first over-cap gather fits the box and freezes it').toBe(true);
+        expect(
+          sun._autoShadowBounds!.max.x,
+          "the grid's last column sits at x = 4, so the box spans the whole batch, not one slot",
+        ).toBeGreaterThan(4);
+        /** The notice is a page-global `warnOnce`: the first backend in this file logs it, the second finds it spent */
         const expectLogged = preference === 'webgpu';
         expect(warnSpy.mock.calls.some((c) => c.join(' ').includes('auto-measure cap'))).toBe(expectLogged);
         const frozenMaxX = sun._autoShadowBounds!.max.x;
 
-        // A caster added outside the frozen box does NOT grow it — frozen means frozen.
-        const far = new Mesh3D({
-          geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
-          material: new Material3D({ baseColor: 0x4a6cc0, metallic: 0, roughness: 0.5 }),
-          castShadow: true,
-        });
-        far.position.set(30, 0, 0);
-        view3d.root.addChild(far);
+        addCaster(view3d, 30);
         app.render();
         expect(sun._autoShadowBoundsFrozen).toBe(true);
-        expect(sun._autoShadowBounds!.max.x).toBe(frozenMaxX);
+        expect(sun._autoShadowBounds!.max.x, 'a caster added outside the frozen box does not grow it').toBe(frozenMaxX);
 
-        // The explicit one-shot re-measure picks the far caster up, then re-freezes.
         sun.fitShadowBounds();
         app.render();
-        expect(sun._autoShadowBounds!.max.x).toBeGreaterThan(25);
-        expect(sun._autoShadowBoundsFrozen).toBe(true);
+        expect(sun._autoShadowBounds!.max.x, 'the one-shot re-measure picks the far caster up').toBeGreaterThan(25);
+        expect(sun._autoShadowBoundsFrozen, 'then freezes again').toBe(true);
       } finally {
         warnSpy.mockRestore();
         app.destroy();
@@ -153,14 +211,15 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const { sun, batched } = buildScene(app, OVER_CAP);
 
         app.render();
-        app.render();
         expect(sun._autoShadowBoundsFrozen).toBe(true);
 
-        // Deactivate most instances → the caster count falls under the cap and the
-        // pass re-fits live again (the box shrinks to the survivors).
         for (let i = 100; i < OVER_CAP; i++) batched!.setItemActive(i, 0);
         app.render();
         expect(sun._autoShadowBoundsFrozen).toBe(false);
+        expect(
+          sun._autoShadowBounds!.max.z,
+          'instances 0..99 fill grid rows 0 to 5, whose z ends at -2, so the box shrinks the frame the rest leave',
+        ).toBeLessThan(0);
       } finally {
         app.destroy();
       }

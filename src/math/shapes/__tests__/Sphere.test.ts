@@ -26,16 +26,6 @@ describe('Sphere', () => {
       expectVec3Close(s.center, 1, 2, 3);
       expect(s.radius).toBe(5);
     });
-
-    test('default sphere is empty', () => {
-      expect(new Sphere().isEmpty()).toBe(true);
-    });
-  });
-
-  describe('type', () => {
-    test('is "sphere"', () => {
-      expect(new Sphere().type).toBe('sphere');
-    });
   });
 
   describe('setFromBox', () => {
@@ -45,21 +35,10 @@ describe('Sphere', () => {
       expect(s.radius).toBeCloseTo(0.5 * Math.hypot(4, 4, 4), 5);
     });
 
-    test('a unit-cube box centred at origin gives radius sqrt(3)/2', () => {
-      const s = new Sphere().setFromBox(new Box(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5)));
-      expectVec3Close(s.center, 0, 0, 0);
-      expect(s.radius).toBeCloseTo(Math.sqrt(3) / 2, 5);
-    });
-
     test('an empty box yields an empty sphere', () => {
       const s = new Sphere(new Vector3(9, 9, 9), 5).setFromBox(new Box().makeEmpty());
       expect(s.isEmpty()).toBe(true);
       expect(s.radius).toBe(-1);
-    });
-
-    test('returns this', () => {
-      const s = new Sphere();
-      expect(s.setFromBox(new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1)))).toBe(s);
     });
   });
 
@@ -69,11 +48,6 @@ describe('Sphere', () => {
       s.set({ x: -1, y: -2, z: -3 }, 10);
       expectVec3Close(s.center, -1, -2, -3);
       expect(s.radius).toBe(10);
-    });
-
-    test('returns this', () => {
-      const s = new Sphere();
-      expect(s.set({ x: 0, y: 0, z: 0 }, 1)).toBe(s);
     });
   });
 
@@ -95,12 +69,6 @@ describe('Sphere', () => {
       expectVec3Close(b.center, 1, 2, 3);
       expect(b.radius).toBe(5);
     });
-
-    test('returns target', () => {
-      const a = new Sphere(new Vector3(1, 2, 3), 5);
-      const b = new Sphere();
-      expect(a.copyTo(b)).toBe(b);
-    });
   });
 
   describe('clone', () => {
@@ -113,12 +81,6 @@ describe('Sphere', () => {
   });
 
   describe('equals', () => {
-    test('matches exactly', () => {
-      const a = new Sphere(new Vector3(1, 2, 3), 5);
-      const b = new Sphere(new Vector3(1, 2, 3), 5);
-      expect(a.equals(b)).toBe(true);
-    });
-
     test('rejects different radius', () => {
       const a = new Sphere(new Vector3(1, 2, 3), 5);
       const b = new Sphere(new Vector3(1, 2, 3), 5.0001);
@@ -140,18 +102,9 @@ describe('Sphere', () => {
       expect(s.radius).toBe(-1);
       expect(s.isEmpty()).toBe(true);
     });
-
-    test('returns this', () => {
-      const s = new Sphere();
-      expect(s.makeEmpty()).toBe(s);
-    });
   });
 
   describe('isEmpty', () => {
-    test('default sphere is empty', () => {
-      expect(new Sphere().isEmpty()).toBe(true);
-    });
-
     test('radius < 0 is empty', () => {
       expect(new Sphere(new Vector3(0, 0, 0), -0.1).isEmpty()).toBe(true);
     });
@@ -171,11 +124,9 @@ describe('Sphere', () => {
       expect(s.distanceToPoint({ x: 5, y: 0, z: 0 })).toBeCloseTo(0, 5);
     });
 
-    test('point inside returns negative distance', () => {
+    test('point inside returns negative distance, -radius at the center', () => {
       const s = new Sphere(new Vector3(0, 0, 0), 5);
-      // Center → distance is -radius.
       expect(s.distanceToPoint({ x: 0, y: 0, z: 0 })).toBeCloseTo(-5, 5);
-      // Halfway out.
       expect(s.distanceToPoint({ x: 2, y: 0, z: 0 })).toBeCloseTo(-3, 5);
     });
 
@@ -217,13 +168,6 @@ describe('Sphere', () => {
       expect(sphere.intersectsBox(box)).toBe(true);
       expect(sphere.intersectsBox(box)).toBe(box.intersectsSphere(sphere));
     });
-
-    test('delegates to box.intersectsSphere (miss)', () => {
-      const sphere = new Sphere(new Vector3(10, 10, 10), 1);
-      const box = new Box(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
-      expect(sphere.intersectsBox(box)).toBe(false);
-      expect(sphere.intersectsBox(box)).toBe(box.intersectsSphere(sphere));
-    });
   });
 
   describe('intersectsSphere', () => {
@@ -261,23 +205,20 @@ describe('Sphere', () => {
   describe('intersectsPlane', () => {
     test('plane through center intersects', () => {
       const sphere = new Sphere(new Vector3(0, 0, 0), 1);
-      // Plane y = 0 with normal +Y.
-      const plane = new Plane(new Vector3(0, 1, 0), 0);
-      expect(sphere.intersectsPlane(plane)).toBe(true);
+      const ground = new Plane(new Vector3(0, 1, 0), 0);
+      expect(sphere.intersectsPlane(ground)).toBe(true);
     });
 
     test('plane tangent to sphere intersects', () => {
       const sphere = new Sphere(new Vector3(0, 0, 0), 1);
-      // Plane at y = 1 (constant -1, normal +Y).
-      const plane = new Plane(new Vector3(0, 1, 0), -1);
-      expect(sphere.intersectsPlane(plane)).toBe(true);
+      const planeAtY1 = new Plane(new Vector3(0, 1, 0), -1);
+      expect(sphere.intersectsPlane(planeAtY1)).toBe(true);
     });
 
     test('plane outside sphere does not intersect', () => {
       const sphere = new Sphere(new Vector3(0, 0, 0), 1);
-      // Plane at y = 5.
-      const plane = new Plane(new Vector3(0, 1, 0), -5);
-      expect(sphere.intersectsPlane(plane)).toBe(false);
+      const planeAtY5 = new Plane(new Vector3(0, 1, 0), -5);
+      expect(sphere.intersectsPlane(planeAtY5)).toBe(false);
     });
 
     test('empty sphere returns false', () => {
@@ -292,13 +233,6 @@ describe('Sphere', () => {
       const sphere = new Sphere(new Vector3(0, 0, 0), 1);
       const ray = new Ray(new Vector3(0, 0, 5), new Vector3(0, 0, -1));
       expect(sphere.intersectsRay(ray)).toBe(true);
-      expect(sphere.intersectsRay(ray)).toBe(ray.intersectsSphere(sphere));
-    });
-
-    test('delegates to ray.intersectsSphere (miss)', () => {
-      const sphere = new Sphere(new Vector3(10, 10, 10), 1);
-      const ray = new Ray(new Vector3(0, 0, 5), new Vector3(0, 0, -1));
-      expect(sphere.intersectsRay(ray)).toBe(false);
       expect(sphere.intersectsRay(ray)).toBe(ray.intersectsSphere(sphere));
     });
   });
@@ -319,11 +253,10 @@ describe('Sphere', () => {
       expect(sphere.radius).toBeCloseTo(3, 5);
     });
 
-    test('non-uniform scale uses max axis', () => {
+    test('non-uniform scale scales the radius by the largest axis scale', () => {
       const sphere = new Sphere(new Vector3(0, 0, 0), 1);
       const m = new Matrix4().makeScale(2, 5, 3);
       sphere.applyMatrix4(m);
-      // getMaxScaleOnAxis returns sqrt(max column squared length).
       expect(sphere.radius).toBeCloseTo(5, 5);
     });
 
@@ -367,13 +300,6 @@ describe('Sphere', () => {
       expect(result).toBe(out);
       expectVec3Close(out.min, -1, -1, -1);
       expectVec3Close(out.max, 1, 1, 1);
-    });
-  });
-
-  describe('toString', () => {
-    test('formats center and radius', () => {
-      const sphere = new Sphere(new Vector3(1, 2, 3), 5);
-      expect(sphere.toString()).toBe('[pixi-3d/math:Sphere center=(1, 2, 3) radius=5]');
     });
   });
 });

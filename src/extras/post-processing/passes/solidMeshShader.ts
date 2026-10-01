@@ -6,9 +6,12 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '../../../core/shader/ShaderBitTemplate';
 import type { ShaderDescriptorOptions } from '../../../core/shader/ShaderDescriptor';
 
-// One template for both backends. The vertex stage mirrors the shadow template's shape:
-// declare the locals the engine's deform bits write (position / normal / tangent), let
-// `{{vertexInput}}` / `{{input}}` decode + skin + morph them, then offset and transform.
+/**
+ * Vertex stage shaped like the shadow pass's: declare the locals the engine's deform bits write
+ * (`position`, `normal`, `tangent`), let `{{vertexInput}}` in WGSL or `{{input}}` in GLSL decode,
+ * skin and morph them, then push the position `SOLID_EXTRUDE` local units along the deformed
+ * normal and transform it. With `SOLID_EXTRUDE` at 0 that is a plain draw.
+ */
 const solidMeshTemplate: ShaderBitTemplate = {
   bindGroups: ['global', 'camera'],
   gpu: /* wgsl */ `
@@ -33,7 +36,6 @@ fn mainVertex(
 
   {{vertexInput}}
 
-  // Optional push along the (deformed) normal, in local units — zero is a plain draw.
   position = vec4<f32>(position.xyz + normalize(normal) * SOLID_EXTRUDE, 1.0);
 
   let worldPosition = modelMatrix * position;
@@ -62,7 +64,6 @@ void main() {
 
   {{input}}
 
-  // Optional push along the (deformed) normal, in local units — zero is a plain draw.
   position.xyz += normalize(normal) * SOLID_EXTRUDE;
 
   vec4 worldPosition = modelMatrix * position;
@@ -81,8 +82,11 @@ void main() {
   },
 };
 
-// Colour and extrusion ride as specialization constants: fixed per pass instance, so a
-// pipeline constant is cheaper than a uniform block.
+/**
+ * Colour and extrusion as shader constants: pipeline overrides on WebGPU, `#define`s on WebGL
+ *
+ * They are fixed per pass, so a constant is cheaper than a uniform block.
+ */
 const solidMeshBit: ShaderBit = {
   name: 'solidMesh',
   attributes: {
@@ -115,11 +119,14 @@ export interface SolidMeshDescriptorOptions {
 }
 
 /**
- * Shader recipe for a `MeshPass` that draws meshes in one flat colour
+ * Shader recipe for a {@link MeshPass} that draws meshes in one flat colour
  *
- * The workhorse behind hull outlines, wireframes and selection masks: the engine's forward
- * vertex path (so skinning, morph targets and batching apply) with no lighting, no textures,
- * and an optional push along the normal. One shader for both backends.
+ * {@link OutlinePass} and {@link WireframePass} draw with it, and it suits any flat-colour redraw
+ * such as a selection mask. It runs the engine's own vertex path, so skinning, morph targets and
+ * batching apply, with no lighting, no textures, and an optional push along the normal.
+ *
+ * Colour and extrusion are baked in as shader constants, so every distinct pair is a separate
+ * shader. Pick them once per pass rather than animating them.
  * @example
  * ```ts
  * new MeshPass({ name: 'mask', descriptor: { shaderDescriptor: solidMeshDescriptor({ color: 0xffffff }) } });

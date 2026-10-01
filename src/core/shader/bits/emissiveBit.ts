@@ -1,32 +1,19 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Owns the self-illumination term
+ * Sets `emissive` to the material's emissive colour times `emissiveStrength` and the sRGB-decoded
+ * emissive texture
  *
- * Kept separate from `pbrMaterialBit` so that materials with no emissive
- * contribution (the common case) don't pay for the material-struct read, the
- * `sampleEmissive` texture fetch, or the strength multiplier.
+ * It is a bit of its own so a material with no emissive reads no extra fields and samples no extra
+ * texture. It assigns the `emissive` that `pbrMaterialBit` and `phongMaterialBit` declare as zero,
+ * so it comes after them, and before any bit that adds to `emissive`, as `transmissionBit` does.
+ * The lighting bit then adds `emissive` to `finalColor`.
  *
- * Writes to the `material` slot — runs AFTER `pbrMaterialBit` (which declares
- * `var emissive: vec3<f32> = vec3(0)` as the neutral no-op default) and
- * BEFORE `pbrLightingBit` (which adds `emissive` into `finalColor`). This
- * bit *assigns* the already-declared variable rather than re-declaring it,
- * mirroring the way `pbrMaterialBit` overwrites its own `metallic`/`roughness`
- * defaults from the material struct.
+ * `emissiveStrength` is `KHR_materials_emissive_strength`. Core glTF caps `emissiveFactor` at 1, and
+ * the strength scales past that, for screens, neon and anything meant to bloom. Its default of 1
+ * renders as core glTF does. Tone mapping runs on the result like on any other light.
  *
- * ## KHR_materials_emissive_strength
- *
- * Core glTF clamps `emissiveFactor` to [0, 1]. This extension lifts the
- * clamp via a scalar `emissiveStrength` multiplier (default 1.0), letting
- * authored assets push past 1.0 for HDR / bloom — necessary for tone-mapped
- * rendering of neon signs, screens, glowing lava, etc. The multiplier is
- * applied before tone mapping (ACES is downstream in the bit list), so
- * high-strength values get lifted into the tone-mapping shoulder and
- * preserve hue.
- *
- * Default `emissiveStrength = 1.0` is bit-identical to core-glTF output —
- * same pattern as `KHR_materials_ior`, where the default IOR 1.5 reproduces
- * the spec's F0 = 0.04.
+ * An unset slot holds `Texture.WHITE`, so the texture multiply changes nothing.
  * @internal
  */
 export const emissiveBit: ShaderBit = {
@@ -41,11 +28,7 @@ export const emissiveBit: ShaderBit = {
   gpu: {
     fragment: {
       material: /*wgsl*/ `
-  // Assign into the emissive var declared by pbrMaterialBit's defaults.
   emissive = material.emissive * material.emissiveStrength;
-  // Unbound emissive slot resolves to the reserved white slot (returned as 1.0
-  // by the batch-texture getter without sampling), so this is a no-op when no
-  // texture is set — no HAS_UVS gate, matching the GL hook and pbrMaterialBit.
   let emissiveTex = sampleEmissive(input.vUV).rgb;
   emissive *= pow(emissiveTex, vec3<f32>(2.2));
 `,

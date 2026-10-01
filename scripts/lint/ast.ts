@@ -36,6 +36,13 @@ export interface AstNode {
   init?: AstNode | null;
   source?: AstNode | null;
   comments?: AstComment[];
+  typeAnnotation?: AstNode | null;
+  declare?: boolean;
+  optional?: boolean;
+  definite?: boolean;
+  readonly?: boolean;
+  static?: boolean;
+  body?: AstNode | AstNode[] | null;
 }
 
 interface SourceCode {
@@ -44,6 +51,7 @@ interface SourceCode {
 
 interface Fixer {
   replaceText(node: AstNode, text: string): unknown;
+  insertTextAfter(node: AstNode, text: string): unknown;
 }
 
 interface NodeDiagnostic {
@@ -57,7 +65,7 @@ interface LocDiagnostic {
   message: string;
 }
 
-interface RuleContext {
+export interface RuleContext {
   sourceCode: SourceCode;
   filename: string;
   cwd: string;
@@ -83,18 +91,47 @@ function docTarget(node: AstNode): AstNode {
   return node;
 }
 
+const LINE_DIRECTIVE =
+  /^\s*(?:(?:oxlint|eslint)-(?:disable|enable)|@ts-(?:expect-error|ignore|nocheck)|prettier-ignore|oxfmt-ignore|(?:c8|v8|istanbul) ignore|Auto-generated)\b|^\/\s*<reference\b/;
+const BLOCK_DIRECTIVE =
+  /^\s*(?:[#@]__(?:PURE|NO_SIDE_EFFECTS)__|@vite-ignore|webpack[A-Z]\w*:|(?:oxlint|eslint)-(?:disable|enable)|prettier-ignore|(?:c8|v8|istanbul) ignore)\b|^!|@license\b|^\s*(?:wgsl|glsl)\s*$/;
+
 /**
- * The JSDoc block directly above a node (at most one blank line of separation), if any.
+ * True for comments that instruct a tool rather than explain code: lint and TypeScript
+ * suppressions, formatter ignores, coverage hints, triple-slash references, bundler annotations,
+ * license headers, the `wgsl` and `glsl` tags editors read to highlight a shader string, and the
+ * header `scripts/build/index.mts` writes into generated barrels.
+ * @param comment - The comment to classify
+ */
+export function isDirective(comment: AstComment): boolean {
+  if (comment.type === 'Shebang') return true;
+  if (comment.type === 'Line') return LINE_DIRECTIVE.test(comment.value);
+  return !comment.value.startsWith('*') && BLOCK_DIRECTIVE.test(comment.value);
+}
+
+/**
+ * The JSDoc block directly above a node, if any. Comments that `skip` accepts may sit between the
+ * block and the node; by default those are tool directives such as `oxlint-disable-next-line`.
  * @param sourceCode - The linted file's source
  * @param node - The declaration being documented
+ * @param skip - Comments allowed between the JSDoc block and the node
  */
-export function getDocComment(sourceCode: SourceCode, node: AstNode): AstComment | null {
+export function getDocComment(
+  sourceCode: SourceCode,
+  node: AstNode,
+  skip: (comment: AstComment) => boolean = isDirective,
+): AstComment | null {
   const target = docTarget(node);
   const comments = sourceCode.getCommentsBefore(target);
-  const last = comments[comments.length - 1];
-  if (!last || last.type !== 'Block' || !last.value.startsWith('*')) return null;
-  if (target.loc.start.line - last.loc.end.line > 1) return null;
-  return last;
+  let nextLine = target.loc.start.line;
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const comment = comments[i];
+    if (nextLine - comment.loc.end.line > 1) return null;
+    if (comment.type === 'Block' && comment.value.startsWith('*')) return comment;
+    if (!skip(comment)) return null;
+    nextLine = comment.loc.start.line;
+  }
+  return null;
 }
 
 /**

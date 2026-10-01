@@ -8,46 +8,54 @@ import type { BaseMaterial3DOptions } from '../BaseMaterial3D';
 import { flatMaterialBit } from './bits/flatMaterialBit';
 
 /**
- * Constructor options for {@link FlatMaterial}, identical to {@link BaseMaterial3DOptions}
+ * Options for {@link FlatMaterial}, the same as {@link BaseMaterial3DOptions}
  *
- * `extraBits` sit between `flatMaterialBit` (the base-colour sample) and `alphaMaskBit` (the
- * cutout discard), so user bits see the post-base-colour `albedo` / `alpha`, and any further
- * alpha modulation flows through to the cutout test.
+ * `extraBits` run after the base colour and texture are applied and before the `'mask'` cutoff
+ * test, so they see the textured `albedo` and `alpha`, and any alpha they write still reaches the
+ * cutoff.
+ * @example
+ * ```ts
+ * const options: FlatMaterialOptions = { baseColorTexture: iconTexture, alphaMode: 'mask' };
+ * const icon = new FlatMaterial(options);
+ * ```
  * @category materials
  * @standard
  */
 export type FlatMaterialOptions = BaseMaterial3DOptions;
 
 /**
- * Unlit, flat-shaded material
+ * An unlit material that draws its base colour and texture with no lighting
  *
- * Renders base color (factor * texture) with no lighting, IBL, or tone mapping. `alphaCutoff`
- * comes from {@link BaseMaterial3D}.
- *
- * The bit list rebuilds when `alphaMode` toggles through `mask`; `uvTransformBit` is
- * unconditional — the transform defaults to identity, derives automatically from a framed
- * baseColor texture, and an explicit `uvTransform` matrix overrides derivation. The Material
- * struct stays fixed for the material's lifetime.
+ * Lights, the view's environment, shadows and tone mapping all leave it alone, which suits UI
+ * panels, icons, debug drawing and anything baked. The view's fog still applies unless `fog` is
+ * `false`. `flatShading` has no visible effect, since nothing reads the normal.
+ * @example
+ * ```ts
+ * const panel = new Mesh3D({
+ *   geometry: new PlaneGeometry({ width: 2, height: 1 }),
+ *   material: new FlatMaterial({ baseColorTexture: panelTexture }),
+ * });
+ * ```
  * @category materials
  * @standard
  */
 export class FlatMaterial extends BaseMaterial3D {
-  /** Unlit by definition — opt out of the View's tone-mapping curve */
+  /**
+   * `false`: a flat material skips the view's tone mapping
+   * @advanced
+   */
   public override toneMapped = false;
 
-  /** Unlit by definition — declares no lighting accumulators, so view-level lighting bits (env, shadow) are skipped */
+  /**
+   * `false`: a flat material takes no part in lighting, so no shadow sampling is compiled in
+   * @advanced
+   */
   public override lit = false;
 
   constructor(options: FlatMaterialOptions = {}) {
     super(options);
     this._descriptor = new ShaderDescriptor({});
 
-    // Slot layout derives from the texture-bearing bits in descriptor order
-    // (alphaMaskBit declares no textures or unique fields, so its runtime
-    // toggle disturbs neither slots nor struct). extraBits' own `textures`
-    // declarations resolve from the name-keyed `textures` option, making
-    // texture-sampling extra bits first-class. uvTransformBit is
-    // unconditional so the struct snapshot always covers its fields.
     const derivationBits = [flatMaterialBit, uvTransformBit, ...this._extraBits];
     this._deriveLayoutFromBits(derivationBits, {
       baseColor: options.baseColorTexture,
@@ -56,9 +64,13 @@ export class FlatMaterial extends BaseMaterial3D {
   }
 
   /**
-   * Rebuilds the flat bit list when the variant is dirty (e.g. `alphaMode` toggled through `'mask'`)
-   * @param _view - Unused; flat shading composes no view-dependent bits.
-   * @returns The material's primary shader descriptor.
+   * The shader descriptor for this material, rebuilt after `alphaMode` moves to or from `'mask'`
+   *
+   * In `'mask'` mode the list gains `alphaMaskBit`. It adds no texture and needs only
+   * `alphaCutoff`, which `flatMaterialBit` already declares, so the layout derived at construction
+   * still holds.
+   * @param _view - Unused; the descriptor is the same in every view.
+   * @advanced
    */
   public override getPrimaryDescriptor(_view: View3D): ShaderDescriptor {
     if (!this._variantDirty) return this._descriptor!;

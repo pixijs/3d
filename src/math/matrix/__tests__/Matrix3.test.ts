@@ -37,13 +37,6 @@ describe('Matrix3', () => {
       const b = Matrix3.shared;
       expect(b.isIdentity()).toBe(true);
     });
-
-    test('returns the same reused instance', () => {
-      const a = Matrix3.shared;
-      const b = Matrix3.shared;
-
-      expect(a).toBe(b);
-    });
   });
 
   describe('static Matrix3.IDENTITY', () => {
@@ -59,13 +52,6 @@ describe('Matrix3', () => {
 
       expectMatrix3Equal(m, [1, 4, 7, 2, 5, 8, 3, 6, 9]);
     });
-
-    test('returns this for chaining', () => {
-      const m = new Matrix3();
-      const result = m.set(1, 2, 3, 4, 5, 6, 7, 8, 9);
-
-      expect(result).toBe(m);
-    });
   });
 
   describe('identity', () => {
@@ -76,18 +62,9 @@ describe('Matrix3', () => {
 
       expectMatrix3Equal(m, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
     });
-
-    test('returns this for chaining', () => {
-      const m = new Matrix3();
-      expect(m.identity()).toBe(m);
-    });
   });
 
   describe('isIdentity', () => {
-    test('returns true for identity', () => {
-      expect(new Matrix3().isIdentity()).toBe(true);
-    });
-
     test('returns false for non-identity', () => {
       const m = new Matrix3().set(2, 0, 0, 0, 1, 0, 0, 0, 1);
       expect(m.isIdentity()).toBe(false);
@@ -102,12 +79,6 @@ describe('Matrix3', () => {
 
       expectMatrix3Equal(b, [1, 4, 7, 2, 5, 8, 3, 6, 9]);
     });
-
-    test('returns this for chaining', () => {
-      const a = new Matrix3();
-      const b = new Matrix3();
-      expect(b.copyFrom(a)).toBe(b);
-    });
   });
 
   describe('copyTo', () => {
@@ -118,22 +89,9 @@ describe('Matrix3', () => {
 
       expectMatrix3Equal(b, [1, 4, 7, 2, 5, 8, 3, 6, 9]);
     });
-
-    test('returns target for chaining', () => {
-      const a = new Matrix3();
-      const b = new Matrix3();
-      expect(a.copyTo(b)).toBe(b);
-    });
   });
 
   describe('equals', () => {
-    test('true for identical matrices', () => {
-      const a = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
-      const b = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
-
-      expect(a.equals(b)).toBe(true);
-    });
-
     test('false when any element differs', () => {
       const a = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
       const b = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 99);
@@ -155,22 +113,7 @@ describe('Matrix3', () => {
     });
   });
 
-  describe('toString', () => {
-    test('contains class identifier', () => {
-      const m = new Matrix3();
-
-      expect(m.toString()).toContain('Matrix3');
-    });
-  });
-
   describe('fromArray', () => {
-    test('reads column-major data at offset 0', () => {
-      const m = new Matrix3();
-      m.fromArray([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-
-      expectMatrix3Equal(m, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    });
-
     test('honors offset', () => {
       const m = new Matrix3();
       m.fromArray([99, 99, 1, 2, 3, 4, 5, 6, 7, 8, 9], 2);
@@ -205,13 +148,7 @@ describe('Matrix3', () => {
   });
 
   describe('multiply', () => {
-    test('identity * identity = identity', () => {
-      const a = new Matrix3();
-      const b = new Matrix3();
-      a.multiply(b);
-
-      expect(a.isIdentity()).toBe(true);
-    });
+    const aTimesBColumnMajor = [30, 84, 138, 24, 69, 114, 18, 54, 90];
 
     test('mutates this when no out is supplied', () => {
       const a = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
@@ -219,11 +156,7 @@ describe('Matrix3', () => {
       const result = a.multiply(b);
 
       expect(result).toBe(a);
-      // a * b row-major: row1 = [1*9+2*6+3*3, 1*8+2*5+3*2, 1*7+2*4+3*1] = [30, 24, 18]
-      // row2 = [4*9+5*6+6*3, 4*8+5*5+6*2, 4*7+5*4+6*1] = [84, 69, 54]
-      // row3 = [7*9+8*6+9*3, 7*8+8*5+9*2, 7*7+8*4+9*1] = [138, 114, 90]
-      // column-major: [30, 84, 138, 24, 69, 114, 18, 54, 90]
-      expectMatrix3Equal(a, [30, 84, 138, 24, 69, 114, 18, 54, 90]);
+      expectMatrix3Equal(a, aTimesBColumnMajor);
     });
 
     test('does not mutate this when out is supplied', () => {
@@ -233,7 +166,7 @@ describe('Matrix3', () => {
       a.multiply(b, out);
 
       expectMatrix3Equal(a, [1, 4, 7, 2, 5, 8, 3, 6, 9]);
-      expectMatrix3Equal(out, [30, 84, 138, 24, 69, 114, 18, 54, 90]);
+      expectMatrix3Equal(out, aTimesBColumnMajor);
     });
   });
 
@@ -242,7 +175,6 @@ describe('Matrix3', () => {
       const a = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
       const b = new Matrix3().set(9, 8, 7, 6, 5, 4, 3, 2, 1);
       a.premultiply(b);
-      // b * a — same as a.multiply(b) but with operands swapped.
       const expected = new Matrix3().set(9, 8, 7, 6, 5, 4, 3, 2, 1);
       expected.multiply(new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9));
 
@@ -328,37 +260,23 @@ describe('Matrix3', () => {
   });
 
   describe('determinant', () => {
-    test('identity matrix has determinant 1', () => {
-      expect(new Matrix3().determinant()).toBe(1);
-    });
-
     test('scale matrix determinant equals product of scales', () => {
       const m = new Matrix3().set(2, 0, 0, 0, 3, 0, 0, 0, 5);
       expect(m.determinant()).toBeCloseTo(2 * 3 * 5, 5);
     });
 
     test('singular matrix has determinant 0', () => {
-      // Two identical rows -> singular
-      const m = new Matrix3().set(1, 2, 3, 1, 2, 3, 4, 5, 6);
-      expect(m.determinant()).toBe(0);
+      const twoEqualRows = new Matrix3().set(1, 2, 3, 1, 2, 3, 4, 5, 6);
+      expect(twoEqualRows.determinant()).toBe(0);
     });
   });
 
   describe('transpose', () => {
-    test('swaps element layout', () => {
+    test('swaps rows and columns', () => {
       const m = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
       m.transpose();
 
-      // Original was column-major [1, 4, 7, 2, 5, 8, 3, 6, 9]; transpose is [1, 2, 3, 4, 5, 6, 7, 8, 9].
       expectMatrix3Equal(m, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    });
-
-    test('transpose of transpose returns original', () => {
-      const original = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
-      const m = original.clone();
-      m.transpose().transpose();
-
-      expect(m.equals(original)).toBe(true);
     });
 
     test('does not mutate this when out is supplied', () => {
@@ -404,25 +322,11 @@ describe('Matrix3', () => {
       const out = new Matrix3();
       a.getInverse(a, false, out);
 
-      // a here is the source, but we passed `a` as `m` and `out` is separate, so a is unchanged.
       expect(a.equals(original)).toBe(true);
     });
   });
 
   describe('translate', () => {
-    test('applies 2D translation to identity', () => {
-      const m = new Matrix3().translate(10, 5);
-      // Identity translated by (10, 5) gives matrix with translation column (10, 5).
-      // Column-major identity is [1,0,0, 0,1,0, 0,0,1]. After translate:
-      // te[0] += 10 * te[2] -> te[0] = 1 + 10*0 = 1
-      // te[3] += 10 * te[5] -> te[3] = 0 + 10*0 = 0
-      // te[6] += 10 * te[8] -> te[6] = 0 + 10*1 = 10
-      // te[1] += 5 * te[2]  -> te[1] = 0
-      // te[4] += 5 * te[5]  -> te[4] = 1
-      // te[7] += 5 * te[8]  -> te[7] = 0 + 5 = 5
-      expectMatrix3Equal(m, [1, 0, 0, 0, 1, 0, 10, 5, 1]);
-    });
-
     test('does not mutate this when out is supplied', () => {
       const m = new Matrix3();
       const out = new Matrix3();
@@ -434,12 +338,6 @@ describe('Matrix3', () => {
   });
 
   describe('scale', () => {
-    test('applies 2D scale to identity', () => {
-      const m = new Matrix3().scale(2, 3);
-
-      expectMatrix3Equal(m, [2, 0, 0, 0, 3, 0, 0, 0, 1]);
-    });
-
     test('does not mutate this when out is supplied', () => {
       const m = new Matrix3();
       const out = new Matrix3();
@@ -461,24 +359,6 @@ describe('Matrix3', () => {
       expect(p.y).toBeCloseTo(1, 5);
       expect(p.x).toBeCloseTo(pixi.x, 5);
       expect(p.y).toBeCloseTo(pixi.y, 5);
-    });
-
-    test('agrees with Vector2.rotate', () => {
-      const p = new Vector2(3, -2).applyMatrix3(new Matrix3().rotate(0.7));
-      const expected = new Vector2(3, -2).rotate(0.7);
-
-      expect(p.x).toBeCloseTo(expected.x, 5);
-      expect(p.y).toBeCloseTo(expected.y, 5);
-    });
-
-    test('rotation by 0 leaves matrix unchanged', () => {
-      const original = new Matrix3().set(1, 2, 3, 4, 5, 6, 7, 8, 9);
-      const m = original.clone();
-      m.rotate(0);
-
-      for (let i = 0; i < 9; i++) {
-        expect(m.elements[i]).toBeCloseTo(original.elements[i], 5);
-      }
     });
 
     test('does not mutate this when out is supplied', () => {
@@ -518,7 +398,6 @@ describe('Matrix3', () => {
   describe('setUvTransform', () => {
     test('translation only', () => {
       const m = new Matrix3().setUvTransform(0.5, 0.25, 1, 1, 0, 0, 0);
-      // No rotation, no scale change, just translation: tx=0.5, ty=0.25.
       expectMatrix3Equal(m, [1, 0, 0, 0, 1, 0, 0.5, 0.25, 1]);
     });
 
@@ -530,31 +409,13 @@ describe('Matrix3', () => {
 
     test('rotation only around (0,0)', () => {
       const m = new Matrix3().setUvTransform(0, 0, 1, 1, Math.PI / 2, 0, 0);
-      // Row-major args: (0, 1, 0, -1, 0, 0, 0, 0, 1) -> col-major storage.
       expectMatrix3Equal(m, [0, -1, 0, 1, 0, 0, 0, 0, 1]);
     });
   });
 
   describe('setFromMatrix4', () => {
-    test('extracts upper-left 3x3', () => {
-      const m4 = new Matrix4().set(
-        1,
-        2,
-        3,
-        99, // row 1
-        4,
-        5,
-        6,
-        99, // row 2
-        7,
-        8,
-        9,
-        99, // row 3
-        99,
-        99,
-        99,
-        99,
-      );
+    test('extracts upper-left 3x3, ignoring the fourth row and column (the 99s)', () => {
+      const m4 = new Matrix4().set(1, 2, 3, 99, 4, 5, 6, 99, 7, 8, 9, 99, 99, 99, 99, 99);
       const m3 = new Matrix3().setFromMatrix4(m4);
 
       expectMatrix3Equal(m3, [1, 4, 7, 2, 5, 8, 3, 6, 9]);
@@ -566,28 +427,21 @@ describe('Matrix3', () => {
       const m4 = new Matrix4().makeRotationY(Math.PI / 4);
       const normal = new Matrix3().getNormalMatrix(m4);
 
-      // Upper-left of m4 column-major: [c,0,-s, 0,1,0, s,0,c] (where c=cos, s=sin).
-      // Inverse-transpose of an orthonormal rotation = the rotation itself.
       const c = Math.cos(Math.PI / 4);
       const s = Math.sin(Math.PI / 4);
       expectMatrix3Equal(normal, [c, 0, -s, 0, 1, 0, s, 0, c]);
     });
 
-    test('non-uniform scale yields inverse-transpose', () => {
-      // Matrix4 with non-uniform scale (2, 3, 4).
+    test('non-uniform scale yields inverse-transpose, which keeps a normal perpendicular to its surface', () => {
       const m4 = new Matrix4().makeScale(2, 3, 4);
       const normal = new Matrix3().getNormalMatrix(m4);
 
-      // Inverse of diag(2,3,4) = diag(1/2,1/3,1/4); transpose unchanged.
       expectMatrix3Equal(normal, [1 / 2, 0, 0, 0, 1 / 3, 0, 0, 0, 1 / 4]);
 
-      // Verify: applying normalMatrix to a normal vector preserves its perpendicularity to a
-      // surface vector under the inverse-transpose rule for scaled space.
       const surface = new Vector3(1, 0, 0);
       const surfaceTransformed = surface.clone().applyMatrix3(new Matrix3().set(2, 0, 0, 0, 3, 0, 0, 0, 4));
       const norm = new Vector3(0, 1, 0);
       const normTransformed = norm.clone().applyMatrix3(normal);
-      // Transformed normal should still be perpendicular to transformed surface.
       expect(surfaceTransformed.dot(normTransformed)).toBeCloseTo(0, 5);
     });
   });

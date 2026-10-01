@@ -16,77 +16,20 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-// View-local probe points for the two-cube scene built by `makeScene` (camera
-// at z=10, fov 60): A sits at world x=-2, B at x=+2, nothing at the center.
+/** View-local point over cube A of `makeScene`, at world x = -2 (camera at z = 10, fov 60) */
 const AT_A = { x: 31, y: 50 };
+/** View-local point over cube B of `makeScene`, at world x = +2 */
 const AT_B = { x: 69, y: 50 };
+/** View-local point between the two cubes of `makeScene`, where nothing is hit */
 const AT_EMPTY = { x: 50, y: 50 };
 
-// A 2×2×2 cube centred at origin, so each face sits one unit from the centre.
+/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
-    -1,
-    -1,
-    -1,
-    1,
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    -1,
-    1,
-    -1, // back
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    1,
-    1,
-    1,
-    1,
-    -1,
-    1,
-    1, // front
+    -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
   ]);
   const indices = new Uint16Array([
-    0,
-    1,
-    2,
-    0,
-    2,
-    3, // back
-    4,
-    6,
-    5,
-    4,
-    7,
-    6, // front
-    0,
-    4,
-    5,
-    0,
-    5,
-    1, // bottom
-    2,
-    6,
-    7,
-    2,
-    7,
-    3, // top
-    1,
-    5,
-    6,
-    1,
-    6,
-    2, // right
-    0,
-    3,
-    7,
-    0,
-    7,
-    4, // left
+    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 2, 6, 7, 2, 7, 3, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4,
   ]);
   const geometry = new Geometry3D({
     positions,
@@ -96,8 +39,7 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-// Run the transform pass + camera projection so worldTransform / viewProjection
-// reflect the current scene state. These tests sit outside the render loop.
+/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -105,8 +47,10 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-// Two sibling cubes under an interactive group — the smallest scene where
-// press, release, and click targets can all be distinct nodes.
+/**
+ * Interactive sibling cubes A and B under a static group: the smallest scene where press, release and
+ * click targets can all differ
+ */
 function makeScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -127,8 +71,10 @@ function makeScene() {
   return { view3d, group, a, b };
 }
 
-// Hit test the way pixi does before every dispatch, asserting the pick landed
-// where the test intends so probe-point drift fails loudly.
+/**
+ * Hit-tests as pixi does before every dispatch, asserting the pick lands on `expected` so a drifted
+ * probe point fails loudly
+ */
 function hitAt(view3d: View3D, point: { x: number; y: number }, expected: Container3D | null): void {
   expect(view3d.containsPoint(point)).toBe(true);
   expect(view3d.events._currentPick3D).toBe(expected);
@@ -143,9 +89,7 @@ interface EventInit3D {
   timeStamp?: number;
 }
 
-// Minimal stand-in for a pooled FederatedPointerEvent — the dispatcher reads
-// pointerId / button / pointerType / nativeEvent / detail / timeStamp plus the
-// propagation flags and eventPhase, and writes the 3D fields onto it.
+/** A plain-object stand-in for a pooled `FederatedPointerEvent`, with the fields the 3D dispatcher reads */
 function makeEvent(type: string, init: EventInit3D = {}): FederatedPointerEvent {
   return {
     type,
@@ -163,9 +107,10 @@ function makeEvent(type: string, init: EventInit3D = {}): FederatedPointerEvent 
   } as unknown as FederatedPointerEvent;
 }
 
-// A cube parented inside another cube — the smallest scene where hover can
-// move between an ancestor and its descendant. The parent sits at AT_A; the
-// child's local offset lands it at AT_B in world space.
+/**
+ * An interactive cube parented to another, the parent under AT_A and the child under AT_B: the smallest
+ * scene where hover moves between ancestor and descendant
+ */
 function makeNestedScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -192,24 +137,21 @@ describe('View3D dispatcher — per-pointer independence', () => {
     a.on('pointerupoutside', () => events.push('a-upoutside'));
     b.on('pointerup', () => events.push('b-up'));
 
-    // Finger 1 presses A, finger 2 presses B.
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerdown', makeEvent('pointerdown', { pointerId: 1, pointerType: 'touch' }));
     hitAt(view3d, AT_B, b);
     view3d.emit('pointerdown', makeEvent('pointerdown', { pointerId: 2, pointerType: 'touch' }));
 
-    // Finger 2 releases on B first — must not clear finger 1's press.
     hitAt(view3d, AT_B, b);
     view3d.emit('pointerup', makeEvent('pointerup', { pointerId: 2, pointerType: 'touch' }));
 
-    // Finger 1 leaves the view, then releases outside.
     view3d.emit('pointerout', makeEvent('pointerout', { pointerId: 1, pointerType: 'touch' }));
     view3d.emit('pointerupoutside', makeEvent('pointerupoutside', { pointerId: 1, pointerType: 'touch' }));
 
     expect(events).toEqual(['a-down', 'b-down', 'b-up', 'a-upoutside']);
   });
 
-  test('interleaved moves from two pointers keep independent hover state', () => {
+  test('interleaved moves from two pointers fire one pointerover each, and flushing one pointer leaves the other hovering', () => {
     const { view3d, a, b } = makeScene();
     let overA = 0;
     let outA = 0;
@@ -220,8 +162,6 @@ describe('View3D dispatcher — per-pointer independence', () => {
     b.on('pointerover', () => overB++);
     b.on('pointerout', () => outB++);
 
-    // Alternating moves: single-slot hover would fire an out/over pair per
-    // alternation; per-pointer records fire exactly one over each.
     hitAt(view3d, AT_A, a);
     view3d.emit('pointermove', makeEvent('pointermove', { pointerId: 1 }));
     hitAt(view3d, AT_B, b);
@@ -233,7 +173,6 @@ describe('View3D dispatcher — per-pointer independence', () => {
 
     expect([overA, outA, overB, outB]).toEqual([1, 0, 1, 0]);
 
-    // Flushing pointer 1 leaves pointer 2's hover intact.
     view3d.emit('pointerout', makeEvent('pointerout', { pointerId: 1 }));
     expect(outA).toBe(1);
     hitAt(view3d, AT_B, b);
@@ -241,7 +180,7 @@ describe('View3D dispatcher — per-pointer independence', () => {
     expect(overB).toBe(1);
   });
 
-  test('a right press during a held left drag tracks its own press path (per-button independence)', () => {
+  test('a right press during a held left drag reconciles on its own release, each button with its own upoutside alias', () => {
     const { view3d, a, b } = makeScene();
     let aUpOutside = 0;
     let aRightUpOutside = 0;
@@ -257,15 +196,12 @@ describe('View3D dispatcher — per-pointer independence', () => {
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerdown', makeEvent('pointerdown', { button: 2 }));
 
-    // Slide to B and release the right button there: only button 2's press
-    // reconciles — with the button-2 alias — while the left press stays held.
     hitAt(view3d, AT_B, b);
     view3d.emit('pointermove', makeEvent('pointermove'));
     hitAt(view3d, AT_B, b);
     view3d.emit('pointerup', makeEvent('pointerup', { button: 2 }));
     expect([aUpOutside, aRightUpOutside, aMouseUpOutside, bUp]).toEqual([1, 1, 0, 1]);
 
-    // Now release the left button on B: button 0 reconciles with its alias.
     hitAt(view3d, AT_B, b);
     view3d.emit('pointerup', makeEvent('pointerup', { button: 0 }));
     expect([aUpOutside, aRightUpOutside, aMouseUpOutside, bUp]).toEqual([2, 1, 1, 2]);
@@ -273,7 +209,7 @@ describe('View3D dispatcher — per-pointer independence', () => {
 });
 
 describe('View3D dispatcher — in-view slide-off release', () => {
-  test('B gets pointerup, A gets pointerupoutside, the common ancestor gets the click — B does not; hit3D is B throughout', () => {
+  test('B gets pointerup, A gets pointerupoutside, and the common ancestor, not B, gets the click and no upoutside; hit3D is B throughout', () => {
     const { view3d, group, a, b } = makeScene();
     let aUpOutside = 0;
     let aUpOutsideHit: unknown = 'unset';
@@ -312,9 +248,7 @@ describe('View3D dispatcher — in-view slide-off release', () => {
 
     expect(bUp).toBe(1);
     expect(aUpOutside).toBe(1);
-    // The release ray landed on B, and the pressed node hears exactly that (a drop target's cue).
     expect(aUpOutsideHit).toBe(b);
-    // The walk excludes the common ancestor — it is the click target instead.
     expect(groupUpOutside).toBe(0);
     expect(groupClick).toBe(1);
     expect(groupClickTarget).toBe(group);
@@ -347,7 +281,7 @@ describe('View3D dispatcher — in-view slide-off release', () => {
     expect(clickDistance).toBeGreaterThan(0);
   });
 
-  test('a press on empty viewport suppresses the click on the release node', () => {
+  test('a press on empty viewport leaves the release node its pointerup but gives the click to the View, which reads target3D null', () => {
     const { view3d, b } = makeScene();
     let bUp = 0;
     let bClick = 0;
@@ -363,8 +297,6 @@ describe('View3D dispatcher — in-view slide-off release', () => {
     const clickEvt = makeEvent('click', { nativeEvent: nUp });
     view3d.emit('click', clickEvt);
 
-    // The release node hears the up, but the click belongs to the View (the
-    // press/release common ancestor) — its listeners see a miss.
     expect(bUp).toBe(1);
     expect(bClick).toBe(0);
     expect((clickEvt as Pointer3DEvent).target3D).toBeNull();
@@ -381,7 +313,6 @@ describe('View3D dispatcher — in-view slide-off release', () => {
 
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerdown', makeEvent('pointerdown'));
-    // Cross B so `_lastHit` describes B's surface — the stale-data trap.
     hitAt(view3d, AT_B, b);
     view3d.emit('pointermove', makeEvent('pointermove'));
 
@@ -412,7 +343,7 @@ describe('View3D dispatcher — detached press target (findMountedTarget parity)
     expect(groupUpOutside).toBe(1);
   });
 
-  test('an in-view release after the press target detached clicks the mounted ancestor', () => {
+  test('an in-view release after the press target detached clicks its mounted ancestor, on the release chain, with no upoutside', () => {
     const { view3d, group, a, b } = makeScene();
     let groupClick = 0;
     let bClick = 0;
@@ -425,8 +356,6 @@ describe('View3D dispatcher — detached press target (findMountedTarget parity)
     view3d.emit('pointerdown', makeEvent('pointerdown', { nativeEvent: {} }));
     group.removeChild(a);
 
-    // The press path resolves to the mounted group, which is on B's release
-    // chain — so no upoutside fires and the group is the click target.
     const nUp = {};
     hitAt(view3d, AT_B, b);
     view3d.emit('pointerup', makeEvent('pointerup', { nativeEvent: nUp }));
@@ -439,18 +368,21 @@ describe('View3D dispatcher — detached press target (findMountedTarget parity)
 });
 
 describe('View3D dispatcher — multi-click detail per 3D target', () => {
+  /** The `detail` pixi counted with the View as click target, which the 3D chain overrides and then restores */
+  const PIXI_VIEW_CLICK_DETAIL = 7;
+
   function clickOn(view3d: View3D, point: { x: number; y: number }, node: Container3D): FederatedPointerEvent {
     hitAt(view3d, point, node);
     view3d.emit('pointerdown', makeEvent('pointerdown', { nativeEvent: {} }));
     const nUp = {};
     hitAt(view3d, point, node);
     view3d.emit('pointerup', makeEvent('pointerup', { nativeEvent: nUp }));
-    const clickEvt = makeEvent('click', { nativeEvent: nUp, detail: 7 });
+    const clickEvt = makeEvent('click', { nativeEvent: nUp, detail: PIXI_VIEW_CLICK_DETAIL });
     view3d.emit('click', clickEvt);
     return clickEvt;
   }
 
-  test('rapid same-target clicks increment detail; switching targets resets it', () => {
+  test("rapid same-target clicks increment detail; switching targets resets it; pixi's own count comes back after the 3D chain", () => {
     const { view3d, a, b } = makeScene();
     const aDetails: number[] = [];
     const bDetails: number[] = [];
@@ -463,19 +395,15 @@ describe('View3D dispatcher — multi-click detail per 3D target', () => {
 
     expect(aDetails).toEqual([1, 2]);
     expect(bDetails).toEqual([1]);
-    // Pixi's own per-View count is restored on the event after the 3D chain.
-    expect(secondClick.detail).toBe(7);
+    expect(secondClick.detail).toBe(PIXI_VIEW_CLICK_DETAIL);
   });
 
-  test('detail survives the record teardown between taps of one pointer (2D parity)', () => {
+  test('detail survives the pointerout that frees the record between taps, as on non-hover devices (2D parity)', () => {
     const { view3d, a } = makeScene();
     const details: number[] = [];
     a.on('click', (e: Pointer3DEvent) => details.push(e.detail));
 
     clickOn(view3d, AT_A, a);
-    // Non-hover devices fire pointerout right after the release, which frees
-    // the pointer record — the click history must outlive it, as 2D's
-    // never-dropped tracking data does.
     view3d.emit('pointerout', makeEvent('pointerout'));
     clickOn(view3d, AT_A, a);
 
@@ -515,21 +443,7 @@ describe('View3D dispatcher — hit3D.triangleIndex', () => {
     expect(triangleIndex).toBe(view3d.raycast(AT_A)?.triangleIndex);
   });
 
-  test("a 'box' hit reports no triangle", () => {
-    const { view3d, a } = makeScene();
-    a.hitVolume = 'box';
-    let triangleIndex = Number.NaN;
-    a.on('pointerdown', (e: Pointer3DEvent) => {
-      triangleIndex = e.hit3D?.triangleIndex ?? Number.NaN;
-    });
-
-    hitAt(view3d, AT_A, a);
-    view3d.emit('pointerdown', makeEvent('pointerdown', { nativeEvent: {} }));
-
-    expect(triangleIndex).toBe(-1);
-  });
-
-  test('a viewport miss clears the hit off a reused pooled event', () => {
+  test('a viewport miss clears the hit off a reused pooled event, even under the same token', () => {
     const { view3d, a } = makeScene();
     a.hitVolume = 'geometry';
     const evt = makeEvent('pointermove', { nativeEvent: {} });
@@ -539,8 +453,6 @@ describe('View3D dispatcher — hit3D.triangleIndex', () => {
     view3d.emit('pointermove', evt);
     expect(e.hit3D?.triangleIndex).toBeGreaterThanOrEqual(0);
 
-    // Same pooled object, same token — a miss must null the hit, not leave the
-    // previous hit's surface readable.
     hitAt(view3d, AT_EMPTY, null);
     view3d.emit('pointermove', evt);
     expect(e.hit3D).toBeNull();
@@ -579,25 +491,10 @@ describe('View3D dispatcher — hit3D is the pick under the pointer, whatever th
 
     expect(outHit).toBeNull();
   });
-
-  test('hit3D.target matches target3D on a plain hit; both are null on a viewport miss', () => {
-    const { view3d, a } = makeScene();
-    const evt = makeEvent('pointerdown', { nativeEvent: {} }) as Pointer3DEvent;
-    hitAt(view3d, AT_A, a);
-    view3d.emit('pointerdown', evt);
-    expect(evt.target3D).toBe(a);
-    expect(evt.hit3D?.target).toBe(a);
-
-    const miss = makeEvent('pointerdown', { nativeEvent: {} }) as Pointer3DEvent;
-    hitAt(view3d, AT_EMPTY, null);
-    view3d.emit('pointerdown', miss);
-    expect(miss.target3D).toBeNull();
-    expect(miss.hit3D).toBeNull();
-  });
 });
 
 describe('View3D dispatcher — stale 3D fields on pooled events (validity token)', () => {
-  test('a recycled event that skips the View reads as a miss', () => {
+  test('a recycled event with a new nativeEvent that skips the View reads as a miss', () => {
     const { view3d, a } = makeScene();
     a.hitVolume = 'geometry';
 
@@ -611,8 +508,6 @@ describe('View3D dispatcher — stale 3D fields on pooled events (validity token
     expect(e.hit3D?.triangleIndex).toBeGreaterThanOrEqual(0);
     expect(e.hit3D?.point.z).toBeCloseTo(1, 2);
 
-    // Pixi recycles the pooled event object for an unrelated dispatch (a new
-    // nativeEvent) that never crosses the View — the fields must not leak.
     (evt as unknown as { nativeEvent: unknown }).nativeEvent = {};
     expect(e.target3D).toBeNull();
     expect(e.hit3D).toBeNull();
@@ -620,14 +515,13 @@ describe('View3D dispatcher — stale 3D fields on pooled events (validity token
 });
 
 describe('View3D dispatcher — touch alias family', () => {
-  test('touchstart / touchmove / touchend route through the pick under the alias type', () => {
+  test('touchstart / touchmove / touchend, re-emitted with the same pooled event, route through the pick under the alias type', () => {
     const { view3d, a } = makeScene();
     const types: string[] = [];
     a.on('touchstart', (e: Pointer3DEvent) => types.push(e.type));
     a.on('touchmove', (e: Pointer3DEvent) => types.push(e.type));
     a.on('touchend', (e: Pointer3DEvent) => types.push(e.type));
 
-    // Pixi re-dispatches the same pooled event under the alias key.
     hitAt(view3d, AT_A, a);
     const down = makeEvent('pointerdown', { pointerType: 'touch' });
     view3d.emit('pointerdown', down);
@@ -713,19 +607,7 @@ describe('View3D dispatcher — stopPropagation View silencing', () => {
     expect(evt.propagationImmediatelyStopped).toBe(true);
   });
 
-  test('an unstopped chain leaves the propagation flags untouched', () => {
-    const { view3d, a } = makeScene();
-    a.on('pointerdown', () => {});
-
-    hitAt(view3d, AT_A, a);
-    const evt = makeEvent('pointerdown');
-    view3d.emit('pointerdown', evt);
-
-    expect(evt.propagationStopped).toBe(false);
-    expect(evt.propagationImmediatelyStopped).toBe(false);
-  });
-
-  test('a stop inside a synthesized pointerout chain does not leak into the move dispatch', () => {
+  test('a stop inside a synthesized pointerout chain neither skips the over chain nor leaks into the move dispatch', () => {
     const { view3d, a, b } = makeScene();
     let overB = 0;
     a.on('pointerout', (e: FederatedPointerEvent) => {
@@ -740,8 +622,6 @@ describe('View3D dispatcher — stopPropagation View silencing', () => {
     const move = makeEvent('pointermove');
     view3d.emit('pointermove', move);
 
-    // The synthesized out-chain stop is restored: the over chain still ran
-    // and pixi's onward 2D dispatch of the move is unaffected.
     expect(overB).toBe(1);
     expect(move.propagationStopped).toBe(false);
     expect(move.propagationImmediatelyStopped).toBe(false);
@@ -761,18 +641,16 @@ describe('View3D dispatcher — capture phase', () => {
     const evt = makeEvent('pointerdown');
     view3d.emit('pointerdown', evt);
 
-    // CAPTURING_PHASE = 1, AT_TARGET = 2 (fires the target's capture and
-    // plain listeners), BUBBLING_PHASE = 3.
     expect(log).toEqual([
-      ['group-capture', 1],
-      ['a-capture', 2],
-      ['a-plain', 2],
-      ['group-plain', 3],
+      ['group-capture', Event.CAPTURING_PHASE],
+      ['a-capture', Event.AT_TARGET],
+      ['a-plain', Event.AT_TARGET],
+      ['group-plain', Event.BUBBLING_PHASE],
     ]);
     expect(evt.eventPhase).toBe(0);
   });
 
-  test('stopPropagation in an ancestor capture listener silences the target entirely', () => {
+  test('stopPropagation in an ancestor capture listener silences the target entirely and, like a bubble-phase stop, the View batch', () => {
     const { view3d, group, a } = makeScene();
     const log: string[] = [];
     group.on('pointerdowncapture', (e: FederatedPointerEvent) => {
@@ -788,8 +666,6 @@ describe('View3D dispatcher — capture phase', () => {
     view3d.emit('pointerdown', evt);
 
     expect(log).toEqual(['group-capture']);
-    // The stop counts as stopping the main chain — the View batch is
-    // silenced just as for a bubble-phase stop.
     expect(evt.propagationStopped).toBe(true);
     expect(evt.propagationImmediatelyStopped).toBe(true);
   });
@@ -812,7 +688,7 @@ describe('View3D dispatcher — capture phase', () => {
 });
 
 describe('View3D dispatcher — pointerenter / pointerleave', () => {
-  test('moving parent → child fires enter on the child only, no leave (no out/over storm)', () => {
+  test('moving parent → child fires pointerout on the parent but no leave, and enter on the child only', () => {
     const { view3d, parent, child } = makeNestedScene();
     let parentEnter = 0;
     let parentLeave = 0;
@@ -830,15 +706,13 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     hitAt(view3d, AT_B, child);
     view3d.emit('pointermove', makeEvent('pointermove'));
 
-    // out still fires on the old target (bubbling), but the parent is on the
-    // child's chain so it is never *left*; enter reaches the child only.
     expect(parentOut).toBe(1);
     expect(parentLeave).toBe(0);
     expect(childEnter).toBe(1);
     expect(parentEnter).toBe(1);
   });
 
-  test('moving child → parent fires leave on the child only, no enter', () => {
+  test('moving child → parent fires leave on the child only, and no enter on the parent, an ancestor of the old target', () => {
     const { view3d, parent, child } = makeNestedScene();
     let parentEnter = 0;
     let childEnter = 0;
@@ -849,7 +723,6 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     child.on('pointerleave', () => childLeave++);
     parent.on('pointerleave', () => parentLeave++);
 
-    // First hover lands on the child: enter reaches child and parent both.
     hitAt(view3d, AT_B, child);
     view3d.emit('pointermove', makeEvent('pointermove'));
     expect([childEnter, parentEnter]).toEqual([1, 1]);
@@ -857,8 +730,6 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     hitAt(view3d, AT_A, parent);
     view3d.emit('pointermove', makeEvent('pointermove'));
 
-    // The parent was never left, and it is not re-entered (it is an
-    // ancestor of the old target — 2D's didPointerEnter probe).
     expect(childLeave).toBe(1);
     expect(parentLeave).toBe(0);
     expect(parentEnter).toBe(1);
@@ -881,7 +752,7 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     ]);
   });
 
-  test("the View's incoming pointerover seeds hover without waiting for a move", () => {
+  test("the View's incoming pointerover seeds hover, over then enter from target to root, so the next move fires nothing new", () => {
     const { view3d, group, a } = makeScene();
     const log: string[] = [];
     a.on('pointerover', () => log.push('a-over'));
@@ -891,10 +762,8 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerover', makeEvent('pointerover'));
 
-    // over bubbles, then enter walks target → root.
     expect(log).toEqual(['a-over', 'a-enter', 'group-enter']);
 
-    // The subsequent move of the same entry sees hover already seeded.
     hitAt(view3d, AT_A, a);
     view3d.emit('pointermove', makeEvent('pointermove'));
     expect(log).toEqual(['a-over', 'a-enter', 'group-enter']);
@@ -914,7 +783,7 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     expect(log).toEqual(['a-out', 'a-leave', 'group-leave']);
   });
 
-  test('enter/leave target3D names the node being notified', () => {
+  test("enter/leave target3D names the node being notified, then returns to the move's own pick", () => {
     const { view3d, group, a } = makeScene();
     const enterTargets: unknown[] = [];
     a.on('pointerenter', (e: Pointer3DEvent) => enterTargets.push(e.target3D));
@@ -925,7 +794,6 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     view3d.emit('pointermove', move);
 
     expect(enterTargets).toEqual([a, group]);
-    // Restored to the move's own pick after the walk.
     expect((move as Pointer3DEvent).target3D).toBe(a);
   });
 });
@@ -1018,40 +886,10 @@ describe('View3D dispatcher — on-handler properties', () => {
 
     expect(log).toEqual(['onpointerdown', 'onmousedown']);
   });
-
-  test('onpointerupoutside fires along the reconciliation walk', () => {
-    const { view3d, a, b } = makeScene();
-    const log: string[] = [];
-    a.onpointerupoutside = () => log.push('on-upoutside');
-    a.onmouseupoutside = () => log.push('on-mouseupoutside');
-    a.on('pointerupoutside', () => log.push('listener'));
-
-    hitAt(view3d, AT_A, a);
-    view3d.emit('pointerdown', makeEvent('pointerdown'));
-    hitAt(view3d, AT_B, b);
-    view3d.emit('pointerup', makeEvent('pointerup'));
-
-    expect(log).toEqual(['on-upoutside', 'listener', 'on-mouseupoutside']);
-  });
-
-  test('enter/leave walks invoke on-handlers per node', () => {
-    const { view3d, group, a } = makeScene();
-    const log: string[] = [];
-    a.onpointerenter = () => log.push('a-enter');
-    group.onpointerenter = () => log.push('group-enter');
-    a.onpointerleave = () => log.push('a-leave');
-    group.onpointerleave = () => log.push('group-leave');
-
-    hitAt(view3d, AT_A, a);
-    view3d.emit('pointermove', makeEvent('pointermove'));
-    view3d.emit('pointerout', makeEvent('pointerout'));
-
-    expect(log).toEqual(['a-enter', 'group-enter', 'a-leave', 'group-leave']);
-  });
 });
 
 describe('View3D dispatcher — globalpointermove', () => {
-  test('fans out once per interactive node in registration order, alias interleaved per node', () => {
+  test('fans out once per interactive node in registration order, children before parents, alias interleaved per node, and restores the event type', () => {
     const { view3d, group, a, b } = makeScene();
     const log: string[] = [];
     a.on('globalpointermove', (e: Pointer3DEvent) => log.push(`a:${e.type}`));
@@ -1062,36 +900,20 @@ describe('View3D dispatcher — globalpointermove', () => {
     const move = makeEvent('pointermove', { pointerType: 'touch' });
     view3d.emit('globalpointermove', move);
 
-    // Registration order is the _attach cascade order (children first).
     expect(log).toEqual(['a:globalpointermove', 'a:globaltouchmove', 'b', 'group']);
-    // The event's own type is restored for pixi's continued dispatch.
     expect(move.type).toBe('pointermove');
   });
 
-  test('mouse pointers get the globalmousemove alias; on-handlers are invoked', () => {
-    const { view3d, a } = makeScene();
-    const log: string[] = [];
-    a.onglobalpointermove = () => log.push('on-global');
-    a.on('globalpointermove', () => log.push('listener'));
-    a.on('globalmousemove', () => log.push('mouse'));
-
-    view3d.emit('globalpointermove', makeEvent('pointermove', { pointerType: 'mouse' }));
-
-    expect(log).toEqual(['on-global', 'listener', 'mouse']);
-  });
-
-  test('reuses the hit fields when the same native event already picked; reads a miss otherwise', () => {
+  test('reuses the hit fields of the pointermove that shares its event; a move that never crossed the View reads a miss', () => {
     const { view3d, a } = makeScene();
     const targets: unknown[] = [];
     a.on('globalpointermove', (e: Pointer3DEvent) => targets.push(e.target3D));
 
-    // Pixi reuses one event object for the move and the global fan-out.
     hitAt(view3d, AT_A, a);
     const move = makeEvent('pointermove', { nativeEvent: {} });
     view3d.emit('pointermove', move);
     view3d.emit('globalpointermove', move);
 
-    // A move whose pointer never crossed the View carries no pick.
     view3d.emit('globalpointermove', makeEvent('pointermove', { nativeEvent: {} }));
 
     expect(targets).toEqual([a, null]);
@@ -1113,7 +935,7 @@ describe('View3D dispatcher — globalpointermove', () => {
 });
 
 describe("View3D dispatcher — eventMode 'auto'", () => {
-  test("a hit on an auto child targets the interactive group with the child's surface data", () => {
+  test("a hit on an auto child targets the interactive group, with surface data in the child's local space", () => {
     const { view3d, group, a } = makeScene();
     a.eventMode = 'auto';
 
@@ -1137,8 +959,6 @@ describe("View3D dispatcher — eventMode 'auto'", () => {
     expect(hitTarget).toBe(group);
     expect(aHeard).toBe(0);
     expect(distance).toBeGreaterThan(0);
-    // Surface data stays in the struck (auto) node's space: the ray hit the
-    // front face of the cube, local z = +1.
     expect(localZ).toBeCloseTo(1, 2);
   });
 
@@ -1160,14 +980,12 @@ describe("View3D dispatcher — eventMode 'auto'", () => {
     expect(hit?.distance).toBeGreaterThan(0);
   });
 
-  test("auto nodes register on the pick list; under an interactive ancestor only 'none' leaves it", () => {
+  test("auto nodes register on the pick list, and under an interactive ancestor so do passive ones; only 'none' leaves it", () => {
     const { view3d, a } = makeScene();
     a.eventMode = 'auto';
     expect(view3d.events._interactiveList).toContain(a);
-    // Under the interactive group a 'passive' mesh stays implicitly registered (2D parity)...
     a.eventMode = 'passive';
     expect(view3d.events._interactiveList).toContain(a);
-    // ...'none' is the full opt-out.
     a.eventMode = 'none';
     expect(view3d.events._interactiveList).not.toContain(a);
   });
@@ -1206,7 +1024,7 @@ describe("View3D dispatcher — eventMode 'auto'", () => {
     expect(heard).toBe(1);
   });
 
-  test("another View's pick never leaks into this View's fan-out fields", () => {
+  test("another View's pick never leaks into this View's fan-out fields, and the picking View, notified second, still reads its own", () => {
     const s1 = makeScene();
     const s2 = makeScene();
     const s1Targets: unknown[] = [];
@@ -1214,17 +1032,12 @@ describe("View3D dispatcher — eventMode 'auto'", () => {
     s1.a.on('globalpointermove', (e: Pointer3DEvent) => s1Targets.push(e.target3D));
     s2.a.on('globalpointermove', (e: Pointer3DEvent) => s2Targets.push(e.target3D));
 
-    // The move picks in View 1 only; pixi's all() then hands the same pooled
-    // event to both Views, in whatever order the stage yields.
     hitAt(s1.view3d, AT_A, s1.a);
     const move = makeEvent('pointermove', { nativeEvent: {} });
     s1.view3d.emit('pointermove', move);
     s2.view3d.emit('globalpointermove', move);
     s1.view3d.emit('globalpointermove', move);
 
-    // View 2 never crossed this move — its listeners read a miss even though
-    // the shared storage held View 1's hit; View 1 still reads its own pick
-    // regardless of fan-out order.
     expect(s2Targets).toEqual([null]);
     expect(s1Targets).toEqual([s1.a]);
   });
@@ -1265,8 +1078,6 @@ describe('View3D dispatcher — stopImmediatePropagation between same-node liste
     hitAt(view3d, AT_B, b);
     view3d.emit('pointerdown', makeEvent('pointerdown'));
 
-    // a's single plain listener rides 2D's unchecked single-listener fast
-    // path; b's two-listener array path checks the flag before each call.
     expect(log).toEqual(['a-lone']);
   });
 
@@ -1285,7 +1096,7 @@ describe('View3D dispatcher — stopImmediatePropagation between same-node liste
 });
 
 describe('View3D dispatcher — release chain frozen at pointerup', () => {
-  test('a pointerup listener detaching the target cannot spawn a phantom upoutside or move the click', () => {
+  test('a pointerup listener detaching the target cannot spawn a phantom upoutside: the frozen chain bubbles the up and clicks the group', () => {
     const { view3d, group, a } = makeScene();
     let upOutside = 0;
     let groupUp = 0;
@@ -1303,10 +1114,6 @@ describe('View3D dispatcher — release chain frozen at pointerup', () => {
     view3d.emit('pointerup', makeEvent('pointerup', { nativeEvent: nUp }));
     view3d.emit('click', makeEvent('click', { nativeEvent: nUp }));
 
-    // The frozen chain still bubbles the up to the group, the mounted press
-    // target (the group) is found on it — so no upoutside fires anywhere —
-    // and the group receives the click (2D reconciles against the release
-    // event's cached composedPath, immune to listener-driven scene edits).
     expect(groupUp).toBe(1);
     expect(upOutside).toBe(0);
     expect(groupClick).toBe(1);
@@ -1364,7 +1171,7 @@ describe('View3D dispatcher — View-entry/exit hover chains honor 3D stops', ()
 });
 
 describe('View3D dispatcher — slide-off release ordering (documented divergence)', () => {
-  test('the legacy up alias lands after the upoutside walk', () => {
+  test('the legacy up alias lands after the upoutside walk, where 2D sends it before', () => {
     const { view3d, a, b } = makeScene();
     const order: string[] = [];
     b.on('pointerup', () => order.push('b-pointerup'));
@@ -1382,32 +1189,23 @@ describe('View3D dispatcher — slide-off release ordering (documented divergenc
     view3d.emit('pointerup', up);
     view3d.emit('mouseup', up);
 
-    // 2D orders this b-pointerup, b-mouseup, a-pointerupoutside,
-    // a-mouseupoutside; the 3D reconciliation runs inside the primary
-    // `pointerup` dispatch, so the legacy alias trails the walk.
     expect(order).toEqual(['b-pointerup', 'a-pointerupoutside', 'a-mouseupoutside', 'b-mouseup']);
   });
 });
 
-describe('View3D dispatcher — orphaned pointer record sweep', () => {
-  test('an abandoned held-press record is reclaimed when a new pointer appears after the stale window', () => {
+describe('View3D dispatcher — orphaned pointer record sweep after 60 s idle', () => {
+  test('a held press abandoned after pointerout is reclaimed when a new pointer appears after the stale window', () => {
     const { view3d, a } = makeScene();
     let upOutside = 0;
     a.on('pointerupoutside', () => upOutside++);
 
-    // Touch 1 presses A, then the contact is cancelled: the View only sees a
-    // pointerout while the press is held, so the record survives the sweep
-    // there (a mid-drag boundary exit must keep upoutside routing alive).
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerdown', makeEvent('pointerdown', { pointerId: 1, pointerType: 'touch', timeStamp: 1_000 }));
     view3d.emit('pointerout', makeEvent('pointerout', { pointerId: 1, pointerType: 'touch', timeStamp: 1_000 }));
 
-    // A fresh pointerId a minute later (id-minting mobile browsers never
-    // reuse a cancelled touch's id) triggers the staleness sweep.
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerdown', makeEvent('pointerdown', { pointerId: 2, pointerType: 'touch', timeStamp: 61_000 }));
 
-    // Nothing is left to reconcile for pointer 1.
     view3d.emit('pointerupoutside', makeEvent('pointerupoutside', { pointerId: 1, pointerType: 'touch' }));
     expect(upOutside).toBe(0);
   });

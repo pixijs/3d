@@ -3,16 +3,16 @@ import { Track } from './Track';
 import type { TrackOptions } from './Track';
 
 /**
- * Track for quaternion rotation animation values
+ * Track for a rotation stored as a quaternion, such as a node's `quaternion`
  *
- * Quaternion tracks use spherical interpolation for linear samples and normalize
- * cubic spline samples after evaluation.
+ * It slerps `'LINEAR'` keyframes rather than blending each component, and renormalises
+ * `'CUBICSPLINE'` samples to unit length.
  * @category animation
  * @advanced
  */
 export class QuaternionTrack extends Track {
   /**
-   * @param options - Keyframe data and binding label for the quaternion channel
+   * @param options - Keyframes and target label
    */
   constructor(options: Omit<TrackOptions, 'valueSize'>) {
     super({ ...options, valueSize: 4 });
@@ -72,11 +72,10 @@ export class QuaternionTrack extends Track {
       target[2] *= invLen;
       target[3] *= invLen;
     } else {
-      // SLERP (Linear for Quaternions)
       Quaternion.slerpFlat(
         target as number[],
         0,
-        this.values as unknown as number[], // slerpFlat expects number[] but Float32Array works in JS
+        this.values as unknown as number[],
         index * 4,
         this.values as unknown as number[],
         nextIndex * 4,

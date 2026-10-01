@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { CameraData } from '~/core/CameraData';
+import { LIGHT_TILES_X, LIGHT_TILES_Y } from '~/core/LightTiles';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 import { Vector3 } from '~/math/vector/Vector3';
@@ -54,19 +55,23 @@ describe('CameraData', () => {
     expect(Math.sign(data.projection.elements[5])).toBe(-1);
     expect(ndcZ(data.projection, -near)).toBeCloseTo(0, 5);
   });
-  it('holds the viewport as the uViewport lane, wherever the image sits on the target', () => {
+  it('maps pixel positions to light tiles, rows counting up from the bottom, wherever the image sits', () => {
     const data = new CameraData().setViewport({ x: 150, y: 92, width: 300, height: 200 });
-    const { x, y, width, height } = data.viewport;
+    const [sx, sy, ox, oy] = data.lightTiles.tileTransform;
 
-    expect(data.uniformGroup.uniforms.uViewport).toBe(data.viewport);
-    expect([x, y, width, height]).toEqual([150, 92, 300, 200]);
+    expect(data.uniformGroup.uniforms.uLightTileTransform).toBe(data.lightTiles.tileTransform);
+    expect(150 * sx + ox).toBeCloseTo(0, 4);
+    expect(92 * sy + oy).toBeCloseTo(0, 4);
+    expect(450 * sx + ox).toBeCloseTo(LIGHT_TILES_X, 4);
+    expect(292 * sy + oy).toBeCloseTo(LIGHT_TILES_Y, 4);
   });
 
-  it('starts with a viewport the shader can divide by', () => {
-    const { width, height } = new CameraData().viewport;
+  it('counts tile rows up from the bottom when pixel rows count down', () => {
+    const data = new CameraData().setViewport({ x: 150, y: 92, width: 300, height: 200 }, true);
+    const [, sy, , oy] = data.lightTiles.tileTransform;
 
-    expect(width).toBeGreaterThan(0);
-    expect(height).toBeGreaterThan(0);
+    expect(92 * sy + oy).toBeCloseTo(LIGHT_TILES_Y, 4);
+    expect(292 * sy + oy).toBeCloseTo(0, 4);
   });
 
   it('uploads the viewport only when it moves', () => {
@@ -85,21 +90,24 @@ describe('CameraData', () => {
 
     expect(data.lightTiles.masks.every((mask) => mask === -1)).toBe(true);
     expect(data.uniformGroup.uniforms.uLightTiles).toBe(data.lightTiles.masks);
+    expect(data.lightTiles.depthMasks.every((mask) => mask === -1)).toBe(true);
+    expect(data.uniformGroup.uniforms.uLightDepthMasks).toBe(data.lightTiles.depthMasks);
     expect(data.uniformGroup.uniforms.uLightDepthPlane).toBe(data.lightTiles.depthPlane);
 
     const view3d = new View3D({ width: 64, height: 64 });
     const session = { view3d } as RenderSession;
     const dirtyId = data.uniformGroup._dirtyId;
 
-    // No lights bins to all zeros.
     data.prepareLightTiles(session);
-    expect(data.lightTiles.masks.every((mask) => mask === 0)).toBe(true);
+    expect(
+      data.lightTiles.masks.every((mask) => mask === 0),
+      'no lights bins to all zeros',
+    ).toBe(true);
     expect(data.uniformGroup._dirtyId).not.toBe(dirtyId);
 
-    // A second upload in the same session changes nothing.
     const preparedId = data.uniformGroup._dirtyId;
     data.prepareLightTiles(session);
-    expect(data.uniformGroup._dirtyId).toBe(preparedId);
+    expect(data.uniformGroup._dirtyId, 'a second upload in the same session changes nothing').toBe(preparedId);
 
     view3d.destroy();
   });

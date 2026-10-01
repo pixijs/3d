@@ -12,7 +12,8 @@ const _sphere = new Sphere();
  * Parks a perspective camera on the +Z side of `target`, facing it, at the closest distance where
  * the sphere around the target's local bounds fits the viewport; near and far follow the distance
  *
- * The camera keeps its rotation, so this expects a fresh camera facing local -Z.
+ * The camera keeps its rotation, so this expects a fresh camera facing local -Z. An empty or
+ * single-point target is framed as if its sphere had a radius of 1.
  * @param camera - Camera to place; its `fov` and `zoom` set the fit.
  * @param target - Subtree to frame, measured with `getLocalBounds`.
  * @param aspect - Viewport width over height.
@@ -21,7 +22,6 @@ const _sphere = new Sphere();
 export function frameCamera(camera: Camera3D, target: Container3D, aspect: number): void {
   const { center, radius } = _sphere.setFromBox(target.getLocalBounds(_bounds));
 
-  // An empty or single-point scene still gets a valid camera one unit off its centre.
   const fit = radius > 0 ? radius : 1;
   const halfFovY = ((camera.fov / camera.zoom) * DEG_TO_RAD) / 2;
   const halfFovX = Math.atan(Math.tan(halfFovY) * aspect);

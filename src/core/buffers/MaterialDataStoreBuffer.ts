@@ -2,13 +2,10 @@ import type { BaseMaterial3D, MaterialUploadQueue } from '../../materials/BaseMa
 import { DataStoreBuffer } from './DataStoreBuffer';
 
 /**
- * Floats per material slot: 64 floats / 256 B
+ * Floats per material row, 64 floats or 256 bytes
  *
- * The worst-case Material3D struct (every glTF extension on simultaneously:
- * clearcoat + sheen + specular + iridescence + transmission + emissive +
- * uvTransform + normalScale) lays out to ~52 floats with WGSL alignment; 64
- * leaves headroom for future extensions without forcing field-tetris on every
- * new contributor.
+ * A {@link Material3D} with every extension on packs to 46 floats, so the rest is headroom for new
+ * fields. `mergeMaterialStruct` throws when a material's packed struct doesn't fit.
  * @internal
  */
 export const MATERIAL_STRIDE_FLOATS = 64;
@@ -20,43 +17,39 @@ export const MATERIAL_STRIDE_FLOATS = 64;
 export const MATERIAL_STRIDE_BYTES = MATERIAL_STRIDE_FLOATS * 4;
 
 /**
- * The material store — rows, slots, upload — plus the dirty queue in front of them
+ * The material store, one row per material, with the queue of rows waiting to be copied in
  *
- * Materials signal `enqueueDirty` (via `material.update()`); the pipe's
- * per-frame `update` stages queued rows and then uploads the dirty range, so
- * drain-before-upload ordering is unskippable. One per pipe; the backend
- * material systems register materials through it.
+ * `material.update()` queues the material through `enqueueDirty`. The pipe's per-frame `update`
+ * copies the queued rows in and then uploads, so a queued change can't miss the upload. Each
+ * renderer's View3D pipe has one, and its material system registers materials through it.
  *
- * Materials are user-owned and outlive the store (which dies with its
- * renderer), so the store keeps no membership list: each material carries the
- * store that minted its row (`_uploadQueue`); when that is not this store,
- * `register` hands the old row back to it and re-mints here, and calls through
- * a back-reference to a destroyed store are no-ops. One live renderer at a
- * time — two live renderers drawing the same material would re-mint it every
- * frame.
+ * Materials belong to the user and outlive the store, which dies with its renderer, so the store
+ * keeps no list of them. Each material carries the store that gave it its row, `_uploadQueue`.
+ * When another store sees it, `register` hands the old row back and gives it a new one, and calls
+ * to a destroyed store do nothing. Only one renderer may draw a material at a time: two live
+ * renderers would swap its row every frame.
  * @internal
  */
 export class MaterialDataStoreBuffer extends DataStoreBuffer implements MaterialUploadQueue {
   /**
-   * Materials whose packed data changed since the last `update`
+   * Materials whose packed data changed since the last `update`, the first `_dirtyCount` entries
    *
-   * `material.update()` lands here (coalesced on `_storeQueued`) — the
-   * transform-system shape: mutation raises a flag, the per-frame pass syncs
-   * it to the GPU. Count-indexed (the `_dirtyIndices` idiom); the drain
-   * nulls slots so a burst frame can't pin materials against GC.
+   * A material's `_storeQueued` flag keeps it from being queued twice. The drain nulls each entry,
+   * so a busy frame can't keep materials from being garbage collected.
    */
   private readonly _dirtyQueue: (BaseMaterial3D | null)[] = [];
   private _dirtyCount = 0;
 
+  /**
+   * Copying a row is one bit-exact copy. `material.data` already is the packed Material struct, a
+   * row long and laid out by the same merge the shader compiles, and its `u32` fields come along
+   * through the float view, since a copy between arrays of the same type moves bytes unchanged.
+   */
   constructor() {
     super({
       stride: MATERIAL_STRIDE_FLOATS,
       initialSize: 100,
       indexKey: '_materialIndex',
-      // `material.data` IS the packed Material struct (stride-sized, laid out
-      // by the same merge the shader compiles), so upload staging is a single
-      // bit-exact copy — u32 fields ride along through the f32 view, which is
-      // a memmove for same-typed arrays.
       copier: (
         material: BaseMaterial3D,
         buffer: Float32Array,
@@ -70,30 +63,26 @@ export class MaterialDataStoreBuffer extends DataStoreBuffer implements Material
   }
 
   /**
-   * Queues a material's row for re-upload on the next `update`
+   * Queues a material's row to be copied in and uploaded on the next `update`
    *
-   * Repeat calls while queued are no-ops — one entry, one copy, however many
-   * writes. Inert once the store is destroyed, so a late `material.update()`
-   * can't latch the queued flag against a store that will never drain.
+   * A material already queued isn't queued again, however many writes it takes. Does nothing once
+   * the store is destroyed, so a late `material.update()` can't leave the material flagged as
+   * queued on a store that will never drain.
    * @param material - The material whose row to re-upload.
    */
   public enqueueDirty(material: BaseMaterial3D): void {
-    if (!this.buffer || material._storeQueued) return;
+    if (!this.data || material._storeQueued) return;
     material._storeQueued = true;
     this._dirtyQueue[this._dirtyCount++] = material;
   }
 
   /**
-   * Wires a material to this store, called by `ensureMaterial` (which always
-   * runs when a material is newly assigned)
+   * Gives a material a row in this store; `ensureMaterial` calls it whenever a mesh gets a material
    *
-   * Mints the slot index synchronously — callers write it into renderable
-   * rows in the same walk — but the data itself rides the queue like every
-   * other upload: one copy path. No-op once resident here. A row minted by
-   * another store (a destroyed renderer's, typically) is never adopted, since
-   * the foreign index may name a row this store gave someone else: it is handed
-   * back to that store (whose `remove` resets the index) and a fresh row minted
-   * here.
+   * The row index is assigned straight away, since callers write it into mesh rows in the same
+   * walk, but the data goes through the queue like every other change. Does nothing for a material
+   * that already has a row here. A row from another store is handed back there and a new one given
+   * here, as `GeometryDataStoreBuffer.set` explains.
    * @param material - The material to register.
    */
   public register(material: BaseMaterial3D): void {
@@ -107,19 +96,20 @@ export class MaterialDataStoreBuffer extends DataStoreBuffer implements Material
     this.enqueueDirty(material);
   }
 
-  /** Per-frame material sync: drains the dirty queue into staged rows, then uploads the dirty range */
+  /**
+   * Copies the queued materials' rows in, then uploads the changed span
+   *
+   * The count resets before the drain, so a throw partway can't leave it counting entries already
+   * nulled. A queued material that was destroyed, or has a row in another store by now, no longer
+   * names this store as its `_uploadQueue`, and is skipped.
+   */
   public override update(): void {
     const queue = this._dirtyQueue;
     const count = this._dirtyCount;
-    // Reset before draining — a throw mid-drain must not leave the count
-    // pointing at already-nulled slots on the next frame.
     this._dirtyCount = 0;
     for (let i = 0; i < count; i++) {
       const material = queue[i]!;
       queue[i] = null;
-      // Only a material still wired here has a row to stage. One destroyed
-      // while queued (destroy nulls the queue and lowers the flag) or re-minted
-      // by another store (the flag is that store's now) falls out of this check.
       if (material._uploadQueue !== this) continue;
       material._storeQueued = false;
       this.set(material);
@@ -127,7 +117,10 @@ export class MaterialDataStoreBuffer extends DataStoreBuffer implements Material
     super.update();
   }
 
-  /** Renderer teardown: drops the pending queue along with the rows; the materials re-mint elsewhere on sight */
+  /**
+   * Drops the queue along with the rows when the renderer goes; each material gets a row in the
+   * next store that sees it
+   */
   public override destroy(): void {
     this._dirtyQueue.length = 0;
     this._dirtyCount = 0;

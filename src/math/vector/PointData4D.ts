@@ -1,9 +1,7 @@
 /**
- * Common interface for 4D points (homogeneous-coord positions or generic four-component vectors)
+ * Minimal `{ x, y, z, w }` shape that 4D math methods accept
  *
- * Provides a structural way to represent 4D coordinates. Implemented by {@link Vector4} and any
- * compatible type with `x`, `y`, `z` and `w` properties. By convention `w` is `1` for positions and
- * `0` for direction vectors.
+ * Any plain object with these four numbers can be passed in place of a full {@link Vector4}.
  * @example
  * ```ts
  * const p: PointData4D = { x: 1, y: 2, z: 3, w: 1 };
@@ -17,12 +15,39 @@
  * @standard
  */
 export interface PointData4D {
-  /** Position of the point on the x axis */
+  /**
+   * Position of the point on the x axis
+   * @example
+   * ```ts
+   * const clip = new Vector4(point.x, point.y, point.z, 1).applyMatrix4(camera.viewProjection);
+   * const screenX = clip.x / clip.w;
+   * ```
+   */
   x: number;
-  /** Position of the point on the y axis */
+  /**
+   * Position of the point on the y axis
+   * @example
+   * ```ts
+   * const screenY = clip.y / clip.w;
+   * ```
+   */
   y: number;
-  /** Position of the point on the z axis */
+  /**
+   * Position of the point on the z axis
+   * @example
+   * ```ts
+   * const depth = clip.z / clip.w;
+   * ```
+   */
   z: number;
-  /** Homogeneous coordinate; `1` for positions and `0` for direction vectors by convention */
+  /**
+   * Fourth component, `1` for a position and `0` for a direction by convention
+   *
+   * A 4x4 matrix moves a point whose `w` is 1, and only turns one whose `w` is 0.
+   * @example
+   * ```ts
+   * const behindCamera = clip.w <= 0;
+   * ```
+   */
   w: number;
 }

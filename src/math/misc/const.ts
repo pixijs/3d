@@ -1,7 +1,7 @@
 /**
- * String identifiers for the built-in 3D shape primitives
+ * Names of the built-in 3D shapes, as found on each shape's `type` field
  *
- * Used as the `type` discriminator on shape classes to avoid `instanceof` checks in hot paths.
+ * Reading `type` costs less than an `instanceof` test, as with pixi's `SHAPE_PRIMITIVE`.
  * @category maths
  * @advanced
  */

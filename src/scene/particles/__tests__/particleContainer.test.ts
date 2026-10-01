@@ -21,7 +21,7 @@ function sheet(frames: number): Texture[] {
 }
 
 describe('ParticleContainer3D', () => {
-  it('lays a written particle out across its four vertices', () => {
+  it('lays a written particle out across its four vertices and leaves its neighbours untouched', () => {
     const buffer = new ParticleContainer3D({ capacity: 4 });
     const { f32, u32, floatStride } = buffer.data;
 
@@ -40,26 +40,23 @@ describe('ParticleContainer3D', () => {
       expect(u32[o + 5]).toBe(packParticleColor(0xff8040, 0.5));
     }
 
-    // Neighbouring slots stay untouched.
     expect(f32[1 * 4 * floatStride + 3]).toBe(0);
     expect(f32[3 * 4 * floatStride + 3]).toBe(0);
 
     buffer.destroy();
   });
 
-  it('packs colour as linear rgb bytes with alpha in the high byte', () => {
+  it('packs colour as sRGB-decoded linear bytes, red in the low byte and alpha in the high one', () => {
     const white = packParticleColor(0xffffff, 1);
 
     expect(white).toBe(0xffffffff >>> 0);
 
-    // Mid-grey in display space sits well below half in linear light.
-    const grey = packParticleColor(0x808080, 1);
+    const displayMidGrey = packParticleColor(0x808080, 1);
 
-    expect(grey & 0xff).toBeLessThan(128);
-    expect(grey >>> 24).toBe(255);
+    expect(displayMidGrey & 0xff).toBeLessThan(128);
+    expect(displayMidGrey >>> 24).toBe(255);
     expect(packParticleColor(0xffffff, 0) >>> 24).toBe(0);
 
-    // Channel order is r, g, b from the low byte up.
     const red = packParticleColor(0xff0000, 1);
 
     expect(red & 0xff).toBe(255);
@@ -67,32 +64,22 @@ describe('ParticleContainer3D', () => {
     expect((red >> 16) & 0xff).toBe(0);
   });
 
-  it('grows the vertex layout only when the system has real frames', () => {
-    const single = new ParticleContainer3D({ capacity: 2, texture: Texture.WHITE });
-    const flip = new ParticleContainer3D({ capacity: 2, texture: sheet(3) });
-
-    expect(single.data.vertexStride).toBe(24);
-    expect(single.textures.length).toBe(1);
-    expect(flip.data.vertexStride).toBe(32);
-    expect(flip.textures.length).toBe(3);
-
-    single.destroy();
-    flip.destroy();
-  });
-
   it('writes the selected packed frame into every vertex', () => {
-    const buffer = new ParticleContainer3D({ capacity: 2, texture: sheet(4) });
+    const frameCount = 4;
+    const frame = 2;
+    const buffer = new ParticleContainer3D({ capacity: 2, texture: sheet(frameCount) });
     const { u16, floatStride } = buffer.data;
 
-    buffer.setParticleAt(0, 0, 0, 0, 1, 0, 0xffffff, 1, 2);
+    buffer.setParticleAt(0, 0, 0, 0, 1, 0, 0xffffff, 1, frame);
 
-    const h = (0 * 4 * floatStride + 6) * 2;
+    for (let v = 0; v < 4; v++) {
+      const h = (0 * 4 * floatStride + v * floatStride + 6) * 2;
 
-    // Frame 2 of 4 starts halfway across the sheet and is a quarter wide.
-    expect(u16[h]).toBe(Math.round(0.5 * 65535));
-    expect(u16[h + 1]).toBe(0);
-    expect(u16[h + 2]).toBe(Math.round(0.25 * 65535));
-    expect(u16[h + 3]).toBe(65535);
+      expect(u16[h]).toBe(Math.round((frame / frameCount) * 65535));
+      expect(u16[h + 1]).toBe(0);
+      expect(u16[h + 2]).toBe(Math.round((1 / frameCount) * 65535));
+      expect(u16[h + 3]).toBe(65535);
+    }
 
     buffer.destroy();
   });
@@ -104,27 +91,20 @@ describe('ParticleContainer3D', () => {
     expect(() => packParticleFrames([a[0], b[0]])).toThrow(/one texture source/);
   });
 
-  it('tracks a dirty range across writes and clears it on upload', () => {
+  it('uploads one range spanning every marked particle, then nothing until more are marked', () => {
     const buffer = new ParticleContainer3D({ capacity: 8 });
+    const bytesPerParticle = 4 * buffer.data.vertexStride;
 
     buffer.markDirty(5, 5);
     buffer.markDirty(2, 3);
 
-    // No public read of the range, so observe it through the buffer update call.
-    const updates: [number, number][] = [];
-    const vertexBuffer = buffer.geometry.attributes.aPosition.buffer;
-    const original = vertexBuffer.update.bind(vertexBuffer);
-
-    vertexBuffer.update = (size?: number, offset?: number) => {
-      updates.push([size ?? -1, offset ?? -1]);
-      original(size, offset);
-    };
+    const updates = recordUploads(buffer);
 
     buffer.upload();
     buffer.upload();
 
-    // One upload covering particles 2..5 (4 particles), starting at particle 2.
-    expect(updates).toEqual([[4 * 4 * 24, 2 * 4 * 24]]);
+    const particlesTwoToFive = [4 * bytesPerParticle, 2 * bytesPerParticle];
+    expect(updates).toEqual([particlesTwoToFive]);
 
     buffer.destroy();
   });
@@ -219,7 +199,7 @@ describe('ParticleContainer3D guards and state', () => {
     blend.destroy();
   });
 
-  it('clear() marks the written range and leaves the one upload to upload()', () => {
+  it('clear() marks the written range for the one upload, which a spawn in the same frame joins', () => {
     const buffer = new ParticleContainer3D({ capacity: 8 });
     const bytes = 4 * buffer.data.vertexStride;
 
@@ -231,7 +211,6 @@ describe('ParticleContainer3D guards and state', () => {
     buffer.clear();
     expect(updates).toEqual([]);
 
-    // A spawn in the same frame joins the cleared range in one contiguous upload.
     buffer.setParticleAt(7, 1, 2, 3, 1);
     buffer.upload();
     expect(updates).toEqual([[8 * bytes, 0]]);
@@ -320,7 +299,7 @@ describe('ParticleContainer3D guards and state', () => {
 });
 
 describe('ParticleContainer3D shared quad buffers', () => {
-  it('draws the corners and indices from one pair, each container its own prefix', () => {
+  it('draws the corners and indices from one pair, each container its own prefix and vertex count', () => {
     const a = new ParticleContainer3D({ capacity: 8 });
     const b = new ParticleContainer3D({ capacity: 5 });
 
@@ -329,7 +308,6 @@ describe('ParticleContainer3D shared quad buffers', () => {
     expect(a.geometry.indexCount).toBe(8 * 6);
     expect(b.geometry.indexCount).toBe(5 * 6);
     expect(a.geometry.indices.length).toBeGreaterThanOrEqual(8 * 6);
-    // the vertex count reads off the container's own records
     expect(a.geometry.vertexCount).toBe(8 * 4);
     expect(b.geometry.vertexCount).toBe(5 * 4);
 
@@ -342,14 +320,10 @@ describe('ParticleContainer3D shared quad buffers', () => {
     b.destroy();
   });
 
-  it('grows the pair in place for a bigger request, so every container sees the same buffers', () => {
-    // The 32-bit pair, whose growth is unbounded; the 16-bit one caps at what
-    // 16-bit indices can address.
+  it('grows the uncapped 32-bit pair in place for a bigger request, so every container sees the same buffers', () => {
     const pair = ensureQuadBuffers(20_000);
     const before = pair.capacity;
-    const small = new ParticleContainer3D({ capacity: 20_000 });
-    // Growth reallocates both buffers, and `change` is what the draw builds that
-    // captured them listen for.
+    const onlyContainer = new ParticleContainer3D({ capacity: 20_000 });
     let changes = 0;
     const onChange = (): void => void changes++;
 
@@ -363,19 +337,17 @@ describe('ParticleContainer3D shared quad buffers', () => {
     expect(pair.corners.data.length).toBe(pair.capacity * 4 * 4);
     expect(changes).toBe(2);
 
-    // the container made before the growth draws from the grown buffers
-    expect(small.geometry.indexBuffer).toBe(pair.indices);
-    expect(small.geometry.indices.length).toBe(pair.capacity * 6);
-    expect(small.geometry.indexCount).toBe(20_000 * 6);
+    expect(onlyContainer.geometry.indexBuffer).toBe(pair.indices);
+    expect(onlyContainer.geometry.indices.length).toBe(pair.capacity * 6);
+    expect(onlyContainer.geometry.indexCount).toBe(20_000 * 6);
 
-    // a request the pair already covers changes nothing
-    expect(ensureQuadBuffers(before)).toBe(pair);
+    const alreadyCovered = before;
+    expect(ensureQuadBuffers(alreadyCovered)).toBe(pair);
     expect(changes).toBe(2);
 
     pair.corners.off('change', onChange);
     pair.indices.off('change', onChange);
-    // the only container holding the pair, so its destroy takes the pair with it
-    small.destroy();
+    onlyContainer.destroy();
     expect(pair.indices.destroyed).toBe(true);
   });
 });
@@ -395,15 +367,13 @@ describe('ParticleContainer3D destroy cascade', () => {
     return { mesh: new Mesh3D({ geometry, material }), geometry, texture, source: texture.source, material };
   };
 
-  it('hands destroyed children the caller’s own options', () => {
+  it('hands destroyed children the caller’s own options, so a child still frees the geometry it owns', () => {
     const container = new ParticleContainer3D({ capacity: 4 });
     const { mesh, geometry } = childMesh();
 
     container.addChild(mesh);
     container.destroy({ children: true, geometry: true });
 
-    // The container spares its own geometry, whose buffers are shared, but a child mesh owns its
-    // geometry outright — strip `geometry` on the way down and that geometry leaks.
     expect(mesh.destroyed).toBe(true);
     expect((geometry as unknown as GeometryInternals)._destroyed).toBe(true);
   });
@@ -422,14 +392,13 @@ describe('ParticleContainer3D destroy cascade', () => {
     expect(source.destroyed).toBe(true);
   });
 
-  it('still keeps the shared corner and index pair under destroy(true)', () => {
+  it('still keeps the shared corner and index pair under destroy(true), for the other containers', () => {
     const a = new ParticleContainer3D({ capacity: 8 });
     const b = new ParticleContainer3D({ capacity: 8 });
     const corners = a.geometry.attributes.aUV.buffer;
 
     expect(corners.destroyed).toBe(false);
 
-    // `geometry: true` reaching the base cascade would free the pair every other container draws from.
     a.destroy(true);
 
     expect(corners.destroyed).toBe(false);

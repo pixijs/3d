@@ -11,16 +11,10 @@ import { View3D } from '~/scene/View3D';
 
 import { RenderPassBit } from '../../render-passes/RenderPass';
 
-// A batch key that folded the geometry uid into 12 bits let two geometries exactly 0x1000
-// uids apart compare equal, and the batcher merged them into one draw — the second mesh
-// rendering from the first's index range. Geometry uids are handed out in order and never
-// recycled, so the collision is reachable by any session that creates enough geometry;
-// here it's set up exactly, by burning uids between the two.
-//
-// WebGPU only: its batcher is the one that breaks on the packed key. The WebGL batcher
-// compares the full geometry uid and the shader by reference, so it was never exposed.
-
-/** Uids to burn so the next `Geometry3D` built lands `gap` above `from`. */
+/**
+ * Burns uids so the next `Geometry3D` built lands `gap` above `from`; pixi hands geometry uids out
+ * in order and never reuses one
+ */
 function burnGeometryUids(from: number, gap: number): void {
   for (let i = 0; i < gap - 1; i++) uid('geometry');
 }
@@ -41,7 +35,6 @@ describe('batch key with colliding geometry uids', () => {
       burnGeometryUids(cube.uid, 0x1000);
       const sphere = new SphereGeometry({ radius: 0.6 });
 
-      // The setup itself: same low 12 bits, different geometries.
       expect(sphere.uid - cube.uid).toBe(0x1000);
       expect(sphere.uid & 0xfff).toBe(cube.uid & 0xfff);
 
@@ -57,16 +50,12 @@ describe('batch key with colliding geometry uids', () => {
       const allocA = cube._geometryAtlasAllocation!;
       const allocB = sphere._geometryAtlasAllocation!;
 
-      // Same attribute layout → same atlas → same pipeline, which is what puts the two
-      // meshes adjacent in sort order with nothing but the batch key to separate them.
-      expect(allocA.atlas).toBe(allocB.atlas);
+      expect(allocA.atlas, 'one atlas, so one pipeline, leaves only the batch key to separate them').toBe(allocB.atlas);
       expect(meshA._passCache[RenderPassBit.OPAQUE].batchKey).not.toBe(meshB._passCache[RenderPassBit.OPAQUE].batchKey);
 
       const pd = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
       expect(pd.commandList.count).toBe(2);
 
-      // Each draw covers one instance and carries its own geometry's index range —
-      // a fused pair would be one draw of two instances over a single range.
       const calls = pd.drawData.drawCalls;
       const drawn = [
         { indexCount: calls[0], instances: calls[1], firstIndex: calls[2] },
@@ -77,7 +66,7 @@ describe('batch key with colliding geometry uids', () => {
         { indexCount: allocB.indexCount, instances: 1, firstIndex: allocB.firstIndex },
       ].sort((a, b) => a.firstIndex - b.firstIndex);
 
-      expect(drawn).toEqual(expected);
+      expect(drawn, 'one instance per draw, each over its own index range').toEqual(expected);
     } finally {
       app.destroy();
     }

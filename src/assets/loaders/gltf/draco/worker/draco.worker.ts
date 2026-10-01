@@ -1,19 +1,9 @@
-// Classic worker (no ESM imports). Loads Google's Draco decoder glue via
-// importScripts, initializes the WASM module once, then handles per-primitive
-// decode requests.
-//
-// Protocol:
-//   Main → worker: { type: 'init', jsUrl, wasmUrl }
-//                  { type: 'decode', id, bufferViewBytes, attributeIds: { [semantic]: { dracoId, componentType } } }
-//   Worker → main: { id, success, indices?, attributes?, error? }
-
-// oxlint-disable no-console
-
-// The Draco glue that `importScripts` loads defines `DracoDecoderModule` on the worker global.
+/** The Draco glue that `importScripts` loads defines `DracoDecoderModule` on the worker global */
 declare const self: DedicatedWorkerGlobalScope & {
   DracoDecoderModule: (config?: { wasmBinary?: ArrayBuffer }) => Promise<DracoModule>;
 };
 
+/** The parts of Draco's decoder module the worker uses; the `DT_*` members are its data-type enum */
 interface DracoModule {
   Decoder: new () => DracoDecoder;
   DecoderBuffer: new () => DracoDecoderBuffer;
@@ -22,7 +12,6 @@ interface DracoModule {
   _free(ptr: number): void;
   destroy(obj: unknown): void;
   HEAPU8: Uint8Array;
-  // Draco DT_* enum — exposed as numbered properties on the module.
   DT_INT8: number;
   DT_UINT8: number;
   DT_INT16: number;
@@ -63,19 +52,30 @@ interface DracoStatus {
   error_msg(): string;
 }
 
+/** One attribute to decode; mirrors `DracoAttributeRequest` in `loadDracoOnWorker.ts` */
 interface AttributeRequest {
   dracoId: number;
   componentType: number;
 }
 
+/**
+ * The decoder module, set by the `init` message
+ *
+ * A failed init stays here as a rejected promise, so each decode reports the real error, such as a
+ * failed WASM fetch, rather than a missing decoder.
+ */
 let modulePromise: Promise<DracoModule> | undefined;
-// Decoder is stateless between calls — reuse across all primitive decodes for
-// the worker's lifetime. Mesh + DecoderBuffer still get allocated per-call.
+/** Draco's decoder keeps no state between decodes, so one serves the worker's whole life */
 let sharedDecoder: DracoDecoder | undefined;
 
+/**
+ * Loads the Draco glue script and its WASM, then instantiates the module
+ *
+ * Relative URLs resolve against the page's origin, because the worker itself may run from a blob URL.
+ * @param jsUrl - URL of Draco's JS glue
+ * @param wasmUrl - URL of Draco's WASM decoder
+ */
 async function initDecoder(jsUrl: string, wasmUrl: string): Promise<DracoModule> {
-  // Resolve relative URLs against the page origin — important when the worker
-  // was instantiated with a blob URL or a non-HTTP location.
   const absJsUrl = new URL(jsUrl, self.location.origin).href;
   const absWasmUrl = new URL(wasmUrl, self.location.origin).href;
 
@@ -89,8 +89,7 @@ async function initDecoder(jsUrl: string, wasmUrl: string): Promise<DracoModule>
   return await self.DracoDecoderModule({ wasmBinary });
 }
 
-// Generic typed-array constructor + slice() shape — every TypedArray prototype
-// has both, but TS lacks a single union for "any TypedArray ctor" so we hand-roll.
+/** Any typed-array constructor, written out because TypeScript has no single type for one */
 type TypedArrayCtor = new (
   buf: ArrayBufferLike,
   offset: number,
@@ -107,9 +106,7 @@ interface ComponentInfo {
   dtKey: DracoDtKey;
 }
 
-// Single source of truth for every glTF componentType we support: the matching
-// TypedArray constructor, its element size in bytes, and the Draco DT_* enum
-// key on the WASM module.
+/** For each glTF component type: its typed array, its size in bytes, and the matching Draco data type */
 const COMPONENT_INFO: Record<number, ComponentInfo> = {
   5120: { ctor: Int8Array as unknown as TypedArrayCtor, bytes: 1, dtKey: 'DT_INT8' },
   5121: { ctor: Uint8Array as unknown as TypedArrayCtor, bytes: 1, dtKey: 'DT_UINT8' },
@@ -120,15 +117,17 @@ const COMPONENT_INFO: Record<number, ComponentInfo> = {
 };
 
 /**
- * Decodes one Draco-compressed primitive into JS-side typed arrays ready to post back across the worker boundary
+ * Decodes one Draco-compressed primitive into typed arrays to post back to the main thread
  *
- * Memory discipline: every WASM-side allocation (mesh, buffer, malloc'd ptrs)
- * is released in the `finally` block — `pendingPtr` tracks whichever malloc
- * is currently live so a throw mid-loop can't leak the heap.
+ * Every WASM allocation is released in the `finally` block, with `pendingPtr` holding whichever
+ * `_malloc` is live, so a throw partway through leaks nothing. Data leaves the WASM heap through
+ * `slice()`, which copies without zero-filling a new array first.
  *
- * Returns `transferables` so the caller can hand them off zero-copy via
- * `postMessage`'s second argument; the returned `indices`/`attributes` arrays
- * become detached on the worker side once that happens.
+ * Indices are 16-bit when there are at most 65,535 vertices. The largest index is then 65,534, clear
+ * of 65,535, which graphics APIs can read as a primitive restart.
+ *
+ * `transferables` lets the caller post the arrays without copying them; they are detached in the
+ * worker afterwards.
  * @param bufferViewBytes - Compressed bytes of the primitive's Draco bufferView
  * @param attributeIds - Attributes to decode, keyed by glTF semantic, with their Draco ids and component types
  */
@@ -143,13 +142,9 @@ async function decodePrimitive(
   if (!modulePromise) throw new Error('Draco decoder not initialized');
   const module = await modulePromise;
 
-  // Decoder is stateless between calls — one shared instance per worker
-  // lifetime is safe and avoids the (non-trivial) construction cost.
   if (!sharedDecoder) sharedDecoder = new module.Decoder();
   const decoder = sharedDecoder;
 
-  // Allocations that must always be released — track them so the finally
-  // block can clean up regardless of which line throws.
   const buffer = new module.DecoderBuffer();
   const mesh = new module.Mesh();
   let pendingPtr = 0;
@@ -164,10 +159,6 @@ async function decodePrimitive(
     const numIndices = numFaces * 3;
     const numPoints = mesh.num_points();
 
-    // Pick 16-bit indices whenever every vertex index can fit. Halves the
-    // WASM heap allocation, postMessage transfer payload, and the eventual
-    // GPU index buffer. Threshold is conservative (≤ 0xffff rather than
-    // ≤ 0x10000) to stay clear of values some APIs treat as primitive-restart.
     const useShortIndices = numPoints <= 0xffff;
     const indexBytes = useShortIndices ? 2 : 4;
     pendingPtr = module._malloc(numIndices * indexBytes);
@@ -199,8 +190,6 @@ async function decodePrimitive(
       const byteSize = totalComponents * info.bytes;
       pendingPtr = module._malloc(byteSize);
       decoder.GetAttributeDataArrayForAllPoints(mesh, attribute, module[info.dtKey], byteSize, pendingPtr);
-      // .slice() copies natively from the WASM heap without zero-initializing
-      // a destination buffer first (unlike `new TypedArray(len) + set()`).
       const copy = new info.ctor(module.HEAPU8.buffer, pendingPtr, totalComponents).slice();
       module._free(pendingPtr);
       pendingPtr = 0;
@@ -213,17 +202,21 @@ async function decodePrimitive(
     if (pendingPtr) module._free(pendingPtr);
     module.destroy(mesh);
     module.destroy(buffer);
-    // sharedDecoder is intentionally NOT destroyed — reused across primitives.
   }
 }
 
-self.onmessage = async (event: MessageEvent) => {
+/**
+ * Handles the messages `loadDracoOnWorker.ts` posts
+ *
+ * `{ type: 'init', jsUrl, wasmUrl }` starts loading the decoder. `{ type: 'decode', id,
+ * bufferViewBytes, attributeIds }` decodes one primitive and replies with
+ * `{ id, success, indices?, attributes?, error? }`.
+ * @param event - The message from the main thread
+ */
+async function handleMessage(event: MessageEvent): Promise<void> {
   const message = event.data;
 
   if (message.type === 'init') {
-    // Keep the rejected promise around so subsequent decode attempts surface
-    // the real initialization error (e.g. CDN 404, WASM fetch failure) instead
-    // of a generic "decoder not initialized" message.
     modulePromise = initDecoder(message.jsUrl, message.wasmUrl);
     return;
   }
@@ -240,4 +233,6 @@ self.onmessage = async (event: MessageEvent) => {
       self.postMessage({ id: message.id, success: false, error });
     }
   }
-};
+}
+
+self.onmessage = handleMessage;

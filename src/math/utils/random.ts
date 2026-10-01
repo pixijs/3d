@@ -1,5 +1,9 @@
 /**
  * Returns a random color
+ * @example
+ * ```ts
+ * confetti.tint = randomColor();
+ * ```
  * @param random - The random function to use, defaults to `Math.random`
  * @returns A random color as a `0xRRGGBB` integer
  * @category maths
@@ -14,7 +18,12 @@ export function randomColor(random = Math.random) {
 }
 
 /**
- * Returns a random number within a range
+ * Returns a random number within a range, optionally floored to an integer
+ * @example
+ * ```ts
+ * const spawnDelay = randomRange(1, 3);
+ * const lane = randomRange(0, laneCount, true);
+ * ```
  * @param min - The lowest number (inclusive)
  * @param max - The highest number (exclusive)
  * @param floor - Whether the number should be floored
@@ -31,6 +40,11 @@ export function randomRange(min: number, max: number, floor = false, random = Ma
 
 /**
  * Returns a random value from an object
+ * @example
+ * ```ts
+ * const greetings = { en: 'Hello', fr: 'Bonjour', es: 'Hola' };
+ * const greeting = randomObjItem(greetings);
+ * ```
  * @param obj - The object to select from
  * @param random - The random function to use, defaults to `Math.random`
  * @returns The value of a randomly chosen key
@@ -46,6 +60,12 @@ export function randomObjItem<T extends Record<string, unknown>>(obj: T, random 
 
 /**
  * Returns a random item from an array
+ * @example
+ * ```ts
+ * const footsteps = ['step-1.ogg', 'step-2.ogg', 'step-3.ogg'];
+ *
+ * sound.play(randomItem(footsteps));
+ * ```
  * @param arr - The array to select from
  * @param random - The random function to use, defaults to `Math.random`
  * @returns A randomly chosen element
@@ -58,6 +78,10 @@ export function randomItem<T>(arr: T[], random = Math.random) {
 
 /**
  * Returns a random number within a range
+ * @example
+ * ```ts
+ * spark.speed = randomFloat(2, 5);
+ * ```
  * @param min - The minimum value (inclusive)
  * @param max - The maximum value (exclusive)
  * @param random - The random function to use, defaults to `Math.random`
@@ -70,7 +94,11 @@ export function randomFloat(min: number, max: number, random = Math.random) {
 }
 
 /**
- * Returns a random float in the interval `[-range/2, range/2]`
+ * Returns a random number in `(-range/2, range/2]`, centred on zero
+ * @example
+ * ```ts
+ * bullet.rotation.y = aimAngle + randomSpread(0.1);
+ * ```
  * @param range - The total spread
  * @param random - The random function to use, defaults to `Math.random`
  * @returns A random number centered on zero
@@ -83,6 +111,10 @@ export function randomSpread(range: number, random = Math.random) {
 
 /**
  * Returns a random integer within a range
+ * @example
+ * ```ts
+ * const roll = randomInt(1, 6);
+ * ```
  * @param min - The minimum value (inclusive)
  * @param max - The maximum value (inclusive)
  * @param random - The random function to use, defaults to `Math.random`
@@ -96,6 +128,10 @@ export function randomInt(min: number, max: number, random = Math.random) {
 
 /**
  * Returns a random boolean
+ * @example
+ * ```ts
+ * if (randomBool(0.1)) dropLoot(enemy.position);
+ * ```
  * @param weight - The chance of a `true` value, between 0 and 1
  * @param random - The random function to use, defaults to `Math.random`
  * @returns `true` with probability `weight`
@@ -108,6 +144,10 @@ export function randomBool(weight = 0.5, random = Math.random) {
 
 /**
  * Returns -1 or 1 at random
+ * @example
+ * ```ts
+ * asteroid.spin = randomSign() * randomFloat(0.5, 2);
+ * ```
  * @param random - The random function to use, defaults to `Math.random`
  * @returns Either `-1` or `1`
  * @category maths
@@ -119,6 +159,10 @@ export function randomSign(random = Math.random) {
 
 /**
  * Randomly shuffles an array in place, without cloning it
+ * @example
+ * ```ts
+ * randomShuffle(deck);
+ * ```
  * @param array - The array that will be shuffled
  * @param random - The random function to use, defaults to `Math.random`
  * @returns The same array, shuffled
@@ -142,8 +186,12 @@ export function randomShuffle<T>(array: T[], random = Math.random): T[] {
 }
 
 /**
- * Returns a random string hash, not guaranteed to be unique
- * @param length - The length of the hash
+ * Returns a random string of letters and digits; two calls can return the same string
+ * @example
+ * ```ts
+ * const roomCode = randomHash(6);
+ * ```
+ * @param length - The length of the string
  * @param random - The random function to use, defaults to `Math.random`
  * @returns A random alphanumeric string
  * @category maths
@@ -163,12 +211,15 @@ export function randomHash(length: number, random = Math.random): string {
 
 /**
  * Returns a random item from a list of `[odds, item]` pairs, weighted by each item's odds
+ *
+ * Odds are relative and need not add up to anything: an item with odds 6 comes up twice as often
+ * as one with odds 3. Throws for an empty list.
  * @example
  * ```ts
- * const item = randomOdds([
- *   [3, item1],
- *   [5, item2],
- *   [2, item3],
+ * const loot = randomOdds([
+ *   [70, 'coin'],
+ *   [25, 'potion'],
+ *   [5, 'sword'],
  * ]);
  * ```
  * @param odds - An array of `[odds, item]` pairs
@@ -187,7 +238,7 @@ export function randomOdds<T>(odds: [number, T][], random = Math.random): T {
   const amount = odds.reduce((prev, curr) => prev + curr[0], 0);
 
   /**
-   * Accumulated ranges — an item wins when the roll lands in `[min, max)`
+   * Each item's slice of the total odds; the item whose `[min, max)` the roll lands in wins
    * @internal
    */
   const oddsMap: { min: number; max: number; val: T }[] = [];

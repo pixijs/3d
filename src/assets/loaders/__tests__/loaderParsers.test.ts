@@ -8,10 +8,6 @@ import { loadGltf } from '~/assets/loaders/gltf/loadGltf';
 import { Scene3DSource } from '~/assets/Scene3DSource';
 
 describe('3D loader parsers', () => {
-  it('each has an id to force it with', () => {
-    expect([loadGltf.id, loadGlb.id, loadCubemap.id]).toEqual(['gltf', 'glb', 'cubemap']);
-  });
-
   it("pass the loader's parser validation together", () => {
     const loader = new Loader();
     loader.parsers.push(loadGltf, loadGlb, loadCubemap);

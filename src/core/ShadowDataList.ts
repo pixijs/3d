@@ -37,7 +37,7 @@ function writeCascadeSlot(slot: CascadeSlot, buffer: Float32Array, offset: numbe
  * pass stops adding at `MAX_SHADOW_SLOTS`, so the array never grows.
  *
  * Layout (stride = 24 floats, 6 × `vec4`), the one source of truth for `uShadowData` on both
- * backends:
+ * backends, unpacked by `shadowBitGl` and `shadowBitGpu`:
  * - [0..15]  light-space view-projection matrix
  * - [16]     bias
  * - [17]     normalBias

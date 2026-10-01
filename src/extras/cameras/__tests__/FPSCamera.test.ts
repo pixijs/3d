@@ -1,5 +1,4 @@
-import type { FederatedPointerEvent } from 'pixi.js';
-import { Ticker } from 'pixi.js';
+import { EventBoundary, FederatedPointerEvent, Ticker } from 'pixi.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { FPSCameraOptions } from '~/extras/cameras/FPSCamera';
@@ -19,6 +18,16 @@ function pointer(x: number, y: number, overrides: Partial<FederatedPointerEvent>
 
 function key(type: 'keydown' | 'keyup', code: string): void {
   window.dispatchEvent(new KeyboardEvent(type, { code }));
+}
+
+function contextMenuPrevented(view: View3D): boolean {
+  const event = new FederatedPointerEvent(new EventBoundary());
+  const nativeEvent = new MouseEvent('contextmenu', { cancelable: true });
+
+  event.nativeEvent = nativeEvent;
+  view.emit('contextmenu', event);
+
+  return nativeEvent.defaultPrevented;
 }
 
 describe('FPSCamera', () => {
@@ -90,6 +99,32 @@ describe('FPSCamera', () => {
 
     expect(controls.yaw).toBe(0);
     expect(controls.camera.position.z).toBe(0);
+  });
+
+  it('keeps the context menu from opening over the View', () => {
+    const controls = make();
+
+    expect(contextMenuPrevented(controls.view)).toBe(true);
+  });
+
+  it('lets the context menu open while preventContextMenu is off or the controller is disabled', () => {
+    const controls = make({ preventContextMenu: false });
+
+    expect(contextMenuPrevented(controls.view)).toBe(false);
+
+    controls.preventContextMenu = true;
+    expect(contextMenuPrevented(controls.view)).toBe(true);
+
+    controls.enabled = false;
+    expect(contextMenuPrevented(controls.view)).toBe(false);
+  });
+
+  it('stops blocking the context menu once destroyed', () => {
+    const controls = make();
+
+    controls.destroy();
+
+    expect(contextMenuPrevented(controls.view)).toBe(false);
   });
 
   it('autoUpdate connects to Ticker.shared and destroy disconnects', () => {

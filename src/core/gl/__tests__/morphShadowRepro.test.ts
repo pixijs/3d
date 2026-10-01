@@ -8,15 +8,13 @@ import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
 /**
- * A morphed mesh lit by a shadow-casting light must render, not fail. The shadow
- * pass compiles a depth shader per caster that composes the morph bit, which
- * reads `vid` + the morph/geometry storage — so the shadow vertex entry has to
- * declare `vid` and the shadow group has to bind those stores. When it didn't,
- * the WGSL failed to compile ("unresolved value 'vid'") and the morphed mesh
- * rendered dark/magenta. This guards that a morphed shadow caster stays lit.
- * ({@link morphShadowDeform} covers that the shadow actually tracks the morph.)
+ * Renders a camera-filling morphed triangle under a shadow-casting light and reads the centre pixel
+ *
+ * The light makes the shadow pass compile a depth shader for the morphed caster, and that shader
+ * reads the vertex index and the morph and geometry stores, so it has to declare and bind them.
+ * `morphShadowDeform.test.ts` checks that the shadow follows the morph.
+ * @param preference - The backend to render with
  */
-
 async function run(preference: 'webgl' | 'webgpu'): Promise<[number, number, number]> {
   const app = await getApp({
     id: `morph-shadow-${preference}`,
@@ -27,13 +25,10 @@ async function run(preference: 'webgl' | 'webgpu'): Promise<[number, number, num
     app.stage.addChild(view3d);
     view3d.camera.position.set(0, 0, 2.6);
 
-    // A shadow-casting light is what forces the shadow pass to compile a shader
-    // for the morphed caster.
     const key = new DirectionalLight({ color: 0xffffff, intensity: 6, castShadow: true });
     key.rotation.set(-0.6, 0.4, 0);
     view3d.root.addChild(key);
 
-    // A camera-filling green morph triangle (castShadow defaults true).
     const mesh = new Mesh3D({
       geometry: new Geometry3D({
         positions: new Float32Array([-2, -2, 0, 2, -2, 0, 0, 2.5, 0]),
@@ -59,12 +54,12 @@ async function run(preference: 'webgl' | 'webgpu'): Promise<[number, number, num
 describe('morphed shadow caster', () => {
   it('WebGL: lit base-pose shadow, not a failed shader', async () => {
     const [r, g, b] = await run('webgl');
-    expect([r, g, b]).not.toEqual([255, 0, 255]); // not the magenta shader-fail
-    expect(g).toBeGreaterThan(20); // lit surface, not shadowed-to-black
+    expect([r, g, b], 'not the magenta of a failed shader').not.toEqual([255, 0, 255]);
+    expect(g, 'a lit surface, not shadowed to black').toBeGreaterThan(20);
   });
 
   it('WebGPU: lit base-pose shadow, not a failed pipeline', async () => {
     const [, g] = await run('webgpu');
-    expect(g).toBeGreaterThan(20); // not the black invalid-pipeline result
+    expect(g, 'not the black of an invalid pipeline').toBeGreaterThan(20);
   });
 });

@@ -6,7 +6,7 @@
 >
 > ```sh
 > npm install pixi.js
-> npm install ./pixi-3d-0.1.0-beta.1.tgz
+> npm install ./pixi-3d-0.1.0-beta.2.tgz
 > ```
 >
 > **Show us what you make.** Screenshots, clips, half-finished experiments: post them in
@@ -99,7 +99,7 @@ import { FPSCamera, OrbitCamera } from '@pixi/3d/extras';
 
 **TypeScript 5:** no WebGPU types are built in, so `pixi.js` adds [`@webgpu/types`](https://github.com/gpuweb/types) for you. No additional setup required.
 
-**TypeScript 6 and 7:** need `pixi.js` 8.21.0 or later. The WebGPU types are built into the `"dom"` library, but some releases leave parts out, such as `GPUTextureUsage`. Use [`@types/web`](https://www.npmjs.com/package/@types/web), which has the full set, in place of `"dom"`. Remove `@webgpu/types` from `types` if it's there, since it conflicts with the built-in types.
+**TypeScript 6 and 7:** the WebGPU types are built into the `"dom"` library, but some releases leave parts out, such as `GPUTextureUsage`. Use [`@types/web`](https://www.npmjs.com/package/@types/web), which has the full set, in place of `"dom"`. Remove `@webgpu/types` from `types` if it's there, since it conflicts with the built-in types.
 
 ```bash
 npm install --save-dev @types/web
@@ -122,7 +122,7 @@ The CDN build ships inside the npm package under `dist/`, so jsdelivr serves it.
 <script type="importmap">
   {
     "imports": {
-      "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.21.0/dist/pixi.min.mjs",
+      "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.mjs",
       "@pixi/3d": "https://cdn.jsdelivr.net/npm/@pixi/3d@1.0.0/dist/pixi-3d.min.mjs",
       "@pixi/3d/extras": "https://cdn.jsdelivr.net/npm/@pixi/3d@1.0.0/dist/pixi-3d-extras.min.mjs"
     }

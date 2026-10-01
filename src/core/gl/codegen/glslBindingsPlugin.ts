@@ -5,15 +5,20 @@ import type { ShaderBit, StructDefinition } from '../../shader/ShaderBit';
 import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
-/** Maps WGSL types to GLSL types */
+/**
+ * The GLSL type each WGSL binding type declares as
+ *
+ * Textures become `sampler*` uniforms. GLSL combines a texture with its sampling state, so a
+ * standalone WGSL sampler maps to `''` and gets no declaration. Every sampler type here needs a
+ * line in `GLSL_PRECISION_PRELUDE` in `glslPrecisionPlugin`; `samplerCubeArrayShadow` has none,
+ * as GLSL ES 3.00 has no such type.
+ */
 const WGSL_TO_GLSL: Record<string, string> = {
-  // Scalars
   f32: 'float',
   i32: 'int',
   u32: 'uint',
   bool: 'bool',
 
-  // Vectors
   'vec2<f32>': 'vec2',
   'vec3<f32>': 'vec3',
   'vec4<f32>': 'vec4',
@@ -24,7 +29,6 @@ const WGSL_TO_GLSL: Record<string, string> = {
   'vec3<u32>': 'uvec3',
   'vec4<u32>': 'uvec4',
 
-  // Matrices
   'mat2x2<f32>': 'mat2',
   'mat3x3<f32>': 'mat3',
   'mat4x4<f32>': 'mat4',
@@ -35,8 +39,9 @@ const WGSL_TO_GLSL: Record<string, string> = {
   'mat4x2<f32>': 'mat4x2',
   'mat4x3<f32>': 'mat4x3',
 
-  // Textures → samplers in GLSL
   'texture_2d<f32>': 'sampler2D',
+  'texture_2d<u32>': 'usampler2D',
+  'texture_2d<i32>': 'isampler2D',
   'texture_2d_array<f32>': 'sampler2DArray',
   'texture_3d<f32>': 'sampler3D',
   'texture_cube<f32>': 'samplerCube',
@@ -45,7 +50,6 @@ const WGSL_TO_GLSL: Record<string, string> = {
   texture_depth_cube: 'samplerCubeShadow',
   texture_depth_cube_array: 'samplerCubeArrayShadow',
 
-  // Samplers (combined with textures in GLSL, so we skip standalone samplers)
   sampler: '',
   sampler_comparison: '',
 };
@@ -71,12 +75,12 @@ function parseArrayType(wgslType: string): ArrayInfo | null {
 /**
  * Converts a WGSL type to a GLSL type
  *
- * Returns null if the type should be skipped (e.g., standalone sampler).
- * For array types, returns { glslType, arraySize } to allow proper declaration.
+ * Returns null if the type should be skipped (e.g., standalone sampler), and passes a type the
+ * map doesn't know through unchanged. For array types, returns { glslType, arraySize } to allow
+ * proper declaration.
  * @param wgslType - The WGSL binding type to convert
  */
 function toGlslType(wgslType: string): string | null | { glslType: string; arraySize: string } {
-  // Check for array type first
   const arrayInfo = parseArrayType(wgslType);
   if (arrayInfo) {
     const baseGlsl = WGSL_TO_GLSL[arrayInfo.baseType] ?? arrayInfo.baseType;
@@ -85,13 +89,15 @@ function toGlslType(wgslType: string): string | null | { glslType: string; array
   }
 
   const mapped = WGSL_TO_GLSL[wgslType];
-  if (mapped !== undefined) return mapped || null; // empty string = skip
-  return wgslType; // pass through unknown types
+  if (mapped !== undefined) return mapped || null;
+  return wgslType;
 }
 
-/** GLSL resource types that can't go in UBOs (textures/samplers) */
+/** GLSL sampler types, always declared as plain uniforms because a uniform block can't hold one */
 const RESOURCE_TYPES = new Set([
   'sampler2D',
+  'usampler2D',
+  'isampler2D',
   'sampler2DArray',
   'sampler3D',
   'samplerCube',
@@ -106,18 +112,14 @@ const RESOURCE_TYPES = new Set([
  * @internal
  */
 interface CompileBindingsGlslOptions {
-  /**
-   * Groups to compile as UBOs (WebGL2 uniform buffer objects)
-   * Groups not in this set are compiled as flat uniforms.
-   * @example ["global", "material"] // these groups use UBOs
-   */
+  /** Groups to declare as `std140` uniform blocks; any other group's fields become plain uniforms */
   uboGroups?: Set<string> | string[];
 }
 
 /** Uniform entry with optional array size */
 interface UniformEntry {
   glslType: string;
-  arraySize?: string; // undefined for non-arrays
+  arraySize?: string;
 }
 
 interface GroupData {
@@ -160,22 +162,12 @@ interface CompileBindingsGlslResult {
 /**
  * Compiles shader bindings from bits into GLSL uniform declarations
  *
- * - Supports both flat uniforms and UBOs (WebGL2)
- * - Textures become samplers (always flat, can't be in UBOs)
- * - Standalone samplers are skipped (combined with textures in GLSL)
- * - Duplicates are automatically deduplicated (warns if types conflict)
- * @example
- * ```ts
- * // Flat uniforms (WebGL1 compatible)
- * const glsl = compileBindingsGlsl(bits, template);
- * // uniform vec4 uColor;
- *
- * // With UBOs (WebGL2)
- * const glsl = compileBindingsGlsl(bits, template, {
- *   uboGroups: ["global", "material"]
- * });
- * // layout(std140) uniform materialUniforms { vec4 uColor; };
- * ```
+ * For each group the template binds, its uniform fields become plain uniforms, or a
+ * `layout(std140) uniform <group> { ... };` block when `uboGroups` names it, and its textures become
+ * sampler uniforms. A group the template doesn't bind, such as `material`, becomes a struct named
+ * after it (`Material`) for the shader to fill, as do the bits' own `structs`. Storage-buffer
+ * bindings are skipped: they're WebGPU-only, and the GL bits declare data-texture twins instead.
+ * A name declared twice with different types warns and keeps the first.
  * @param bits - Array of shader bits containing binding definitions
  * @param template - Template defining bind group names
  * @param options - Optional settings (e.g., which groups use UBOs)
@@ -189,16 +181,13 @@ function compileBindingsGlsl(
   const uboGroups = new Set(options.uboGroups ?? []);
   const bindGroupNames = new Set(template.bindGroups);
 
-  // Per-bind-group resource data (textures/samplers only — uniforms go into structs).
   const bindGroups: Record<string, GroupData> = Object.create(null);
   for (const groupName of template.bindGroups) {
     bindGroups[groupName] = { uniforms: Object.create(null), resources: Object.create(null), bindAsUniform: false };
   }
 
-  // All struct definitions: explicit (bit.structs) + generated from groups.
   const structs: Record<string, StructDefinition> = Object.create(null);
 
-  // Collect explicit structs from bits
   for (const bit of bits) {
     if (!bit.structs) continue;
     for (const [structName, structDef] of Object.entries(bit.structs)) {
@@ -208,8 +197,6 @@ function compileBindingsGlsl(
     }
   }
 
-  // Collect bindings from all bits — every group produces a struct from
-  // its uniform-type fields; bind groups also collect resources.
   for (const bit of bits) {
     if (!bit.bindings) continue;
 
@@ -239,7 +226,6 @@ function compileBindingsGlsl(
             }
           }
         } else {
-          // Bind-group uniforms need array info for UBO/flat declarations.
           if (isBound) {
             const unis = bindGroups[groupName].uniforms;
             if (!(name in unis)) {
@@ -248,7 +234,6 @@ function compileBindingsGlsl(
             bindGroups[groupName].bindAsUniform = true;
           }
 
-          // All uniform-type fields (bound or not) contribute to the struct.
           if (!(structName in structs)) structs[structName] = {};
           const structDef = structs[structName];
           if (structDef[name] && structDef[name] !== wgslType) {
@@ -261,12 +246,9 @@ function compileBindingsGlsl(
     }
   }
 
-  // --- Generate output ---
   const out: string[] = [];
 
-  // Emit struct definitions (skip bind-group structs — those become UBO/uniform blocks)
   for (const structName in structs) {
-    // Only skip bind group structs if they are actually used as uniforms
     const groupNameLower = structName.charAt(0).toLowerCase() + structName.slice(1);
     if (bindGroupNames.has(groupNameLower) && bindGroups[groupNameLower]?.bindAsUniform) continue;
 
@@ -278,11 +260,6 @@ function compileBindingsGlsl(
     out.push('};');
   }
 
-  /**
-   * Formats a uniform declaration with optional array size
-   * @param name - The uniform's name
-   * @param entry - The uniform's GLSL type and optional array size
-   */
   const formatUniform = (name: string, entry: UniformEntry): string => {
     if (entry.arraySize) {
       return `${entry.glslType} ${name}[${entry.arraySize}]`;

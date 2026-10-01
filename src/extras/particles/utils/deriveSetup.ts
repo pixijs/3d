@@ -31,10 +31,16 @@ interface DerivedSetup {
 /**
  * Resolves what the options imply about the shader before the container is built
  *
- * Which behaviour bits to compose, in order, and what the container should
- * bind as its texture. Lifetime always leads because every other bit reads the
- * age it derives, and motion is always present because a system with nothing
- * but drift still integrates velocity. The rest follow the options one for one.
+ * The container derives its vertex layout from its bits in its own constructor, so
+ * the system settles which behaviour bits to compose, in order, and what the
+ * container should bind as its texture before calling it. Lifetime always leads
+ * because every other bit reads the age it derives, and motion is always present
+ * because a system with nothing but drift still integrates velocity. The rest
+ * follow the options one for one.
+ *
+ * A shader flipbook, `'animate'` or `'overLife'` over several frames, binds the
+ * whole sheet as one texture and works out each frame's cell from the grid, so
+ * particles carry no frame attribute.
  * @param opts - The merged constructor options.
  * @returns The bits, the texture to bind and the flipbook grid, if any.
  * @internal
@@ -53,8 +59,6 @@ export function deriveSetup(opts: ParticleSystem3DOptions): DerivedSetup {
     return { bits, texture: opts.texture, grid: null, ownsTexture: false };
   }
 
-  // A shader flipbook binds the whole sheet as one texture and works out each
-  // frame's cell from the grid, so the container carries no per-particle frame.
   bits.push(opts.frameMode === 'animate' ? particleFlipbookRateBit : particleFlipbookOverLifeBit);
 
   const source = frames[0].source;

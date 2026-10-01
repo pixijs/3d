@@ -2,23 +2,20 @@ import type { ShaderCompilerPlugin } from '../ShaderCompilerPlugin';
 import { mergeMaterialStruct } from './materialStruct';
 
 /**
- * Plugin that canonicalises the `Material` struct
+ * Replaces the collected `Material` struct with the packed one from `mergeMaterialStruct`
  *
- * Replaces the generic per-backend merge wholesale with `mergeMaterialStruct` (merge + alignment
- * pack), so the compiled struct and a material's construction-time layout derive from one
- * function. Shared by both backends; everything downstream — WGSL struct emission, the GLSL
- * storage accessor, and the JIT material sync function — derives field offsets from this def by
- * name, so the reorder is invisible to consumers.
+ * The shader's struct and each material's construction-time layout then come from one function, on
+ * both backends. The material accessors and the material data class look fields up by name, so the
+ * new order changes nothing for them.
  *
- * Scoped to the struct named `Material` only: it is the one struct whose CPU-side writes are
- * generated from the same layout (`createMaterialSyncFunction` → `createStructLayout`). `Light`,
- * `ShadowData` and `Renderable` are hand-packed CPU-side at fixed float offsets
- * (`LightDataList`, `ShadowDataList`, `Mesh3DDataStoreBuffer`) — repacking those
- * would silently corrupt them, so they keep declaration order.
+ * Only `Material` is repacked, because only its CPU writes follow the computed layout: the material
+ * data class builds them from `createStructLayout`. `LightDataList`, `ShadowDataList` and
+ * `Mesh3DDataStoreBuffer` write the other structs at fixed offsets, so those keep their declared
+ * order.
  *
- * Runs in `preCompile`. On the GPU path it must be registered before
- * `materialStoragePaddingPlugin` so `_pad` is computed from the packed layout and stays last.
- * Idempotent — the GLSL pipeline runs `preCompile` once per stage over shared `data`.
+ * It runs in `preCompile`, so every `injectCode`, the accessors' included, sees the packed struct.
+ * GLSL runs `preCompile` once per stage over the same `data`, and a second run gives the same
+ * result.
  * @internal
  */
 export const materialStructPackPlugin: ShaderCompilerPlugin = {

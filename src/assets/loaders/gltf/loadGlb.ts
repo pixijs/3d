@@ -16,10 +16,10 @@ import { loadImages } from './utils/loadImages';
  * and unloads every image the file referenced from the loader's cache, as pixi's spritesheets do
  * with their image, even when another loaded asset still uses one.
  *
- * The container's first buffer is the embedded binary chunk; images are resolved relative to the
- * `.glb` URL (external buffers are not fetched). Meshopt-compressed buffers
- * (`EXT_meshopt_compression` / `KHR_meshopt_compression`) are decoded transparently. Use
- * {@link loadGltf} for the text `.gltf` form.
+ * Only the buffer packed in the container is loaded; a buffer the file keeps outside it is not
+ * fetched, and the loader warns. Images the file keeps outside resolve relative to the `.glb` URL.
+ * Compressed data decodes as it loads, as {@link loadGltf} describes. Use {@link loadGltf} for the
+ * text `.gltf` form.
  * @example
  * ```ts
  * import { Assets } from 'pixi.js';
@@ -49,14 +49,8 @@ export const loadGlb = {
 
     const { json, buffers } = glbToGltf(arrayBuffer);
 
-    // The binary chunk is buffer 0. Later entries have no bytes in the container — a URI-less
-    // meshopt fallback stub, or an external `.bin` this loader doesn't fetch — but they still
-    // need a slot so `buffers` stays index-aligned with `json.buffers` for bufferView lookups.
     padContainerBuffers(json.buffers ?? [], buffers);
 
-    // Decode meshopt compression (if any) and compact `buffers` in place so
-    // stubs and now-dead compressed-source buffers drop out before anything
-    // downstream indexes into it.
     await normalizeMeshopt(json, buffers);
 
     const images = await loadImages(json.images || [], basePath, json, buffers, loader!);
@@ -67,15 +61,25 @@ export const loadGlb = {
 
     return source;
   },
+  /**
+   * Unloads the images the file loaded, then destroys the source
+   * @param source - The source `load` returned
+   * @param _resolvedAsset - Unused
+   * @param loader - The loader that cached the images
+   */
   async unload(source: Scene3DSource, _resolvedAsset?: ResolvedAsset, loader?: Loader) {
-    // The loader destroys the image textures it cached, then the source frees everything else
     await loader!.unload(source._imageUrls);
     source.destroy();
   },
 } satisfies LoaderParser<Scene3DSource>;
 
 /**
- * Stands a zero-length ArrayBuffer in for every declared buffer the GLB container doesn't carry
+ * Stands an empty `ArrayBuffer` in for every buffer the file declares after the one the container
+ * carries
+ *
+ * The container holds only buffer 0. A later buffer is either a meshopt fallback, whose data sits
+ * compressed in another buffer, or an external `.bin`, which this loader doesn't fetch and warns
+ * about. Each still needs a slot so `buffers` stays index-aligned with the file's list.
  * @param declared - The buffers the glTF JSON declares
  * @param buffers - The buffers the container carries; padded in place to match `declared`
  */

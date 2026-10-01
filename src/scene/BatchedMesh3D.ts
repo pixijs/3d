@@ -10,14 +10,13 @@ import type { Destroy3DOptions } from '../utils/Destroy3DOptions';
 import { resolveDestroy3DFlag } from '../utils/Destroy3DOptions';
 import { Container3D } from './Container3D';
 import type { Container3DOptions } from './Container3D';
+import type { CullMode } from './View3D';
 
 /**
  * Constructor options for {@link BatchedMesh3D}
  *
- * Only `size` is required; the slot count is fixed for the lifetime of the batch and cannot be
- * resized after construction. Every {@link Container3DOptions} member (label, position, parent,
- * ...) is accepted too, except `width`, `height` and `depth`: the slots are not children, so the
- * node has no local bounds to size against. `label` defaults to `'BatchedMesh3D'`.
+ * The {@link Container3DOptions} apply too, except `width`, `height` and `depth`: the slots aren't
+ * children, so the node has no bounds to size against. `label` defaults to `'BatchedMesh3D'`.
  * @example
  * ```ts
  * const batched = new BatchedMesh3D({ size: 1000, label: 'crowd', parent: view.root });
@@ -28,31 +27,50 @@ import type { Container3DOptions } from './Container3D';
  */
 export interface BatchedMesh3DOptions extends Omit<Container3DOptions, 'width' | 'height' | 'depth'> {
   /**
-   * Number of mesh slots to pre-allocate
+   * Number of slots, fixed for the batch's lifetime; required
    *
-   * Required — no default. The slot count is fixed at construction; pick a number that covers
-   * the maximum concurrent slot count you'll need.
+   * Every slot holds a row in the batch's buffers whether it draws or not, so size it to the most
+   * you'll draw at once.
+   * @example
+   * ```ts
+   * const forest = new BatchedMesh3D({ size: treePositions.length });
+   * ```
    */
   size: number;
+  /**
+   * Frustum-culling mode for this batch's instances, set per batch rather than taken from the view
+   *
+   * Off by default: a batch's instances usually move every frame and sit mostly in view, where
+   * testing each one costs more than drawing the few off screen. Turn it on (`'auto'`, `'cpu'`
+   * or `'gpu'`) for a large batch spread well beyond the view, such as scattered scenery.
+   * @default 'off'
+   * @example
+   * ```ts
+   * const forest = new BatchedMesh3D({ size: treePositions.length, cull: 'auto' });
+   * ```
+   * @see {@link BatchedMesh3D.cull} For changing it later.
+   * @see {@link CullMode} For the modes.
+   */
+  cull?: CullMode;
 }
 
 /**
- * `BatchedMesh3D` is a user-facing batched mesh container
+ * A scene node that draws many meshes as slots of one batch, with no scene node per mesh
  *
- * A single scene node that draws up to `size` instances through one internal batch, cutting
- * per-mesh transform and submission overhead to a handful of O(1) buffer writes per item.
+ * Reach for it for crowds, foliage, debris and other large counts. Each slot is a geometry, a
+ * material and a matrix, written straight into the batch's buffers, so updating a slot costs a
+ * few array writes. The node's own world matrix is applied on the GPU, so moving the
+ * `BatchedMesh3D` moves every slot at no extra cost.
  *
- * It extends {@link Container3D} so it participates in the scene graph
- * (transform hierarchy, `addChild` / `removeChild`) while internally
- * delegating rendering to a `Mesh3DBatch`. The container's world
- * matrix is uploaded to store-buffer slot 0 and applied in the vertex
- * shader, so moving the container is free — no per-item matrix re-upload.
+ * The slot count is fixed at construction. Fill slots with
+ * {@link BatchedMesh3D#setGeometryAt | setGeometryAt},
+ * {@link BatchedMesh3D#setMaterialAt | setMaterialAt} and
+ * {@link BatchedMesh3D#setMatrixAt | setMatrixAt}, then turn each one on with
+ * {@link BatchedMesh3D#setItemActive | setItemActive}. Give every slot a geometry and a material
+ * before the batch first renders, including slots you leave off.
  *
- * The slot count is fixed at construction. Populate slots with
- * {@link BatchedMesh3D.setGeometryAt | setGeometryAt} /
- * {@link BatchedMesh3D.setMaterialAt | setMaterialAt} /
- * {@link BatchedMesh3D.setMatrixAt | setMatrixAt}, then enable rendering with
- * {@link BatchedMesh3D.setItemActive | setItemActive}.
+ * Unlike a {@link Mesh3D}, a slot doesn't notice when its material changes; see
+ * {@link BatchedMesh3D#invalidate | invalidate}.
  * @example
  * ```ts
  * import { BatchedMesh3D, RenderPassBit } from '@pixi/3d';
@@ -68,7 +86,7 @@ export interface BatchedMesh3DOptions extends Omit<Container3DOptions, 'width' |
  *
  * view.root.addChild(batched);
  *
- * // Animate slot 0 — a free per-frame uniform-style write:
+ * // Moving one slot is a matrix write, cheap enough for every frame.
  * batched.setMatrixAt(0, nextMatrix);
  * ```
  * @see {@link BatchedMesh3DOptions} For the constructor options.
@@ -79,18 +97,16 @@ export interface BatchedMesh3DOptions extends Omit<Container3DOptions, 'width' |
  */
 export class BatchedMesh3D extends Container3D {
   /**
-   * The internal `Mesh3DBatch` that owns the store buffer, ID buffers, and per-pass draw lists
-   *
-   * Exposed for advanced use (custom render passes, direct slot inspection); prefer the
-   * wrapper methods on this class for routine updates.
+   * The engine's batch behind this node, which owns its buffers and draw lists
+   * @internal
    */
   public readonly batch: Mesh3DBatch;
 
   /**
-   * Creates a new `BatchedMesh3D`
+   * Creates a new `BatchedMesh3D`; add it under {@link View3D.root | view.root} to draw it
    *
-   * Add the returned instance to a {@link View3D}'s scene graph (typically
-   * `view.root.addChild(batched)`) to render it.
+   * A `parent` option is applied last, once the batch exists, since attaching to a view registers
+   * the batch with it.
    * @example
    * ```ts
    * const batched = new BatchedMesh3D({ size: 1000 });
@@ -99,37 +115,78 @@ export class BatchedMesh3D extends Container3D {
    * @param options - Construction options; see {@link BatchedMesh3DOptions}.
    */
   constructor(options: BatchedMesh3DOptions) {
-    // `parent` waits until the batch exists: attaching to a live View registers `batch`.
-    const { size, parent, ...rest } = definedProps(options);
+    const { size, parent, cull, ...rest } = definedProps(options);
 
     super({ label: 'BatchedMesh3D', ...rest });
 
     this.batch = new Mesh3DBatch({ size, renderData: this });
+    this.batch.cull = cull ?? 'off';
     parent?.addChild(this);
   }
 
   /**
-   * The pre-allocated mesh items managed by the internal batch
+   * The slots, one per index
    *
-   * Read-only — the slot count is fixed at construction; mutate slots through the
-   * `set*At` methods rather than the items array directly.
+   * Set a slot's geometry, material and matrix through the `set*At` methods. A slot's
+   * `billboardMode` and `receiveShadow` are set here, followed by
+   * {@link BatchedMesh3D#invalidate | invalidate}.
+   * @example
+   * ```ts
+   * batched.items[0].billboardMode = 'spherical';
+   * batched.invalidate(0);
+   * ```
    */
   public get items(): readonly Mesh3DData[] {
     return this.batch.items;
   }
 
-  /** Number of slots in this batched mesh; fixed at construction */
+  /**
+   * Frustum-culling mode for this batch's instances, set per batch rather than taken from the view
+   *
+   * Off by default. Takes effect on the next render.
+   * @example
+   * ```ts
+   * // ten thousand trees across the map, most of them off screen: test each one
+   * forest.cull = 'auto';
+   * ```
+   * @see {@link CullMode} For the modes.
+   */
+  public get cull(): CullMode {
+    return this.batch.cull;
+  }
+
+  /**
+   * Sets this batch's frustum-culling mode
+   * @param value - The culling mode.
+   */
+  public set cull(value: CullMode) {
+    this.batch.cull = value;
+  }
+
+  /**
+   * Number of slots, fixed at construction
+   * @example
+   * ```ts
+   * for (let i = 0; i < batched.size; i++) batched.setMatrixAt(i, matrices[i]);
+   * ```
+   */
   public get size(): number {
     return this.batch.items.length;
   }
 
   /**
-   * Writes a local world matrix for the item at `index`
+   * Sets a slot's matrix, relative to this node
    *
-   * O(1), zero GC — the 16 floats are written directly into the store buffer. The container's
-   * own world matrix is multiplied in by the vertex shader, so moving the parent remains free.
+   * It's copied straight into the batch's buffer and allocates nothing, so it's fine to call for
+   * every slot every frame. The matrix must be affine, with a bottom row of `0, 0, 0, 1`; the batch
+   * doesn't keep a projective one. To rewrite many slots a frame without the copy, write into
+   * {@link BatchedMesh3D#matrices | matrices}.
+   * @example
+   * ```ts
+   * batched.setMatrixAt(i, matrix.makeTranslation(x, 0, z));
+   * ```
    * @param index - The slot index within this batch
-   * @param matrix - The local matrix to apply to the slot
+   * @param matrix - The slot's matrix
    */
   public setMatrixAt(index: number, matrix: Matrix4): void {
     this.batch.setMatrixAt(index, matrix);
@@ -159,34 +216,48 @@ export class BatchedMesh3D extends Container3D {
   }
 
   /**
-   * Swaps the geometry for a slot
-   *
-   * Triggers a draw-command rebuild on the next frame so the shader is recompiled against the
-   * new vertex layout.
+   * Sets a slot's geometry; the slot rebuilds its shader on the next frame, for the new vertex layout
+   * @example
+   * ```ts
+   * forest.setGeometryAt(i, i % 3 === 0 ? pineGeometry : oakGeometry);
+   * ```
    * @param index - The slot index within this batch
-   * @param geometry - The new geometry for the slot
+   * @param geometry - The slot's geometry
    */
   public setGeometryAt(index: number, geometry: Geometry3D): void {
     this.batch.setGeometryAt(index, geometry);
   }
 
   /**
-   * Swaps the material for a slot
+   * Sets a slot's material; the slot rebuilds its shader on the next frame
    *
-   * Triggers a draw-command rebuild on the next frame so the slot's pass assignment and shader
-   * are refreshed.
+   * The slot stays in the passes {@link BatchedMesh3D#setItemActive | setItemActive} gave it, so
+   * move it there when the new material blends and the old one didn't, or the other way round.
+   * @example
+   * ```ts
+   * crowd.setMaterialAt(i, team === 'red' ? redShirt : blueShirt);
+   * ```
    * @param index - The slot index within this batch
-   * @param material - The new material for the slot
+   * @param material - The slot's material
    */
   public setMaterialAt(index: number, material: BaseMaterial3D): void {
     this.batch.setMaterialAt(index, material);
   }
 
   /**
-   * Adds or removes a slot from render-pass views
+   * Sets which passes draw a slot; `0` turns it off
    *
-   * Pass `0` to disable a slot entirely; pass a bitwise-OR of `RenderPassBit` values to include
-   * it in those passes.
+   * Pass a bitwise OR of {@link RenderPassBit} flags. A slot doesn't pick its passes from its
+   * material the way a {@link Mesh3D} does, so match them yourself: `OPAQUE` for an opaque or
+   * `'mask'` material, `TRANSPARENT` for a `'blend'` one, plus `SHADOW` to cast shadows.
+   *
+   * Each change rebuilds the draw lists of the passes it touches on the next frame, so avoid
+   * switching slots on and off every frame.
+   * @example
+   * ```ts
+   * batched.setItemActive(i, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+   * batched.setItemActive(j, 0);
+   * ```
    * @param index - The slot index within this batch
    * @param passMask - Bitmask of `RenderPassBit` flags for this slot
    */
@@ -195,26 +266,20 @@ export class BatchedMesh3D extends Container3D {
   }
 
   /**
-   * Flushes a slot's cached pipeline state, forcing its shader, render state and batch
-   * assignment to rebuild on the next frame
+   * Makes a slot rebuild its shader and draw state on the next frame
    *
-   * Needed because batch slots are updated from a dirty list rather than a per-frame
-   * scan — that's what makes them cheap, but it also means the batch only learns about
-   * changes you announce. Swapping a slot's geometry or material announces itself
-   * ({@link BatchedMesh3D.setGeometryAt | setGeometryAt} /
-   * {@link BatchedMesh3D.setMaterialAt | setMaterialAt}); **mutating a material object
-   * that slots already hold does not**. Call this after doing that, once per affected
-   * slot:
+   * A batch only revisits the slots it's told about, which is what keeps it cheap. Swapping a
+   * slot's geometry or material tells it. Changing a material that slots already use doesn't, so
+   * call this for each of those slots afterwards; {@link BaseMaterial3D} lists the changes that
+   * need it. A slot's `billboardMode` or `receiveShadow` needs it too. The view-wide
+   * `toneMapping`, `fog`, `environment` and `shadowFilter` reach every slot on their own.
    *
+   * A {@link Mesh3D} needs none of this: the view checks every mesh each frame.
+   * @example
    * ```ts
-   * material.alphaMode = 'blend';               // no slot knows about this
-   * for (const i of slotsUsingMaterial) batched.invalidate(i);
+   * leafMaterial.textures.baseColor = autumnLeaves;
+   * for (const i of leafSlots) trees.invalidate(i);
    * ```
-   *
-   * Plain {@link Mesh3D} needs none of this — the scene loop already walks every mesh
-   * each frame and picks material changes up on its own. View-wide settings
-   * (`toneMapping`, `fog`, `environment`, `shadowFilter`) also propagate to batch slots
-   * automatically. This is only for per-material mutation.
    * @param index - The slot index within this batch
    */
   public invalidate(index: number): void {
@@ -222,15 +287,17 @@ export class BatchedMesh3D extends Container3D {
   }
 
   /**
-   * Give back this batch's GPU memory — the geometry buffers and atlas ranges behind every
-   * slot, the store buffer's GPU copy, and the recorded draw programs together with the
-   * captures they took on the slot textures (which return to pixi's normal collection rules).
-   * Each distinct geometry is unloaded once, and the slots are marked dirty so the next render
-   * re-packs and re-records them, rendering identically.
+   * Frees this batch's GPU memory, keeping what it needs to rebuild
    *
-   * Slot materials are shared and left alone, matching {@link Mesh3D.unload}. A batch taken out
-   * of the scene keeps its build, and the GPU memory behind it, until this is called or it is
-   * destroyed; adding it back before then is a replay, not a rebuild.
+   * That's the GPU buffers of every slot's geometry, each geometry once, plus the batch's own
+   * buffers and recorded draws, which also stop holding the slot textures back from pixi's texture
+   * garbage collection. Every slot is invalidated, since its recorded draw points at where its
+   * geometry sat in the shared geometry buffer. The next render uploads and records it all again
+   * and draws the same image.
+   *
+   * Slot materials are shared, so they're left alone, as {@link Mesh3D.unload} does. A batch taken
+   * out of the scene keeps its GPU memory until this is called or it's destroyed, which makes
+   * adding it back before then cheap.
    * @example
    * ```ts
    * view.root.removeChild(crowd);
@@ -252,8 +319,6 @@ export class BatchedMesh3D extends Container3D {
         seenGeometry.add(geometry);
         geometry.unload();
       }
-      // The slot's recorded draw args bake the atlas range just vacated; this is what re-packs
-      // the geometry and re-keys the slot on the next frame.
       this.batch.invalidate(i);
     }
 
@@ -261,16 +326,17 @@ export class BatchedMesh3D extends Container3D {
   }
 
   /**
-   * Tears down this batched mesh
+   * Destroys this node and its batch
    *
-   * {@link Container3D.destroy | super.destroy} runs first so the {@link View3D} detaches the
-   * node and splices the batch out of its mesh batches.
+   * The batch is always destroyed. Slot geometries and materials are often shared, so they stay
+   * unless you pass `geometry` or `material`; each is destroyed once, however many slots use it.
+   * `texture` then frees the destroyed materials' textures, and `textureSource` their sources.
    *
-   * The internal {@link BatchedMesh3D.batch | batch} is exclusively owned and fully GPU-backed, so
-   * it is always destroyed regardless of flags. Per-slot geometry and material are shared by default
-   * and left intact; pass `geometry` / `material` to destroy them (each unique resource once, since
-   * slots may reference the same geometry or material). `texture` then frees the destroyed
-   * materials' textures, and `textureSource` their sources.
+   * The base `destroy` runs first, so the view lets go of the batch before it's freed.
+   * @example
+   * ```ts
+   * crowd.destroy({ geometry: true, material: true });
+   * ```
    * @param options - Teardown flags; see {@link Destroy3DOptions}.
    */
   public override destroy(options?: Destroy3DOptions): void {

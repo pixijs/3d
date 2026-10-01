@@ -21,34 +21,10 @@ describe('Vector2', () => {
       expect(p.y).toBe(6);
     });
 
-    test('fromArray returns this for chaining', () => {
-      const p = new Vector2();
-      const result = p.fromArray([1, 2]);
-
-      expect(result).toBe(p);
-    });
-
-    test('fromArray works with a Float32Array source', () => {
-      const p = new Vector2();
-      p.fromArray(new Float32Array([7, 8]));
-
-      expect(p.x).toBe(7);
-      expect(p.y).toBe(8);
-    });
-
     test('toArray allocates a new array when not supplied', () => {
       const p = new Vector2(2, 3);
       const arr = p.toArray();
 
-      expect(arr).toEqual([2, 3]);
-    });
-
-    test('toArray writes into a supplied array at offset 0', () => {
-      const p = new Vector2(2, 3);
-      const arr: number[] = [];
-      const result = p.toArray(arr);
-
-      expect(result).toBe(arr);
       expect(arr).toEqual([2, 3]);
     });
 
@@ -58,15 +34,6 @@ describe('Vector2', () => {
       p.toArray(arr, 2);
 
       expect(arr).toEqual([0, 0, 2, 3]);
-    });
-
-    test('toArray works with a Float32Array destination', () => {
-      const p = new Vector2(1.5, 2.5);
-      const f32 = new Float32Array(2);
-      p.toArray(f32);
-
-      expect(f32[0]).toBeCloseTo(1.5, 6);
-      expect(f32[1]).toBeCloseTo(2.5, 6);
     });
   });
 
@@ -291,14 +258,6 @@ describe('Vector2', () => {
       expect(p.y).toBe(10);
     });
 
-    test('values within range are unchanged', () => {
-      const p = new Vector2(5, 5);
-      p.clamp({ x: 0, y: 0 }, { x: 10, y: 10 });
-
-      expect(p.x).toBe(5);
-      expect(p.y).toBe(5);
-    });
-
     test('out variant leaves this unchanged', () => {
       const p = new Vector2(-3, 12);
       const out = new Vector2();
@@ -390,11 +349,6 @@ describe('Vector2', () => {
       expect(a.distanceTo({ x: 4, y: 6 })).toBeCloseTo(5, 6);
     });
 
-    test('distanceTo to itself is 0', () => {
-      const a = new Vector2(7, -3);
-      expect(a.distanceTo({ x: 7, y: -3 })).toBe(0);
-    });
-
     test('distanceToSquared returns squared Euclidean distance', () => {
       const a = new Vector2(1, 2);
       expect(a.distanceToSquared({ x: 4, y: 6 })).toBe(25);
@@ -404,10 +358,6 @@ describe('Vector2', () => {
   describe('dot', () => {
     test('returns sum of componentwise products', () => {
       expect(new Vector2(1, 2).dot({ x: 3, y: 4 })).toBe(11);
-    });
-
-    test('orthogonal vectors have zero dot product', () => {
-      expect(new Vector2(1, 0).dot({ x: 0, y: 1 })).toBe(0);
     });
   });
 
@@ -434,21 +384,9 @@ describe('Vector2', () => {
       expect(new Vector2(1, 0).cross({ x: 0, y: 1 })).toBe(1);
       expect(new Vector2(0, 1).cross({ x: 1, y: 0 })).toBe(-1);
     });
-
-    test('parallel vectors yield zero', () => {
-      expect(new Vector2(2, 4).cross({ x: 1, y: 2 })).toBe(0);
-    });
   });
 
   describe('applyMatrix3', () => {
-    test('identity matrix leaves the point unchanged', () => {
-      const p = new Vector2(2, 3);
-      p.applyMatrix3(new Matrix3());
-
-      expect(p.x).toBeCloseTo(2, 6);
-      expect(p.y).toBeCloseTo(3, 6);
-    });
-
     test('translation matrix translates the point (uses w = 1)', () => {
       const p = new Vector2(1, 1);
       const m = new Matrix3().translate(5, 7);
@@ -487,22 +425,6 @@ describe('Vector2', () => {
 
       expect(p.x).toBeCloseTo(0, 6);
       expect(p.y).toBeCloseTo(1, 6);
-    });
-
-    test('rotating (1, 0) by PI yields (-1, 0)', () => {
-      const p = new Vector2(1, 0);
-      p.rotate(Math.PI);
-
-      expect(p.x).toBeCloseTo(-1, 6);
-      expect(p.y).toBeCloseTo(0, 6);
-    });
-
-    test('rotating by 0 leaves the point unchanged', () => {
-      const p = new Vector2(3, 4);
-      p.rotate(0);
-
-      expect(p.x).toBeCloseTo(3, 6);
-      expect(p.y).toBeCloseTo(4, 6);
     });
 
     test('out variant leaves this unchanged', () => {

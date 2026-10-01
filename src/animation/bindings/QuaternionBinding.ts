@@ -13,7 +13,11 @@ interface QuaternionSettable extends QuaternionData {
 }
 
 /**
- * Applies four-component samples to objects that expose mutable quaternion data
+ * Writes four-component samples to a quaternion, renormalised to unit length
+ *
+ * Blending several states averages unit quaternions component by component, which comes out
+ * shorter than unit length and would scale the transform. A zero-length sample writes the
+ * identity rotation.
  * @internal
  */
 export class QuaternionBinding extends Binding {
@@ -26,8 +30,6 @@ export class QuaternionBinding extends Binding {
     const y = value[1];
     const z = value[2];
     const w = value[3];
-    // Blended samples are a weighted average of unit quaternions (nlerp) —
-    // renormalize so consumers always see a unit rotation.
     const lengthSq = x * x + y * y + z * z + w * w;
 
     if (lengthSq === 0) {

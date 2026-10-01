@@ -15,8 +15,10 @@ import { loadImages } from './utils/loadImages';
  * and unloads every image the file referenced from the loader's cache, as pixi's spritesheets do
  * with their image, even when another loaded asset still uses one.
  *
- * Meshopt-compressed buffers (`EXT_meshopt_compression` / `KHR_meshopt_compression`) are decoded
- * transparently. Use {@link loadGlb} for the `.glb` binary container.
+ * Meshopt-compressed buffers (`EXT_meshopt_compression` / `KHR_meshopt_compression`) and
+ * Draco-compressed meshes (`KHR_draco_mesh_compression`) are decoded as they load; Draco fetches its
+ * decoder from the URLs {@link setDracoDecoderPath} sets. Use {@link loadGlb} for the `.glb` binary
+ * container.
  * @example
  * ```ts
  * import { Assets } from 'pixi.js';
@@ -38,6 +40,16 @@ export const loadGltf = {
   test(url: string) {
     return checkDataUrl(url, 'model/gltf+json') || checkExtension(url, '.gltf');
   },
+  /**
+   * Fetches the file and its buffers and images, and builds the source
+   *
+   * A buffer with no `uri` is a meshopt fallback: a placeholder for data that sits compressed in
+   * another buffer. It gets an empty `ArrayBuffer` so `buffers` stays index-aligned with the file's
+   * list until `normalizeMeshopt` drops it. Any other buffer without a `uri` is an error.
+   * @param url - URL of the `.gltf` file; buffers and images resolve relative to it
+   * @param _resolvedAsset - Unused
+   * @param loader - The loader that loads and caches the images
+   */
   async load(url: string, _resolvedAsset?: ResolvedAsset, loader?: Loader) {
     const response = await fetch(url);
     const json: GltfFormat = await response.json();
@@ -57,11 +69,6 @@ export const loadGltf = {
         return await bufferResponse.arrayBuffer();
       }
 
-      // URI-less "fallback buffer" per EXT/KHR_meshopt_compression: a stub
-      // whose real data lives compressed in another buffer, accessed through
-      // the bufferView's meshopt extension. Return a zero-length ArrayBuffer
-      // so the Promise.all result stays positionally aligned with json.buffers;
-      // normalizeMeshopt will drop it during compaction.
       const isMeshoptFallback =
         buffer.extensions?.EXT_meshopt_compression?.fallback === true ||
         buffer.extensions?.KHR_meshopt_compression?.fallback === true;
@@ -75,9 +82,6 @@ export const loadGltf = {
 
     const buffers = await Promise.all(bufferPromises);
 
-    // Decode meshopt compression (if any) and compact `buffers` in place so
-    // stubs and now-dead compressed-source buffers drop out before anything
-    // downstream indexes into it.
     await normalizeMeshopt(json, buffers);
 
     const images = await loadImages(json.images || [], basePath, json, buffers, loader!);
@@ -88,8 +92,13 @@ export const loadGltf = {
 
     return source;
   },
+  /**
+   * Unloads the images the file loaded, then destroys the source
+   * @param source - The source `load` returned
+   * @param _resolvedAsset - Unused
+   * @param loader - The loader that cached the images
+   */
   async unload(source: Scene3DSource, _resolvedAsset?: ResolvedAsset, loader?: Loader) {
-    // The loader destroys the image textures it cached, then the source frees everything else
     await loader!.unload(source._imageUrls);
     source.destroy();
   },

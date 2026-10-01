@@ -7,25 +7,25 @@ import type { Plane } from './Plane';
 import type { Sphere } from './Sphere';
 
 /**
- * The `Ray` object represents a ray in 3D space, defined by an `origin` and a unit-length `direction`
+ * A half-line that starts at `origin` and runs along `direction`, for picking and line-of-sight
+ * tests
  *
- * Used by raycasters for picking and visibility queries.
+ * {@link View3D#screenToRay} builds one through a pointer position.
  *
- * Math operations follow the unified mutating-default pattern: `a.applyMatrix4(m)` mutates `a`;
- * `a.applyMatrix4(m, out)` writes the result into `out` without mutating `a`.
+ * Keep `direction` unit length. The distance and sphere methods measure along it and say so in
+ * their docs; call `direction.normalize()` after changing it by hand.
  *
- * Methods that depend on `direction` being unit length call out the requirement; pass a
- * normalized direction or call `direction.normalize()` after mutating it.
+ * Methods that change the ray do so in place, or write into an `out` ray when you pass one and
+ * leave this ray as it is.
  * @example
  * ```ts
- * const ray = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, -1));
+ * const hit = new Vector3();
  *
- * // Point along the ray at t = 5
- * ray.at(5);
+ * view3d.on('pointertap', (e) => {
+ *   const ray = view3d.screenToRay(e.global);
  *
- * // Sphere hit test
- * const hit = ray.intersectSphere(sphere);
- * if (hit) console.log('hit at', hit);
+ *   if (ray.intersectPlane(ground, hit)) unit.moveTo(hit);
+ * });
  * ```
  * @see {@link Box} For ray-box hit tests
  * @see {@link Sphere} For ray-sphere hit tests
@@ -34,20 +34,36 @@ import type { Sphere } from './Sphere';
  * @standard
  */
 export class Ray {
-  /** The origin of the ray */
+  /**
+   * The point the ray starts from
+   * @example
+   * ```ts
+   * muzzle.getGlobalPosition(shotRay.origin);
+   * ```
+   */
   public readonly origin: Vector3;
-  /** The (unit-length) direction of the ray */
+  /**
+   * The unit-length direction the ray runs in
+   * @example
+   * ```ts
+   * sightLine.direction.copyFrom(target.position).subtract(sightLine.origin).normalize();
+   * ```
+   */
   public readonly direction: Vector3;
 
   /**
-   * The type of the object, mainly used to avoid `instanceof` checks
+   * Names the shape without an `instanceof` check, like the `type` on pixi's 2D shapes
    * @readonly
    * @default 'ray'
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'ray';
 
   /**
    * Creates a new `Ray`
+   *
+   * Left out, the ray starts at the origin and points down -Z. Vectors passed in become the ray's
+   * own; they are not copied.
    * @param origin - The origin of the ray
    * @param direction - The unit-length direction of the ray
    */
@@ -57,9 +73,14 @@ export class Ray {
   }
 
   /**
-   * Sets the origin and direction of this ray
+   * Sets the origin and direction of this ray, copying their values
    *
    * The direction is assumed to be normalized.
+   * @example
+   * ```ts
+   * camera.worldTransform.extractForward(forward);
+   * aimRay.set(camera.getGlobalPosition(eye), forward);
+   * ```
    * @param origin - The origin of the ray
    * @param direction - The unit-length direction of the ray
    * @returns This ray for chaining
@@ -73,6 +94,10 @@ export class Ray {
 
   /**
    * Copies `ray` into this ray
+   * @example
+   * ```ts
+   * lastPointerRay.copyFrom(pointerRay);
+   * ```
    * @param ray - The ray to copy from
    * @returns This ray for chaining
    */
@@ -85,6 +110,10 @@ export class Ray {
 
   /**
    * Copies this ray into `target` and returns it
+   * @example
+   * ```ts
+   * pointerRay.copyTo(lastPointerRay);
+   * ```
    * @param target - The ray to copy into
    * @returns The given `target`
    */
@@ -97,6 +126,10 @@ export class Ray {
 
   /**
    * Creates a new `Ray` with the same origin and direction
+   * @example
+   * ```ts
+   * const reflected = incoming.clone();
+   * ```
    * @returns The new ray
    */
   public clone(): Ray {
@@ -105,6 +138,10 @@ export class Ray {
 
   /**
    * Returns true when `origin` and `direction` match `ray` exactly (no epsilon tolerance)
+   * @example
+   * ```ts
+   * if (!pointerRay.equals(lastPointerRay)) updateHover(pointerRay);
+   * ```
    * @param ray - The ray to compare with
    * @returns Whether the origin and direction match
    */
@@ -114,6 +151,14 @@ export class Ray {
 
   /**
    * Writes the point at distance `t` along this ray (`origin + direction * t`) into `out`
+   *
+   * With a unit-length `direction`, `t` is in world units.
+   * @example
+   * ```ts
+   * const reticle = new Vector3();
+   *
+   * aimRay.at(20, reticle);
+   * ```
    * @param t - The distance along the ray
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The point along the ray
@@ -130,7 +175,13 @@ export class Ray {
   /**
    * Writes the closest point on this ray to `point` into `out`
    *
-   * The result is clamped to the forward half-line: points behind `origin` collapse to `origin`.
+   * Points behind `origin` give `origin`. Requires a unit-length `direction`.
+   * @example
+   * ```ts
+   * const nearest = new Vector3();
+   *
+   * aimRay.closestPointToPoint(enemy.position, nearest);
+   * ```
    * @param point - The point to measure from
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The closest point on this ray
@@ -149,6 +200,12 @@ export class Ray {
 
   /**
    * Returns the Euclidean distance from `point` to the closest point on this ray
+   *
+   * Requires a unit-length `direction`.
+   * @example
+   * ```ts
+   * const nearMiss = aimRay.distanceToPoint(target.position) < 0.5;
+   * ```
    * @param point - The point to measure from
    * @returns The distance to the closest point on this ray
    */
@@ -158,6 +215,13 @@ export class Ray {
 
   /**
    * Returns the squared Euclidean distance from `point` to the closest point on this ray
+   *
+   * Cheaper than {@link Ray#distanceToPoint}; compare it against a squared radius. Requires a
+   * unit-length `direction`.
+   * @example
+   * ```ts
+   * const locked = enemies.find((enemy: Container3D) => aimRay.distanceSqToPoint(enemy.position) < 0.25);
+   * ```
    * @param point - The point to measure from
    * @returns The squared distance to the closest point on this ray
    */
@@ -184,14 +248,19 @@ export class Ray {
    *
    * Both must be in the same space; the hit point is written into `out` (or a new `Vector3`) in
    * that space. When the ray origin is inside the sphere the exit point is used instead, so
-   * callers always get a forward-facing hit. A negative radius marks the sphere as empty
-   * ({@link Sphere#radius}) and never intersects, matching {@link Ray#intersectsSphere}.
+   * callers always get a forward-facing hit. An empty sphere (negative radius) never intersects.
    *
-   * Requires a unit-length `direction`; the quadratic solve measures along it.
+   * Requires a unit-length `direction`.
+   * @example
+   * ```ts
+   * const hit = new Vector3();
+   *
+   * if (ray.intersectSphere(planet.boundingSphere, hit)) flag.position.copyFrom(hit);
+   * ```
    * @param sphere - The sphere to intersect
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The entry point (or the exit point from inside), or `null` when the ray misses
-   * @see {@link Ray#intersectSphereT} For the parametric `t` of the same hit, without the point.
+   * @see {@link Ray#intersectSphereT} For the distance to the same hit, without the point.
    */
   public intersectSphere(sphere: Sphere, out?: Vector3): Vector3 | null {
     const t = this.intersectSphereT(sphere);
@@ -200,13 +269,28 @@ export class Ray {
   }
 
   /**
-   * Intersects this ray with `sphere` and returns the hit as a parametric `t` rather than a point
+   * Intersects this ray with `sphere` and returns the distance to the hit rather than the point
    *
-   * The distance form of {@link Ray#intersectSphere}: same hit, same entry / exit rule, but the
-   * caller decides whether to materialise a point (`ray.at(t)`). Requires a unit-length
-   * `direction`, which also makes `t` the Euclidean distance from `origin` to the hit.
+   * Same hit as {@link Ray#intersectSphere}, including the exit point from inside; call
+   * {@link Ray#at} when you need the point. Compare distances to find the nearest of several hits
+   * without making a point for each. Requires a unit-length `direction`, which also makes `t` the
+   * Euclidean distance from `origin` to the hit.
+   * @example
+   * ```ts
+   * let nearest: Mesh3D | null = null;
+   * let nearestT = Infinity;
+   *
+   * for (const target of targets) {
+   *   const t = ray.intersectSphereT(target.boundingSphere);
+   *
+   *   if (t !== -1 && t < nearestT) {
+   *     nearestT = t;
+   *     nearest = target;
+   *   }
+   * }
+   * ```
    * @param sphere - The sphere to intersect
-   * @returns The parametric `t` of the hit (`>= 0`), or `-1` when the ray misses
+   * @returns The distance `t` to the hit (`>= 0`), or `-1` when the ray misses
    */
   public intersectSphereT(sphere: Sphere): number {
     if (sphere.radius < 0) return -1;
@@ -231,6 +315,12 @@ export class Ray {
 
   /**
    * Returns true when this ray hits `sphere`
+   *
+   * Requires a unit-length `direction`. An empty sphere (negative radius) is never hit.
+   * @example
+   * ```ts
+   * const hovered = enemies.filter((enemy: Mesh3D) => pointerRay.intersectsSphere(enemy.boundingSphere));
+   * ```
    * @param sphere - The sphere to test
    * @returns Whether the ray hits the sphere
    */
@@ -243,10 +333,17 @@ export class Ray {
   /**
    * Intersects this ray with `plane`
    *
-   * Coplanar rays return the origin.
+   * A ray that lies in the plane hits at its origin. Works with a `direction` of any length.
+   * @example
+   * ```ts
+   * const ground = new Plane(new Vector3(0, 1, 0), 0);
+   * const target = new Vector3();
+   *
+   * if (pointerRay.intersectPlane(ground, target)) cursor.position.copyFrom(target);
+   * ```
    * @param plane - The plane to intersect
    * @param out - Optional vector to write into; a new `Vector3` when omitted
-   * @returns The hit point, or `null` when there is no intersection
+   * @returns The hit point, or `null` when the ray points away from the plane or runs parallel to it
    */
   public intersectPlane(plane: Plane, out?: Vector3): Vector3 | null {
     const denominator = plane.normal.dot(this.direction);
@@ -269,7 +366,11 @@ export class Ray {
   }
 
   /**
-   * Returns true when this ray hits `plane`
+   * Returns true when this ray hits `plane`, including when its origin lies on the plane
+   * @example
+   * ```ts
+   * const canLand = dropRay.intersectsPlane(ground);
+   * ```
    * @param plane - The plane to test
    * @returns Whether the ray hits the plane
    */
@@ -282,13 +383,20 @@ export class Ray {
   }
 
   /**
-   * Intersects this ray with `box` using the slab method
+   * Intersects this ray with `box`
    *
-   * When the ray origin is inside the box, the exit point is returned.
+   * When the ray origin is inside the box, the exit point is returned. Works with a `direction` of
+   * any length.
+   * @example
+   * ```ts
+   * const hit = new Vector3();
+   *
+   * if (localRay.intersectBox(mesh.geometry.bounds3D, hit)) decal.position.copyFrom(hit);
+   * ```
    * @param box - The box to intersect
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The entry point, or `null` when there is no intersection
-   * @see {@link Ray#intersectBoxT} For the parametric `t` of the same hit, without the point.
+   * @see {@link Ray#intersectBoxT} For the distance to the same hit, without the point.
    */
   public intersectBox(box: Box, out?: Vector3): Vector3 | null {
     const t = this.intersectBoxT(box);
@@ -298,6 +406,10 @@ export class Ray {
 
   /**
    * Returns true when this ray hits `box`
+   * @example
+   * ```ts
+   * const hovered = pointerRay.intersectsBox(buttonBounds);
+   * ```
    * @param box - The box to test
    * @returns Whether the ray hits the box
    */
@@ -306,13 +418,20 @@ export class Ray {
   }
 
   /**
-   * Transforms this ray by `matrix`
+   * Transforms this ray by an affine `matrix`
    *
-   * The origin is transformed as a position; the direction is transformed by the rotation portion
-   * (and renormalized).
+   * The origin moves as a point. The direction turns and scales with the matrix, ignoring
+   * translation, and is normalized again. Distances measured along the new ray are therefore in
+   * the new space's units: under scale, compare hits as points, not as `t` values.
    *
-   * Assumes `matrix` is affine (bottom row `[0, 0, 0, 1]`); this is the universal case for
-   * `Container3D.worldTransform`. Projection matrices are not supported here.
+   * `matrix` must be affine (bottom row `[0, 0, 0, 1]`), as a {@link Container3D#worldTransform}
+   * always is. Projection matrices are not supported.
+   * @example
+   * ```ts
+   * const worldToLocal = new Matrix4().getInverse(mesh.worldTransform);
+   * const localRay = pointerRay.applyMatrix4(worldToLocal, new Ray());
+   * const overMesh = localRay.intersectsBox(mesh.geometry.bounds3D);
+   * ```
    * @param matrix - The affine matrix to transform by
    * @param out - Target to write the result into instead of mutating this ray
    * @returns The result ray for chaining
@@ -326,14 +445,23 @@ export class Ray {
   }
 
   /**
-   * Intersects this ray with `box` and returns the hit as a parametric `t` rather than a point
+   * Intersects this ray with `box` and returns the distance to the hit rather than the point
    *
-   * The distance form of {@link Ray#intersectBox}: same slab method, same entry / exit rule, but
-   * the caller decides whether to materialise a point (`ray.at(t)`). With a unit-length
-   * `direction`, `t` is the Euclidean distance from `origin` to the hit.
+   * Same hit as {@link Ray#intersectBox}, including the exit point from inside; call
+   * {@link Ray#at} when you need the point. The result is in units of `direction`, so with a
+   * unit-length `direction` it is the Euclidean distance from `origin` to the hit.
+   *
+   * A zero direction component makes that axis's bounds infinite, or `NaN` when the origin sits
+   * exactly on one of the box's faces; the method skips a `NaN` bound rather than letting it
+   * spread.
+   * @example
+   * ```ts
+   * const t = sightLine.intersectBoxT(wallBounds);
+   * const blocked = t !== -1 && t < distanceToTarget;
+   * ```
    * @param box - The box to intersect
-   * @returns The parametric `t` of the entry point — of the exit point when the origin is inside
-   * the box — or `-1` when the ray misses
+   * @returns The distance `t` to the entry point, or to the exit point when the origin is inside
+   * the box, or `-1` when the ray misses
    */
   public intersectBoxT(box: Box): number {
     const invdirx = 1 / this.direction.x;
@@ -366,7 +494,6 @@ export class Ray {
 
     if (tmin > tymax || tymin > tmax) return -1;
 
-    // NaN propagation guard for axis-aligned rays (invdir = ±Infinity).
     if (tymin > tmin || Number.isNaN(tmin)) tmin = tymin;
     if (tymax < tmax || Number.isNaN(tmax)) tmax = tymax;
 
@@ -391,6 +518,7 @@ export class Ray {
   /**
    * Returns a string representation of this ray
    * @returns A string in the form `[pixi-3d/math:Ray origin=(0, 0, 0) direction=(0, 0, -1)]`
+   * @advanced
    */
   public toString(): string {
     return `[pixi-3d/math:Ray origin=(${this.origin.x}, ${this.origin.y}, ${this.origin.z}) direction=(${this.direction.x}, ${this.direction.y}, ${this.direction.z})]`;

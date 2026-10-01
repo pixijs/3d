@@ -8,21 +8,22 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// The visibility-only compaction is dirty-gated: its answer can only change when something is
-// hidden or shown, so a clean frame must not re-walk the instances or re-upload the index
-// texture. The visual scenes can't catch a broken gate — they assert pixels, and skipping work
-// that produces identical pixels is invisible to them. So count the walks directly.
-//
-// A frustum producer is deliberately NOT gated (the camera has no change signal), which is why
-// these scenes stay under the `'auto'` cull threshold so the producer resolves to `'off'`.
-
-/** Spies on the batcher's private compaction and returns a per-frame call counter. */
+/**
+ * Spies on the batcher's private compaction, so a test can count the walks
+ *
+ * The visual scenes can't catch a broken gate: skipping work that gives identical pixels is
+ * invisible to them.
+ */
 function spyOnCompaction(renderer: WebGLRenderer) {
   const batcher = renderer.material3d.batcher as unknown as { _compact: (...args: unknown[]) => void };
 
   return vi.spyOn(batcher, '_compact');
 }
 
+/**
+ * A lit view of `meshCount` cubes, few enough that the `'auto'` cull mode resolves to `'off'`:
+ * frustum culling compacts every frame by design, so only the visibility-only walk is gated
+ */
 function buildView(meshCount: number): { view3d: View3D; meshes: Mesh3D[] } {
   const view3d = new View3D({ width: 64, height: 64 });
   view3d.camera.position.set(0, 0, 8);
@@ -60,7 +61,6 @@ describe('WebGL instance-index compaction gate', () => {
 
       const compact = spyOnCompaction(app.renderer);
 
-      // Three clean frames: no transforms, no visibility flips, no adds or removes.
       app.render();
       app.render();
       app.render();
@@ -90,20 +90,18 @@ describe('WebGL instance-index compaction gate', () => {
       const afterHide = compact.mock.calls.length;
       expect(afterHide).toBeGreaterThan(0);
 
-      // The flip has been consumed — the next frame is clean again.
       app.render();
-      expect(compact.mock.calls.length).toBe(afterHide);
+      expect(compact.mock.calls.length, 'the flip was consumed, so the next frame is clean').toBe(afterHide);
 
-      // Showing it again is another flip, so the walk has to run once more.
       meshes[0].visible = true;
       app.render();
-      expect(compact.mock.calls.length).toBeGreaterThan(afterHide);
+      expect(compact.mock.calls.length, 'showing it again is another flip').toBeGreaterThan(afterHide);
     } finally {
       app.destroy();
     }
   });
 
-  it('re-walks after a structural rebuild', async () => {
+  it('re-walks after a structural rebuild, though no visibility flipped', async () => {
     const app = await getApp<WebGLRenderer>({
       id: 'gl-compaction-gate-rebuild',
       appOptions: { preference: 'webgl', width: 64, height: 64, backgroundColor: 0x000000 },
@@ -117,8 +115,6 @@ describe('WebGL instance-index compaction gate', () => {
 
       const compact = spyOnCompaction(app.renderer);
 
-      // A new mesh rebuilds the draw work, which invalidates the index the compaction reads
-      // from — the walk must run even though no visibility flipped.
       const extra = new Mesh3D({ geometry: new CubeGeometry(), material: new Material3D({ baseColor: 0x44ff88 }) });
       extra.position.set(2.5, 0, 0);
       view3d.root.addChild(extra);

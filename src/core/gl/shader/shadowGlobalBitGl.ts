@@ -4,8 +4,11 @@ import type { ShaderBit } from '../../shader/ShaderBit';
  * Minimal global bindings for the WebGL shadow-map pass
  *
  * Kept separate from the main scene global bit so shadow shaders only receive the
- * uniforms/resources they actually use. The cascade's matrices are not here — it draws from a
- * camera group at group 1, like every other mesh draw.
+ * uniforms/resources they actually use. The cascade's matrices are not here: it draws from a
+ * camera group at group 1, like every other mesh draw. The bone pit and the morph and geometry
+ * stores let skinned and morphed casters deform their depth as they do in colour.
+ *
+ * The bindings' order sets their slots in `ShadowRenderPassGl`'s bind group.
  * @internal
  */
 export const shadowGlobalBitGl: ShaderBit = {
@@ -14,11 +17,8 @@ export const shadowGlobalBitGl: ShaderBit = {
     global: {
       uBatchWorldMatrix: 'mat4x4<f32>',
       uBonePitTexture: 'texture_2d<f32>',
-      // Shadow-morph: the shared morph store + per-geometry facts as data-texture
-      // views, read by morphTargetBitGl to deform the caster's depth. Bound per
-      // frame in ShadowRenderPassGl (slots 2–3, after the bone-pit at 1).
       uMorphTexture: 'texture_2d<f32>',
-      uGeometryTexture: 'texture_2d<f32>',
+      uGeometryTexture: 'texture_2d<u32>',
     },
   },
 };

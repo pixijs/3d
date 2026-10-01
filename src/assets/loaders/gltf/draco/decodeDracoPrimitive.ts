@@ -9,14 +9,11 @@ import type { DracoAttributeRequest } from './worker/loadDracoOnWorker';
 import { loadDracoOnWorker } from './worker/loadDracoOnWorker';
 
 /**
- * Decodes a primitive's KHR_draco_mesh_compression extension into `Geometry3DOptions`-shaped data
+ * Decodes a primitive's `KHR_draco_mesh_compression` data into `Geometry3DOptions` fields
  *
- * Returns the indices + attributes keyed by internal attribute names like
- * 'positions', 'normals', 'uvs'.
- *
- * Iterates `dracoExt.attributes` (not `primitiveRaw.attributes`) — the Draco
- * extension lists exactly which attributes are compressed, while the primitive
- * may also reference uncompressed accessors which Draco doesn't decode.
+ * Only the attributes the extension lists are decoded. The primitive can name others, stored
+ * uncompressed, which this path doesn't load. Colours are widened to RGBA as on the uncompressed
+ * path in `processMeshes`.
  * @param gltfRaw - Parsed glTF JSON, used to resolve the extension's bufferView and accessors
  * @param buffers - Binary buffers indexed by glTF buffer index
  * @param primitiveRaw - The primitive whose attribute accessors the decoded data belongs to
@@ -32,8 +29,6 @@ export async function decodeDracoPrimitive(
   const bufferView = gltfRaw.bufferViews![dracoExt.bufferView];
   const sourceBuffer: ArrayBuffer = buffers[bufferView.buffer];
   const start = bufferView.byteOffset ?? 0;
-  // Slice (not view) — the worker takes ownership via transfer, so we must
-  // give it a standalone buffer that doesn't alias the shared source.
   const bytes = sourceBuffer.slice(start, start + bufferView.byteLength);
 
   const attributeIds: Record<string, DracoAttributeRequest> = {};
@@ -57,8 +52,6 @@ export async function decodeDracoPrimitive(
     if (!decoded.attributes[semantic]) continue;
     const attributeName = GLTF_SEMANTIC_TO_ATTRIBUTE[semantic];
     if (attributeName) {
-      // Colors are VEC3 or VEC4 in glTF; widen so Geometry3D always sees RGBA.
-      // Matches the uncompressed path in `processMeshes`.
       const data = decoded.attributes[semantic] as TypedArray;
       result[attributeName] =
         attributeName === 'colors' || attributeName === 'colors1'

@@ -86,8 +86,8 @@ describe('DepthMapViewer', () => {
         const buffers = [...geometry.buffers];
 
         expect(buffers.every((buffer) => gpuCopies(buffer) > 0)).toBe(true);
-        // Only WebGL keeps a per-geometry GPU object (its VAO cache); WebGPU binds the buffers directly
-        expect(gpuCopies(geometry)).toBe(preference === 'webgl' ? 1 : 0);
+        const webglVaoCacheCopies = preference === 'webgl' ? 1 : 0;
+        expect(gpuCopies(geometry)).toBe(webglVaoCacheCopies);
 
         viewer.unload();
 

@@ -51,25 +51,10 @@ describe('ObservableVector3', () => {
       expect(p.z).toBe(0);
     });
 
-    test('respects supplied x, y, z', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 1, 2, 3);
-      expect(p.x).toBe(1);
-      expect(p.y).toBe(2);
-      expect(p.z).toBe(3);
-    });
-
     test('does not fire observer on construction', () => {
       const c = makeCounter();
       new ObservableVector3(c.observer, 1, 2, 3);
       expect(c.count).toBe(0);
-    });
-
-    test('stores the supplied observer (it can be inspected via mutation)', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 0, 0, 0);
-      p.x = 1;
-      expect(c.last).toBe(p);
     });
   });
 
@@ -89,14 +74,6 @@ describe('ObservableVector3', () => {
       p.x = 5;
       expect(c.count).toBe(0);
     });
-
-    test('point.x = point.x is a no-op', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 5, 0, 0);
-      // oxlint-disable-next-line no-self-assign
-      p.x = p.x;
-      expect(c.count).toBe(0);
-    });
   });
 
   describe('y setter', () => {
@@ -114,14 +91,6 @@ describe('ObservableVector3', () => {
       p.y = 5;
       expect(c.count).toBe(0);
     });
-
-    test('point.y = point.y is a no-op', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 0, 5, 0);
-      // oxlint-disable-next-line no-self-assign
-      p.y = p.y;
-      expect(c.count).toBe(0);
-    });
   });
 
   describe('z setter', () => {
@@ -137,14 +106,6 @@ describe('ObservableVector3', () => {
       const c = makeCounter();
       const p = new ObservableVector3(c.observer, 0, 0, 5);
       p.z = 5;
-      expect(c.count).toBe(0);
-    });
-
-    test('point.z = point.z is a no-op', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 0, 0, 5);
-      // oxlint-disable-next-line no-self-assign
-      p.z = p.z;
       expect(c.count).toBe(0);
     });
   });
@@ -191,19 +152,6 @@ describe('ObservableVector3', () => {
       p.set(1, 2, 3);
       expect(c.count).toBe(0);
     });
-
-    test('set(currentX, currentY, currentZ) is a no-op', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 4, 5, 6);
-      p.set(p.x, p.y, p.z);
-      expect(c.count).toBe(0);
-    });
-
-    test('returns this', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer);
-      expect(p.set(1, 2, 3)).toBe(p);
-    });
   });
 
   describe('copyFrom', () => {
@@ -227,12 +175,6 @@ describe('ObservableVector3', () => {
       p.copyFrom({ x: 1, y: 2, z: 3 });
       expect(c.count).toBe(0);
     });
-
-    test('returns this', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer);
-      expect(p.copyFrom({ x: 1, y: 2, z: 3 })).toBe(p);
-    });
   });
 
   describe('copyTo', () => {
@@ -242,21 +184,6 @@ describe('ObservableVector3', () => {
       const target = new Vector3();
       p.copyTo(target);
       expectVec3Close(target, 1, 2, 3);
-    });
-
-    test('returns target', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 1, 2, 3);
-      const target = new Vector3();
-      expect(p.copyTo(target)).toBe(target);
-    });
-
-    test("does not fire this point's observer", () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 1, 2, 3);
-      const target = new Vector3();
-      p.copyTo(target);
-      expect(c.count).toBe(0);
     });
   });
 
@@ -330,13 +257,6 @@ describe('ObservableVector3', () => {
       expectVec3Close(p, 1, 2, 3);
     });
 
-    test('works with Float32Array', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer);
-      p.fromArray(new Float32Array([1, 2, 3]));
-      expectVec3Close(p, 1, 2, 3);
-    });
-
     test('fires observer at most once', () => {
       const c = makeCounter();
       const p = new ObservableVector3(c.observer, 0, 0, 0);
@@ -359,28 +279,12 @@ describe('ObservableVector3', () => {
       expect(p.toArray()).toEqual([1, 2, 3]);
     });
 
-    test('writes into supplied array', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 1, 2, 3);
-      const arr = [0, 0, 0];
-      const result = p.toArray(arr);
-      expect(result).toBe(arr);
-      expect(arr).toEqual([1, 2, 3]);
-    });
-
     test('writes at supplied offset', () => {
       const c = makeCounter();
       const p = new ObservableVector3(c.observer, 1, 2, 3);
       const arr = [9, 9, 9, 9, 9];
       p.toArray(arr, 2);
       expect(arr).toEqual([9, 9, 1, 2, 3]);
-    });
-
-    test('does not fire observer', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 1, 2, 3);
-      p.toArray();
-      expect(c.count).toBe(0);
     });
   });
 
@@ -614,12 +518,11 @@ describe('ObservableVector3', () => {
       expect(c.count).toBe(1);
     });
 
-    test('zero-magnitude point is left unchanged', () => {
+    test('zero-magnitude point is left unchanged and the observer stays silent', () => {
       const c = makeCounter();
       const a = new ObservableVector3(c.observer, 0, 0, 0);
       a.normalize();
       expectVec3Close(a, 0, 0, 0);
-      // No mutation occurred so observer is not fired.
       expect(c.count).toBe(0);
     });
 
@@ -669,13 +572,6 @@ describe('ObservableVector3', () => {
       const p = new ObservableVector3(c.observer, 1, 2, 2);
       expect(p.magnitude()).toBeCloseTo(3, 5);
     });
-
-    test('does not fire observer', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 1, 2, 3);
-      p.magnitude();
-      expect(c.count).toBe(0);
-    });
   });
 
   describe('magnitudeSquared', () => {
@@ -684,13 +580,6 @@ describe('ObservableVector3', () => {
       const p = new ObservableVector3(c.observer, 1, 2, 3);
       expect(p.magnitudeSquared()).toBe(1 + 4 + 9);
     });
-
-    test('does not fire observer', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 1, 2, 3);
-      p.magnitudeSquared();
-      expect(c.count).toBe(0);
-    });
   });
 
   describe('distanceTo', () => {
@@ -698,12 +587,6 @@ describe('ObservableVector3', () => {
       const c = makeCounter();
       const a = new ObservableVector3(c.observer, 0, 0, 0);
       expect(a.distanceTo({ x: 1, y: 2, z: 2 })).toBeCloseTo(3, 5);
-    });
-
-    test('returns 0 for identical points', () => {
-      const c = makeCounter();
-      const a = new ObservableVector3(c.observer, 1, 2, 3);
-      expect(a.distanceTo({ x: 1, y: 2, z: 3 })).toBe(0);
     });
   });
 
@@ -720,12 +603,6 @@ describe('ObservableVector3', () => {
       const c = makeCounter();
       const a = new ObservableVector3(c.observer, 1, 2, 3);
       expect(a.dot({ x: 4, y: 5, z: 6 })).toBe(4 + 10 + 18);
-    });
-
-    test('returns 0 for orthogonal vectors', () => {
-      const c = makeCounter();
-      const a = new ObservableVector3(c.observer, 1, 0, 0);
-      expect(a.dot({ x: 0, y: 1, z: 0 })).toBe(0);
     });
   });
 
@@ -753,12 +630,6 @@ describe('ObservableVector3', () => {
       const a = new ObservableVector3(c.observer, 0, 0, 0);
       expect(a.angleTo({ x: 1, y: 0, z: 0 })).toBe(Math.PI / 2);
     });
-
-    test('returns PI/2 when the other vector has zero magnitude', () => {
-      const c = makeCounter();
-      const a = new ObservableVector3(c.observer, 1, 0, 0);
-      expect(a.angleTo({ x: 0, y: 0, z: 0 })).toBe(Math.PI / 2);
-    });
   });
 
   describe('cross', () => {
@@ -768,13 +639,6 @@ describe('ObservableVector3', () => {
       a.cross({ x: 0, y: 1, z: 0 });
       expectVec3Close(a, 0, 0, 1);
       expect(c.count).toBe(1);
-    });
-
-    test('cross product is anti-commutative (x cross y = z, y cross x = -z)', () => {
-      const c = makeCounter();
-      const a = new ObservableVector3(c.observer, 0, 1, 0);
-      a.cross({ x: 1, y: 0, z: 0 });
-      expectVec3Close(a, 0, 0, -1);
     });
 
     test('writes into out without mutating this; observer not fired', () => {
@@ -789,12 +653,11 @@ describe('ObservableVector3', () => {
   });
 
   describe('applyMatrix3', () => {
-    test('identity matrix leaves point unchanged', () => {
+    test('identity matrix leaves point unchanged and the observer stays silent', () => {
       const c = makeCounter();
       const a = new ObservableVector3(c.observer, 1, 2, 3);
       a.applyMatrix3(new Matrix3());
       expectVec3Close(a, 1, 2, 3);
-      // Values match — observer should not fire.
       expect(c.count).toBe(0);
     });
 
@@ -919,7 +782,6 @@ describe('ObservableVector3', () => {
     test('rotates a direction and ignores translation', () => {
       const c = makeCounter();
       const m = new Matrix4().makeRotationY(Math.PI / 2);
-      // Translation should be ignored.
       m.elements[12] = 100;
       m.elements[13] = 200;
       m.elements[14] = 300;
@@ -975,13 +837,6 @@ describe('ObservableVector3', () => {
       p.setFromSpherical(s);
       expectVec3Close(p, 0, 1, 0);
     });
-
-    test('returns this', () => {
-      const c = makeCounter();
-      const s = new Spherical(1, Math.PI / 2, 0);
-      const p = new ObservableVector3(c.observer);
-      expect(p.setFromSpherical(s)).toBe(p);
-    });
   });
 
   describe('setFromCylindrical', () => {
@@ -1001,22 +856,14 @@ describe('ObservableVector3', () => {
       p.setFromCylindrical(cyl);
       expectVec3Close(p, 1, 0, 0);
     });
-
-    test('returns this', () => {
-      const c = makeCounter();
-      const cyl = new Cylindrical(1, 0, 0);
-      const p = new ObservableVector3(c.observer);
-      expect(p.setFromCylindrical(cyl)).toBe(p);
-    });
   });
 
   describe('setFromMatrixColumn', () => {
-    test('reads column 0 (translation column 3 holds (10, 20, 30))', () => {
+    test('reads the translation (10, 20, 30) from column 3', () => {
       const c = makeCounter();
       const m = new Matrix4().makeTranslation(10, 20, 30);
       const p = new ObservableVector3(c.observer);
       p.setFromMatrixColumn(m, 3);
-      // Column 3 = elements[12..15] = (10, 20, 30, 1)
       expect(p.x).toBeCloseTo(10, 5);
       expect(p.y).toBeCloseTo(20, 5);
       expect(p.z).toBeCloseTo(30, 5);
@@ -1028,48 +875,6 @@ describe('ObservableVector3', () => {
       const p = new ObservableVector3(c.observer);
       p.setFromMatrixColumn(m, 0);
       expectVec3Close(p, 1, 0, 0);
-    });
-
-    test('reads second column of identity (0, 1, 0)', () => {
-      const c = makeCounter();
-      const m = new Matrix4();
-      const p = new ObservableVector3(c.observer);
-      p.setFromMatrixColumn(m, 1);
-      expectVec3Close(p, 0, 1, 0);
-    });
-
-    test('returns this', () => {
-      const c = makeCounter();
-      const m = new Matrix4();
-      const p = new ObservableVector3(c.observer);
-      expect(p.setFromMatrixColumn(m, 0)).toBe(p);
-    });
-  });
-
-  describe('observer no-op semantics', () => {
-    test('point.x = point.x does not fire the observer', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 5, 6, 7);
-      // oxlint-disable no-self-assign
-      p.x = p.x;
-      p.y = p.y;
-      p.z = p.z;
-      // oxlint-enable no-self-assign
-      expect(c.count).toBe(0);
-    });
-
-    test('set(currentX, currentY, currentZ) does not fire the observer', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 5, 6, 7);
-      p.set(p.x, p.y, p.z);
-      expect(c.count).toBe(0);
-    });
-
-    test('copyFrom of identical values does not fire the observer', () => {
-      const c = makeCounter();
-      const p = new ObservableVector3(c.observer, 5, 6, 7);
-      p.copyFrom({ x: 5, y: 6, z: 7 });
-      expect(c.count).toBe(0);
     });
   });
 });

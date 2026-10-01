@@ -15,17 +15,17 @@ import { updateView3DTransforms } from './updateView3DTransforms';
 /**
  * Per-frame scene update for a {@link View3D}
  *
- * Walks the View's mesh batches, dispatches pass dirty hooks, and updates the
- * bonepit. Each batch/pass owns its structural dirty version, so one dirty
- * batch does not invalidate peers.
+ * Places the scene, builds the view camera, then brings the view's GPU-side scene data up to
+ * date: bone matrices, morph data, every mesh batch's store rows and draw lists, and the caches
+ * that baked a buffer which has since moved. Each batch and pass keeps its own dirty version, so
+ * one dirty batch doesn't invalidate the others.
  *
- * The pipe is the orchestrator: it provides backend-specific strategy through
- * `materialSystem`, `materialStoreBuffer` and `atlasPool`. The view camera is built here, right
- * after the transform walk that places it — its frame is what decides whether the rest of the
- * update is worth doing. Caller should bail when this returns `false`: the view is fully
- * off-screen.
+ * The view camera is built right after the transform walk that places it, because its frame
+ * decides whether the rest of the update is worth doing. Bones and morphs settle before the
+ * batch walks, because a mesh's store row copies its bone-pit base and morph weight offset.
+ * Caller should bail when this returns `false`: the view is fully off-screen.
  * @param view3d - the View being updated this frame
- * @param pipe - backend View3D pipe supplying the strategy hooks
+ * @param pipe - backend View3D pipe supplying the stores, the atlas pool and the material system
  * @param session - the frame's render session; its `viewport` is filled here
  * @returns `false` when the view camera is fully off-screen.
  * @internal
@@ -40,14 +40,33 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
 
   view3d._syncShadowSampling();
 
+  refillBonePit(view3d);
+  pipe._morphStoreBuffer.sync(view3d._morphedMeshes.items);
+
+  updateSceneBatch(view3d, pipe);
+  updateUserBatches(view3d, pipe);
+
+  restampMorphedGeometry(view3d, pipe);
+  invalidateGrownStores(view3d);
+
+  return true;
+}
+
+/**
+ * Refills the view's bone pit with every skinned mesh's bone matrices
+ *
+ * The pit is refilled from scratch every frame, so a skeleton's base in it moves whenever a
+ * skinned mesh joins or leaves. A mesh's store row bakes that base, so the row is re-emitted
+ * exactly when the base moves.
+ * @param view3d - the View whose skinned meshes are packed
+ */
+function refillBonePit(view3d: View3D): void {
   view3d._bonePit.clear();
   const skinnedMeshes = view3d._skinnedMeshes.items;
   for (let i = 0; i < view3d._skinnedMeshes.items.length; i++) {
     const mesh = skinnedMeshes[i];
     const skeleton = mesh.skeleton!;
     skeleton.updateWorld();
-    // Rows bake the pit base. The pit is refilled from scratch every frame, so the base
-    // moves whenever a skinned mesh joins or leaves; re-emit the row exactly then.
     const base = view3d._bonePit.add(skeleton);
     if (mesh._lastBonePitIndex !== base) {
       mesh._lastBonePitIndex = base;
@@ -55,81 +74,75 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
     }
   }
   view3d._bonePit.update();
+}
 
-  // Morph prepare pass — backend-neutral: slots, offsets, rows, and uploads run
-  // for both pipes (WebGPU binds the storage buffer, WebGL the store's data
-  // texture). Runs before the scene batch loop so the store-row copier reads
-  // each morph's up-to-date offsets.
-  pipe._morphStoreBuffer.sync(view3d._morphedMeshes.items);
-
-  // Per-geometry data store — every geometry registers (dynamic ones carry a
-  // no-cull sentinel radius but keep their morph texel live). Both pipes own
-  // one; WebGPU binds the buffer, WebGL its data texture.
+/**
+ * Walks every scene mesh: syncs its pass membership and visibility, rebuilds what a dirty mesh
+ * needs, and re-emits changed store rows
+ *
+ * Membership is which passes a mesh belongs to, never whether it's visible. Both backends skip
+ * hidden meshes when they compact the draw data, so hiding or showing a mesh never changes
+ * membership and rebuilds no draw commands or render bundles. `removeChild` is the only way out
+ * of the lists. A visibility flip re-emits the store row, whose visibility lane is what the GPU
+ * reads (the CPU walks read `_worldVisible` itself), and bumps the batch's
+ * `_visibilityDirtyId`, which wakes the visibility-only compactions.
+ *
+ * A texture swap or shader-variant change on the material sends the mesh down the full rebuild
+ * path, so the shader recompiles this frame. Each mesh watermarks the material's
+ * `_descriptorDirtyId` itself: a flag on the shared material would be consumed by the first mesh
+ * the walk reaches, leaving the others with a stale `_passCache` entry, or none at all when the
+ * pass bit moved too. Recording the version before `ensureMaterial` is safe because
+ * `_batchDirty` is sticky: a mesh in no pass skips the rebuild but still rebuilds on the frame it
+ * joins one.
+ *
+ * A non-dynamic geometry with no atlas allocation was unloaded while a mesh still draws it;
+ * `Geometry3D.unload` repacks nothing itself. Its recorded draw arguments bake the vacated range
+ * and its store row the old atlas base, so the mesh takes the rebuild path too: repack, re-stage
+ * the geometry row, re-key, and rebuild its draw lists. That costs one null check per mesh.
+ *
+ * The rebuild packs the geometry through the pool, which knows whether it is already packed,
+ * before staging its geometry row, because the row bakes the atlas `baseVertex` the packing
+ * decides. Each pass then rebuilds what it keeps per mesh in `onRenderableDirty`: batch and sort
+ * keys for the forward passes, pass shaders for the shadow pass.
+ * @param view3d - the View whose scene batch is walked
+ * @param pipe - backend View3D pipe supplying the stores, the atlas pool and the material system
+ */
+function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): void {
   const geomStore = pipe.geometryDataStoreBuffer;
-
-  // --- Scene batch update loop ---
   const allItems = view3d.meshes.items;
   for (let i = 0; i < allItems.length; i++) {
     const renderable = allItems[i];
     const material = renderable.material;
 
-    // Pull-based pass-membership validation. Membership is what KIND of thing this is (its
-    // passes) — never whether it's visible: hidden instances are skipped at draw-data level by
-    // the compaction walks on both backends, so a hide/show never changes membership and no
-    // draw commands or render bundles rebuild. `removeChild` is the way OUT of the lists.
     const membershipMask = renderable.renderPassMask;
     if (membershipMask !== renderable._lastRenderPass) {
       view3d._sceneBatch.setItemActive(view3d._meshSlots.getIndex(renderable), membershipMask);
     }
 
-    // Visibility flip: re-emit the store row (`copyMeshData` mirrors `worldVisible` into the
-    // visibility lane — the GPU-side value; the CPU walks read the field directly) and bump the
-    // dirty-id that wakes the visibility-only compactions. Never a membership change.
     if (renderable._worldVisible !== renderable._lastWorldVisible) {
       renderable._lastWorldVisible = renderable._worldVisible;
       renderable._storeDirty = true;
       view3d._sceneBatch._visibilityDirtyId++;
     }
 
-    // Texture-swap or shader-variant change — promote to a full batch rebuild
-    // so the recompile happens this frame. Watermarked per-mesh (like
-    // `_lastRenderPass` above): a shared flag on the material would be consumed
-    // by the first mesh the loop reaches, leaving siblings with a stale — or,
-    // when `_passBit` moved too, an entirely absent — `_passCache` entry.
-    //
-    // Recording the version here rather than after `ensureMaterial` is safe:
-    // `_batchDirty` is sticky, so a mesh that falls out below (not in an active
-    // pass) still rebuilds on the frame it becomes active.
     if (renderable._lastDescriptorDirtyId !== material._descriptorDirtyId) {
       renderable._lastDescriptorDirtyId = material._descriptorDirtyId;
       renderable._batchDirty = true;
     }
 
-    // Skip per-renderable dirty work for meshes not in any active pass
-    // (hidden, or empty renderPassMask). Flags persist for the next frame.
     if (renderable._lastRenderPass === 0) continue;
 
-    // A packable geometry with no atlas allocation was unloaded while this mesh still draws it
-    // (`Geometry3D.unload` re-packs nothing itself). The recorded draw args bake the vacated
-    // range and the store row the old atlas base, so the mesh takes the dirty path: re-pack,
-    // re-stage the row, re-key, and rebuild its draw lists. One null check per walked mesh.
     const geometry = renderable.geometry;
     if (renderable._batchDirty || (geometry._geometryAtlasAllocation === null && !geometry.dynamic)) {
       renderable._batchDirty = false;
 
       pipe.renderer.material3d.ensureMaterial(renderable, view3d);
 
-      // Always through the pool — it owns the "already packed here?" check.
       if (!geometry.dynamic) {
         geometry._geometryAtlasAllocation = pipe.atlasPool.allocate(geometry);
       }
-      // Mint _geometryDataIndex + stage the row (sphere + morph texel) after the
-      // atlas allocation minted baseVertex, before the store copy (below) reads it.
       geomStore.set(geometry);
 
-      // Dispatch per-pass dirty hooks. Each pass's onRenderableDirty
-      // computes its own batch/sort keys (forward passes) or compiles
-      // pass-specific shaders (shadow). Polymorphism handles the backend.
       let bits = renderable.renderPassMask & view3d._dirtyHookBits;
       while (bits) {
         const bit = bits & -bits;
@@ -145,12 +158,23 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
   }
 
   view3d._sceneBatch.storeBuffer.update();
+}
 
-  // --- User batch update loop ---
+/**
+ * Rebuilds the dirty items of every user batch, such as a `BatchedMesh3D`
+ *
+ * A batch's world matrix is its owning container's, already current from the transform walk, so
+ * it is written every frame. As in the scene batch, each dirty item's geometry is packed before
+ * its geometry row is staged, because the row bakes the atlas `baseVertex`; the item's geometry
+ * lane then takes the row's index.
+ * @param view3d - the View whose user batches are walked
+ * @param pipe - backend View3D pipe supplying the stores, the atlas pool and the material system
+ */
+function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): void {
+  const geomStore = pipe.geometryDataStoreBuffer;
   for (let b = 1; b < view3d._meshBatches.length; b++) {
     const batch = view3d._meshBatches[b];
 
-    // User batch worldMatrix is shared with the owning container — always current.
     batch.writeBatchWorldMatrix(batch.renderData.worldTransform);
 
     const dirtyIndices = batch._dirtyIndices!;
@@ -166,8 +190,6 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
       if (!item.geometry.dynamic) {
         item.geometry._geometryAtlasAllocation = pipe.atlasPool.allocate(item.geometry);
       }
-      // Mint _geometryDataIndex + stage the row (sphere + morph texel) after the
-      // atlas allocation minted baseVertex, before writing [18].
       geomStore.set(item.geometry);
 
       batch.storeBuffer.u32Data[item._storeIndex * MESH3D_STORE_STRIDE + MESH3D_LANE_MATERIAL] =
@@ -186,24 +208,41 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
     batch._dirtyCount = 0;
     batch.storeBuffer.update();
   }
+}
 
-  // --- Structural invalidations (pipeline state, not scene state) ---
-  // A morphed geometry's store row caches its atlas `baseVertex`, which the morph bits
-  // subtract to turn an atlas-wide vertex id into a geometry-local one. Growth and
-  // compaction both move that base while dirtying nothing, so re-stamp those rows when
-  // the pool's version moves — after the walks above, so an allocation made this frame
-  // is already reflected. Only morphed geometry caches the base, and the View keeps that
-  // list, so a normal frame costs one integer compare.
+/**
+ * Re-stages the geometry rows of morphed meshes when the shared atlas has moved
+ *
+ * A morphed geometry's row caches its atlas `baseVertex`, which the morph bits subtract to turn
+ * an atlas-wide vertex id into a geometry-local one. Atlas growth and compaction both move that
+ * base without dirtying any mesh, so the rows are re-staged whenever the pool's `bufferVersion`
+ * moves. It runs after the batch walks, so an allocation made this frame is already in place.
+ * Only morphed geometry caches the base, and the view keeps that list, so a normal frame costs
+ * one integer compare.
+ * @param view3d - the View whose morphed meshes are re-staged
+ * @param pipe - backend View3D pipe supplying the geometry store and the atlas pool
+ */
+function restampMorphedGeometry(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): void {
+  const geomStore = pipe.geometryDataStoreBuffer;
   const atlasBufferVersion = pipe.atlasPool.bufferVersion;
   if (view3d._lastAtlasBufferVersion !== atlasBufferVersion) {
     view3d._lastAtlasBufferVersion = atlasBufferVersion;
     const morphedMeshes = view3d._morphedMeshes.items;
     for (let i = 0; i < morphedMeshes.length; i++) geomStore.set(morphedMeshes[i].geometry);
   }
+}
 
-  // Storage growth (a `bufferVersion` move) invalidates cached pass bundles /
-  // command lists. Batch-store growth is local; bone storage is shared by every
-  // batch in the View.
+/**
+ * Invalidates the draw caches that baked a store buffer which grew
+ *
+ * Recorded command lists and render bundles bake each buffer, so a reallocation (a
+ * `bufferVersion` move) leaves them stale. A batch's store belongs to that batch alone, while the
+ * bone pit is shared by every batch in the view. Shared buffers outside the view, such as the
+ * morph store, the atlas and the material store, are the pipe's to watch, through
+ * `detectSharedCacheInvalidation`.
+ * @param view3d - the View whose stores are checked
+ */
+function invalidateGrownStores(view3d: View3D): void {
   for (let b = 0; b < view3d._meshBatches.length; b++) {
     const batch = view3d._meshBatches[b];
     const storeVersion = batch.storeBuffer.bufferVersion;
@@ -217,8 +256,4 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
     view3d._lastBonePitBufferVersion = boneVersion;
     view3d._invalidateDrawCaches();
   }
-  // Morph store growth is a shared-buffer hazard, handled per view by the pipe
-  // through detectSharedCacheInvalidation (same as the atlas / material store).
-
-  return true;
 }

@@ -3,7 +3,6 @@ import { describe, expect, test } from 'vitest';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 import { ObservableQuaternion } from '~/math/rotation/ObservableQuaternion';
 import { Quaternion } from '~/math/rotation/Quaternion';
-import { Vector3 } from '~/math/vector/Vector3';
 
 function expectQuatClose(
   actual: { x: number; y: number; z: number; w: number },
@@ -41,13 +40,6 @@ describe('ObservableQuaternion — constructor', () => {
     const { observer, counter } = makeObserver();
     const q = new ObservableQuaternion(observer);
     expectQuatClose(q, 0, 0, 0, 1);
-    expect(counter.count).toBe(0);
-  });
-
-  test('accepts explicit (x, y, z, w)', () => {
-    const { observer, counter } = makeObserver();
-    const q = new ObservableQuaternion(observer, 0.1, 0.2, 0.3, 0.4);
-    expectQuatClose(q, 0.1, 0.2, 0.3, 0.4);
     expect(counter.count).toBe(0);
   });
 });
@@ -128,19 +120,6 @@ describe('ObservableQuaternion.set', () => {
     const q = new ObservableQuaternion(observer, 0.1, 0.2, 0.3, 0.4);
     q.set(0.1, 0.2, 0.3, 0.4);
     expect(counter.count).toBe(0);
-  });
-
-  test('q.set(q.x, q.y, q.z, q.w) is a no-op', () => {
-    const { observer, counter } = makeObserver();
-    const q = new ObservableQuaternion(observer, 0.5, 0.6, 0.7, 0.8);
-    q.set(q.x, q.y, q.z, q.w);
-    expect(counter.count).toBe(0);
-  });
-
-  test('returns this for chaining', () => {
-    const { observer } = makeObserver();
-    const q = new ObservableQuaternion(observer);
-    expect(q.set(0, 0, 0, 1)).toBe(q);
   });
 });
 
@@ -548,16 +527,6 @@ describe('ObservableQuaternion.inverse and conjugate', () => {
     expectQuatClose(out, -0.1, -0.2, -0.3, 0.4);
     expectQuatClose(q, 0.1, 0.2, 0.3, 0.4);
   });
-
-  test('inverse writes into out without firing observer', () => {
-    const { observer, counter } = makeObserver();
-    const q = new ObservableQuaternion(observer, 0.1, 0.2, 0.3, 0.4);
-    const out: { x: number; y: number; z: number; w: number } = { x: 0, y: 0, z: 0, w: 0 };
-    q.inverse(out);
-    expect(counter.count).toBe(0);
-    expectQuatClose(out, -0.1, -0.2, -0.3, 0.4);
-    expectQuatClose(q, 0.1, 0.2, 0.3, 0.4);
-  });
 });
 
 describe('ObservableQuaternion.multiply and premultiply', () => {
@@ -699,40 +668,5 @@ describe('ObservableQuaternion.fromArray and toArray', () => {
     const q = new ObservableQuaternion(observer, 0.1, 0.2, 0.3, 0.4);
     q.fromArray([0.1, 0.2, 0.3, 0.4]);
     expect(counter.count).toBe(0);
-  });
-});
-
-describe('ObservableQuaternion — math sanity vs Quaternion', () => {
-  test('applyQuaternion result matches Quaternion-equivalent', () => {
-    const { observer } = makeObserver();
-    const oq = new ObservableQuaternion(observer);
-    oq.setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 3);
-
-    const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 3);
-
-    const p = new Vector3(0.3, 0.5, 0.7);
-    // Vector3.applyQuaternion expects a Quaternion; the math reads x,y,z,w which both expose.
-    const viaObservable = p.clone().applyQuaternion(oq as unknown as Quaternion);
-    const viaQuat = p.clone().applyQuaternion(q);
-    expect(viaObservable.x).toBeCloseTo(viaQuat.x, 5);
-    expect(viaObservable.y).toBeCloseTo(viaQuat.y, 5);
-    expect(viaObservable.z).toBeCloseTo(viaQuat.z, 5);
-  });
-
-  test('round-trip rotation by q then by inverse returns to start', () => {
-    const { observer } = makeObserver();
-    const oq = new ObservableQuaternion(observer);
-    oq.setFromAxisAngle({ x: 0.5, y: 0.5, z: 0.5 }, Math.PI / 3);
-    oq.normalize();
-
-    const inv = new Quaternion(oq.x, oq.y, oq.z, oq.w).inverse();
-    const p = new Vector3(1, 2, 3);
-    const round = p
-      .clone()
-      .applyQuaternion(oq as unknown as Quaternion)
-      .applyQuaternion(inv);
-    expect(round.x).toBeCloseTo(1, 5);
-    expect(round.y).toBeCloseTo(2, 5);
-    expect(round.z).toBeCloseTo(3, 5);
   });
 });

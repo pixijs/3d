@@ -4,108 +4,84 @@ import { ShaderDescriptor } from '../core/shader/ShaderDescriptor';
 import type { ShaderDescriptorOptions } from '../core/shader/ShaderDescriptor';
 
 /**
- * Input shape for a per-pass override entry
+ * A material's or a pass's overrides for one render pass
  *
- * The `shaderDescriptor` field accepts either a pre-built {@link ShaderDescriptor} or its raw
- * options (auto-wrapped at normalization time).
- *
- * Used wherever a user supplies pass overrides — the `passes:` constructor option on
- * {@link BaseMaterial3D}, and `RenderPassOptions.descriptor`.
+ * Given per pass name in the `passes` option of {@link BaseMaterial3D}, and as `descriptor` when
+ * creating a `RenderPass`. Every field is optional; {@link PassDescriptor} explains how they combine.
  * @category materials
  * @advanced
  */
 export interface PassDescriptorOptions {
-  /** Shader recipe to compile for this pass; plain options are auto-wrapped in a {@link ShaderDescriptor} */
+  /** Shader to draw with in this pass; plain options are wrapped in a {@link ShaderDescriptor} */
   shaderDescriptor?: ShaderDescriptor | ShaderDescriptorOptions;
-  /** GPU render state (blend / depth / cull); overrides `material.state` */
+  /** Render state (blending, depth, culling) for this pass */
   state?: State;
   /**
-   * Primitive topology
+   * Primitive topology for this pass
    *
-   * Overrides `material.topology` and `geometry.topology`. Caveat: a triangle-list index buffer
-   * drawn as line-list yields triangle edges with 3x overdraw, not "real" wireframe — author a
-   * wireframe geometry for clean output.
+   * `'line-list'` joins the indices in pairs, so a triangle index buffer drawn that way isn't a
+   * wireframe: it draws some edges and misses others. Use a geometry with line indices for that.
    */
   topology?: Topology;
 }
 
 /**
- * Resolved per-pass override entry
+ * Pass overrides as the engine stores them: {@link PassDescriptorOptions} with the shader always a
+ * {@link ShaderDescriptor}
  *
- * Same shape as {@link PassDescriptorOptions} but with the inner `shaderDescriptor` always
- * normalized to a {@link ShaderDescriptor} instance (or `undefined`).
+ * ## Which value wins
  *
- * Stored at `material._passes[bit]` and read at cache-build time. Each field has its own
- * resolution chain (the chain shape depends on which path is compiling — see below).
+ * In a custom pass, such as an outline or shadow pass, each field takes the first value that is
+ * set, in this order:
  *
- * ## Resolution chain
+ * - `shaderDescriptor`: the material's entry for the pass, then the pass's own descriptor.
+ * - `state`: the material's entry, the pass's own, then `material.state`.
+ * - `topology`: the material's entry, the pass's own, `material.topology`, then the geometry's.
  *
- * **Custom passes** (shadow / outline / wireframe / user-defined) — handled
- * by `RenderPass.onRenderableDirty` and pass-specific GL hooks. Each field
- * resolves through up to four sources:
+ * In a material's main pass (opaque, transparent or transmission) the shader always comes from
+ * {@link BaseMaterial3D#getPrimaryDescriptor}, and no pass-level entry is read:
  *
- * ```text
- * shaderDescriptor: matPd.shaderDescriptor  || passPd.shaderDescriptor
- * state:            matPd.state             || passPd.state             || material.state
- * topology:         matPd.topology          || passPd.topology          || material.topology || geometry.topology
- * ```
+ * - `state`: the material's entry for the pass, then `material.state`.
+ * - `topology`: the material's entry, `material.topology`, then the geometry's.
  *
- * **Primary material pass** (opaque / transparent / transmission) — handled
- * by `MaterialSystemGpu.ensureMaterial`. The pass-level descriptor (`passPd`)
- * isn't consulted because the primary pass IS the material; the chain skips
- * straight from the per-material override to the material/geometry defaults:
+ * ## Changing one
  *
- * ```text
- * shaderDescriptor: built from material.getPrimaryDescriptor()  (no matPd shader)
- * state:            matPd.state    || material.state
- * topology:         matPd.topology || material.topology || geometry.topology
- * ```
- *
- * ## Mutation
- *
- * **Construction-only.** Field values are read once at cache-build time
- * (when the owning mesh's `_batchDirty` flag fires) and the cache holds
- * resolved snapshots after that. Mutating `pd.shaderDescriptor`,
- * `pd.state`, or `pd.topology` post-construction is not part of the
- * supported API surface — to change overrides, build a new material and
- * assign it to the mesh.
- *
- * Special case: `state` is stored by *reference*, so mutating its fields
- * (`pd.state!.blend = true`) propagates live at draw time. That's mutation
- * of the State object's contents, not of the PassDescriptor — fine to do.
+ * Meshes resolve these values when they build their draw data, not every frame, and a custom pass
+ * doesn't resolve them again for a mesh until its geometry or material changes. So giving a field
+ * a new value after the descriptor has rendered isn't supported: build a new material with the
+ * overrides and assign it. The `state` object is kept by reference, so a change to one of its
+ * fields does reach the meshes, after {@link Mesh3D#invalidate} on each one, since WebGPU replays
+ * the draws it recorded with the old state.
  * @example
  * ```ts
- * // Per-material per-pass override
+ * // Per-material override for one pass
  * new BaseMaterial3D({
  *   passes: {
- *     outline: { state: customState, shaderDescriptor: { bitsGpu: [...], bitsGl: [...] } },
+ *     outline: { state: customState, shaderDescriptor: { bitsGpu: [outlineBitGpu], bitsGl: [outlineBitGl] } },
  *   },
  * });
  *
- * // Pass-level default (e.g. wireframe pass forces line-list for everyone)
+ * // Pass-level default for every mesh in the pass
  * new RenderPass({
- *   name: 'wireframe',
- *   pipe,
- *   descriptor: { topology: 'line-list', shaderDescriptor: wireframeShader },
+ *   renderer,
+ *   name: 'xray',
+ *   descriptor: { state: xrayState, shaderDescriptor: xrayShader },
  * });
  * ```
  * @category materials
  * @advanced
  */
 export interface PassDescriptor {
-  /** Shader recipe to compile for this pass, normalized to a {@link ShaderDescriptor} instance */
+  /** Shader to draw with in this pass */
   shaderDescriptor?: ShaderDescriptor;
-  /** GPU render state (blend / depth / cull) override */
+  /** Render state (blending, depth, culling) for this pass */
   state?: State;
-  /** Primitive topology override */
+  /** Primitive topology for this pass */
   topology?: Topology;
 }
 
 /**
- * Normalize a {@link PassDescriptorOptions} into a {@link PassDescriptor}
- *
- * Auto-wraps the inner `shaderDescriptor` into a {@link ShaderDescriptor} when raw options were
- * supplied.
+ * Normalize a {@link PassDescriptorOptions} into a {@link PassDescriptor}, wrapping plain shader options
  * @param options - Pass override entry as supplied by the user
  * @returns The normalized entry
  * @internal

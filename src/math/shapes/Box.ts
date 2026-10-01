@@ -7,23 +7,21 @@ import type { Ray } from './Ray';
 import type { Sphere } from './Sphere';
 
 /**
- * The `Box` object represents an axis-aligned bounding box (AABB) in 3D space, defined by `min` and `max` corners
+ * An axis-aligned bounding box (AABB), spanning from its `min` corner to its `max` corner
  *
- * Math operations follow the unified mutating-default pattern: `a.union(b)` mutates `a`;
- * `a.union(b, out)` writes the result into `out` without mutating `a`.
+ * Use one to bound a mesh or a group and to run cheap overlap, culling and picking tests before
+ * precise ones. {@link Container3D#getLocalBounds} measures one for a subtree.
+ *
+ * A new box is empty, so growing it with {@link Box#expandByPoint} gives a tight fit. Methods that
+ * change the box do so in place, or write into an `out` box when you pass one and leave this box
+ * as it is.
  * @example
  * ```ts
- * // Empty box (min = +Infinity, max = -Infinity)
- * const box = new Box();
+ * const squadBounds = new Box();
  *
- * // Grow to enclose a point
- * box.expandByPoint({ x: 1, y: 2, z: 3 });
+ * for (const soldier of squad) squadBounds.expandByPoint(soldier.position);
  *
- * // Test containment
- * box.containsPoint({ x: 0, y: 0, z: 0 });
- *
- * // Transform by a 4x4 matrix
- * box.applyMatrix4(worldTransform);
+ * const rallyPoint = squadBounds.getCenter(new Vector3());
  * ```
  * @see {@link Sphere} For the bounding-sphere counterpart
  * @see {@link Plane} For half-space intersection tests
@@ -32,23 +30,37 @@ import type { Sphere } from './Sphere';
  * @standard
  */
 export class Box {
-  /** The minimum corner of the box */
+  /**
+   * The corner with the smallest x, y and z; `+Infinity` on every axis in a new, empty box
+   * @example
+   * ```ts
+   * const floorHeight = levelBounds.min.y;
+   * ```
+   */
   public readonly min: Vector3;
-  /** The maximum corner of the box */
+  /**
+   * The corner with the largest x, y and z; `-Infinity` on every axis in a new, empty box
+   * @example
+   * ```ts
+   * const roofHeight = levelBounds.max.y;
+   * ```
+   */
   public readonly max: Vector3;
 
   /**
-   * The type of the object, mainly used to avoid `instanceof` checks
+   * Names the shape without an `instanceof` check, like the `type` on pixi's 2D shapes
    * @readonly
    * @default 'box'
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'box';
 
   /**
    * Creates a new `Box`
    *
-   * Defaults to an empty box (`min = +Infinity`, `max = -Infinity`) so any subsequent
-   * `expandByPoint` call produces a tight bound.
+   * Left out, the corners start empty (`min` at `+Infinity`, `max` at `-Infinity`), so the first
+   * {@link Box#expandByPoint} gives a tight fit. Vectors passed in become the box's corners; they
+   * are not copied.
    * @param min - The minimum corner of the box
    * @param max - The maximum corner of the box
    */
@@ -60,7 +72,12 @@ export class Box {
   /**
    * Creates a box centred at `center` with the given full `size`
    *
-   * A number produces a uniform cube; a point gives per-axis extents.
+   * A number makes a cube; a point sets the size of each axis.
+   * @example
+   * ```ts
+   * const crate = Box.fromCenterSize({ x: 0, y: 0.5, z: 0 }, 1);
+   * const pickupZone = Box.fromCenterSize(player.position, { x: 4, y: 2, z: 4 });
+   * ```
    * @param center - The center of the box
    * @param size - The full size of the box, uniform or per-axis
    * @returns The new box
@@ -77,7 +94,11 @@ export class Box {
   }
 
   /**
-   * Sets the corners of this box to `min` and `max`
+   * Sets the corners of this box to `min` and `max`, copying their values
+   * @example
+   * ```ts
+   * triggerZone.set({ x: -2, y: 0, z: -2 }, { x: 2, y: 3, z: 2 });
+   * ```
    * @param min - The minimum corner
    * @param max - The maximum corner
    * @returns This box for chaining
@@ -91,6 +112,10 @@ export class Box {
 
   /**
    * Copies `box` into this box
+   * @example
+   * ```ts
+   * const bounds = new Box().copyFrom(geometry.bounds3D);
+   * ```
    * @param box - The box to copy from
    * @returns This box for chaining
    */
@@ -103,6 +128,10 @@ export class Box {
 
   /**
    * Copies this box into `target` and returns it
+   * @example
+   * ```ts
+   * geometry.bounds3D.copyTo(cachedBounds);
+   * ```
    * @param target - The box to copy into
    * @returns The given `target`
    */
@@ -115,6 +144,10 @@ export class Box {
 
   /**
    * Creates a new `Box` with the same corners
+   * @example
+   * ```ts
+   * const padded = bounds.clone().expandByPoint(spawnPoint);
+   * ```
    * @returns The new box
    */
   public clone(): Box {
@@ -122,7 +155,12 @@ export class Box {
   }
 
   /**
-   * Resets this box to the empty state (`min = +Infinity`, `max = -Infinity`)
+   * Resets this box to empty (`min` at `+Infinity`, `max` at `-Infinity`), ready to grow again
+   * @example
+   * ```ts
+   * trailBounds.makeEmpty();
+   * for (const point of trail) trailBounds.expandByPoint(point);
+   * ```
    * @returns This box for chaining
    */
   public makeEmpty(): this {
@@ -133,10 +171,13 @@ export class Box {
   }
 
   /**
-   * Returns true when this box has no volume
+   * Returns true when `max` is below `min` on any axis, as in a new box
    *
-   * A box is empty when any axis has `max < min`, which is more robust than a volume check (two
-   * negative axes would yield positive volume).
+   * A flat box, with `min` equal to `max` on an axis, is not empty: it holds the points on it.
+   * @example
+   * ```ts
+   * if (!selectionBounds.isEmpty()) camera.lookAt(selectionBounds.getCenter());
+   * ```
    * @returns Whether this box is empty
    */
   public isEmpty(): boolean {
@@ -145,6 +186,10 @@ export class Box {
 
   /**
    * Returns true when both corners match `box` exactly (no epsilon tolerance)
+   * @example
+   * ```ts
+   * if (!bounds.equals(lastBounds)) rebuildNavGrid(bounds);
+   * ```
    * @param box - The box to compare with
    * @returns Whether both corners match
    */
@@ -154,6 +199,12 @@ export class Box {
 
   /**
    * Grows this box to enclose `point`
+   * @example
+   * ```ts
+   * const routeBounds = new Box();
+   *
+   * for (const waypoint of route) routeBounds.expandByPoint(waypoint);
+   * ```
    * @param point - The point to enclose
    * @param out - Target to write the result into instead of mutating this box
    * @returns The result box for chaining
@@ -168,6 +219,12 @@ export class Box {
 
   /**
    * Grows this box to enclose `box`
+   * @example
+   * ```ts
+   * const levelBounds = new Box();
+   *
+   * for (const room of rooms) levelBounds.union(room.bounds);
+   * ```
    * @param box - The box to enclose
    * @param out - Target to write the result into instead of mutating this box
    * @returns The result box for chaining
@@ -184,6 +241,12 @@ export class Box {
    * Writes the center of this box into `out` (or a new `Vector3`)
    *
    * Empty boxes return `(0, 0, 0)`.
+   * @example
+   * ```ts
+   * const center = new Vector3();
+   *
+   * camera.lookAt(model.getLocalBounds().getCenter(center));
+   * ```
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The center of this box
    */
@@ -201,6 +264,12 @@ export class Box {
    * Writes the size (`max - min`) of this box into `out` (or a new `Vector3`)
    *
    * Empty boxes return `(0, 0, 0)`.
+   * @example
+   * ```ts
+   * const size = model.getLocalBounds().getSize(new Vector3());
+   *
+   * model.scale.set(2 / Math.max(size.x, size.y, size.z));
+   * ```
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The size of this box
    */
@@ -216,6 +285,10 @@ export class Box {
 
   /**
    * Returns the Euclidean distance from `point` to the closest point on this box (`0` if inside)
+   * @example
+   * ```ts
+   * const inReach = doorBounds.distanceToPoint(player.position) < 1.5;
+   * ```
    * @param point - The point to measure from
    * @returns The distance to the closest point on this box
    */
@@ -225,6 +298,17 @@ export class Box {
 
   /**
    * Writes the closest point on this box to `point` into `out` (or a new `Vector3`)
+   *
+   * A point inside the box comes back unchanged.
+   * @example
+   * ```ts
+   * const kept = new Vector3();
+   *
+   * app.ticker.add(() => {
+   *   arena.clampPoint(player.position, kept);
+   *   player.position.copyFrom(kept);
+   * });
+   * ```
    * @param point - The point to clamp
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The closest point on this box
@@ -237,6 +321,10 @@ export class Box {
 
   /**
    * Returns true when `point` is inside this box (boundary is inclusive)
+   * @example
+   * ```ts
+   * if (pickupZone.containsPoint(player.position)) collect(pickup);
+   * ```
    * @param point - The point to test
    * @returns Whether the point is inside this box
    */
@@ -253,6 +341,12 @@ export class Box {
 
   /**
    * Returns true when `box` is fully inside this box (boundary is inclusive)
+   *
+   * An empty `box` counts as inside any box.
+   * @example
+   * ```ts
+   * const fitsOnShelf = shelfBounds.containsBox(itemBounds);
+   * ```
    * @param box - The box to test
    * @returns Whether the box is fully inside this box
    */
@@ -268,7 +362,11 @@ export class Box {
   }
 
   /**
-   * Returns true when this box and `box` overlap
+   * Returns true when this box and `box` overlap; boxes that only touch count
+   * @example
+   * ```ts
+   * if (playerBounds.intersectsBox(doorBounds)) openDoor();
+   * ```
    * @param box - The box to test
    * @returns Whether the boxes overlap
    */
@@ -284,7 +382,13 @@ export class Box {
   }
 
   /**
-   * Returns true when this box and `sphere` overlap (uses the closest-point clamp test)
+   * Returns true when this box and `sphere` overlap; an empty sphere never does
+   * @example
+   * ```ts
+   * for (const crate of crates) {
+   *   if (crate.bounds.intersectsSphere(blastRadius)) crate.shatter();
+   * }
+   * ```
    * @param sphere - The sphere to test
    * @returns Whether the box and sphere overlap
    */
@@ -296,9 +400,13 @@ export class Box {
   }
 
   /**
-   * Returns true when this box straddles `plane`
+   * Returns true when `plane` passes through this box or touches it
+   * @example
+   * ```ts
+   * const wading = playerBounds.intersectsPlane(waterSurface);
+   * ```
    * @param plane - The plane to test
-   * @returns Whether the box straddles the plane
+   * @returns Whether the plane passes through or touches the box
    */
   public intersectsPlane(plane: Plane): boolean {
     let min: number;
@@ -332,7 +440,13 @@ export class Box {
   }
 
   /**
-   * Returns true when `ray` enters this box
+   * Returns true when `ray` enters this box; same as {@link Ray#intersectsBox}
+   * @example
+   * ```ts
+   * view3d.on('pointermove', (e) => {
+   *   hovered = buttonBounds.intersectsRay(view3d.screenToRay(e.global, pointerRay));
+   * });
+   * ```
    * @param ray - The ray to test
    * @returns Whether the ray enters this box
    */
@@ -341,13 +455,19 @@ export class Box {
   }
 
   /**
-   * Transforms this box by `matrix` and rebuilds the AABB
+   * Transforms this box by an affine `matrix`, then fits a new axis-aligned box around the result
    *
-   * Empty boxes are left empty.
+   * The result is the smallest axis-aligned box around the eight transformed corners, so rotating
+   * a box grows it. An empty box stays empty.
    *
-   * Uses the Akenine-Möller center/half-extent transform, which assumes `matrix` is affine
-   * (bottom row `[0, 0, 0, 1]`); this is the universal case for `Container3D.worldTransform`.
-   * Projection matrices are not supported here.
+   * `matrix` must be affine (bottom row `[0, 0, 0, 1]`), as a {@link Container3D#worldTransform}
+   * always is. A projection matrix gives a wrong box.
+   * @example
+   * ```ts
+   * const worldBounds = new Box();
+   *
+   * mesh.geometry.bounds3D.applyMatrix4(mesh.worldTransform, worldBounds);
+   * ```
    * @param matrix - The affine matrix to transform by
    * @param out - Target to write the result into instead of mutating this box
    * @returns The result box for chaining
@@ -380,7 +500,11 @@ export class Box {
   }
 
   /**
-   * Writes the AABB of this box into `out` (or a new `Box`)
+   * Copies this box into `out` (or a new `Box`), so a box answers `getBounds` like a {@link Sphere}
+   * @example
+   * ```ts
+   * const bounds = volume.getBounds(scratchBox);
+   * ```
    * @param out - Optional box to write into; a new `Box` when omitted
    * @returns The bounds of this box
    */
@@ -390,17 +514,36 @@ export class Box {
     return out.copyFrom(this);
   }
 
-  /** The width (X extent) of this box */
+  /**
+   * The width (X extent) of this box; `-Infinity` for a new, empty box, where
+   * {@link Box#getSize} gives `0`
+   * @example
+   * ```ts
+   * const footprint = bounds.width * bounds.depth;
+   * ```
+   */
   public get width(): number {
     return this.max.x - this.min.x;
   }
 
-  /** The height (Y extent) of this box */
+  /**
+   * The height (Y extent) of this box; `-Infinity` for a new, empty box
+   * @example
+   * ```ts
+   * nameTag.position.y = bounds.max.y + 0.1 * bounds.height;
+   * ```
+   */
   public get height(): number {
     return this.max.y - this.min.y;
   }
 
-  /** The depth (Z extent) of this box */
+  /**
+   * The depth (Z extent) of this box; `-Infinity` for a new, empty box
+   * @example
+   * ```ts
+   * const footprint = bounds.width * bounds.depth;
+   * ```
+   */
   public get depth(): number {
     return this.max.z - this.min.z;
   }
@@ -408,6 +551,7 @@ export class Box {
   /**
    * Returns a string representation of this box
    * @returns A string in the form `[pixi-3d/math:Box min=(0, 0, 0) max=(1, 1, 1)]`
+   * @advanced
    */
   public toString(): string {
     return `[pixi-3d/math:Box min=(${this.min.x}, ${this.min.y}, ${this.min.z}) max=(${this.max.x}, ${this.max.y}, ${this.max.z})]`;

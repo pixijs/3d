@@ -37,7 +37,7 @@ interface GlBatcherBuildOptions {
   skipTextureBatching?: boolean;
 }
 
-// Null-object for meshes with no atlas allocation — avoids ternaries in the hot loop
+/** Stands in for a geometry with no atlas allocation, so the build reads the same fields either way */
 const noAlloc: {
   atlas: null;
   indexCount: undefined;
@@ -48,13 +48,17 @@ const noAlloc: {
   firstIndex: undefined,
 };
 
-// Extend TextureSource with batch tracking fields
+/**
+ * A texture source with the build's slot bookkeeping
+ *
+ * `_batchTick` is pixi's own `TextureSource` field, which pixi's 2D batcher also writes with its
+ * own counter. `_batchSlot` is the source's slot in the bind group stamped `_batchTick`.
+ */
 interface BatchedTextureSource extends TextureSource {
   _batchTick: number;
   _batchSlot: number;
 }
 
-// Sanity checks for reserved texture UIDs
 if (Texture.EMPTY.source.uid !== 0) {
   throw new Error('Texture.EMPTY.source.uid is not 0');
 }
@@ -66,15 +70,18 @@ if (NORMAL_MAP.source.uid !== 2) {
 }
 
 /**
- * Monotonically increasing tick used to track which texture sources have already been assigned a
- * slot in the current batch
+ * Texture batch counter, stamped on a texture source as `_batchTick` once the source has a slot in
+ * the current bind group
  *
- * Incremented by 2 for each new batch so that the speculative probe (`tick + 1`) stays an
- * integer, keeping all `_batchTick` values as V8 Smis.
+ * Each new bind group steps it by 2, so the fit probe in {@link Mesh3DBatcherGl#build} can stamp
+ * the integer between, `tick + 1`, without matching any bind group's tick.
+ *
+ * Module state shared by every renderer, so only `renderer.destroy({ releaseGlobalResources: true })`
+ * resets it, through `GlobalResourceRegistry`.
  */
 let batchTick = 0;
 
-// Stand-in for the plane array on visibility-only compactions; never actually tested against.
+/** Stands in for the plane array in a visibility-only compaction, which never tests against it */
 const _noPlanes = new Float32Array(24);
 
 /**
@@ -86,33 +93,53 @@ const _noPlanes = new Float32Array(24);
  * `instanceFetchBitGl` does the two hops in the vertex shader.
  *
  * ## Build phase (only when dirty)
- * Sorts renderables, walks sorted order assigning each mesh a stable slot `i`, writes its
- * store row (plus this pass's packed texture slots) into the index staging array at `i`, and
- * records a DrawCommandList with firstInstance/instanceCount per batch.
+ * Walks the sorted renderables, giving each mesh a stable slot `i`, writes its store row (plus
+ * this pass's packed texture slots) into the index staging array at `i`, and records a
+ * DrawCommandList with firstInstance/instanceCount per batch. Every command's base vertex is 0,
+ * because the WebGL geometry atlas bakes it into the index values.
  *
  * ## Draw phase (every frame)
  * Compacts the staging array into the index texture, dropping hidden and frustum-culled
  * instances and rebuilding each command's instance count, uploads it, then issues the draws.
- * `firstInstance` rides as one `uniform1i` — no per-command vertex state at all.
+ * Without frustum culling, the compaction runs only when visibility changed. `firstInstance`
+ * rides as one `uniform1i`, so a command needs no per-command vertex state at all.
  *
- * Index texel: `[storeIndex, slotsLo, slotsHi, spare]`, 16 bytes per instance.
- * @see `Mesh3DBatcher` — the WebGPU equivalent
- * @see `MaterialSystemGl` — owns the single GL batcher instance
+ * Index texel: `[storeIndex, packedSlots]`, 8 bytes per instance. Each texture takes a 4-bit slot
+ * in `packedSlots`. The three built-in textures of one flat colour, `Texture.EMPTY`,
+ * `Texture.WHITE` and `NORMAL_MAP` (the module checks their uids are 0, 1 and 2 when it loads),
+ * take slot 13 + uid, which `texturesPluginGl` answers without a fetch, so they use up no batch
+ * texture unit.
+ * @see `Mesh3DBatcher`, the WebGPU equivalent
+ * @see `MaterialSystemGl`, which owns the single GL batcher instance
  * @internal
  */
 export class Mesh3DBatcherGl {
-  /** Per-slot texture sources for the current batch — written into the BindGroup */
+  /** Per-slot texture sources for the current batch, written into its texture bind group */
   private readonly _sources = Array.from<BatchedTextureSource>({ length: MAX_BATCH_TEXTURES });
 
-  /** Scratch field — avoids returning a tuple from `_packTextures` / `_commitTextures` */
+  /** Slot count `_packTextures` and `_commitTextures` leave behind, so they needn't return a tuple */
   private _lastSlotCount = 0;
 
   /**
-   * Build phase: sorts renderables, walks sorted order, writes each mesh's index texel, and
-   * records draw commands
+   * Build phase: walks the sorted renderables, writes each mesh's index texel, and records draw
+   * commands
    *
-   * After build, the mesh at sorted position `i` has its index texel at `i * 4` in the
+   * After build, the mesh at sorted position `i` has its index texel at `i * 2` in the
    * pass's staging array. The draw compacts that into the texture.
+   *
+   * A run of meshes with the same `batchKey`, which carries shader, state, topology and geometry
+   * exactly, is one draw command however long it gets: the index texture grows to fit. A mesh
+   * whose key matches joins the run if its material's new textures fit in the free slots. A probe
+   * counts them first, marking each with `tick + 1` so a texture listed twice counts once, and
+   * only then are slots committed. When the key changes, the run's command is recorded, and the
+   * next mesh still tries to fit the current slots, so several commands can share one texture
+   * bind group. When the textures don't fit, the slots flush: the bind group is finished and
+   * assigned to every command since the last flush, and a fresh tick starts the next set. Passes
+   * that skip texture batching (depth, shadow, solid colour) sample no material textures, so they
+   * build no bind group.
+   *
+   * Parks `lastVisibilityDirtyId` at -1, which no real dirty id matches, so the next draw
+   * compacts the new index rather than trusting last frame's survivors.
    * @param options - What to batch and the draw list it lands in
    * @returns The total number of instances written (== renderables.count)
    */
@@ -152,7 +179,6 @@ export class Mesh3DBatcherGl {
     let prevMaterial: BaseMaterial3D | null = null;
     let prevPackedSlots = 0;
 
-    // --- Process first mesh ---
     {
       const packedSlots = this._packTextures(r.material, sources, tick);
       slotCount = this._lastSlotCount;
@@ -162,14 +188,10 @@ export class Mesh3DBatcherGl {
       prevPackedSlots = packedSlots;
     }
 
-    // --- Main build loop ---
     for (let i = 1; i < len; i++) {
       r = items[indices[i]];
       cache = r._passCache[passBit];
 
-      // One compare covers shader, state, topology and geometry: `batchKey` carries all of
-      // them exactly. There is no instance cap: the index texture grows to fit, so a run of
-      // like-keyed meshes is one draw however long it gets.
       const needsFlush = cache.batchKey !== currentBatchKey;
 
       if (!needsFlush) {
@@ -180,7 +202,6 @@ export class Mesh3DBatcherGl {
           continue;
         }
 
-        // Speculative check: can we fit this item's textures?
         const textures = m._textures;
         const probeTick = tick + 1;
         let needed = 0;
@@ -204,7 +225,6 @@ export class Mesh3DBatcherGl {
         }
       }
 
-      // --- FLUSH: record draw command ---
       this._recordCommand(
         commandList,
         list.drawData,
@@ -219,7 +239,6 @@ export class Mesh3DBatcherGl {
         currentTopology,
       );
 
-      // --- Reset for new batch ---
       batchStart = i;
       currentShader = cache.shader;
       currentBatchKey = cache.batchKey;
@@ -232,8 +251,6 @@ export class Mesh3DBatcherGl {
       drawStart = currentAlloc.firstIndex;
       drawSize = currentAlloc.indexCount;
 
-      // When the batch key changed, try to keep the current texture bind
-      // group alive so multiple draw commands share it.
       if (needsFlush) {
         const m = r.material;
 
@@ -265,12 +282,6 @@ export class Mesh3DBatcherGl {
         }
       }
 
-      // --- TEXTURE FLUSH ---
-      // Slots are full. Finalise the bind group and back-assign it to every
-      // draw command emitted since the last texture flush. Skipped in texture-skipping passes
-      // (depth / shadow / solid-colour) — those shaders sample no material textures, so building and
-      // binding a group would be wasted work / a stray binding. Mirrors the WebGPU twin and the end-of-batch
-      // flush below.
       if (!skipTextureBatching) {
         const bg = commandList.nextBatchBindGroup(sources, slotCount);
         const cmds = commandList.commands;
@@ -292,7 +303,6 @@ export class Mesh3DBatcherGl {
       prevPackedSlots = packedSlots;
     }
 
-    // --- Final flush ---
     this._recordCommand(
       commandList,
       list.drawData,
@@ -318,8 +328,6 @@ export class Mesh3DBatcherGl {
     commandList.endBuild();
 
     glData.usedSlots = len;
-    // The index the compaction reads from just changed, so last frame's survivor set is
-    // meaningless. `-1` can never match a real dirty id, which forces the walk below.
     list.glData.lastVisibilityDirtyId = -1;
 
     return len;
@@ -329,7 +337,18 @@ export class Mesh3DBatcherGl {
    * Refreshes this pass's instance index if it can have changed, then issues its draws
    *
    * The compaction (`_compact`) drops hidden and out-of-frustum instances and rebuilds each
-   * command's `instanceCount`; commands culled to nothing are skipped here.
+   * command's `instanceCount`; commands culled to nothing are skipped here. A list with no index
+   * texture was never built for this batch and draws nothing.
+   *
+   * Without frustum culling, the compaction's answer can only change when something is hidden or
+   * shown, which bumps the batch's visibility dirty id. On a frame where the id hasn't moved since
+   * the last walk, last frame's texture and instance counts still stand, so the walk and its upload
+   * are skipped; `build` parks the id at -1, so a rebuild always walks. Frustum culling can never
+   * skip: the camera is one of its inputs and has no change signal. The gate also keeps the shadow
+   * pass from repeating an identical walk once per cascade per light.
+   *
+   * `uInstanceBase` carries each command's `firstInstance`, which WebGL2 has no draw argument for.
+   * A shader without `instanceFetchBitGl` has no such uniform, so the upload is skipped.
    * @param renderer - The WebGL renderer issuing the draws
    * @param list - This pass's persistent per-batch state
    * @param batch - The batch whose commands are drawn
@@ -344,23 +363,14 @@ export class Mesh3DBatcherGl {
     camera: CameraData,
   ): void {
     const indexTexture = list.glData.indexTexture;
-    // No index texture means this pass never built for this batch — nothing to draw.
     if (!indexTexture) return;
 
     const frustumCull = cullFrustum !== null && list._cullProducer === 'cpu';
 
-    // The visibility-only compaction is pure CPU work whose answer can only change when
-    // something was hidden or shown, and that bumps the batch's dirty id — so on a frame
-    // where it didn't move, last frame's texture and instance counts still stand and the
-    // walk plus its upload are skipped outright. `build` parks the id at -1, so a rebuild
-    // always walks. A frustum producer can never skip: the camera is one of its inputs and
-    // it has no change signal. This is also what stops the shadow pass repeating an
-    // identical walk once per cascade per light.
     if (frustumCull || list.glData.lastVisibilityDirtyId !== batch._visibilityDirtyId) {
       this._compact(list, batch, frustumCull ? cullFrustum : null, indexTexture);
     }
 
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     const gl = (renderer as any).gl as WebGL2RenderingContext;
     const shaderSys = renderer.shader;
     const geoSys = renderer.geometry;
@@ -372,7 +382,7 @@ export class Mesh3DBatcherGl {
 
     for (let i = 0; i < commandCount; i++) {
       const b = i * 5;
-      if (drawCalls[b + 1] === 0) continue; // command culled to nothing — skip bind + draw
+      if (drawCalls[b + 1] === 0) continue;
       const cmd = commandList.commands[i];
 
       cmd.shader.groups[0] = cmd.globalBindGroup;
@@ -383,7 +393,6 @@ export class Mesh3DBatcherGl {
       geoSys.bind(cmd.geometry, shaderSys._activeProgram);
       if (cmd.state) stateSys.set(cmd.state);
 
-      // Location 0 is valid, so this checks for undefined rather than truthiness.
       const location = shaderSys._getProgramData(shaderSys._activeProgram).uniformData.uInstanceBase?.location;
       if (location !== undefined) gl.uniform1i(location, drawCalls[b + 4]);
 
@@ -395,16 +404,17 @@ export class Mesh3DBatcherGl {
    * Walks the build's staging index, drops hidden and out-of-frustum instances, and writes the
    * survivors into the index texture
    *
-   * Each instance passes a **visibility** check (`Mesh3DData._worldVisible` — the item is in hand
-   * anyway) and, when `cullFrustum` is given, a frustum test of its cached
-   * `Mesh3DData.boundingSphere` (world-space for scene meshes, batch-local for
-   * {@link BatchedMesh3D} instances — the planes move into that same frame once per batch, so
-   * there is no per-instance matrix work). `radius < 0` (dynamic geometry, no bounds) always
-   * survives.
+   * Each instance passes a **visibility** check (`Mesh3DData._worldVisible`, as the item is in
+   * hand anyway) and, when `cullFrustum` is given, a frustum test of its cached
+   * `Mesh3DData.boundingSphere`: world-space for scene meshes, batch-local for
+   * {@link BatchedMesh3D} instances. The six inward-facing planes move into the batch's frame once
+   * per batch, so there is no per-instance matrix work, and a sphere more than its radius outside
+   * any plane is culled. `radius < 0` (dynamic geometry, no bounds) always survives.
    *
-   * Survivors keep the command's original `firstInstance` base (gaps model — the draw reads
-   * `[firstInstance, +instanceCount)`), so `firstInstance` is never rewritten and the source
-   * ranges stay stable frame to frame. Only `instanceCount` is rebuilt.
+   * Survivors pack contiguously from the command's original `firstInstance`, and the draw reads
+   * `[firstInstance, firstInstance + instanceCount)`, so `firstInstance` is never rewritten and
+   * the source ranges stay stable frame to frame. Only `instanceCount` is rebuilt. The walk records
+   * the visibility dirty id it consumed, which gates the next visibility-only walk in `draw`.
    * @param list - The draw list whose staging index is walked
    * @param batch - The batch that owns the list; its store matrix sets the frame the planes move into
    * @param cullFrustum - World-space frustum to cull against, or `null` for a visibility-only walk
@@ -426,8 +436,6 @@ export class Mesh3DBatcherGl {
     const src = glData.indexStaging!;
     const dst = indexTexture.data;
 
-    // Six inward-facing test planes ([nx, ny, nz, c] x 6) in the batch's frame. Visibility-only
-    // compactions never read them — the scratch stands in so the loop needs no null check.
     const planes =
       cullFrustum !== null ? transformFrustumToBatch(cullFrustum.planesData, batch.storeBuffer.data) : null;
     const tp = planes ?? _noPlanes;
@@ -435,7 +443,6 @@ export class Mesh3DBatcherGl {
     for (let k = 0; k < commandCount; k++) {
       const start = drawCalls[k * 5 + 4];
       const end = k + 1 < commandCount ? drawCalls[(k + 1) * 5 + 4] : totalInstances;
-      // Survivors land contiguously from the command's stable base.
       let w = start;
 
       for (let i = start; i < end; i++) {
@@ -452,7 +459,6 @@ export class Mesh3DBatcherGl {
             const cy = center.y;
             const cz = center.z;
 
-            // Outside any plane by more than the radius -> cull. Short-circuit `||`.
             if (
               tp[0] * cx + tp[1] * cy + tp[2] * cz + tp[3] < -radius ||
               tp[4] * cx + tp[5] * cy + tp[6] * cz + tp[7] < -radius ||
@@ -466,25 +472,25 @@ export class Mesh3DBatcherGl {
           }
         }
 
-        const sw = w * 4;
-        const si = i * 4;
+        const sw = w * 2;
+        const si = i * 2;
         dst[sw] = src[si];
         dst[sw + 1] = src[si + 1];
-        dst[sw + 2] = src[si + 2];
         w++;
       }
 
       drawCalls[k * 5 + 1] = w - start;
     }
 
-    indexTexture.upload();
-    // Record which visibility state this walk consumed — `draw` dirty-gates the next
-    // visibility-only run on it.
+    indexTexture.upload(totalInstances);
     list.glData.lastVisibilityDirtyId = batch._visibilityDirtyId;
   }
 
   /**
    * Grows this pass's index texture and its staging array to hold `needed` instances
+   *
+   * The staging array matches the texture's padded length, so the compaction indexes source and
+   * destination the same way.
    * @param list - The draw list whose index texture grows
    * @param needed - Instance count the texture must hold
    */
@@ -493,10 +499,8 @@ export class Mesh3DBatcherGl {
 
     const indexTexture = (glData.indexTexture ??= new RenderInstanceTexture(Math.max(256, needed)));
     indexTexture.ensureCapacity(needed);
-    // Staging matches the texture's padded length, so the compaction's source and
-    // destination indices are the same arithmetic.
     if (!glData.indexStaging || glData.indexStaging.length < indexTexture.data.length) {
-      glData.indexStaging = new Float32Array(indexTexture.data.length);
+      glData.indexStaging = new Uint32Array(indexTexture.data.length);
     }
   }
 
@@ -525,7 +529,7 @@ export class Mesh3DBatcherGl {
     drawCalls[offset] = drawSize || geometry.indexCount || geometry.indexBuffer!.data.length;
     drawCalls[offset + 1] = instanceCount;
     drawCalls[offset + 2] = drawStart || 0;
-    drawCalls[offset + 3] = 0; // WebGL rebases indices into the atlas; baseVertex unused.
+    drawCalls[offset + 3] = 0;
     drawCalls[offset + 4] = firstInstance;
   }
 
@@ -533,19 +537,18 @@ export class Mesh3DBatcherGl {
    * Writes one instance's index texel: the mesh store row to read, and this pass's packed
    * texture slots
    *
-   * Everything else about the instance — matrix, material index, bone / morph / geometry
-   * lanes — already lives in the store row, so the pass records nothing but the pointer.
-   * `RenderInstanceTexture` documents why the slots ride here, split into 16-bit halves.
+   * Everything else about the instance, its matrix, material index and bone, morph and geometry
+   * lanes, already lives in the store row, so the pass records nothing but the pointer.
+   * `RenderInstanceTexture` documents why the slots ride here.
    * @param index - The index texture's data
    * @param slot - Instance slot to write
    * @param r - The instance's mesh, whose store row the texel points at
    * @param packedSlots - This pass's packed texture slots for the instance
    */
-  private _writeIndex(index: Float32Array, slot: number, r: Mesh3DData, packedSlots: number): void {
-    const off = slot * 4;
+  private _writeIndex(index: Uint32Array, slot: number, r: Mesh3DData, packedSlots: number): void {
+    const off = slot * 2;
     index[off] = r._storeIndex;
-    index[off + 1] = packedSlots & 0xffff;
-    index[off + 2] = (packedSlots >>> 16) & 0xffff;
+    index[off + 1] = packedSlots;
   }
 
   private _packTextures(material: BaseMaterial3D, sources: BatchedTextureSource[], tick: number): number {
@@ -606,11 +609,6 @@ export class Mesh3DBatcherGl {
   }
 }
 
-/**
- * `batchTick` is module state shared across renderers, so it can only be reset
- * globally — `renderer.destroy({ releaseGlobalResources: true })` returns it to
- * its initial value.
- */
 GlobalResourceRegistry.register({
   clear() {
     batchTick = 0;

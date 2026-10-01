@@ -4,68 +4,78 @@ import type { View3D } from '../scene/View3D';
 import type { RaycastHit3D } from './HitResult3D';
 
 /**
- * The interaction members mixed into {@link View3D}
+ * The pointer-event members of {@link View3D}
  *
- * Thin delegates into the View's {@link EventBoundary3D} (`view3d.events`), which owns all state and
- * dispatch logic. Applied to `View3D.prototype` with `extensions.mixin`, mirroring how pixi.js mixes
- * `FederatedContainer` into `Container`.
+ * Pixi's event system treats a View as one 2D object. These members connect it to the 3D scene:
+ * when pixi hit-tests the View, a ray goes into the scene and picks a node, and the View then
+ * passes the event on to that node. The work happens in the View's {@link EventBoundary3D},
+ * `view3d.events`.
+ * @example
+ * ```ts
+ * view3d.cursor = 'crosshair';                    // shown over empty space
+ * view3d.hitArea = new Rectangle(0, 0, 400, 300); // only this part takes pointer events
+ *
+ * const hit = view3d.raycast({ x: 200, y: 150 }); // a pick without an event
+ * ```
  * @see {@link EventBoundary3D} For the boundary these delegate to.
  * @category events
  * @standard
  */
 export interface IView3DEvents {
   /**
-   * Hit-tests a 2D point against the View — the hook that wires 3D picking into pixi's `EventBoundary`
+   * Whether a point in the View's local 2D space is inside the View; pixi's hit test for the View
    *
-   * Pixi calls it for every pointer event after `worldTransform.applyInverse(globalPoint, localPoint)`,
-   * so `point` is in View3D's local 2D space. It runs the 3D ray cast, caches the picked
-   * {@link Container3D} for the dispatch that follows, and reports containment anywhere inside the
-   * View's 2D bounds: a viewport miss still resolves to View3D itself as the event target, so "click
-   * empty space to deselect" needs no extra wiring.
+   * Pixi calls it during its hit test, with the point already in the View's local space. It also
+   * casts the ray into the scene and keeps the picked {@link Container3D} for the event that
+   * follows. It answers `true` anywhere in the View's rectangle, so a click on empty space still
+   * targets the View, and "click empty space to deselect" needs no extra wiring.
    * @remarks
-   * - Because the whole rect reports containment, the View occludes interactive 2D content layered
-   *   *behind* it — 2D hit-testing stops at the topmost hit.
-   * - To let events fall through, put 2D UI above the View in the display list, set the View's own
-   *   2D `eventMode` to `'none'` / `'passive'` (which also disables 3D interaction with it), or set
-   *   {@link View3D#hitArea} to keep only part of the viewport interactive.
+   * - Because the whole rectangle counts, the View hides interactive 2D content behind it from
+   *   pointer events: pixi's hit test stops at the topmost hit.
+   * - To let events through, put the 2D UI above the View, set {@link View3D#hitArea} to keep only
+   *   part of the View interactive, or set the View's own `eventMode` to `'none'`, which turns off
+   *   3D picking too. `'passive'` only works while no 2D ancestor of the View is interactive;
+   *   under one, pixi still hit-tests the View.
+   * - Calling it from a listener changes the pick the rest of that event's dispatches use. Use
+   *   {@link View3D#raycast} to query the scene.
+   * @example
+   * ```ts
+   * const overView = view3d.containsPoint(view3d.toLocal({ x: 400, y: 300 }));
+   * ```
    * @param {PointData} point - Point in View3D's local 2D space.
    * @returns Whether the point falls inside the View's 2D rect.
    */
   containsPoint(point: PointData): boolean;
 
   /**
-   * CSS cursor shown over this View, forwarding the picked 3D node's own cursor
+   * CSS cursor shown over the View
    *
-   * Pixi reads `e.target.cursor` to update the canvas CSS cursor and `e.target` stays the View3D
-   * through 2D dispatch, so the picked node's cursor has to flow through here: reads resolve the
-   * current pick's cursor and fall back to the View's own, writes set that fallback. A 3D node whose
-   * {@link Container3D#cursor} is `null` therefore shows the View's cursor, where bare 2D would coerce
-   * to `'default'`.
+   * Over a 3D node, the View shows that node's {@link Container3D#cursor | cursor}. Over empty
+   * space, or a node whose cursor is `null`, it shows the cursor set here. Pixi only reads the
+   * cursor of the event's target, which stays the View, so the View passes the node's cursor on.
+   * Reading it back returns the cursor in effect now, which can be the node's.
    * @example
    * ```ts
-   * view3d.cursor = 'default';  // shown over empty viewport
-   * mesh.cursor = 'pointer';    // shown while the ray hits the mesh
+   * view3d.cursor = 'default'; // shown over empty space
+   * mesh.cursor = 'pointer';   // shown while the ray hits the mesh
    * ```
    */
   cursor?: Cursor | (string & {});
 
   /**
-   * Restricts the View's interactive region to a shape, in View-local 2D space, with 3D picking
+   * Limits pointer events to a shape inside the View, in View-local 2D space, with 3D picking
    * still working inside it
    *
-   * Pixi's hit test short-circuits on a container with a `hitArea` and never calls `containsPoint`,
-   * which is where the 3D pick runs — so the View intercepts this property and hands pixi a composite
-   * that tests the shape first, then runs the pick.
+   * Pixi's hit test never calls `containsPoint` on a container with a `hitArea`, and that is where
+   * the 3D pick runs. So the View keeps your shape and gives pixi a hit area of its own, which
+   * tests your shape and then runs the pick.
    * @remarks
-   * - The interactive region is the intersection of the shape and the View's 2D rect: a shape can
-   *   shrink the region, never extend it past the viewport. This diverges from 2D on purpose, where
-   *   `hitArea` replaces the container's bounds outright.
-   * - Outside the shape the View is not hit at all, so events fall through to content behind it —
-   *   the third fall-through lever listed on {@link View3D#containsPoint}.
-   * - Reading it back returns the View's composite hit area, not the shape you assigned — keep your
-   *   own reference. The same read/write asymmetry {@link View3D#cursor} has.
-   * - {@link View3D#raycast} and {@link View3D#containsPoint} ignore the shape: both are explicit
-   *   geometric queries, matching 2D, where a direct `containsPoint` call bypasses `hitArea` too.
+   * - The interactive region is where the shape and the View's rectangle overlap: a shape can
+   *   shrink it but never extend it past the View. In 2D, `hitArea` replaces the bounds outright.
+   * - Outside the shape the View isn't hit at all, so events reach the content behind it.
+   * - Reading it back returns the View's own hit area, not your shape, so keep your own reference.
+   * - {@link View3D#raycast} and {@link View3D#containsPoint} ignore the shape: they are direct
+   *   queries, as a direct `containsPoint` call in 2D ignores `hitArea` too.
    * @example
    * ```ts
    * // Only the top-left 400×300 of the View is interactive;
@@ -76,28 +86,29 @@ export interface IView3DEvents {
   hitArea?: IHitArea | null;
 
   /**
-   * Ray-casts at a 2D global point and returns the closest hit
+   * Casts a ray through a 2D point and returns the closest hit
    *
-   * `position` is in the space of `event.global` and pixi's `toGlobal`, shared with
-   * {@link View3D#screenToRay}. Use this for picking outside the pointer pipeline: placing decals, AI
-   * line-of-sight, drag-and-drop hit tests.
+   * `position` is in the space of `event.global` and pixi's `toGlobal`, as for
+   * {@link View3D#screenToRay}. Use it to pick outside pointer events: placing decals, line of
+   * sight, drag-and-drop targets.
    * @remarks
-   * - Returns a fresh {@link RaycastHit3D}; events carry the same shape, pooled, as `hit3D`.
-   * - `distance` is measured from the camera (from the camera plane for orthographic projections),
-   *   matching `ray.at(t)` on {@link View3D#screenToRay} and `hit3D.distance` on events.
-   * - Picks see the scene as of the last render/transform pass, since the ray is built from cached
-   *   camera / View transforms and tested against node `worldTransform`s. A pick issued before the
-   *   first render, or after mutating transforms in the same tick, reads last-frame values and so
-   *   stays consistent with what is on screen.
-   * - Hidden nodes (`visible === false` on the node or any ancestor) are skipped: they neither pick
-   *   nor occlude nodes behind them.
-   * - A hit on a non-interactive (`'auto'` / `'passive'`) node reports its nearest interactive
-   *   ancestor as `target` while the surface data (`point` / `normal` / `uv` / `triangleIndex`)
-   *   comes from the struck node.
-   * - An ancestor's explicit {@link Container3D#hitVolume | hitVolume} clips its descendants: a hit
-   *   whose point falls outside any explicit ancestor volume is skipped without occluding what's
-   *   behind it. Default volumes never clip — the same rule event picking uses.
-   * - {@link View3D#hitArea} does not clip raycast queries; the shape only restricts pointer events.
+   * - Only nodes that take part in picking can be hit: interactive nodes and, under them, nodes
+   *   with a shape (see {@link IFederatedContainer3D#eventMode}). In a scene where nothing is
+   *   interactive it always returns `null`.
+   * - Returns a new {@link RaycastHit3D} on every call. Events carry the same shape as `hit3D`.
+   * - `distance` is measured from the camera, or from the camera plane for an orthographic camera,
+   *   the same as `ray.at(t)` on {@link View3D#screenToRay}.
+   * - It uses the transforms from the last render, so it picks what is on screen: a node or camera
+   *   moved since then is picked where it was drawn.
+   * - Hidden nodes, and nodes under a hidden ancestor, are skipped: they neither hit nor block
+   *   what is behind them.
+   * - A hit on a non-interactive (`'auto'` or `'passive'`) node reports its nearest interactive
+   *   ancestor as `target`, while `point`, `normal`, `uv` and `triangleIndex` describe the node
+   *   that was struck.
+   * - A {@link Container3D#hitVolume | hitVolume} you set on an ancestor clips its descendants: a
+   *   hit outside it is skipped and doesn't block what is behind it. Default volumes never clip.
+   *   Pointer events follow the same rule.
+   * - {@link View3D#hitArea} only limits pointer events, not this.
    * @param {PointData} position - 2D global point to cast through (e.g. `event.global`).
    * @returns The closest hit, or `null` on a miss or when the point falls outside the View's 2D rect.
    * @example
@@ -115,7 +126,7 @@ export interface IView3DEvents {
 }
 
 /**
- * The mixin applied to `View3D.prototype` by `events/init.ts` — see {@link IView3DEvents}
+ * What `events/init.ts` mixes into `View3D.prototype`; {@link IView3DEvents} documents the members
  * @internal
  */
 export const View3DEvents: IView3DEvents & ThisType<View3D> = {
@@ -135,9 +146,14 @@ export const View3DEvents: IView3DEvents & ThisType<View3D> = {
     return this.events._hitAreaShape !== null ? this.events._hitAreaProxy : null;
   },
 
+  /**
+   * Stores the shape the boundary's hit area tests
+   *
+   * Ignores the boundary's own hit area: `view.hitArea = view.hitArea` hands it back, and storing
+   * it as the shape would make its `contains` call itself forever.
+   * @param value - The shape, or `null` to clear it.
+   */
   set hitArea(value: IHitArea | null | undefined) {
-    // `view.hitArea = view.hitArea` hands the proxy back; storing it as the shape would make
-    // `contains` recurse into itself forever.
     if (value === this.events._hitAreaProxy) return;
     this.events._hitAreaShape = value ?? null;
   },
@@ -149,7 +165,6 @@ export const View3DEvents: IView3DEvents & ThisType<View3D> = {
 
 declare global {
   namespace PixiMixins {
-    // oxlint-disable-next-line no-empty-object-type
     interface View3D extends IView3DEvents {}
   }
 }

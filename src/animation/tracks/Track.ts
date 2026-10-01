@@ -1,5 +1,10 @@
 /**
- * Interpolation algorithm used between keyframes in a track
+ * How a track fills the time between two keyframes
+ *
+ * - `'LINEAR'` blends straight from one keyframe to the next; a {@link QuaternionTrack} slerps.
+ * - `'STEP'` holds each keyframe until the next one.
+ * - `'CUBICSPLINE'` follows a smooth curve shaped by tangents stored with each keyframe;
+ *   {@link TrackOptions#values} has the layout.
  * @category animation
  * @advanced
  */
@@ -11,16 +16,32 @@ export type InterpolationMode = 'LINEAR' | 'STEP' | 'CUBICSPLINE';
  * @advanced
  */
 export interface TrackOptions {
-  /** Keyframe times in seconds */
+  /** Keyframe times in seconds, in ascending order */
   times: number[] | Float32Array;
-  /** Packed keyframe values matching the track's value size */
+  /**
+   * Keyframe values, `valueSize` numbers per keyframe, in the order of `times`
+   *
+   * A `'CUBICSPLINE'` track stores three groups per keyframe instead: in-tangent, value and
+   * out-tangent, each `valueSize` long. Tangents are rates of change per second, as glTF stores them.
+   */
   values: number[] | Float32Array;
   /**
    * Interpolation algorithm used between keyframes
    * @default 'LINEAR'
    */
   interpolation?: InterpolationMode;
-  /** Binding label resolved by the animation player */
+  /**
+   * The property this track drives, as `'<node>.<property>'`, such as `'Hips.quaternion'`
+   *
+   * The player splits the label at its last `.` and looks for a node with that label, or a bone
+   * of a skinned mesh with that name, in the subtree of {@link AnimationPlayerOptions#target}.
+   * On a bone the property is `position`, `quaternion` or `scale`. On a node it is any vector,
+   * quaternion, number or numeric array property, such as `position`, `x` or `weights`. A label
+   * that matches nothing is ignored without a warning.
+   *
+   * Tracks loaded from glTF name their node by its index in the file, which only the player of a
+   * {@link Model3D} resolves.
+   */
   label: string;
   /**
    * Number of numeric components in each keyframe value, such as the morph-target
@@ -33,13 +54,12 @@ export interface TrackOptions {
 }
 
 /**
- * Sampled animation data for a property of any width
+ * Keyframes for one animated property
  *
- * Tracks are advanced authoring primitives for manually creating animations.
- * Loaders usually create them for you, but custom animations can provide
- * tracks directly through {@link AnimationOptions#tracks}. Use `Track` itself for
- * numeric arrays such as morph-target weights, and the fixed-width subclasses for
- * scalars, points, and rotations.
+ * The glTF loader builds tracks for you. Build them yourself to author an animation in code, and
+ * pass them to {@link AnimationOptions#tracks}. Use `Track` itself for numeric arrays such as
+ * morph-target weights, and {@link NumberTrack}, {@link Vector3Track} or {@link QuaternionTrack}
+ * for numbers, vectors and rotations.
  * @example
  * ```ts
  * const weights = new Track({
@@ -53,18 +73,18 @@ export interface TrackOptions {
  * @advanced
  */
 export class Track {
-  /** Binding label resolved by the animation player */
+  /** The property this track drives; {@link TrackOptions#label} has the format */
   public label: string;
   /** Keyframe times in seconds */
   public times: Float32Array;
-  /** Packed keyframe values matching {@link Track#valueSize} */
+  /** Keyframe values; {@link TrackOptions#values} has the layout */
   public values: Float32Array;
   /** Interpolation algorithm used between keyframes */
   public interpolation: InterpolationMode;
   /** Number of numeric components in each sampled value */
-  public readonly valueSize: number;
+  public readonly valueSize: number = 0;
   /**
-   * @param options - Track data, binding label, and value size
+   * @param options - Keyframes, target label and value size
    */
   constructor(options: TrackOptions) {
     this.label = options.label;
@@ -77,11 +97,11 @@ export class Track {
   /**
    * Blends a freshly sampled value into a running weighted average
    *
-   * Runs once per track for every blended animation state, every frame, so it
-   * is on the hot path for every animated skeleton. Subclasses override it to
-   * unroll their fixed width, which beats this generic loop even with the
-   * virtual dispatch, and to add whatever their representation needs beyond a
-   * component-wise lerp — {@link QuaternionTrack} aligns hemispheres first.
+   * The player calls it every frame for each state after the first that drives the same
+   * property, so it is hot while animations crossfade. Subclasses override it to unroll their
+   * fixed width, which beats this generic loop even with the virtual dispatch, and to add
+   * whatever their representation needs beyond a component-wise lerp: {@link QuaternionTrack}
+   * aligns hemispheres first.
    * @param values - The running weighted average, updated in place
    * @param sample - The freshly evaluated value to blend in
    * @param t - Blend factor for `sample` against `values`
@@ -95,11 +115,11 @@ export class Track {
   }
 
   /**
-   * Evaluates the track at the given time
-   * @param time - Current animation time in seconds
-   * @param index - Keyframe index from the previous update, used as a search hint
-   * @param target - Buffer to write the result into
-   * @returns The updated keyframe index to be stored for the next frame
+   * Samples the track at a time, holding the first or last keyframe outside their range
+   * @param time - Time in seconds
+   * @param index - Keyframe index this returned last time, which shortens the search; `0` always works
+   * @param target - Receives `valueSize` numbers
+   * @returns The keyframe index to pass back as `index` next time
    */
   public evaluate(time: number, index: number, target: Float32Array | number[]): number {
     const times = this.times;
@@ -107,11 +127,10 @@ export class Track {
     const len = times.length;
     const valueSize = this.valueSize;
 
-    // Handle boundaries
     if (time <= times[0]) {
       if (this.interpolation === 'CUBICSPLINE') {
-        const offset = valueSize; // (0 * valueSize * 3) + valueSize
-        for (let i = 0; i < valueSize; i++) target[i] = values[offset + i];
+        const firstValueOffset = valueSize;
+        for (let i = 0; i < valueSize; i++) target[i] = values[firstValueOffset + i];
       } else {
         for (let i = 0; i < valueSize; i++) target[i] = values[i];
       }
@@ -120,9 +139,8 @@ export class Track {
 
     if (time >= times[len - 1]) {
       if (this.interpolation === 'CUBICSPLINE') {
-        // Last keyframe: (len-1) * 3 * valueSize + valueSize
-        const offset = (len - 1) * 3 * valueSize + valueSize;
-        for (let i = 0; i < valueSize; i++) target[i] = values[offset + i];
+        const lastValueOffset = (len - 1) * 3 * valueSize + valueSize;
+        for (let i = 0; i < valueSize; i++) target[i] = values[lastValueOffset + i];
       } else {
         const offset = (len - 1) * valueSize;
         for (let i = 0; i < valueSize; i++) target[i] = values[offset + i];
@@ -130,7 +148,6 @@ export class Track {
       return len - 2;
     }
 
-    // Search
     if (times[index] > time) index = 0;
     while (index < len - 1 && times[index + 1] <= time) index++;
 
@@ -152,6 +169,14 @@ export class Track {
     return index;
   }
 
+  /**
+   * Writes the value between two keyframes for `'LINEAR'` and `'CUBICSPLINE'`; {@link Track#evaluate} handles `'STEP'`
+   * @param index - Keyframe at or before the sample time
+   * @param nextIndex - Keyframe after it
+   * @param t - How far the sample sits between the two, from 0 to 1
+   * @param duration - Seconds between the two keyframes, which scales the cubic tangents
+   * @param target - Receives `valueSize` numbers
+   */
   protected interpolate(
     index: number,
     nextIndex: number,
@@ -184,7 +209,6 @@ export class Track {
         target[i] = s0 * p0 + s1 * m0 + s2 * p1 + s3 * m1;
       }
     } else {
-      // LINEAR
       const offset1 = index * valueSize;
       const offset2 = nextIndex * valueSize;
 

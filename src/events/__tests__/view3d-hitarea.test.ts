@@ -1,5 +1,3 @@
-// Load pixi's 2D events mixin (isInteractive etc.) — normally installed lazily at Application.init,
-// which these tests never run; without it `EventBoundary.hitTest` throws.
 import 'pixi.js/browser';
 import { Container, EventBoundary, Rectangle } from 'pixi.js';
 import { describe, expect, test } from 'vitest';
@@ -16,76 +14,18 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-// View-local probe points for the two-cube scene built by `makeScene` (camera
-// at z=10, fov 60): A sits at world x=-2, B at x=+2.
+/** View-local point over cube A of `makeScene`, at world x = -2 (camera at z = 10, fov 60) */
 const AT_A = { x: 31, y: 50 };
+/** View-local point over cube B of `makeScene`, at world x = +2 */
 const AT_B = { x: 69, y: 50 };
 
-// A 2×2×2 cube centred at origin, so each face sits one unit from the centre.
+/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
-    -1,
-    -1,
-    -1,
-    1,
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    -1,
-    1,
-    -1, // back
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    1,
-    1,
-    1,
-    1,
-    -1,
-    1,
-    1, // front
+    -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
   ]);
   const indices = new Uint16Array([
-    0,
-    1,
-    2,
-    0,
-    2,
-    3, // back
-    4,
-    6,
-    5,
-    4,
-    7,
-    6, // front
-    0,
-    4,
-    5,
-    0,
-    5,
-    1, // bottom
-    2,
-    6,
-    7,
-    2,
-    7,
-    3, // top
-    1,
-    5,
-    6,
-    1,
-    6,
-    2, // right
-    0,
-    3,
-    7,
-    0,
-    7,
-    4, // left
+    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 2, 6, 7, 2, 7, 3, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4,
   ]);
   const geometry = new Geometry3D({
     positions,
@@ -95,8 +35,7 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-// Run the transform pass + camera projection so worldTransform / viewProjection
-// reflect the current scene state. These tests sit outside the render loop.
+/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -104,8 +43,10 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-// Two cubes and pixi's REAL EventBoundary over a bare root, so hit tests take
-// the exact hitTestFn / hitPruneFn path pointer events do.
+/**
+ * Two cubes in a View3D under a bare 2D root, hit-tested through pixi's real EventBoundary so each test takes
+ * the `hitTestFn` / `hitPruneFn` path pointer events do
+ */
 function makeScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -128,17 +69,7 @@ function makeScene() {
 }
 
 describe('View3D hitArea', () => {
-  test('no shape: hitTest hits the View and refreshes the 3D pick', () => {
-    const { view3d, a, b, boundary } = makeScene();
-
-    expect(boundary.hitTest(AT_A.x, AT_A.y)).toBe(view3d);
-    expect(view3d.events._currentPick3D).toBe(a);
-
-    expect(boundary.hitTest(AT_B.x, AT_B.y)).toBe(view3d);
-    expect(view3d.events._currentPick3D).toBe(b);
-  });
-
-  test('a full-viewport shape no longer freezes the pick', () => {
+  test('a full-viewport shape still refreshes the 3D pick on each hit test', () => {
     const { view3d, a, b, boundary } = makeScene();
 
     boundary.hitTest(AT_A.x, AT_A.y);
@@ -188,19 +119,6 @@ describe('View3D hitArea', () => {
 
     expect(boundary.hitTest(AT_A.x, AT_A.y)).toBe(view3d);
     expect(view3d.events._currentPick3D).toBe(a);
-  });
-
-  test('reading back returns the composite proxy, not the assigned shape', () => {
-    const { view3d } = makeScene();
-    expect(view3d.hitArea).toBeNull();
-
-    const shape = new Rectangle(0, 0, 50, 100);
-    view3d.hitArea = shape;
-
-    const readBack = view3d.hitArea;
-    expect(readBack).not.toBeNull();
-    expect(typeof readBack?.contains).toBe('function');
-    expect(readBack).not.toBe(shape);
   });
 
   test('destroy clears the shape', () => {

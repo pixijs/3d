@@ -31,10 +31,8 @@ describe('DrawCommandList captures', () => {
     list.endBuild();
 
     expect(bg.getResource(0)).toBe(source);
-    // Remaining slots are padded so the bind group is always fully populated.
-    expect(bg.getResource(MAX_BATCH_TEXTURES - 1)).toBe(Texture.EMPTY.source);
-    // One listener from the list, one from the bind group slot that holds the source.
-    expect(source.listenerCount('change')).toBe(listeners + 2);
+    expect(bg.getResource(MAX_BATCH_TEXTURES - 1), 'unused slots hold the empty texture').toBe(Texture.EMPTY.source);
+    expect(source.listenerCount('change'), "one from the list, one from the bind group's slot").toBe(listeners + 2);
     expect(captures(list).has(source)).toBe(true);
 
     source._gcLastUsed = 5;
@@ -72,8 +70,6 @@ describe('DrawCommandList captures', () => {
     const onCaptureLost = vi.fn<() => void>();
     list.onCaptureLost = onCaptureLost;
 
-    // A Geometry3D's own unload also vacates its atlas range and unloads every buffer it owns —
-    // far more than one lost buffer calls for.
     const geometry = new Geometry3D({ positions: new Float32Array(9) });
     const fullUnload = vi.spyOn(geometry, 'unload');
     const layoutDropped = vi.fn<() => void>();
@@ -85,7 +81,10 @@ describe('DrawCommandList captures', () => {
 
     expect(onCaptureLost).toHaveBeenCalledTimes(1);
     expect(layoutDropped).toHaveBeenCalledTimes(1);
-    expect(fullUnload).not.toHaveBeenCalled();
+    expect(
+      fullUnload,
+      "Geometry3D's own unload would also vacate its atlas range and unload every buffer",
+    ).not.toHaveBeenCalled();
 
     list.destroy();
     geometry.destroy(true);
@@ -127,10 +126,12 @@ describe('DrawCommandList captures', () => {
     list.captureGeometry(geometry);
     list.endBuild();
 
-    // A cleared list that never rebuilt (a culled pass) still bakes the resource, so it still reports.
     list.clear();
     geometry.buffers[0].unload();
-    expect(onCaptureLost).toHaveBeenCalledTimes(1);
+    expect(
+      onCaptureLost,
+      'a cleared list that never rebuilt, like a culled pass, still holds the buffer',
+    ).toHaveBeenCalledTimes(1);
 
     list.destroy();
     geometry.destroy(true);
@@ -178,8 +179,7 @@ describe('DrawCommandList captures', () => {
     expect(list.nextBatchBindGroup([a], 1)).toBe(first);
     list.endBuild();
 
-    // The unused second group let go of `b`, so destroying `b` is not a bound-resource destroy.
-    expect(second.getResource(0)).toBe(Texture.EMPTY.source);
+    expect(second.getResource(0), 'the unused second group lets go of b').toBe(Texture.EMPTY.source);
     expect(captures(list).has(b)).toBe(false);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {

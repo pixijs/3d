@@ -40,8 +40,8 @@ interface CompileWgslResult {
    * Bind-group layout with per-stage `visibility` narrowed from the bits'
    * `{ type, visibility }` binding tags. Passed to `GpuProgram` so a storage
    * buffer read in only one stage spends a slot in only that stage's budget
-   * (WebGPU caps `maxStorageBuffersPerShaderStage`). Untagged bindings default
-   * to `VERTEX | FRAGMENT`, exactly as pixi would auto-generate.
+   * (WebGPU's default `maxStorageBuffersPerShaderStage` is 8). Untagged bindings
+   * keep `VERTEX | FRAGMENT`, as pixi would generate them.
    */
   gpuLayout: ReturnType<typeof generateGpuLayoutGroups>;
 }
@@ -50,10 +50,13 @@ interface CompileWgslResult {
  * Builds the WebGPU bind-group layout for `source` and narrows each entry whose
  * binding a bit tagged with a single stage
  *
- * The base layout is pixi's own default (every binding `VERTEX | FRAGMENT`); we
- * only edit the `visibility` of bindings tagged `'vertex'` / `'fragment'`,
- * matching entries by their parsed binding number so the narrowing tracks the
- * same indices the source declares.
+ * The base layout is pixi's own default, derived from the WGSL: every binding
+ * `VERTEX | FRAGMENT`, and each texture's sample type from its texel type. Only the
+ * `visibility` of bindings tagged `'vertex'` or `'fragment'` changes, matched by the
+ * binding number parsed from the source.
+ *
+ * A binding's tag comes from the first bit that declares it, the rule `collectBindings` follows
+ * for its type. Tags are keyed by binding name, which WGSL keeps unique across the module.
  * @param source - The compiled WGSL source whose bindings the layout describes
  * @param bits - The bits whose per-binding stage tags narrow the layout
  */
@@ -61,8 +64,6 @@ function narrowGpuLayout(source: string, bits: ShaderBit[]): ReturnType<typeof g
   const parsed = extractStructAndGroups(source);
   const layout = generateGpuLayoutGroups(parsed);
 
-  // Collect per-binding stage tags across the bits (first declaration wins,
-  // matching the binding collectors). Keyed by binding name — names are unique.
   const tags: Record<string, ReturnType<typeof bindingVisibility>> = Object.create(null);
   for (const bit of bits) {
     if (!bit.bindings) continue;
@@ -83,6 +84,19 @@ function narrowGpuLayout(source: string, bits: ShaderBit[]): ReturnType<typeof g
 
   return layout;
 }
+
+/**
+ * The directive every module starts with
+ *
+ * `textureSample` takes its level of detail from derivatives. WGSL reports the
+ * `derivative_uniformity` diagnostic as an error by default when a derivative sits in control flow
+ * the compiler cannot prove uniform. The batch samplers branch on a flat varying, uniform across
+ * every quad but not provably so, and this directive turns that diagnostic off. It is off for the
+ * whole module, so no bit compiled here gets that check. A bit's own `textureSample`, `dpdx`,
+ * `dpdy` and the other derivative builtins must stay in uniform control flow. `textureSampleLevel`
+ * and `textureSampleGrad` take no derivative, so they may sit in any branch.
+ */
+const WGSL_DIRECTIVE = 'diagnostic(off, derivative_uniformity);\n';
 
 /**
  * Compiles a WGSL shader source from bits + template using the default WGSL
@@ -110,7 +124,7 @@ export function compileWgslSource(options: CompileWgslSourceOptions): CompileWgs
     templateString: template.gpu!,
     data: {},
   };
-  const source = compileShader(context, plugins);
+  const source = `${WGSL_DIRECTIVE}${compileShader(context, plugins)}`;
 
   return {
     vertex: { source, entryPoint: 'mainVertex' },

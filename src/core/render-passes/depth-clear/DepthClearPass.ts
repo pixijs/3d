@@ -15,32 +15,27 @@ interface DepthClearPassOptions {
   /**
    * Camera whose rect to reset, instead of the view's
    *
-   * A camera pass resets its own rect unconditionally: `session.needsDepthClear` is the
-   * *view's* one reset, and an inset drawn after the scene needs its own regardless.
+   * A camera's reset always runs: `session.needsDepthClear` tracks only the view's own reset, and
+   * an inset drawn after the scene needs its own either way.
    */
   camera?: Camera3D;
 }
 
 /**
- * Resets this View3D's depth to the far plane over `session.activeViewport`, before Opaque
+ * Resets this View3D's depth to the far plane over `session.activeViewport`, before the opaque pass
  *
- * Scoping the reset to the viewport means opaque geometry depth-tests against fresh
- * depth while the overlapping insets / 2D content sharing the one depth buffer survive
- * (a whole-attachment clear would wipe them).
+ * Only the viewport is reset, so the opaque draw tests against fresh depth while other insets and
+ * 2D content sharing the depth buffer keep theirs. A clear of the whole attachment would wipe them.
  *
- * The manual clear runs only while `session.needsDepthClear` is unspent: in
- * composite mode the scene-target bind's load-op clear spends it first (the
- * executor marks it), so this pass draws nothing there; in direct mode the
- * screen bind never clears (`CLEAR.NONE` keeps the keep-open weave), so it
- * always runs. The pass stays in the graph in both modes — its declarations
- * make it the scene target's first writer, which is what gives the composite
- * bind its clear in the first place.
+ * The reset runs only while `session.needsDepthClear` is `true`. In composite mode, binding the
+ * scene target clears the depth first, so this pass does nothing. In direct mode the screen is
+ * bound with no clear, so that several views can draw in one GPU pass, and this pass always runs.
+ * It stays in the graph in both modes, since being the scene target's first writer is what gives
+ * the composite bind its clear.
  *
- * One class for both backends: the divergent technique lives behind
- * `pipe.clearDepth` (WebGPU rasterises a fullscreen triangle with colour-mask
- * off; WebGL scissors a native `gl.clear(DEPTH)`). Declaring colour + depth
- * resolves the pass to the default colour+depth target (a depth-only decl would
- * resolve elsewhere) and keeps it in the keep-open flow; only depth is cleared.
+ * One class for both backends, through `pipe.clearDepth`: WebGPU draws a fullscreen triangle with
+ * colour writes masked off, and WebGL scissors a `gl.clear` of the depth. The pass declares colour
+ * as well as depth so it lands on the same target as the opaque pass, but clears only depth.
  * @internal
  */
 export class DepthClearPass extends RenderPass {
@@ -55,7 +50,7 @@ export class DepthClearPass extends RenderPass {
   }
 
   /**
-   * Declares colour + depth writes so the pass resolves to this camera's target, or the scene pair
+   * Declares colour and depth writes, which put the pass on its camera's target or the scene's
    * @param b - The builder recording this pass's resource accesses
    */
   public override setup(b: PassBuilder): void {
@@ -66,10 +61,10 @@ export class DepthClearPass extends RenderPass {
   /**
    * Clears the depth of `session.activeViewport`
    *
-   * Without a camera that is the view's rect, once per view — `session.needsDepthClear` is
-   * spent so a composite bind's load-op clear can satisfy it instead. With a camera the
-   * executor has already pointed the live frame at that camera, and the reset always runs:
-   * the view's flag says nothing about an inset.
+   * Without a camera that is the view's rect, cleared once a frame: the pass sets
+   * `session.needsDepthClear` to `false`, and skips when a composite bind already did. With a
+   * camera the graph has already narrowed the viewport to the camera's rect, and the reset always
+   * runs.
    * @param session - The current frame's render session
    */
   public override render(session: RenderSession): void {

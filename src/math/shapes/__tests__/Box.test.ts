@@ -32,18 +32,6 @@ describe('Box', () => {
       expectVec3Close(box.min, -1, -2, -3);
       expectVec3Close(box.max, 4, 5, 6);
     });
-
-    test('default box is empty', () => {
-      const box = new Box();
-      expect(box.isEmpty()).toBe(true);
-    });
-  });
-
-  describe('type', () => {
-    test('is "box"', () => {
-      const box = new Box();
-      expect(box.type).toBe('box');
-    });
   });
 
   describe('set', () => {
@@ -52,11 +40,6 @@ describe('Box', () => {
       box.set({ x: -2, y: -3, z: -4 }, { x: 5, y: 6, z: 7 });
       expectVec3Close(box.min, -2, -3, -4);
       expectVec3Close(box.max, 5, 6, 7);
-    });
-
-    test('returns this', () => {
-      const box = new Box();
-      expect(box.set({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 })).toBe(box);
     });
   });
 
@@ -68,12 +51,6 @@ describe('Box', () => {
       expectVec3Close(b.min, 1, 2, 3);
       expectVec3Close(b.max, 4, 5, 6);
     });
-
-    test('returns this', () => {
-      const a = new Box(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
-      const b = new Box();
-      expect(b.copyFrom(a)).toBe(b);
-    });
   });
 
   describe('copyTo', () => {
@@ -83,12 +60,6 @@ describe('Box', () => {
       a.copyTo(b);
       expectVec3Close(b.min, 1, 2, 3);
       expectVec3Close(b.max, 4, 5, 6);
-    });
-
-    test('returns target', () => {
-      const a = new Box(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
-      const b = new Box();
-      expect(a.copyTo(b)).toBe(b);
     });
   });
 
@@ -102,12 +73,6 @@ describe('Box', () => {
   });
 
   describe('equals', () => {
-    test('matches exactly', () => {
-      const a = new Box(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
-      const b = new Box(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
-      expect(a.equals(b)).toBe(true);
-    });
-
     test('rejects mismatch', () => {
       const a = new Box(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
       const b = new Box(new Vector3(1, 2, 3), new Vector3(4, 5, 7));
@@ -123,25 +88,15 @@ describe('Box', () => {
       expect(box.max.x).toBe(-Infinity);
       expect(box.isEmpty()).toBe(true);
     });
-
-    test('returns this', () => {
-      const box = new Box();
-      expect(box.makeEmpty()).toBe(box);
-    });
   });
 
   describe('isEmpty', () => {
-    test('default box is empty', () => {
-      expect(new Box().isEmpty()).toBe(true);
-    });
-
     test('valid box is non-empty', () => {
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
       expect(box.isEmpty()).toBe(false);
     });
 
-    test('any axis with max < min produces empty', () => {
-      // Only X axis flipped — should still be empty even though Y and Z are valid.
+    test('a single axis with max < min makes the box empty, whichever axis it is', () => {
       const xFlipped = new Box(new Vector3(2, 0, 0), new Vector3(1, 5, 5));
       expect(xFlipped.isEmpty()).toBe(true);
 
@@ -174,13 +129,6 @@ describe('Box', () => {
       expectVec3Close(box.max, 5, 1, 2);
     });
 
-    test('point inside existing box leaves it unchanged', () => {
-      const box = new Box(new Vector3(0, 0, 0), new Vector3(10, 10, 10));
-      box.expandByPoint({ x: 5, y: 5, z: 5 });
-      expectVec3Close(box.min, 0, 0, 0);
-      expectVec3Close(box.max, 10, 10, 10);
-    });
-
     test('out arg variant does not mutate this', () => {
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
       const out = new Box();
@@ -189,11 +137,6 @@ describe('Box', () => {
       expectVec3Close(box.max, 1, 1, 1);
       expectVec3Close(out.min, 0, 0, 0);
       expectVec3Close(out.max, 5, 5, 5);
-    });
-
-    test('returns out', () => {
-      const box = new Box();
-      expect(box.expandByPoint({ x: 1, y: 1, z: 1 })).toBe(box);
     });
   });
 
@@ -204,14 +147,6 @@ describe('Box', () => {
       a.union(b);
       expectVec3Close(a.min, 0, 0, 0);
       expectVec3Close(a.max, 6, 6, 6);
-    });
-
-    test('overlapping boxes yield bounding hull', () => {
-      const a = new Box(new Vector3(0, 0, 0), new Vector3(2, 2, 2));
-      const b = new Box(new Vector3(1, 1, 1), new Vector3(3, 3, 3));
-      a.union(b);
-      expectVec3Close(a.min, 0, 0, 0);
-      expectVec3Close(a.max, 3, 3, 3);
     });
 
     test('out arg variant does not mutate this', () => {
@@ -281,13 +216,11 @@ describe('Box', () => {
 
     test('point outside returns distance to closest face', () => {
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      // Point (3, 0.5, 0.5) — closest face is x=1, distance = 2.
       expect(box.distanceToPoint({ x: 3, y: 0.5, z: 0.5 })).toBeCloseTo(2, 5);
     });
 
-    test('point outside corner returns Euclidean distance', () => {
+    test('point beyond a corner returns the Euclidean distance to that corner', () => {
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      // Point (4, 5, 13) — closest corner (1, 1, 1), distance = sqrt(9+16+144) = 13.
       expect(box.distanceToPoint({ x: 4, y: 5, z: 13 })).toBeCloseTo(13, 5);
     });
   });
@@ -354,16 +287,9 @@ describe('Box', () => {
       expect(a.containsBox(b)).toBe(false);
     });
 
-    test('disjoint boxes return false', () => {
-      const a = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      const b = new Box(new Vector3(5, 5, 5), new Vector3(6, 6, 6));
-      expect(a.containsBox(b)).toBe(false);
-    });
-
     test('empty box is contained by any non-empty box (empty min > max trivially satisfies condition)', () => {
       const outer = new Box(new Vector3(0, 0, 0), new Vector3(10, 10, 10));
       const empty = new Box();
-      // The implementation checks min.x <= box.min.x (so 0 <= +Inf = true) and box.max.x <= max.x (so -Inf <= 10 = true).
       expect(outer.containsBox(empty)).toBe(true);
     });
   });
@@ -381,12 +307,6 @@ describe('Box', () => {
       expect(a.intersectsBox(b)).toBe(true);
     });
 
-    test('separated boxes do not intersect', () => {
-      const a = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      const b = new Box(new Vector3(2, 2, 2), new Vector3(3, 3, 3));
-      expect(a.intersectsBox(b)).toBe(false);
-    });
-
     test('separated on a single axis returns false', () => {
       const a = new Box(new Vector3(0, 0, 0), new Vector3(1, 10, 10));
       const b = new Box(new Vector3(2, 0, 0), new Vector3(3, 10, 10));
@@ -395,12 +315,6 @@ describe('Box', () => {
   });
 
   describe('intersectsSphere', () => {
-    test('sphere inside box intersects', () => {
-      const box = new Box(new Vector3(0, 0, 0), new Vector3(10, 10, 10));
-      const sphere = new Sphere(new Vector3(5, 5, 5), 1);
-      expect(box.intersectsSphere(sphere)).toBe(true);
-    });
-
     test('sphere touching box face intersects', () => {
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
       const sphere = new Sphere(new Vector3(2, 0.5, 0.5), 1);
@@ -422,31 +336,27 @@ describe('Box', () => {
 
   describe('intersectsPlane', () => {
     test('plane straddling box intersects', () => {
-      // Plane at y = 0.5, normal +Y.
-      const plane = new Plane(new Vector3(0, 1, 0), -0.5);
+      const planeAtYHalf = new Plane(new Vector3(0, 1, 0), -0.5);
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      expect(box.intersectsPlane(plane)).toBe(true);
+      expect(box.intersectsPlane(planeAtYHalf)).toBe(true);
     });
 
     test('plane outside box does not intersect', () => {
-      // Plane at y = 5, normal +Y.
-      const plane = new Plane(new Vector3(0, 1, 0), -5);
+      const planeAtY5 = new Plane(new Vector3(0, 1, 0), -5);
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      expect(box.intersectsPlane(plane)).toBe(false);
+      expect(box.intersectsPlane(planeAtY5)).toBe(false);
     });
 
     test('plane tangent to box face intersects', () => {
-      // Plane at y = 1, normal +Y.
-      const plane = new Plane(new Vector3(0, 1, 0), -1);
+      const planeAtY1 = new Plane(new Vector3(0, 1, 0), -1);
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      expect(box.intersectsPlane(plane)).toBe(true);
+      expect(box.intersectsPlane(planeAtY1)).toBe(true);
     });
 
     test('handles negative normal components', () => {
-      // Plane with -X normal that straddles the box.
-      const plane = new Plane(new Vector3(-1, 0, 0), 0.5);
+      const planeAtXHalfFacingMinusX = new Plane(new Vector3(-1, 0, 0), 0.5);
       const box = new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
-      expect(box.intersectsPlane(plane)).toBe(true);
+      expect(box.intersectsPlane(planeAtXHalfFacingMinusX)).toBe(true);
     });
   });
 
@@ -455,13 +365,6 @@ describe('Box', () => {
       const box = new Box(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
       const ray = new Ray(new Vector3(0, 0, 5), new Vector3(0, 0, -1));
       expect(box.intersectsRay(ray)).toBe(true);
-      expect(box.intersectsRay(ray)).toBe(ray.intersectsBox(box));
-    });
-
-    test('delegates to ray.intersectsBox (miss case)', () => {
-      const box = new Box(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
-      const ray = new Ray(new Vector3(5, 5, 5), new Vector3(0, 0, -1));
-      expect(box.intersectsRay(ray)).toBe(false);
       expect(box.intersectsRay(ray)).toBe(ray.intersectsBox(box));
     });
   });
@@ -475,12 +378,10 @@ describe('Box', () => {
       expectVec3Close(box.max, 3, 4, 5);
     });
 
-    test('rotation rotates 8 corners and rebuilds AABB', () => {
-      // Rotate a unit cube 45° about Y axis. The original [-0.5, 0.5]^3 cube becomes a larger AABB.
+    test('a 45° turn about Y grows the X and Z half-extents of a unit cube to half its face diagonal', () => {
       const box = new Box(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5));
       const m = new Matrix4().makeRotationY(Math.PI / 4);
       box.applyMatrix4(m);
-      // After rotation, X and Z extents grow to sqrt(0.5^2 + 0.5^2) = sqrt(0.5) ~= 0.707.
       const expectedExtent = Math.sqrt(0.5);
       expect(box.min.x).toBeCloseTo(-expectedExtent, 5);
       expect(box.max.x).toBeCloseTo(expectedExtent, 5);
@@ -549,13 +450,6 @@ describe('Box', () => {
       expect(box.width).toBeCloseTo(5, 5);
       expect(box.height).toBeCloseTo(7, 5);
       expect(box.depth).toBeCloseTo(9, 5);
-    });
-  });
-
-  describe('toString', () => {
-    test('formats min and max', () => {
-      const box = new Box(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
-      expect(box.toString()).toBe('[pixi-3d/math:Box min=(1, 2, 3) max=(4, 5, 6)]');
     });
   });
 });

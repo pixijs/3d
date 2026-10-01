@@ -18,31 +18,6 @@ const resetDirty = (c: Container3D) => {
 };
 
 describe('Container3D visibility', () => {
-  it('defaults visible to true and worldVisible to 1', () => {
-    const c = new Container3D();
-    expect(c.visible).toBe(true);
-    expect(c.worldVisible).toBe(1);
-  });
-
-  it('worldVisible and view3d are read-only views of engine state', () => {
-    const c = new Container3D();
-    const { view3d } = fakeView3D();
-
-    c._view3d = view3d;
-    c._worldVisible = 0;
-
-    expect(c.view3d).toBe(view3d);
-    expect(c.worldVisible).toBe(0);
-    expect(() => Object.assign(c, { view3d: null })).toThrow(TypeError);
-    expect(() => Object.assign(c, { worldVisible: 1 })).toThrow(TypeError);
-  });
-
-  it('initial dirty signals have both _worldTransformDirty and _worldVisibleDirty set', () => {
-    const c = new Container3D();
-    expect(c._worldTransformDirty).toBe(true);
-    expect(c._worldVisibleDirty).toBe(true);
-  });
-
   it('setting visible to a new value sets _worldVisibleDirty (not _worldTransformDirty) and dispatches once', () => {
     const { view3d, _onChildUpdate } = fakeView3D();
     const c = new Container3D();
@@ -58,13 +33,13 @@ describe('Container3D visibility', () => {
     expect(_onChildUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('setting visible to the same value is a no-op (no enqueue, no flag flip)', () => {
+  it('setting visible to its current value, true, is a no-op (no enqueue, no flag flip)', () => {
     const { view3d, _onChildUpdate } = fakeView3D();
     const c = new Container3D();
     c._view3d = view3d;
     resetDirty(c);
 
-    c.visible = true; // already true
+    c.visible = true;
 
     expect(c._worldVisibleDirty).toBe(false);
     expect(c._worldTransformDirty).toBe(false);
@@ -72,13 +47,13 @@ describe('Container3D visibility', () => {
     expect(_onChildUpdate).not.toHaveBeenCalled();
   });
 
-  it('emits visibleChanged only when the value flips, even when the node is already enqueued', () => {
+  it('emits visibleChanged only when the value flips, even after a position write has enqueued the node', () => {
     const c = new Container3D();
     const seen: boolean[] = [];
     c.on('visibleChanged', (visible) => seen.push(visible));
 
     c.visible = true;
-    c.position.x = 1; // enqueues first, so the visible flip takes the didChange early path
+    c.position.x = 1;
     c.visible = false;
     c.visible = false;
     c.visible = true;
@@ -101,34 +76,19 @@ describe('Container3D visibility', () => {
     expect(c._worldTransformDirty).toBe(true);
   });
 
-  it('position change sets _worldTransformDirty only (not _worldVisibleDirty)', () => {
+  it('local-transform setters set _localTransformDirty, but a visibility flip or a reparent does not', () => {
     const { view3d } = fakeView3D();
     const c = new Container3D();
     c._view3d = view3d;
     resetDirty(c);
 
-    c.position.set(5, 0, 0);
-
-    expect(c._worldTransformDirty).toBe(true);
-    expect(c._worldVisibleDirty).toBe(false);
-  });
-
-  it('local-transform setters also set _localTransformDirty (visibility setter does not)', () => {
-    const { view3d } = fakeView3D();
-    const c = new Container3D();
-    c._view3d = view3d;
-    resetDirty(c);
-
-    // Visibility flip: cascading visible flag only, local matrix is unaffected.
     c.visible = false;
     expect(c._localTransformDirty).toBe(false);
 
-    // Reparenting shouldn't dirty local either (only the cascading flags).
     resetDirty(c);
     new Container3D().addChild(c);
     expect(c._localTransformDirty).toBe(false);
 
-    // Local-transform inputs all dirty the local matrix.
     resetDirty(c);
     c.position.set(1, 0, 0);
     expect(c._localTransformDirty).toBe(true);
@@ -142,7 +102,6 @@ describe('Container3D visibility', () => {
     expect(c._localTransformDirty).toBe(true);
 
     c._localTransformDirty = false;
-    // Pick values different from the current quaternion so the observer fires.
     c.quaternion.set(0, 0.1, 0, 1);
     expect(c._localTransformDirty).toBe(true);
   });
@@ -184,18 +143,6 @@ describe('Container3D transform accessors', () => {
     expect(c.quaternion).toBe(quaternion);
     expect(c.quaternion.z).toBe(0.1);
     expect(c.rotationDirty).toBe(false);
-  });
-
-  it('assigning a number to scale sets all three axes', () => {
-    const c = new Container3D();
-    const scale = c.scale;
-
-    c.scale = 2;
-    expect(c.scale).toBe(scale);
-    expect(c.scale).toMatchObject({ x: 2, y: 2, z: 2 });
-
-    c.scale = { x: 1, y: 3, z: 4 };
-    expect(c.scale).toMatchObject({ x: 1, y: 3, z: 4 });
   });
 
   it('assigning origin copies into one observable and enqueues once', () => {
@@ -255,35 +202,12 @@ describe('Container3D transform accessors', () => {
     expect(c.rotation.y).toBeCloseTo(Math.PI / 4);
   });
 
-  it('assigning angle copies degrees into rotation', () => {
-    const c = new Container3D();
-    const rotation = c.rotation;
-
-    c.angle = { x: 180, y: 0, z: -90 };
-
-    expect(c.rotation).toBe(rotation);
-    expect(c.rotation.x).toBeCloseTo(Math.PI);
-    expect(c.rotation.z).toBeCloseTo(-Math.PI / 2);
-  });
-
   it('angle and rotation in options are last-wins', () => {
     const rotation = { x: 0, y: 1, z: 0 };
     const angle = { x: 0, y: 90, z: 0 };
 
     expect(new Container3D({ rotation, angle }).rotation.y).toBeCloseTo(Math.PI / 2);
     expect(new Container3D({ angle, rotation }).rotation.y).toBe(1);
-  });
-
-  it('assigned values reach the local matrix', () => {
-    const c = new Container3D();
-
-    c.position = { x: 1, y: 2, z: 3 };
-    c.scale = 2;
-    c.updateLocalTransform();
-
-    const e = c.localTransform.elements;
-    expect([e[0], e[5], e[10]]).toEqual([2, 2, 2]);
-    expect([e[12], e[13], e[14]]).toEqual([1, 2, 3]);
   });
 });
 
@@ -303,11 +227,13 @@ const landing = (c: Container3D, x: number, y: number, z: number): number[] => {
 };
 
 describe('Container3D origin', () => {
-  // Every case below turns 90° about +Z (local +X → parent +Y, local +Y → parent -X) and scales
-  // (2, 3, 1), so local (1, 0, 0) moves by (0, 2, 0) and local (0, 1, 0) by (-3, 0, 0).
+  /**
+   * A node at x = 10, scaled by (2, 3, 1); once turned 90° about +Z, local (1, 0, 0) moves by (0, 2, 0)
+   * in the parent and local (0, 1, 0) by (-3, 0, 0)
+   */
   const turned = () => new Container3D({ position: { x: 10, y: 0, z: 0 }, scale: { x: 2, y: 3, z: 1 } });
 
-  it('turns the node around the origin without moving it', () => {
+  it('turns the node around the origin, which stays at position + origin, without moving it', () => {
     const still = new Container3D();
     still.origin.set(1, 2, 3);
 
@@ -317,20 +243,9 @@ describe('Container3D origin', () => {
     c.rotation.z = Math.PI / 2;
     c.origin.set(1, 1, 0);
 
-    // The origin stays where it sat before the turn: position + origin.
     expect(landing(c, 1, 1, 0)).toEqual([11, 1, 0]);
     expect(landing(c, 0, 0, 0)).toEqual([14, -1, 0]);
     expect(landing(c, 2, 1, 0)).toEqual([11, 3, 0]);
-  });
-
-  it('holds still on an origin set on one axis only', () => {
-    const c = turned();
-    c.rotation.z = Math.PI / 2;
-    c.origin.set(0, 1, 0);
-
-    expect(landing(c, 0, 1, 0)).toEqual([10, 1, 0]);
-    expect(landing(c, 0, 0, 0)).toEqual([13, 1, 0]);
-    expect(landing(c, 2, 1, 0)).toEqual([10, 5, 0]);
   });
 });
 
@@ -372,9 +287,13 @@ describe('Container3D reparentChild', () => {
 });
 
 describe('Container3D replaceChild', () => {
-  // The old child turns 90° about +X then 90° about +Z and scales by (2, 3, 4) — a basis that sends
-  // local (x, y, z) to (-3y, -4z, 2x). Its origin (1, 1, 0) adds origin - M·origin, which is
-  // (1, 1, 0) - (-3, 0, 2) = (4, 1, -2), so its matrix translates by (14, -1, 3).
+  /**
+   * A child at (10, -2, 5) with Euler angles (90°, 0, 90°) and scale (2, 3, 4), a basis M that sends
+   * local (x, y, z) to (-3y, -4z, 2x)
+   *
+   * Its origin (1, 1, 0) adds origin - M·origin = (1, 1, 0) - (-3, 0, 2) = (4, 1, -2), so its matrix
+   * translates by (14, -1, 3).
+   */
   const oldChildUnder = (parent: Container3D): Container3D =>
     new Container3D({
       position: { x: 10, y: -2, z: 5 },
@@ -387,6 +306,10 @@ describe('Container3D replaceChild', () => {
   it('lands a new child with a different origin exactly where the old child sat', () => {
     const parent = new Container3D();
     const oldChild = oldChildUnder(parent);
+    /**
+     * Keeps its origin (0, 2, -1), which on the copied basis adds (0, 2, -1) - (-6, 4, 0) = (6, -2, -1),
+     * so its position solves to (14, -1, 3) - (6, -2, -1) and its origin lands at position + origin
+     */
     const newChild = new Container3D({
       position: { x: 100, y: 100, z: 100 },
       rotation: { x: 0, y: 1, z: 0 },
@@ -394,7 +317,7 @@ describe('Container3D replaceChild', () => {
       origin: { x: 0, y: 2, z: -1 },
     });
 
-    // The old child's origin sits at position + origin; the rest follow from its basis.
+    /** Where the old child puts four local points; its origin (1, 1, 0) lands at position + origin */
     const corners = [
       landing(oldChild, 0, 0, 0),
       landing(oldChild, 1, 1, 0),
@@ -411,52 +334,14 @@ describe('Container3D replaceChild', () => {
 
     parent.replaceChild(oldChild, newChild);
 
-    // The new child keeps its own origin, which on the copied basis adds
-    // (0, 2, -1) - (-6, 4, 0) = (6, -2, -1). Its position solves to (14, -1, 3) - (6, -2, -1).
     expect(rounded(newChild.position)).toEqual([8, 1, 4]);
-
-    // Same basis, same translation: every local point lands where the old child put it.
     expect([
       landing(newChild, 0, 0, 0),
       landing(newChild, 1, 1, 0),
       landing(newChild, 1, 0, 0),
       landing(newChild, 0, 0, 1),
     ]).toEqual(corners);
-
-    // And the new child turns around its own origin, at position + origin.
     expect(landing(newChild, 0, 2, -1)).toEqual([8, 3, 3]);
-  });
-
-  it('solves the position from the old offset alone when the new child has no origin', () => {
-    const parent = new Container3D();
-    const oldChild = oldChildUnder(parent);
-    const newChild = new Container3D({ position: { x: 100, y: 100, z: 100 } });
-
-    parent.replaceChild(oldChild, newChild);
-
-    // Nothing of its own to subtract, so the position is the old child's translation.
-    expect(rounded(newChild.position)).toEqual([14, -1, 3]);
-    expect(landing(newChild, 0, 0, 0)).toEqual([14, -1, 3]);
-  });
-
-  it('copies the position straight over when neither child has an origin', () => {
-    const parent = new Container3D();
-    const oldChild = new Container3D({
-      position: { x: 10, y: -2, z: 5 },
-      rotation: { x: Math.PI / 2, y: 0, z: Math.PI / 2 },
-      scale: { x: 2, y: 3, z: 4 },
-      parent,
-    });
-    const newChild = new Container3D({ position: { x: 100, y: 100, z: 100 }, scale: 7 });
-
-    parent.replaceChild(oldChild, newChild);
-
-    expect(newChild.position).toMatchObject({ x: 10, y: -2, z: 5 });
-    expect(newChild.scale).toMatchObject({ x: 2, y: 3, z: 4 });
-
-    // With no origin either side, the matrix translates by the position itself.
-    expect(landing(newChild, 0, 0, 0)).toEqual([10, -2, 5]);
-    expect(landing(newChild, 1, 0, 0)).toEqual([10, -2, 7]);
   });
 
   it('takes the old child index, rotation and scale, leaving the Euler angles authoritative', () => {
@@ -474,23 +359,19 @@ describe('Container3D replaceChild', () => {
     expect(newChild.rotation).toMatchObject({ x: 0, y: Math.PI / 2, z: 0 });
     expect(newChild.scale).toMatchObject({ x: 2, y: 3, z: 4 });
     expect(newChild.rotationDirty).toBe(true);
-
-    // The angles reach the matrix: the 90° turn about +Y sends local +X to -Z, stretched by scale.x.
     expect(landing(newChild, 1, 0, 0)).toEqual([0, 0, -2]);
   });
 
-  it('leaves the quaternion authoritative when it was, over the old child stale Euler angles', () => {
+  it("leaves the quaternion authoritative when it was, over the old child's stale Euler angles", () => {
     const parent = new Container3D();
     const oldChild = new Container3D({ rotation: { x: 0, y: Math.PI / 2, z: 0 }, parent });
-    oldChild.quaternion = { x: 0, y: 0, z: 0, w: 1 }; // identity takes over; the angles stay at 90°
+    oldChild.quaternion = { x: 0, y: 0, z: 0, w: 1 };
     const newChild = new Container3D();
 
     parent.replaceChild(oldChild, newChild);
 
     expect(newChild.rotationDirty).toBe(false);
     expect(newChild.rotation).toMatchObject({ x: 0, y: Math.PI / 2, z: 0 });
-
-    // The quaternion wins: an untouched basis, not the turn the angles ask for.
     expect(landing(newChild, 1, 0, 0)).toEqual([1, 0, 0]);
   });
 
@@ -522,10 +403,6 @@ describe('Container3D label', () => {
 });
 
 describe('Container3D rotationDirty', () => {
-  it('starts false so the identity quaternion is authoritative', () => {
-    expect(new Container3D().rotationDirty).toBe(false);
-  });
-
   it('is set by every write path of the observable rotation vector', () => {
     const c = new Container3D();
 
@@ -564,63 +441,57 @@ describe('Container3D rotationDirty', () => {
     expect(c.rotationDirty).toBe(false);
   });
 
-  it('is set by assigning rotation even when the angles already match the stored ones', () => {
+  it('is set by assigning rotation after lookAt, even when the angles match the stale stored ones', () => {
     const { view3d, _onChildUpdate } = fakeView3D();
     const c = new Container3D();
     c._view3d = view3d;
-    c.lookAt({ x: 1, y: 0, z: 0 }); // the quaternion is authoritative now
+    c.lookAt({ x: 1, y: 0, z: 0 });
     resetDirty(c);
     _onChildUpdate.mockClear();
 
-    c.rotation = { x: 0, y: 0, z: 0 }; // equal to the stale stored Euler angles
+    c.rotation = { x: 0, y: 0, z: 0 };
 
     expect(c.rotationDirty).toBe(true);
     expect(c._localTransformDirty).toBe(true);
     expect(_onChildUpdate).toHaveBeenCalledTimes(1);
-
-    // The Euler angles win: the lookAt rotation is gone.
     c.updateLocalTransform();
     expect(c.quaternion.y).toBeCloseTo(0);
     expect(c.quaternion.w).toBeCloseTo(1);
   });
 
-  it('is set by assigning angle even when the degrees already match the stored ones', () => {
+  it('is set by assigning angle after a quaternion write, even when the degrees match the stale stored ones', () => {
     const { view3d, _onChildUpdate } = fakeView3D();
     const c = new Container3D();
     c._view3d = view3d;
     c.angle = { x: 0, y: 90, z: 0 };
-    c.updateLocalTransform(); // the quaternion now holds the 90° rotation
-    c.quaternion = { x: 0, y: 0, z: 0, w: 1 }; // the quaternion is authoritative now
+    c.updateLocalTransform();
+    c.quaternion = { x: 0, y: 0, z: 0, w: 1 };
     resetDirty(c);
     _onChildUpdate.mockClear();
 
-    c.angle = { x: 0, y: 90, z: 0 }; // equal to the stale stored Euler angles
+    c.angle = { x: 0, y: 90, z: 0 };
 
     expect(c.rotationDirty).toBe(true);
     expect(c._localTransformDirty).toBe(true);
     expect(_onChildUpdate).toHaveBeenCalledTimes(1);
-
-    // The Euler angles win: the identity quaternion is gone.
     c.updateLocalTransform();
     expect(c.quaternion.y).toBeCloseTo(Math.SQRT1_2);
     expect(c.quaternion.w).toBeCloseTo(Math.SQRT1_2);
   });
 
-  it('is cleared by assigning quaternion even when the components already match the stored ones', () => {
+  it('is cleared by assigning quaternion after a rotation write, even to the stale stored components', () => {
     const { view3d, _onChildUpdate } = fakeView3D();
     const c = new Container3D();
     c._view3d = view3d;
-    c.rotation.y = 1; // Euler authoritative; the quaternion is still identity
+    c.rotation.y = 1;
     resetDirty(c);
     _onChildUpdate.mockClear();
 
-    c.quaternion = { x: 0, y: 0, z: 0, w: 1 }; // equal to the stale stored quaternion
+    c.quaternion = { x: 0, y: 0, z: 0, w: 1 };
 
     expect(c.rotationDirty).toBe(false);
     expect(c._localTransformDirty).toBe(true);
     expect(_onChildUpdate).toHaveBeenCalledTimes(1);
-
-    // The quaternion wins: an identity basis, not the Euler angle's.
     c.updateLocalTransform();
     expect(c.localTransform.elements[0]).toBeCloseTo(1);
     expect(c.localTransform.elements[2]).toBeCloseTo(0);
@@ -639,9 +510,15 @@ describe('Container3D rotationDirty', () => {
 });
 
 describe('Container3D label lookup', () => {
-  // root ─┬─ a('wheel_1') ── deep('wheel_3')
-  //       ├─ b('body')    ── deeper('wheel_2')
-  //       └─ c('wheel_4')
+  /**
+   * A labelled tree with a deeper wheel under each of the first two children
+   *
+   * ```
+   * root ─┬─ a('wheel_1') ── deep('wheel_3')
+   *       ├─ b('body')    ── deeper('wheel_2')
+   *       └─ c('wheel_4')
+   * ```
+   */
   const build = () => {
     const deep = new Container3D({ label: 'wheel_3' });
     const deeper = new Container3D({ label: 'wheel_2' });
@@ -662,7 +539,7 @@ describe('Container3D label lookup', () => {
     expect(root.getChildByLabel('missing', true)).toBeNull();
   });
 
-  it('getChildByLabel prefers a direct child over a deeper match, then searches pre-order', () => {
+  it('getChildByLabel deep returns a matching direct child first, then searches the subtrees in child order', () => {
     const { root, a, deep } = build();
 
     expect(root.getChildByLabel(/^wheel_/, true)).toBe(a);

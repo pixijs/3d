@@ -15,9 +15,10 @@ export const MAX_CASCADES = 4;
  * across the ground. Both shadow bits fade over the tail of each cascade instead, and read this
  * constant so the two backends can't drift apart.
  *
- * The next cascade has valid depth here because its fitted volume is the bounding sphere of its
- * frustum slice, which overhangs its own near split by far more than this band — comfortably so
- * at ordinary fields of view, and still with room to spare at 15 degrees.
+ * The next cascade covers this band sideways: its window is the square around the bounding sphere
+ * of its frustum slice, which overhangs its own near split by far more than the band. Its depth
+ * range ends at the slice corner farthest from the light, though, so when the light shines toward
+ * the camera part of the band lies past it, and the next cascade reads that part as lit.
  * @internal
  */
 export const CASCADE_BLEND_FRACTION = 0.1;
@@ -25,8 +26,6 @@ export const CASCADE_BLEND_FRACTION = 0.1;
 const _invViewProj = new Matrix4();
 const _lightSpaceFromClip = new Matrix4();
 
-// Per-cascade frustum slice results, written by getFrustumSliceBoundsInLightSpace
-// and read by computeCascadeMatrix.
 let _boundsMinZ = 0;
 let _boundsMaxZ = 0;
 let _centroidX = 0;
@@ -78,13 +77,15 @@ export function prepareLightSpaceTransform(camera: Camera3D, inverseLightMatrix:
 }
 
 /**
- * Fits an orthographic shadow frustum to a sub-range of the camera's view frustum in light space
+ * Measures one slice of the camera frustum in light space: the depth range and the centroid of its
+ * eight corners
  *
- * Same frustum-corner fitting as the standard shadow pass, but parameterised by NDC Z range
- * rather than world-unit distance. Requires `prepareLightSpaceTransform` to have been called
- * first for the current camera + light combination.
- * @param nearZ - NDC near Z for the cascade slice (0-based for WebGPU).
- * @param farZ - NDC far Z for the cascade slice.
+ * Writes them to the module's `_boundsMinZ`, `_boundsMaxZ`, `_centroidX` and `_centroidY`, which
+ * {@link computeCascadeMatrix} reads next. Call {@link prepareLightSpaceTransform} first for the
+ * current camera and light.
+ * @param nearZ - NDC z of the slice's near end, in the camera projection's `[-1, 1]` range on
+ *   both backends.
+ * @param farZ - NDC z of the slice's far end.
  */
 function getFrustumSliceBoundsInLightSpace(nearZ: number, farZ: number): void {
   const e = _lightSpaceFromClip.elements;
@@ -187,6 +188,13 @@ function snapCentreToTexel(centre: number, halfExtent: number, mapSize: number):
  *
  * The cascade's view is the light-space transform `prepareLightSpaceTransform` staged before this
  * call; the caller pairs the two into a camera and forms the view-projection there.
+ *
+ * The window is a square around the slice's bounding sphere, whose radius comes from the
+ * projection and the split distances alone, never the camera's orientation. That keeps the window's
+ * size fixed from frame to frame while texel snapping keeps its position, so shadow edges don't
+ * shimmer. A perspective slice widens with distance, so its far face sets the radius; an
+ * orthographic slice is the same width all the way along. The near plane reaches
+ * {@link DEPTH_EXTENSION} radii toward the light.
  * @param camera - Scene camera with valid projection and viewProjection.
  * @param splitNear - Near split distance in world units from camera.
  * @param splitFar - Far split distance in world units from camera.
@@ -209,13 +217,6 @@ export function computeCascadeMatrix(
 
   getFrustumSliceBoundsInLightSpace(nearZ, farZ);
 
-  // Fixed radius from camera geometry — depends only on the projection and the
-  // split distances, NOT on camera orientation. This keeps the ortho scale
-  // constant across frames, eliminating shadow-edge shimmering.
-  //
-  // A perspective slice widens with distance, so its far face is `splitFar` times the
-  // projection's half-angle; an orthographic one is the same width all the way along, so
-  // its half-extents are just the projection's, whatever the split.
   const pe = camera.projection.elements;
   const spread = camera.mode === 'orthographic' ? 1 : splitFar;
   const halfFarH = spread / pe[5];
@@ -223,9 +224,6 @@ export function computeCascadeMatrix(
   const halfDepth = (splitFar - splitNear) * 0.5;
   const r = Math.sqrt(halfFarW * halfFarW + halfFarH * halfFarH + halfDepth * halfDepth);
 
-  // Z (depth) is extended backwards towards the light so that shadow
-  // casters outside the camera frustum are still captured — without this,
-  // geometry behind/above the view gets clipped and shadows disappear.
   const near = -_boundsMaxZ - r * DEPTH_EXTENSION;
   const far = -_boundsMinZ;
 
@@ -237,7 +235,7 @@ export function computeCascadeMatrix(
   if (applyWebGPUZRangeFix) applyOrthoZRange01(outProjection, near, far);
 }
 
-// Scratch for computeFixedBoxMatrix — the world bounds resolved into light space.
+/** Scratch for {@link computeFixedBoxMatrix}: the world bounds re-boxed in light space */
 const _lightSpaceBox = new Box();
 
 /** Footprint margin (fraction of the fitted box) so an edge caster's shadow still lands inside */
@@ -265,9 +263,11 @@ const DEPTH_EXTENSION = 4;
  * (the scene's caster bounds when auto-fit, or a user-supplied box); this encloses it in a
  * light-aligned ortho frustum.
  *
- * The near plane is pushed toward the light so casters between the light and the box still
- * rasterise, and the XY footprint is padded by `FIXED_BOX_PAD` to catch shadows that fall just
- * outside the caster bounds. Texel-snapped so edges don't swim as the box re-fits frame to frame.
+ * The world box is re-boxed around the light's axes, which can only make it larger. The light looks
+ * down its -Z axis, so depth from the light is `-z`. The near plane is pushed toward the light so
+ * casters between the light and the box still rasterise, and the XY footprint is padded by
+ * `FIXED_BOX_PAD` to catch shadows that fall just outside the caster bounds. Texel-snapped so
+ * edges don't swim as the box re-fits frame to frame.
  *
  * The box's view is `inverseLightMatrix`; the caller pairs the two into a camera and forms the
  * view-projection there.
@@ -286,7 +286,6 @@ export function computeFixedBoxMatrix(
   mapSize: number,
   applyWebGPUZRangeFix = true,
 ): void {
-  // World AABB → light space (applyMatrix4 rebuilds the AABB around the light's axes).
   boundsWorld.applyMatrix4(inverseLightMatrix, _lightSpaceBox);
 
   const { min, max } = _lightSpaceBox;
@@ -296,8 +295,6 @@ export function computeFixedBoxMatrix(
   const centreX = snapCentreToTexel((min.x + max.x) * 0.5, halfX, mapSize);
   const centreY = snapCentreToTexel((min.y + max.y) * 0.5, halfY, mapSize);
 
-  // Light faces -Z; negate to depth-from-light. Near is extended back toward the light so
-  // overhead casters aren't clipped at the near plane.
   const near = -max.z - Math.max(halfX, halfY) * DEPTH_EXTENSION;
   const far = -min.z;
 

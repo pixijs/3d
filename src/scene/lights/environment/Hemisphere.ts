@@ -1,28 +1,32 @@
 import type { ColorSource } from 'pixi.js';
 
+import type { PointData3D } from '../../../math/vector/PointData3D';
+
 /**
- * World-up `(0, 1, 0)` — default axis for {@link Hemisphere.up}
+ * World-up `(0, 1, 0)`, the default for {@link Hemisphere.up}
  * @internal
  */
 export const HEMISPHERE_DEFAULT_UP = { x: 0, y: 1, z: 0 } as const;
 
 /**
- * Sky/ground fill light
+ * Sky and ground colours that light the scene in place of an environment map, or fill the
+ * background behind it
  *
- * Evaluated per fragment as
- * `mix(groundColor, skyColor, dot(normal, up) * 0.5 + 0.5) * intensity`.
+ * Assign one to {@link View3D.environment}. A surface facing `up` takes the sky colour, one facing
+ * the other way takes the ground colour, and anything between blends the two:
+ * `mix(groundColor, skyColor, dot(normal, up) * 0.5 + 0.5) * intensity`. Reflections read the
+ * same gradient, so a white hemisphere lights a surface the same as an all-white cube map.
  *
- * Assigned to `view3d.environment` as the alternative to an IBL cubemap.
- * A cheap, energy-consistent environment fill — no textures, pure ALU —
- * preferred on mobile where cubemap bandwidth is felt. Never casts shadows.
+ * It costs a few instructions per pixel and no texture reads, so it suits mobile, where sampling
+ * a cube map costs more. It casts no shadows.
  *
- * Plain interface, not a class — pass an object literal and the renderer
- * reads its fields each frame.
+ * Assigned to {@link View3D#background}, it draws the same gradient behind the scene, with the
+ * view direction in place of the normal. Use one object for both and the sky matches the light
+ * the scene receives.
  *
- * Colors accept any `ColorSource` (hex, CSS string, `Color`, `[r,g,b]`,
- * `{r,g,b}`) and are parsed at upload time through a shared `Color`
- * scratch — no per-assignment or per-frame allocation. Cheap to set
- * mid-frame for sunset/biome transitions.
+ * It's a plain object, not a class: pass an object literal. The view reads its fields every
+ * frame and only parses a colour that changed, so changing one is a property write, cheap enough
+ * for a sunset or a biome transition.
  * @example
  * ```ts
  * new View3D({
@@ -31,36 +35,50 @@ export const HEMISPHERE_DEFAULT_UP = { x: 0, y: 1, z: 0 } as const;
  *   environment: { skyColor: 0x88ccff, groundColor: 0x553311 },
  * });
  *
- * // Mutation is a normal property write — the renderer re-reads each frame:
+ * // Change a colour at any time:
  * (view.environment as Hemisphere).skyColor = 0xff8800; // sunset
+ *
+ * // The same object as a procedural sky behind the scene
+ * const sky: Hemisphere = { skyColor: 0x88ccff, groundColor: 0x553311 };
+ * new View3D({ width, height, environment: sky, background: sky });
  * ```
  * @category environment
  * @standard
  */
 export interface Hemisphere {
-  /** Color contributing when the surface normal points along `up` */
+  /**
+   * Colour in the direction of `up`: what a surface facing `up` receives, and the sky drawn there
+   * as a background
+   * @example
+   * ```ts
+   * hemisphere.skyColor = 0x88ccff;
+   * ```
+   */
   skyColor: ColorSource;
-  /** Color contributing when the surface normal points opposite `up` */
+  /**
+   * Colour in the direction opposite `up`: what a surface facing away from `up` receives
+   * @example
+   * ```ts
+   * hemisphere.groundColor = 0x553311;
+   * ```
+   */
   groundColor: ColorSource;
   /**
-   * Hemisphere axis, normalised at upload time
+   * Direction the sky is in; it doesn't need to be normalised
    * @default { x: 0, y: 1, z: 0 }
+   * @example
+   * ```ts
+   * const zUpWorld: Hemisphere = { skyColor: 0x88ccff, groundColor: 0x553311, up: { x: 0, y: 0, z: 1 } };
+   * ```
    */
-  up?: {
-    /** X component of the axis */
-    x: number;
-    /** Y component of the axis */
-    y: number;
-    /** Z component of the axis */
-    z: number;
-  };
+  up?: PointData3D;
   /**
-   * Multiplier applied to both sky and ground colors
-   *
-   * Energy-consistent with the IBL cubemap path: a `(1,1,1)` hemisphere
-   * produces the same substrate diffuse contribution as an all-white IBL
-   * cubemap of the same intensity.
+   * Brightness, multiplied into both colours, as a light and as a background
    * @default 1
+   * @example
+   * ```ts
+   * hemisphere.intensity = isNight ? 0.2 : 1;
+   * ```
    */
   intensity?: number;
 }

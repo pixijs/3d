@@ -15,12 +15,6 @@ const TYPE_TO_COMPONENTS: Record<string, 1 | 2 | 3 | 4> = {
   VEC4: 4,
 };
 
-/**
- * For each glTF `componentType`, the WebGPU `VertexFormat` prefix emitted for raw vs. normalized accessors
- *
- * Float ignores the `normalized` flag (always `float32`); integer types pick
- * `(s|u)int*` raw or `(s|u)norm*` normalized.
- */
 const COMPONENT_TYPE_TO_PREFIX: Record<number, { raw: string; normalized: string }> = {
   [GL_FLOAT]: { raw: 'float32', normalized: 'float32' },
   [GL_BYTE]: { raw: 'sint8', normalized: 'snorm8' },
@@ -30,11 +24,11 @@ const COMPONENT_TYPE_TO_PREFIX: Record<number, { raw: string; normalized: string
 };
 
 /**
- * Maps a glTF `Accessor` (`componentType`, `type`, `normalized`) to a WebGPU `VertexFormat` string
+ * The vertex format for an accessor's component type, element type and `normalized` flag
  *
- * VEC3 integer/normalized variants map to `x4` because WebGPU has no `x3`
- * formats for those types — callers must pad the data to 4 components.
- * VEC3 floats keep `x3` (WebGPU has `float32x3`).
+ * WebGPU has no three-component 8- or 16-bit formats, so an integer VEC3 maps to `x4` and the
+ * caller must pad its data to four components. A float VEC3 stays `float32x3`. Scalars, matrices
+ * and 32-bit integers throw.
  * @param accessor - The accessor describing the attribute's element layout
  * @internal
  */

@@ -43,11 +43,11 @@ export interface PassRecord {
 }
 
 /**
- * Recording API handed to `RenderPass.setup`
+ * Recording API handed to {@link GraphRenderPass#setup}
  *
- * One instance lives on the graph; `_beginPass` / `_endPass` scope each setup call so accesses
- * are attributed to the right pass. Methods return their input handle so
- * callers can capture it inline, e.g. `const c = b.writeColor(b.targetColor)`.
+ * The graph keeps one and scopes it to each pass's `setup` call, so every access lands on the pass
+ * that declared it. Methods return their input handle so callers can capture it inline, as in
+ * `const color = b.writeColor(b.targetColor)`.
  * @category rendering
  * @advanced
  */
@@ -61,9 +61,10 @@ export class PassBuilder {
   /**
    * Colour this pass draws into
    *
-   * The camera's render texture when this pass has one, else the scene colour — the screen in
-   * direct mode, a pooled transient in composite mode. Seeded at the start of `setup()`. Passes
-   * that present rather than draw the scene write {@link PassBuilder#defaultColor} instead.
+   * For a pass whose camera has a render texture, that camera's own target, which the graph copies
+   * into the texture. Otherwise the scene colour: the screen in direct mode, a pooled transient in
+   * composite mode. Passes that present the scene rather than draw it write
+   * {@link PassBuilder#defaultColor} instead.
    */
   public get targetColor(): ColorHandle {
     this._mustBeInSetup('targetColor');
@@ -86,20 +87,17 @@ export class PassBuilder {
     return this._graph.defaultDepth;
   }
 
-  // --- Recording API ---
-
   /**
    * Declare a render-target colour write
    *
-   * Load vs clear is inferred from writer order and resource kind — see
-   * `RenderGraph._effectiveLoadOp`.
+   * The graph clears the texture before its first writer each frame when the graph owns it, and
+   * keeps what is there otherwise. Later writers always draw over earlier ones.
    *
-   * A pass's render target is exactly its set of attachment declarations — the
-   * executor resolves them to one `RenderTarget`, cache-keyed by the attachment
-   * textures. To draw into this pass's target, declare BOTH `writeColor(b.targetColor)` AND
-   * `writeDepth(b.targetDepth)`: a colour-only declaration resolves to a different (colour-only)
-   * target, falling out of the screen binding / keep-open weave and, inside a 2D filter, losing
-   * the inset frame.
+   * A pass's render target is exactly the set of attachments it declares, so to draw into this
+   * pass's target declare both `writeColor(b.targetColor)` and `writeDepth(b.targetDepth)`. A
+   * colour-only declaration resolves to a separate colour-only target. Over the screen that is a
+   * second target around the canvas rather than pixi's own, and inside a 2D filter it loses the
+   * view's place on the filter's texture.
    * @param handle - The colour resource this pass writes as an attachment.
    * @returns The same handle, for inline capture.
    */
@@ -121,11 +119,11 @@ export class PassBuilder {
   }
 
   /**
-   * Declare that this pass produces `handle` *without* a render-pass attachment write
+   * Declare that this pass produces `handle` without writing it as an attachment
    *
-   * E.g. a `copyToTexture` blit, an internal multi-target loop (Shadow), or a future compute
-   * dispatch. Same dependency / lifetime / anchoring as {@link PassBuilder#writeColor}, but the
-   * executor doesn't push a target — the pass owns the GPU mechanism.
+   * For a copy, a pass that binds its own targets in a loop (the shadow pass), or a compute
+   * dispatch. The graph orders, keeps and allocates `handle` as for
+   * {@link PassBuilder#writeColor}, but binds no target: the pass does its own GPU work.
    * @param handle - The resource this pass produces.
    * @returns The same handle, for inline capture.
    */
@@ -150,8 +148,7 @@ export class PassBuilder {
   /**
    * Declare that this pass samples `handle` through a shader binding
    *
-   * The executor's auto-bind loop sets the resolved texture on the global bind group at `slot`
-   * before the pass renders.
+   * The graph puts the texture in the view's global bind group at `slot` before the pass renders.
    * @param handle - The resource this pass samples.
    * @param slot - Global-bind-group slot the texture is bound to.
    * @returns The same handle, for inline capture.
@@ -163,11 +160,10 @@ export class PassBuilder {
   }
 
   /**
-   * Declare a read dependency without a shader binding
+   * Declare a read without a shader binding
    *
-   * For transfer-style work (`copyToTexture` blits, manual `TextureView` construction) — same
-   * write-before-read edge as {@link PassBuilder#sample}, but the executor's auto-bind
-   * loop skips it.
+   * For a copy, or a pass that builds its own `TextureView`. The pass runs after the texture's
+   * writers, as with {@link PassBuilder#sample}, but the graph binds nothing.
    * @param handle - The resource this pass reads.
    * @returns The same handle, for inline capture.
    */
@@ -178,10 +174,7 @@ export class PassBuilder {
   }
 
   /**
-   * Register a graph-allocated colour texture
-   *
-   * The descriptor runs each frame; the graph reallocates only when a field changes. Delegates
-   * to {@link RenderGraph#createColor}.
+   * Register a graph-allocated colour texture; see {@link RenderGraph#createColor}
    * @param options - Size, resolution, format and label — see {@link TransientTextureOptions}.
    * @returns The handle for the new transient colour resource.
    */
@@ -200,13 +193,12 @@ export class PassBuilder {
     return this._graph.createDepth(options);
   }
 
-  // --- Internal API (called by RenderGraph.addPass around each setup call) ---
-
   /**
-   * Starts collecting declared accesses into `record` until `_endPass`
+   * Starts collecting declared accesses into `record` until `_endPass`; `RenderGraph.addPass`
+   * calls the pair around each `setup`
    *
    * Seeds {@link PassBuilder#targetColor} / {@link PassBuilder#targetDepth} from `camera`:
-   * that camera's render texture, or the scene pair when it has none.
+   * that camera's own target, or the scene pair when it has no render texture.
    * @param record - The pass whose `setup()` is about to run
    * @param camera - The pass's camera, or `null` to draw the view.
    * @internal

@@ -42,11 +42,11 @@ export class BatchMatrices {
   /** Floats from one slot's matrix to the next in {@link BatchMatrices.data | data} */
   public readonly stride: number = MESH3D_STORE_STRIDE;
   /** Float index of slot 0's matrix in {@link BatchMatrices.data | data} */
-  public readonly offset: number;
+  public readonly offset: number = 0;
 
   private readonly _batch: Mesh3DBatch;
   /** Store row of slot 0 */
-  private readonly _baseIndex: number;
+  private readonly _baseIndex: number = 0;
 
   /**
    * @param batch - The user batch whose slot matrices this exposes.
@@ -91,8 +91,6 @@ export class BatchMatrices {
     const base = this._baseIndex + first;
     batch.storeBuffer.markDirtyRange(base, base + count - 1);
 
-    // Cached bounding spheres are stale. A whole-batch update marks them all with one increment; a
-    // partial one marks only its own slots, so the rest keep their spheres.
     if (count === items.length) {
       batch._matricesId++;
     } else {

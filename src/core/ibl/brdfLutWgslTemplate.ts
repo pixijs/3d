@@ -1,10 +1,11 @@
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
 
 /**
- * WGSL template for the BRDF-LUT generation pass (see `generateBrdfLut`)
+ * WGSL template for the BRDF lookup table pass; `generateBrdfLut` describes the integral
  *
- * Runs the Karis split-sum integration: a full-screen quad where UV x = NdotV
- * and UV y = roughness, Monte Carlo integrating the GGX BRDF per texel.
+ * The vertex stage negates y because WebGPU puts clip y = +1 on texture row 0, which is also
+ * where UV v = 0 reads. Without it the table would come out flipped in roughness, so 0.9 would
+ * read as 0.1.
  * @internal
  */
 export const brdfLutWgslTemplate: ShaderBitTemplate = {
@@ -12,15 +13,13 @@ export const brdfLutWgslTemplate: ShaderBitTemplate = {
   gpu: /* wgsl */ `
 {{header}}
 
-// Geometry function (Smith GGX) for a single direction
 fn geometrySchlickGGX(NdotV: f32, roughness: f32) -> f32 {
    let a = roughness;
-   let k = (a * a) / 2.0; // For IBL, use k = a²/2 (different from direct lighting)
+   let k = (a * a) / 2.0;
    
    return NdotV / (NdotV * (1.0 - k) + k);
 }
 
-// Combined geometry function for view and light directions
 fn geometrySmith(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, roughness: f32) -> f32 {
    let NdotV = max(dot(N, V), 0.0);
    let NdotL = max(dot(N, L), 0.0);
@@ -30,13 +29,12 @@ fn geometrySmith(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, roughness: f32) -> f3
    return ggx1 * ggx2;
 }
 
-// Integrate BRDF for given NdotV and roughness
 fn integrateBRDF(NdotV: f32, roughness: f32, sampleCount: u32) -> vec2<f32> {
    let V = vec3<f32>(sqrt(1.0 - NdotV * NdotV), 0.0, NdotV);
    let N = vec3<f32>(0.0, 0.0, 1.0);
    
-   var A = 0.0; // Scale
-   var B = 0.0; // Bias
+   var A = 0.0;
+   var B = 0.0;
    
    for (var i = 0u; i < sampleCount; i++) {
        let Xi = hammersley(i, sampleCount);
@@ -67,24 +65,17 @@ fn integrateBRDF(NdotV: f32, roughness: f32, sampleCount: u32) -> vec2<f32> {
 fn mainVertex(input: VertexInput) -> VertexOutput {
   var output: VertexOutput;
   output.position = vec4<f32>(input.aPosition, 0.0, 1.0);
-  // Convert from [-1, 1] to [0, 1] for UV.
-  // Negate Y because WebGPU maps clip Y=+1 to texture row 0 (top),
-  // but UV v=0 also samples row 0 — without the negate, the LUT
-  // would be Y-flipped (roughness 0.9 would read as 0.1).
   output.vUv = vec2<f32>(input.aPosition.x * 0.5 + 0.5, -input.aPosition.y * 0.5 + 0.5);
   return output;
 }
 
 @fragment
 fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
-   // X = NdotV, Y = roughness
    let NdotV = input.vUv.x;
    let roughness = input.vUv.y;
    
-   // Clamp NdotV to avoid division by zero
    let clampedNdotV = max(NdotV, 0.001);
    
-   // Clamp roughness to avoid perfectly smooth (causes issues)
    let clampedRoughness = max(roughness, 0.01);
    
    let result = integrateBRDF(clampedNdotV, clampedRoughness, u32(local.sampleCount));

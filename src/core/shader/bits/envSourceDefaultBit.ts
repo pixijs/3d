@@ -1,21 +1,17 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * No-environment fallback
+ * The environment when there is none: `sampleEnvironment(dir, roughness)` returns zero
  *
- * Provides `sampleEnvironment(dir, roughness)` as a constant `vec3(0.0)`.
- * Selected automatically when `view3d.environment` is `null` or omitted.
+ * The view picks it when `view3d.environment` is `null`. Every environment term then comes out as
+ * zero, so materials are lit by their lights and emissive alone.
  *
- * Every environment term a material adds comes out as zero, so materials are
- * lit purely by direct lights and emissive. The zero keeps a caller correct,
- * not free: a shader compiler is not required to drop `x * 0.0` (it is not
- * zero when `x` is NaN or infinite), so whatever a caller fetches and
- * computes on the way to that product may still run. A material whose
- * environment block is expensive leaves it out of the shader instead, as
+ * The zero keeps callers correct, not free. A compiler may not drop `x * 0.0`, which isn't zero
+ * when `x` is NaN or infinite, so whatever a caller fetches and computes on the way may still run.
+ * A material with an expensive environment block leaves it out of the shader instead, as
  * `Material3D` does with `iblBit`.
  *
- * For a soft uniform ambient instead, assign a {@link Hemisphere} with
- * matching sky and ground colors.
+ * For a soft, even ambient, assign a {@link Hemisphere} with the same sky and ground colour.
  * @internal
  */
 export const envSourceDefaultBit: ShaderBit = {

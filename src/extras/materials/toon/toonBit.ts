@@ -2,10 +2,15 @@ import { createLightingBit } from '../../../core/shader/createLightingBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Reads the base colour and toon parameters from the material buffer for the toon lighting bit
+ * Sets up the inputs {@link toonLightingBit} reads
  *
- * Declares the variables the lighting bit consumes: `albedo` (linear base colour), `viewDir`
- * (normalised), and the `bands`, `specularSize`, `rimPower` and `rimIntensity` scalars.
+ * Tints `albedo` and `alpha` by the base colour and its texture, then declares `viewDir`
+ * (normalised) and the `bands`, `specularSize`, `rimPower` and `rimIntensity` scalars from the
+ * material buffer. The texture sample is premultiplied, so it is divided by its alpha first.
+ *
+ * The texture is sampled only when the geometry has UVs. Both backends compare `HAS_UVS` with a
+ * bare `1`: GLSL receives the flag as `#define HAS_UVS 1`, with no `u` suffix, and GLSL ES won't
+ * compare an int with a uint.
  * @category extras:materials
  * @advanced
  */
@@ -53,9 +58,6 @@ export const toonMaterialBit: ShaderBit = {
       material: /*glsl*/ `
   vec4 baseColor = material.baseColor;
 
-  // HAS_UVS is a #define baked from the material's override (1 when the geometry
-  // has UVs). Compare against a bare int — the GLSL u32 override emits \`1\`, not
-  // \`1u\`, and GLSL ES has no implicit int->uint conversion.
   if (HAS_UVS == 1) {
     vec4 baseTex = sampleBaseColor(vUV);
     baseTex.rgb /= max(baseTex.a, 0.001);

@@ -1,9 +1,8 @@
 /**
- * Applies sampled animation values to a concrete target
+ * Writes sampled animation values to one target property
  *
- * Bindings keep the animation player independent from the shape of each target,
- * so sampled track values can be accumulated once and applied through a small,
- * allocation-free contract.
+ * The player blends every property as plain floats; a binding is the one step that knows the
+ * target's shape, so applying a frame is a single allocation-free call per property.
  * @internal
  */
 export abstract class Binding {

@@ -13,7 +13,7 @@ import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 // Desktop Chromium, 2026-09-04, ns per particle:
 //
 //   built-ins only, no overrides                   70
-//     unseeded (Math.random)                       80
+//     unseeded (random seed)                       80
 //     PointShape instead of Sphere                 50
 //     space: 'local' (no transform bake)           80
 //     every spread a single value                  90
@@ -73,7 +73,7 @@ describe('spawn burst cost', () => {
       });
 
     bench('built-ins only, no overrides', base);
-    bench('  … unseeded (Math.random)', () =>
+    bench('  … unseeded (random seed)', () =>
       new ParticleSystem3D({
         autoUpdate: false,
         emitRate: 0,

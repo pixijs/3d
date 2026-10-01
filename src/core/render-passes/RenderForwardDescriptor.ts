@@ -2,25 +2,23 @@ import type { Camera3D } from '../../scene/cameras/Camera3D';
 import type { CullResults } from './CullResult';
 
 /**
- * Declarative description of a forward mesh-draw
+ * What a forward mesh draw should do, in terms that mean the same on both backends
  *
- * Expresses *intent* — what to draw and how to order it — never backend mechanism. A pass
- * builds one of these once and hands the same object to `View3DPipe.renderForward` every
- * frame; each backend pipe chooses its own implementation (WebGPU: render bundle vs.
- * immediate replay; WebGL: persistent buffer + slot-map vs. full rebuild).
- *
- * Deliberately contains no backend terms — no `useBundles`, no `alwaysRebuild`.
+ * It says what to draw and in which order, never how. A pass builds one once and hands the same
+ * object to `View3DPipe.prepareForward` and `View3DPipe.renderForward` every frame. Each pipe picks
+ * its own way to do it: WebGPU a recorded render bundle or a replay without one, WebGL a cached
+ * command list or a rebuild every frame.
  * @internal
  */
 export interface RenderForwardDescriptor {
-  /** The pass bit whose per-mesh cache + `drawLists` slot this draw drives (`pass.bit`) */
+  /** The pass's bit, which picks the draw list on each batch and the mesh's cached shader */
   readonly bit: number;
 
   /**
-   * The pass's per-batch cull results — where its survivors, counts and bundles live
+   * The pass's own cull results per batch: its surviving instances, their counts and its bundles
    *
-   * The draw list is shared by every pass on the bit; what this pass's frustum decides is its
-   * own. WebGL leaves it empty and compacts each list in place.
+   * Every pass on the bit shares the draw list, but what its frustum keeps is its own. WebGL leaves
+   * these empty and compacts each list in place.
    */
   readonly cullResults: CullResults;
 
@@ -33,42 +31,37 @@ export interface RenderForwardDescriptor {
   readonly camera: Camera3D | null;
 
   /**
-   * Draw-ordering intent
+   * Draw order
    *
-   * - `'key'` — sort by the static batch/pipeline key. Order is stable across frames
-   *   unless meshes change, so it is cacheable.
-   * - `'distance'` — back-to-front by camera distance, recomputed every frame (alpha
-   *   blending). The backend owns the camera read and the distance math (which differ
-   *   WebGPU vs. WebGL).
+   * - `'key'` sorts by the batch and pipeline key, which only changes with the meshes, so the draw
+   *   can be cached.
+   * - `'distance'` sorts back to front from the camera every frame, for alpha blending. Each pipe
+   *   does its own distance math.
    */
   readonly sort: 'key' | 'distance';
 
   /**
-   * Caching policy — the backend picks (and may adapt) the mechanism
+   * Whether the pipe may reuse the draw work it built on frames where nothing changed
    *
-   * Optional; defaults from `sort` (`'key'` → `'auto'`, `'distance'` → `'never'`).
-   * - `'auto'` — the backend may reuse recorded draw work across clean frames and rebuild
-   *   only on dirty. May grow adaptive heuristics (e.g. defer bundle compile until the
-   *   pass set is stable).
-   * - `'never'` — rebuild draw work every frame.
+   * `'auto'` reuses it until something changes; `'never'` rebuilds every frame. Left out, it
+   * follows `sort`: `'key'` reuses and `'distance'` rebuilds. {@link cachesDrawWork} resolves it.
    */
   readonly cache?: 'auto' | 'never';
 
   /**
-   * Texture batching
+   * Whether the draw packs its meshes' textures for the shader; `false` skips it
    *
-   * `true` (default) packs a texture atlas + batch texture bind group; `false` is for
-   * depth-only / solid-colour passes such as outline and wireframe.
+   * Left out, the textures are packed. Depth-only and solid-colour passes, such as outlines and
+   * wireframes, set `false`.
    */
   readonly textures?: boolean;
 }
 
 /**
- * Whether this pass caches its draw work across clean frames
+ * Whether a forward draw reuses its draw work on frames where nothing changed
  *
- * Resolves the `cache` policy, defaulting from `sort` when `cache` is unset (`'key'` caches,
- * `'distance'` rebuilds every frame). Single source of truth for both pipes: WebGPU maps
- * `true` to recording a render bundle, WebGL to keeping its persistent slot-map.
+ * Resolves {@link RenderForwardDescriptor#cache}, following `sort` when it is unset. Both pipes
+ * ask this: on `true` WebGPU records a render bundle and WebGL replays its built command list.
  * @param desc - The forward-draw descriptor to resolve
  * @returns `true` when draw work may be reused across clean frames
  * @internal

@@ -5,7 +5,7 @@ import { CubeGeometry } from '~/geometry/CubeGeometry';
 import type { Geometry3D } from '~/geometry/Geometry3D';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 
-// Local bounding sphere radius the cull derives from an AABB: half the diagonal.
+/** The local bounding sphere radius the cull derives from a geometry's box: half its diagonal */
 const localRadius = (geometry: Geometry3D) => {
   const { min, max } = geometry.bounds3D;
   return 0.5 * Math.hypot(max.x - min.x, max.y - min.y, max.z - min.z);
@@ -24,14 +24,14 @@ describe('Mesh3DSlot.boundingSphere', () => {
     expect(s.center.x).toBeCloseTo(5);
     expect(s.center.y).toBeCloseTo(-3);
     expect(s.center.z).toBeCloseTo(2);
-    expect(s.radius).toBeCloseTo(localRadius(geometry)); // translation doesn't scale
+    expect(s.radius).toBeCloseTo(localRadius(geometry));
   });
 
   it('scales the radius by the instance matrix', () => {
     const batch = new Mesh3DBatch({ size: 1 });
     const geometry = cube();
     batch.setGeometryAt(0, geometry);
-    batch.setMatrixAt(0, new Matrix4().makeScale(2, 3, 1)); // longest axis = 3
+    batch.setMatrixAt(0, new Matrix4().makeScale(2, 3, 1));
     expect(batch.items[0].boundingSphere.radius).toBeCloseTo(localRadius(geometry) * 3);
   });
 
@@ -45,7 +45,7 @@ describe('Mesh3DSlot.boundingSphere', () => {
     expect(batch.items[0].boundingSphere.center.x).toBeCloseTo(9);
   });
 
-  // A batch of `xs.length` cubes, slot `i` translated to `xs[i]` on X.
+  /** A batch of `xs.length` cubes, slot `i` translated to `xs[i]` on X */
   const cubesAt = (...xs: number[]) => {
     const batch = new Mesh3DBatch({ size: xs.length });
     const matrix = new Matrix4();
@@ -56,7 +56,7 @@ describe('Mesh3DSlot.boundingSphere', () => {
     return batch;
   };
 
-  // Writes slot `i`'s X translation in place, the way a `matrices.data` user would.
+  /** Writes slot `i`'s X translation in place, as a user of `matrices.data` would */
   const moveInPlace = (batch: Mesh3DBatch, i: number, x: number) => {
     const { data, stride, offset } = batch.matrices;
     data[offset + i * stride + 12] = x;
@@ -110,7 +110,7 @@ describe('Mesh3DSlot.boundingSphere', () => {
     batch.matrices.update(1, 1);
 
     expect(batch.items[1].boundingSphere.center.x).toBeCloseTo(50);
-    expect(batch.items[0].boundingSphere.center.x).toBeCloseTo(1); // not named, kept its sphere
+    expect(batch.items[0].boundingSphere.center.x, 'a slot outside the range keeps its sphere').toBeCloseTo(1);
     expect(batch.items[2].boundingSphere.center.x).toBeCloseTo(3);
   });
 
@@ -124,14 +124,12 @@ describe('Mesh3DSlot.boundingSphere', () => {
     expect(batch.items[1].boundingSphere.center.x).toBeCloseTo(2);
   });
 
-  it('is batch-local — a container (batch matrix) move leaves it unchanged', () => {
+  it('is batch-local, so moving the container costs the cull nothing', () => {
     const batch = new Mesh3DBatch({ size: 1 });
     batch.setGeometryAt(0, cube());
     batch.setMatrixAt(0, new Matrix4().makeTranslation(1, 2, 3));
     const before = batch.items[0].boundingSphere.clone();
 
-    // Move the batch container (store row 0 = B). The instance's local sphere excludes B, so it
-    // must not change — this is the "moving batch is free" property the cull relies on.
     batch.writeBatchWorldMatrix(new Matrix4().makeTranslation(100, 0, 0));
     const after = batch.items[0].boundingSphere;
     expect(after.center.x).toBeCloseTo(before.center.x);

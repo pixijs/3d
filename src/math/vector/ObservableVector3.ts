@@ -10,17 +10,20 @@ import type { PointData3D } from './PointData3D';
 import type { PointLike3D } from './PointLike3D';
 
 /**
- * The `ObservableVector3` object represents a location in a three-dimensional coordinate system
- * that fires an observer callback whenever its components change
+ * A {@link Vector3} that tells an observer when it changes
  *
- * It mirrors the API of {@link Vector3}, making it suitable for transform properties (position,
- * scale) where change detection drives downstream updates.
- *
- * Math operations follow the unified mutating-default pattern: `a.add(b)` mutates `a` in place;
- * `a.add(b, out)` writes the result into `out` instead. In-place mutations route through
- * {@link ObservableVector3#set} so the observer fires exactly once per call, even though the
- * implementation computes each component separately. When `out` is a different point, this point's
- * observer is not fired.
+ * It is the type of a node's {@link Container3D#position | position},
+ * {@link Container3D#scale | scale}, {@link Container3D#rotation | rotation} and
+ * {@link Container3D#origin | origin}: a change is how the node learns to rebuild its transform. It
+ * has the same methods as {@link Vector3}. Each in-place method notifies the observer at most once,
+ * and not at all when no component changed. Given an `out` target, a method writes there and leaves
+ * this point and its observer alone.
+ * @example
+ * ```ts
+ * app.ticker.add((ticker) => {
+ *   player.position.addScaledVector(velocity, ticker.deltaMS / 1000);
+ * });
+ * ```
  * @see {@link Vector3} For the non-observable counterpart
  * @see {@link Observer} For the observer interface
  * @category maths
@@ -28,22 +31,28 @@ import type { PointLike3D } from './PointLike3D';
  */
 export class ObservableVector3 implements PointLike3D {
   /** @ignore */
-  public _x: number;
+  public _x = 0;
   /** @ignore */
-  public _y: number;
+  public _y = 0;
   /** @ignore */
-  public _z: number;
+  public _z = 0;
 
   /** Object whose `_onUpdate` callback is invoked when this point changes */
   private readonly _observer: Observer<ObservableVector3>;
 
-  /** Position of the point on the x axis; assigning a different value fires the observer */
+  /**
+   * Position of the point on the x axis; assigning a different value notifies the observer
+   * @example
+   * ```ts
+   * player.position.x += strafeSpeed * dt;
+   * ```
+   */
   get x(): number {
     return this._x;
   }
 
   /**
-   * Sets the x component; fires the observer only when the value changes
+   * Sets the x component
    * @param value - New position on the x axis
    */
   set x(value: number) {
@@ -53,13 +62,19 @@ export class ObservableVector3 implements PointLike3D {
     }
   }
 
-  /** Position of the point on the y axis; assigning a different value fires the observer */
+  /**
+   * Position of the point on the y axis; assigning a different value notifies the observer
+   * @example
+   * ```ts
+   * if (player.position.y < killPlaneY) respawn(player);
+   * ```
+   */
   get y(): number {
     return this._y;
   }
 
   /**
-   * Sets the y component; fires the observer only when the value changes
+   * Sets the y component
    * @param value - New position on the y axis
    */
   set y(value: number) {
@@ -69,13 +84,19 @@ export class ObservableVector3 implements PointLike3D {
     }
   }
 
-  /** Position of the point on the z axis; assigning a different value fires the observer */
+  /**
+   * Position of the point on the z axis; assigning a different value notifies the observer
+   * @example
+   * ```ts
+   * crate.position.z = -10;
+   * ```
+   */
   get z(): number {
     return this._z;
   }
 
   /**
-   * Sets the z component; fires the observer only when the value changes
+   * Sets the z component
    * @param value - New position on the z axis
    */
   set z(value: number) {
@@ -101,8 +122,11 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Sets the point to a new x, y and z position
-   *
-   * The observer fires once if any component changes, and not at all otherwise.
+   * @example
+   * ```ts
+   * crate.position.set(0, 1, -5);
+   * crate.scale.set(2);
+   * ```
    * @param x - Position on the x axis
    * @param y - Position on the y axis, defaults to `x`
    * @param z - Position on the z axis, defaults to `x`
@@ -121,8 +145,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Copies x, y, z from the given point into this point
-   *
-   * The observer fires only when at least one component differs from the current value.
+   * @example
+   * ```ts
+   * loot.position.copyFrom(enemy.position);
+   * ```
    * @param p - The point to copy from
    * @returns This point, for chaining
    */
@@ -139,6 +165,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Copies this point's x, y, z into the given point
+   * @example
+   * ```ts
+   * player.position.copyTo(lastCheckpoint);
+   * ```
    * @param p - The point to copy into
    * @returns The given point with values updated
    */
@@ -150,6 +180,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Checks if another point is equal to this point
+   * @example
+   * ```ts
+   * if (!player.position.equals(lastSentPosition)) sendPosition(player.position);
+   * ```
    * @param p - The point to check
    * @returns `true` when `x`, `y` and `z` all match exactly (no epsilon tolerance)
    */
@@ -158,18 +192,25 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Creates a copy of this point
+   * Creates a copy of this point that notifies `observer`, or this point's own observer when left out
    *
-   * The clone reuses this instance's observer unless `observer` is provided explicitly.
+   * A clone of a node's `position` that keeps the node as its observer marks the node for a transform
+   * update on every change without moving it. For a plain copy, use
+   * `new Vector3().copyFrom(node.position)`.
    * @param observer - Optional observer for the clone
    * @returns A new `ObservableVector3` with the same component values
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- observer-linked copy; plain copies use Vector3#copyFrom
   public clone(observer?: Observer<ObservableVector3>): ObservableVector3 {
     return new ObservableVector3(observer ?? this._observer, this._x, this._y, this._z);
   }
 
   /**
    * Returns a readable string representation of this point
+   * @example
+   * ```ts
+   * console.log(player.position.toString());
+   * ```
    * @returns A string describing the point's components
    */
   public toString(): string {
@@ -178,8 +219,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Reads `x`, `y`, `z` from `array` starting at `offset`
-   *
-   * The observer fires once if any component changes.
+   * @example
+   * ```ts
+   * crates.forEach((crate: Container3D, i: number) => crate.position.fromArray(savedPositions, i * 3));
+   * ```
    * @param array - The array to read from
    * @param offset - The index of the first component
    * @returns This point, for chaining
@@ -192,6 +235,10 @@ export class ObservableVector3 implements PointLike3D {
    * Writes this point's values into `array` starting at `offset`
    *
    * Allocates a new array when one is not supplied.
+   * @example
+   * ```ts
+   * crates.forEach((crate: Container3D, i: number) => crate.position.toArray(savedPositions, i * 3));
+   * ```
    * @param array - The array to write into
    * @param offset - The index to write the first component at
    * @returns The array the values were written into
@@ -206,6 +253,11 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Adds `v` to this point
+   * @example
+   * ```ts
+   * rider.position.add(platformMovement);
+   * player.position.add(cameraOffset, cameraTarget);
+   * ```
    * @param v - The point to add
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -224,6 +276,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Subtracts `v` from this point
+   * @example
+   * ```ts
+   * target.position.subtract(turret.position, aimDirection);
+   * ```
    * @param v - The point to subtract
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -241,7 +297,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise multiplies this point by `v`
+   * Multiplies each component of this point by the matching component of `v`
+   * @example
+   * ```ts
+   * jelly.scale.multiply({ x: 1.2, y: 0.8, z: 1.2 });
+   * ```
    * @param v - The point to multiply by
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -260,6 +320,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Multiplies each component of this point by the scalar `s`
+   * @example
+   * ```ts
+   * balloon.scale.multiplyScalar(1 + inflateRate * dt);
+   * ```
    * @param s - The scalar to multiply by
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -277,7 +341,12 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise divides this point by `v`
+   * Divides each component of this point by the matching component of `v`
+   * @example
+   * ```ts
+   * player.position.divide(cellSize, cell);
+   * const column = Math.floor(cell.x);
+   * ```
    * @param v - The point to divide by
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -296,6 +365,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Divides each component of this point by the scalar `s`
+   * @example
+   * ```ts
+   * pickup.scale.divideScalar(2);
+   * ```
    * @param s - The scalar to divide by
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -305,7 +378,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Adds `v * s` to this point
+   * Adds `v * s` to this point, such as a velocity times the frame time
+   * @example
+   * ```ts
+   * player.position.addScaledVector(velocity, dt);
+   * ```
    * @param v - The point to scale and add
    * @param s - The scalar to multiply `v` by
    * @param out - The target to write the result into, defaults to this point
@@ -324,7 +401,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Negates each component of this point
+   * Negates each component of this point, mirroring it through the origin
+   * @example
+   * ```ts
+   * reflection.position.copyFrom(player.position).negate();
+   * ```
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
    */
@@ -341,7 +422,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise minimum of this point and `v`
+   * Sets each component to the smaller of this point's and `v`'s
+   * @example
+   * ```ts
+   * player.position.min({ x: Infinity, y: ceilingHeight, z: Infinity });
+   * ```
    * @param v - The point to compare with
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -359,7 +444,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise maximum of this point and `v`
+   * Sets each component to the larger of this point's and `v`'s
+   * @example
+   * ```ts
+   * player.position.max({ x: -Infinity, y: floorHeight, z: -Infinity });
+   * ```
    * @param v - The point to compare with
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -377,9 +466,13 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise clamp of this point between `min` and `max`
+   * Clamps each component of this point between the matching components of `min` and `max`
    *
    * Assumes `min <= max` componentwise.
+   * @example
+   * ```ts
+   * player.position.clamp(arenaMin, arenaMax);
+   * ```
    * @param min - The lower bound per component
    * @param max - The upper bound per component
    * @param out - The target to write the result into, defaults to this point
@@ -398,9 +491,13 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Normalizes this point to unit length
+   * Scales this point to unit length, keeping its direction from the origin
    *
-   * Zero-magnitude points are left unchanged.
+   * A zero point stays zero.
+   * @example
+   * ```ts
+   * player.position.normalize(surfaceUp);
+   * ```
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
    */
@@ -419,10 +516,14 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Rescales this point so its magnitude equals `length`
+   * Scales this point so its distance from the origin equals `length`, keeping its direction
    *
-   * Zero-magnitude points are left unchanged.
-   * @param length - The target magnitude
+   * A zero point stays zero.
+   * @example
+   * ```ts
+   * satellite.position.setLength(orbitRadius);
+   * ```
+   * @param length - The target length
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
    */
@@ -441,25 +542,38 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Computes the magnitude (length) of this point
-   * @returns The magnitude
+   * Computes the length of this point, its distance from the origin
+   * @example
+   * ```ts
+   * const altitude = player.position.magnitude() - planetRadius;
+   * ```
+   * @returns The length
    */
   public magnitude(): number {
     return Math.sqrt(this._x * this._x + this._y * this._y + this._z * this._z);
   }
 
   /**
-   * Computes the squared magnitude of this point
+   * Computes the squared length of this point
    *
-   * Cheaper than `magnitude()` for length comparisons.
-   * @returns The squared magnitude
+   * Cheaper than {@link ObservableVector3#magnitude}, since it skips the square root, and enough to
+   * compare lengths.
+   * @example
+   * ```ts
+   * if (ball.position.magnitudeSquared() > arenaRadius * arenaRadius) resetBall();
+   * ```
+   * @returns The squared length
    */
   public magnitudeSquared(): number {
     return this._x * this._x + this._y * this._y + this._z * this._z;
   }
 
   /**
-   * Computes the Euclidean distance from this point to `v`
+   * Computes the distance from this point to `v`
+   * @example
+   * ```ts
+   * const distanceToExit = player.position.distanceTo(exit.position);
+   * ```
    * @param v - The point to measure to
    * @returns The distance
    */
@@ -468,7 +582,13 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Computes the squared Euclidean distance from this point to `v`
+   * Computes the squared distance from this point to `v`
+   *
+   * Cheaper than {@link ObservableVector3#distanceTo} and enough to compare distances.
+   * @example
+   * ```ts
+   * if (player.position.distanceToSquared(coin.position) < pickupRadius * pickupRadius) collect(coin);
+   * ```
    * @param v - The point to measure to
    * @returns The squared distance
    */
@@ -482,6 +602,10 @@ export class ObservableVector3 implements PointLike3D {
 
   /**
    * Computes the dot product of this point and `v`
+   * @example
+   * ```ts
+   * const distanceAlongTrack = car.position.dot(trackDirection);
+   * ```
    * @param v - The other point
    * @returns The dot product
    */
@@ -490,9 +614,15 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Computes the angle between this point and `v`
+   * Computes the angle between this point and `v`, both seen from the origin
+   *
+   * Returns π/2 when either has zero length.
+   * @example
+   * ```ts
+   * const distanceOverSurface = player.position.angleTo(base.position) * planetRadius;
+   * ```
    * @param v - The other point
-   * @returns The angle in radians
+   * @returns The angle in radians, from 0 to π
    */
   public angleTo(v: PointData3D): number {
     const denominator = Math.sqrt(this.magnitudeSquared() * (v.x * v.x + v.y * v.y + v.z * v.z));
@@ -503,7 +633,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Computes the 3D cross product `this x v`
+   * Computes the cross product `this × v`, a vector at right angles to both
+   * @example
+   * ```ts
+   * player.position.cross(planetAxis, travelDirection).normalize();
+   * ```
    * @param v - The other point
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -527,7 +661,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Applies a {@link Matrix3} (column-major) to this point
+   * Multiplies this point by the 3x3 matrix `m`
+   * @example
+   * ```ts
+   * satellite.position.applyMatrix3(orbitTilt);
+   * ```
    * @param m - The matrix to apply
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -549,8 +687,14 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Applies a {@link Matrix4} to this point, treating it as a position (`w = 1`) and performing
-   * the perspective divide
+   * Transforms this point by `m`, translation included, then divides by the resulting `w`
+   *
+   * {@link Vector3#applyMatrix4} explains when the divide matters.
+   * @example
+   * ```ts
+   * enemy.position.applyMatrix4(camera.viewProjection, ndc);
+   * const onScreen = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1;
+   * ```
    * @param m - The matrix to apply
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -573,11 +717,15 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Like {@link ObservableVector3#applyMatrix4} but assumes `m` is affine (bottom row
-   * `[0, 0, 0, 1]`) and skips the perspective divide
+   * Transforms this point by `m`, translation included, without the divide
+   * {@link ObservableVector3#applyMatrix4} does
    *
-   * Use for world-matrix transforms where no projection is involved.
-   * @param m - The affine matrix to apply
+   * Cheaper, and correct for any transform that doesn't project, such as a node's world transform.
+   * @example
+   * ```ts
+   * muzzle.position.applyAffineMatrix4(gun.worldTransform, muzzleWorldPosition);
+   * ```
+   * @param m - The matrix to apply
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
    */
@@ -598,7 +746,11 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Rotates this point by the unit {@link Quaternion} `q`
+   * Rotates this point around the origin by the unit {@link Quaternion} `q`
+   * @example
+   * ```ts
+   * chaseCamera.position.copyFrom(followOffset).applyQuaternion(car.quaternion).add(car.position);
+   * ```
    * @param q - The unit quaternion to rotate by
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
@@ -630,14 +782,13 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Treats this point as a direction and applies the rotation of {@link Matrix4} `m`, ignoring
-   * translation
-   *
-   * The result is normalized to unit length.
+   * Turns this point, read as a direction, by the rotation and scale in `m`, ignoring its translation,
+   * then normalizes it
    * @param m - The matrix whose rotation to apply
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- direction math; see Vector3#transformDirection
   public transformDirection(m: Matrix4, out: PointLike3D = this): this {
     const ex = this._x;
     const ey = this._y;
@@ -660,7 +811,14 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Sets this point from a {@link Spherical} coordinate
+   * Sets this point to the position the {@link Spherical} coordinate `s` describes
+   *
+   * {@link Vector3#setFromSpherical} describes the angles.
+   * @example
+   * ```ts
+   * orbit.theta += turnSpeed * dt;
+   * camera.position.setFromSpherical(orbit).add(target.position);
+   * ```
    * @param s - The spherical coordinate to convert
    * @returns This point, for chaining
    */
@@ -671,7 +829,18 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Sets this point from a {@link Cylindrical} coordinate
+   * Sets this point to the position the {@link Cylindrical} coordinate `c` describes
+   *
+   * {@link Vector3#setFromCylindrical} describes the angle and height.
+   * @example
+   * ```ts
+   * const slot = new Cylindrical(towerRadius, 0, 2);
+   *
+   * torches.forEach((torch: Mesh3D, i: number) => {
+   *   slot.theta = (i / torches.length) * Math.PI * 2;
+   *   torch.position.setFromCylindrical(slot);
+   * });
+   * ```
    * @param c - The cylindrical coordinate to convert
    * @returns This point, for chaining
    */
@@ -680,9 +849,15 @@ export class ObservableVector3 implements PointLike3D {
   }
 
   /**
-   * Reads column `index` of the column-major {@link Matrix4} `m` into this point
+   * Reads the first three values of column `index` of `m` into this point
+   *
+   * In a transform, column 3 is the translation and columns 0 to 2 are the X, Y and Z axes, scaled.
+   * @example
+   * ```ts
+   * marker.position.setFromMatrixColumn(target.worldTransform, 3);
+   * ```
    * @param m - The matrix to read from
-   * @param index - The column index
+   * @param index - The column index, `0` to `3`
    * @returns This point, for chaining
    */
   public setFromMatrixColumn(m: Matrix4, index: number): this {

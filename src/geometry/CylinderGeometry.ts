@@ -4,6 +4,11 @@ import { buildCylinderBuffers } from './utils/buildCylinderBuffers';
 
 /**
  * Options for {@link CylinderGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<CylinderGeometryOptions> = { radiusTop: 0.5, radiusBottom: 0.5, height: 3 };
+ * const column = new CylinderGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
@@ -14,6 +19,10 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
    * Set independently from `radiusBottom` to build truncated cones; set to `0` to collapse the
    * top ring into an apex.
    * @default 1
+   * @example
+   * ```ts
+   * const bucket = new CylinderGeometry({ radiusTop: 1, radiusBottom: 0.7 });
+   * ```
    */
   radiusTop: number;
   /**
@@ -22,6 +31,10 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
    * Set independently from `radiusTop` to build truncated cones; set to `0` to collapse the
    * bottom ring into an apex.
    * @default 1
+   * @example
+   * ```ts
+   * const lampshade = new CylinderGeometry({ radiusTop: 0.4, radiusBottom: 1, openEnded: true });
+   * ```
    */
   radiusBottom: number;
   /**
@@ -29,27 +42,43 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
    *
    * The mesh is centered on the origin, so the top sits at `+height/2` and the bottom at `-height/2`.
    * @default 2
+   * @example
+   * ```ts
+   * const coin = new CylinderGeometry({ height: 0.1 });
+   * ```
    */
   height: number;
   /**
    * The number of segments around the circumference
    *
-   * Clamped to a minimum of 3; fewer would collapse the ring into a degenerate shape.
+   * Floored, and clamped to a minimum of 3.
    * @default 32
+   * @example
+   * ```ts
+   * const hexPrism = new CylinderGeometry({ radialSegments: 6 });
+   * ```
    */
   radialSegments: number;
   /**
    * The number of segments along the height
    *
-   * Clamped to a minimum of 1.
+   * Floored, and clamped to a minimum of 1.
    * @default 1
+   * @example
+   * ```ts
+   * const bendable = new CylinderGeometry({ height: 6, heightSegments: 24 });
+   * ```
    */
   heightSegments: number;
   /**
    * When `true`, the end caps are skipped and only the side surface is generated
    *
-   * Caps that would collapse to a point (when their radius is `0`) are skipped regardless.
+   * A ring with a radius of `0` never gets a cap.
    * @default false
+   * @example
+   * ```ts
+   * const tube = new CylinderGeometry({ openEnded: true });
+   * ```
    */
   openEnded: boolean;
 }
@@ -61,9 +90,10 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
  * `radiusTop` and `radiusBottom` are independent, so the same primitive covers cylinders,
  * truncated cones, and (with one radius set to `0`) cones.
  *
- * The side surface uses smooth normals derived from the slope between the two radii; UVs wrap once
- * around the circumference (`u` in `[0, 1]`) and run from bottom to top (`v` in `[0, 1]`). End caps
- * are added unless `openEnded` is `true`; cap UVs are radial inside the unit disk.
+ * The side's normals are smooth and follow the slope between the two radii. Its UVs wrap once
+ * around the circumference (`u` from 0 to 1), and `v` runs from 0 at the top to 1 at the bottom.
+ * End caps are added unless `openEnded` is `true`; a cap's UVs map it onto the circle inscribed in
+ * the texture.
  * @example
  * ```ts
  * const cylinder = new CylinderGeometry({
@@ -83,7 +113,13 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
  * @standard
  */
 export class CylinderGeometry extends Geometry3D {
-  /** Default options for {@link CylinderGeometry} */
+  /**
+   * Default options for {@link CylinderGeometry}
+   * @example
+   * ```ts
+   * CylinderGeometry.defaultOptions.radialSegments = 16;
+   * ```
+   */
   public static defaultOptions: CylinderGeometryOptions = {
     ...Geometry3D.defaultOptions,
     radiusTop: 1,

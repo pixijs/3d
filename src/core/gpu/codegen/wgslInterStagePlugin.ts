@@ -3,9 +3,19 @@ import { warn } from 'pixi.js';
 import type { ShaderBit, InterStageType } from '../../shader/ShaderBit';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
-/** Reserved builtin names — always auto-included, never treated as user inter-stage variables */
+/**
+ * Builtin names a bit's `interStage` may list but that never become `@location` varyings
+ *
+ * The emitted structs declare `position` and `frontFacing` themselves; `sampleIndex` and
+ * `sampleMask` are skipped and not declared.
+ */
 const BUILTIN_NAMES = new Set(['position', 'frontFacing', 'sampleIndex', 'sampleMask']);
 
+/**
+ * Whether an inter-stage type must be `@interpolate(flat)`, which WGSL requires of every integer
+ * scalar or vector
+ * @param type - The varying's WGSL type
+ */
 function needsFlatInterpolation(type: InterStageType): boolean {
   return type === 'i32' || type === 'u32' || type.includes('<i32>') || type.includes('<u32>');
 }
@@ -20,8 +30,8 @@ function warnInterStageConflict(name: string, newType: string, existingType: str
 /**
  * Collects deduplicated inter-stage variables from shader bits as a plain object
  *
- * Builtins (position, frontFacing, etc.) are excluded — they're always auto-included. A variable
- * redefined with a different type warns and keeps the original.
+ * Names in `BUILTIN_NAMES` are skipped. A variable redefined with a different type warns and keeps
+ * the original.
  * @param bits - Shader bits to scan for `interStage` declarations
  * @returns Map of inter-stage variable name to its WGSL type
  * @internal

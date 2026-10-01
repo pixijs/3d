@@ -2,7 +2,7 @@ import { definedProps, DOMAdapter } from 'pixi.js';
 
 import type { Geometry3D } from '../../geometry/Geometry3D';
 
-// Layout (PADDING) is authored at this canvas size and scaled to the requested one.
+/** Canvas size, in pixels, that `PADDING` is authored at; other sizes scale the whole layout */
 const REFERENCE_SIZE = 64;
 const MAX_TRIANGLES = 20_000;
 const PADDING = 5;
@@ -56,7 +56,7 @@ export interface GeometryThumbnailUnsupported {
 }
 
 /**
- * Outcome of a thumbnail request — ready canvas or the reason it was unsupported
+ * Outcome of a thumbnail request: the ready canvas, or the reason it was unsupported
  * @category extras:debug
  * @advanced
  */
@@ -112,7 +112,7 @@ export class GeometryThumbnailGenerator {
     size: 64,
   };
 
-  private readonly _size: number;
+  private readonly _size: number = 0;
   private readonly _cache = new Map<number, GeometryThumbnailResult>();
 
   /** @param options - Generator options; see {@link GeometryThumbnailGeneratorOptions} */

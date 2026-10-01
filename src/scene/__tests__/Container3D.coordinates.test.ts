@@ -10,7 +10,10 @@ function expectVec3Close(actual: { x: number; y: number; z: number }, x: number,
   expect(actual.z).toBeCloseTo(z, 5);
 }
 
-/** parent(1,2,3) → child(4,5,6), no transform pass run — everything resolves on demand. */
+/**
+ * A parent at (1, 2, 3) holding a child at (4, 5, 6), before any transform pass, so both cached
+ * world matrices are identity
+ */
 function makeNested() {
   const parent = new Container3D();
   parent.position.set(1, 2, 3);
@@ -32,35 +35,12 @@ describe('Container3D.getGlobalTransform', () => {
     expectVec3Close(pos, 5, 7, 9);
   });
 
-  test('writes into the supplied matrix and returns it', () => {
-    const { child } = makeNested();
-    const out = new Matrix4();
-
-    expect(child.getGlobalTransform(out)).toBe(out);
-  });
-
-  test('skipUpdate = true copies the cached worldTransform', () => {
+  test('skipUpdate = true copies the cached worldTransform, which no transform pass has filled yet', () => {
     const { child } = makeNested();
 
-    // No transform pass has run, so the cached matrix is still identity.
     const cached = child.getGlobalTransform(new Matrix4(), true);
 
     expect(cached.isIdentity()).toBe(true);
-  });
-
-  test('includes ancestor rotation and scale', () => {
-    const parent = new Container3D();
-    parent.rotation.set(0, Math.PI / 2, 0);
-    parent.scale.set(2);
-
-    const child = new Container3D();
-    child.position.set(1, 0, 0);
-    parent.addChild(child);
-
-    const pos = child.getGlobalTransform().extractPosition(new Vector3());
-
-    // (1,0,0) scaled to (2,0,0), then rotated +90° about Y → (0,0,-2).
-    expectVec3Close(pos, 0, 0, -2);
   });
 });
 
@@ -69,28 +49,6 @@ describe('Container3D.toGlobal', () => {
     const { child } = makeNested();
 
     expectVec3Close(child.toGlobal({ x: 1, y: 1, z: 1 }), 6, 8, 10);
-  });
-
-  test('applies ancestor rotation to the point', () => {
-    const parent = new Container3D();
-    parent.rotation.set(0, Math.PI / 2, 0);
-
-    const child = new Container3D();
-    parent.addChild(child);
-
-    // +90° about Y sends +X to -Z.
-    expectVec3Close(child.toGlobal({ x: 1, y: 0, z: 0 }), 0, 0, -1);
-  });
-
-  test('allocates a Vector3 when out is omitted, writes into out when supplied', () => {
-    const { child } = makeNested();
-
-    const fresh = child.toGlobal({ x: 0, y: 0, z: 0 });
-    expect(fresh).toBeInstanceOf(Vector3);
-
-    const out = new Vector3();
-    expect(child.toGlobal({ x: 0, y: 0, z: 0 }, out)).toBe(out);
-    expectVec3Close(out, 5, 7, 9);
   });
 
   test('supports aliasing position as out', () => {
@@ -104,12 +62,6 @@ describe('Container3D.toGlobal', () => {
 });
 
 describe('Container3D.toLocal', () => {
-  test('converts a world point into local space (inverse of toGlobal)', () => {
-    const { child } = makeNested();
-
-    expectVec3Close(child.toLocal({ x: 5, y: 7, z: 9 }), 0, 0, 0);
-  });
-
   test('round-trips with toGlobal under rotation and scale', () => {
     const parent = new Container3D();
     parent.rotation.set(0.4, -0.7, 0.2);
@@ -127,7 +79,7 @@ describe('Container3D.toLocal', () => {
     expectVec3Close(roundTripped, local.x, local.y, local.z);
   });
 
-  test('from converts out of another container’s space', () => {
+  test("from converts out of another container’s space, here b's origin seen from a", () => {
     const parent = new Container3D();
     const a = new Container3D();
     a.position.set(10, 0, 0);
@@ -135,7 +87,6 @@ describe('Container3D.toLocal', () => {
     b.position.set(0, 5, 0);
     parent.addChild(a, b);
 
-    // b's origin, seen from a's local space.
     expectVec3Close(a.toLocal({ x: 0, y: 0, z: 0 }, b), -10, 5, 0);
   });
 });

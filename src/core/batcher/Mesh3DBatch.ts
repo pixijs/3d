@@ -1,6 +1,7 @@
 import type { Geometry3D } from '../../geometry/Geometry3D';
 import type { BaseMaterial3D } from '../../materials/BaseMaterial3D';
 import { Matrix4 } from '../../math/matrix/Matrix4';
+import type { CullMode } from '../../scene/View3D';
 import {
   MESH3D_LANE_MATERIAL,
   MESH3D_LANE_VISIBILITY,
@@ -16,24 +17,22 @@ let _meshBatchUid = 0;
 const _identityMatrix = new Matrix4();
 
 /**
- * Per-frame render-side data the batch needs from its owner
+ * What the render passes read from a batch's owner each frame
  *
- * Structurally satisfied by `Container3D` (and therefore {@link BatchedMesh3D}),
- * so a `BatchedMesh3D` just hands itself in via the `renderData` option.
- * The scene batch omits the option and uses a static stub
- * (`SCENE_BATCH_RENDER_DATA`) — identity matrix, always visible.
- * Per-mesh visibility for scene-graph meshes rides the store row's
- * visibility lane on WebGPU (skipped at draw-data level) and folds into
- * `setItemActive` membership on WebGL — see `updateView3DScene`.
+ * `Container3D` has both fields, so a {@link BatchedMesh3D} passes itself as `renderData`. The scene
+ * batch has no owner and uses `SCENE_BATCH_RENDER_DATA`. This is the whole batch's transform and
+ * visibility; a scene mesh's own visibility is in its store row, and both backends skip hidden
+ * meshes when they compact the draw data.
  * @internal
  */
 interface BatchRenderData {
-  /** The owner's world matrix, written to the batch matrix slot each frame */
+  /** The owner's world matrix, written to the batch matrix row each frame */
   worldTransform: Matrix4;
-  /** 0|1 visibility mask — see `Container3D.worldVisible` */
+  /** The owner's `Container3D.worldVisible` as 0 or 1 */
   _worldVisible: number;
 }
 
+/** The scene batch's stand-in owner: an identity matrix, always visible */
 const SCENE_BATCH_RENDER_DATA: BatchRenderData = {
   worldTransform: _identityMatrix,
   _worldVisible: 1,
@@ -42,53 +41,43 @@ const SCENE_BATCH_RENDER_DATA: BatchRenderData = {
 type Mesh3DBatchSizeOrItems = { size: number; items?: never } | { items: Mesh3DData[]; size?: never };
 
 /**
- * Options for constructing a `Mesh3DBatch` — exactly one of `size` (user batch) or `items` (scene batch)
+ * Options for a `Mesh3DBatch`: `size` for a user batch or `items` for a scene batch, never both
  * @internal
  */
 type Mesh3DBatchOptions = Mesh3DBatchSizeOrItems & {
-  /**
-   * Render-side data sourced from the batch's owner. Defaults to a
-   * static scene-batch stub (identity matrix, always visible). User
-   * batches ({@link BatchedMesh3D}) pass `renderData: this` so render passes
-   * read `worldTransform` / `_worldVisible` from the owner.
-   */
+  /** The owner the render passes read the batch's transform and visibility from; see {@link Mesh3DBatch#renderData} */
   renderData?: BatchRenderData;
 };
 
 /**
- * A self-contained mesh collection
+ * A set of meshes drawn together, with its own store buffer and per-pass draw lists
  *
- * Two construction modes:
- * - `{ size }` — user batch: pre-allocates `size` Mesh3DSlots. Use
- *   setMatrixAt/setGeometryAt/setMaterialAt/setItemActive to populate.
- * - `{ items }` — scene batch: wraps an existing items array (e.g. the
- *   mesh items managed by View3D). Used internally.
+ * Two kinds:
+ * - `{ size }` builds a user batch, the engine side of a {@link BatchedMesh3D}: `size` slots,
+ *   filled through `setMatrixAt`, `setGeometryAt`, `setMaterialAt` and `setItemActive`.
+ * - `{ items }` builds a View3D's scene batch around the View's own mesh list.
  *
- * Each batch owns its store buffer, ID buffers, and draw lists so multiple
- * batches can coexist in one View3D without conflicting bind group state.
+ * Owning its store and draw lists lets several batches share a View3D without sharing bind groups.
  * @internal
  */
 export class Mesh3DBatch {
   /** Stable unique batch id */
   public readonly uid = ++_meshBatchUid;
-  /** The batch's mesh items — `Mesh3DSlot`s for a user batch, an externally-managed array for a scene batch */
+  /** The batch's items: its own `Mesh3DSlot`s for a user batch, the View's mesh list for a scene batch */
   public readonly items: Mesh3DData[];
   /** Per-instance data store (matrices, material indices, visibility lanes) owned by this batch */
   public readonly storeBuffer: Mesh3DDataStoreBuffer;
   /** Per-pass draw lists keyed by `RenderPassBit`, created lazily by `setItemActive` */
   public readonly drawLists: Record<number, DrawList> = Object.create(null);
 
-  /** Store buffer index of slot 0 (batch world matrix) */
-  private readonly _batchWorldMatrixIndex: number;
+  /** Store row of the batch world matrix, always the first row the batch allocates */
+  private readonly _batchWorldMatrixIndex: number = 0;
 
   /**
-   * Render-side data sourced from the batch's owner (a {@link BatchedMesh3D})
+   * The owner the render passes read the batch's transform and visibility from
    *
-   * Defaults to a static "scene batch" stub: identity matrix, always visible.
-   * Set once via the constructor `options.renderData` — `BatchedMesh3D`
-   * passes `renderData: this` so render passes can read `worldTransform` and
-   * `_worldVisible` from the owner without a typed back-reference to
-   * `Container3D`.
+   * A {@link BatchedMesh3D} passes itself; the scene batch gets an identity matrix that is always
+   * visible. Typed by the two fields it needs rather than as `Container3D`.
    */
   public readonly renderData: BatchRenderData;
 
@@ -100,44 +89,37 @@ export class Mesh3DBatch {
   public readonly isUserBatch: boolean;
 
   /**
-   * Dirty index list for user batches
+   * Slots changed through `setGeometryAt`, `setMaterialAt` or `invalidate` since the last frame, so
+   * the per-frame update walks only those
    *
-   * Tracks which items have been modified (via `setGeometryAt` / `setMaterialAt`)
-   * since the last `View3DPipe` update. This avoids iterating all N items
-   * every frame — only the dirty subset is processed.
-   *
-   * The `_batchDirty` flag on each `Mesh3DSlot` guards against duplicate
-   * insertion: an item is only appended to `_dirtyIndices` the first time
-   * it's dirtied between frames. `View3DPipe` resets `_dirtyCount` to 0
-   * after processing.
-   *
-   * Scene batches (`{ items }` constructor) leave this null — they iterate
-   * all items every frame since scene graph meshes can change at any time.
+   * A slot's `_batchDirty` flag keeps it from being listed twice. `updateView3DScene` processes the
+   * list and resets `_dirtyCount`. Null for a scene batch, whose update walks every mesh each frame.
    * @internal
    */
   public _dirtyIndices: Uint32Array | null = null;
-  /** Number of valid entries in `_dirtyIndices`; reset to 0 after processing */
+  /** Number of valid entries in `_dirtyIndices` */
   public _dirtyCount = 0;
 
-  /** True once `destroy()` has run; guards against double-free */
+  /** True once `destroy()` has run */
   public destroyed = false;
 
   /**
-   * Bumped whenever a store row's visibility lane changes (see `updateView3DScene`)
+   * Bumped by `updateView3DScene` whenever a mesh's visibility flips
    *
-   * Batches with no frustum producer dirty-gate their visibility-only
-   * compaction on it, so the walk (and its uploads) only run on frames where
-   * something actually flipped.
+   * A draw without frustum culling compacts only for visibility, and only on frames where this has
+   * moved.
    * @internal
    */
   public _visibilityDirtyId = 0;
 
+  /** Backing field for {@link cull} */
+  private _cull: CullMode = 'auto';
+
   /**
-   * Last-seen `storeBuffer` `bufferVersion`
+   * The `storeBuffer.bufferVersion` this batch's draw caches were built against
    *
-   * `updateView3DScene` compares it each frame and invalidates this batch's
-   * draw caches when the store reallocated on growth — cached command lists /
-   * bundles bind the old buffer.
+   * `updateView3DScene` invalidates the caches when the store grows, since recorded command lists
+   * and bundles bind the old buffer.
    * @internal
    */
   public _lastStoreBufferVersion = 0;
@@ -151,25 +133,29 @@ export class Mesh3DBatch {
    */
   public _matricesId = 0;
 
-  private readonly _baseIndex: number;
+  /** Store row of slot 0; the scene batch's meshes hold their own rows */
+  private readonly _baseIndex: number = 0;
   private _matrices: BatchMatrices | null = null;
 
+  /**
+   * A user batch starts every slot visible. The store's visibility lane is zero-filled, and nothing
+   * else writes it for a slot, since hiding one is a membership change through `setItemActive`;
+   * left at zero, the cull compaction would drop every slot. `allocateBlock` has already marked the
+   * block for upload.
+   * @param options - `{ size }` for a user batch, `{ items }` for a scene batch
+   */
   constructor(options: Mesh3DBatchOptions) {
     this.renderData = options.renderData ?? SCENE_BATCH_RENDER_DATA;
     this.storeBuffer = new Mesh3DDataStoreBuffer();
 
-    // Slot 0 is always reserved for the batch world matrix.
     const matrixSlotOwner = { _storeIndex: -1 };
     this._batchWorldMatrixIndex = this.storeBuffer.allocateBlock(matrixSlotOwner, 1);
 
     if (options.items !== undefined) {
-      // Scene batch: items array is managed externally (by View3D / StableList).
       this.items = options.items;
       this._baseIndex = 0;
       this.isUserBatch = false;
     } else {
-      // User batch: pre-allocate contiguous store buffer slots upfront.
-      // Items start at slot 1 (after the batch matrix slot).
       const size = options.size;
       const blockOwner = { _storeIndex: -1 };
       this._baseIndex = this.storeBuffer.allocateBlock(blockOwner, size);
@@ -179,10 +165,6 @@ export class Mesh3DBatch {
       for (let i = 0; i < size; i++) {
         items.push(new Mesh3DSlot(i, this._baseIndex + i, this));
         dirtyIndices[i] = i;
-        // Default every instance to visible. Nothing ever rewrites this lane for user-batch slots
-        // (slot show/hide is a membership change via `setItemActive`, and the freshly-allocated
-        // block is zero-filled), so without the default the cull compaction would drop every slot.
-        // `allocateBlock` already marked the block dirty, so these writes ride the same upload.
         u32[(this._baseIndex + i) * MESH3D_STORE_STRIDE + MESH3D_LANE_VISIBILITY] = 1;
       }
       this.items = items;
@@ -195,17 +177,18 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Write a world matrix to slot 0 of the store buffer (the batch matrix)
+   * Writes the batch world matrix row
    *
-   * For scene batches this stays identity. For user batches (BatchedMesh3D),
-   * the container's worldTransform is written here each frame.
+   * It stays identity for the scene batch. A user batch gets its container's `worldTransform`
+   * every frame. The 16 floats move as 8 f64 copies, and a row is 12 f64 wide, half of
+   * `MESH3D_STORE_STRIDE`.
    * @param matrix - The owner's world matrix.
    */
   public writeBatchWorldMatrix(matrix: Matrix4): void {
     const idx = this._batchWorldMatrixIndex;
     const fl64 = this.storeBuffer.fl64Data;
     const wm64 = matrix.elements64;
-    const o = idx * 12; // stride 24 f32 / 2 = 12 f64 per entry
+    const o = idx * 12;
     fl64[o] = wm64[0];
     fl64[o + 1] = wm64[1];
     fl64[o + 2] = wm64[2];
@@ -218,21 +201,16 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Write a local matrix directly to the store buffer
+   * Copies a slot's local matrix into the store buffer
    *
-   * O(1), zero GC. Does NOT require a draw command rebuild: both backends read the
-   * transform straight out of the store buffer this writes.
+   * Allocates nothing and needs no draw-command rebuild: both backends read the transform from the
+   * store on every draw. The copy works as in {@link Mesh3DBatch#writeBatchWorldMatrix}.
    *
-   * The matrix must be **affine** — rotation, scale, shear and translation, with a
-   * `(0, 0, 0, 1)` bottom row. Projective transforms are not supported and their bottom
-   * row is not preserved.
-   *
-   * This is the one transform path that does not enforce that for you. Everything else
-   * goes through {@link Matrix4.multiplyAffine}, which reads only the twelve informative
-   * lanes and writes the bottom row as constants, so a scene-graph transform cannot be
-   * anything else. Node matrices loaded from glTF are decomposed to TRS on the way in for
-   * the same reason. This method copies what it is given, so it is the only place a
-   * projective matrix could reach the store, and the store does not promise to keep it.
+   * The matrix must be affine, with a bottom row of `(0, 0, 0, 1)`. The store keeps all 16 floats
+   * and the vertex shader applies them, but the slot's bounds and the cull read only the top three
+   * rows, so a projective matrix culls against the wrong sphere. Scene-graph transforms can't be
+   * projective: they come from {@link Matrix4.multiplyAffine}, and glTF node matrices are decomposed
+   * on load. This method and {@link BatchMatrices.data} copy whatever they're given.
    * @param index - The slot index within this batch.
    * @param matrix - The slot's new local matrix. Must be affine.
    */
@@ -240,7 +218,7 @@ export class Mesh3DBatch {
     const storeIndex = this._baseIndex + index;
     const fl64 = this.storeBuffer.fl64Data;
     const wm64 = matrix.elements64;
-    const o = storeIndex * 12; // stride 24 f32 / 2 = 12 f64 per entry
+    const o = storeIndex * 12;
     fl64[o] = wm64[0];
     fl64[o + 1] = wm64[1];
     fl64[o + 2] = wm64[2];
@@ -251,7 +229,6 @@ export class Mesh3DBatch {
     fl64[o + 7] = wm64[7];
     this.storeBuffer.markDirtyRange(storeIndex, storeIndex);
 
-    // matrix changed → cached bounding sphere is stale
     (this.items[index] as Mesh3DSlot)._boundsCacheId = -1;
   }
 
@@ -265,18 +242,17 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Swap the geometry for a slot
+   * Swaps the geometry for a slot
    *
-   * Triggers a draw command rebuild next frame: marks the slot dirty so the `View3DPipe` loop recreates the shader for the
-   * new geometry's vertex layout. Appends to `_dirtyIndices` if not already
-   * dirty.
+   * Marks the slot dirty, so the next frame rebuilds its draw commands and recompiles its shader for
+   * the new geometry's vertex layout.
    * @param index - The slot index within this batch.
    * @param geometry - The slot's new geometry.
    */
   public setGeometryAt(index: number, geometry: Geometry3D): void {
     const item = this.items[index] as Mesh3DSlot;
     item.geometry = geometry;
-    item._boundsCacheId = -1; // new geometry → new local sphere
+    item._boundsCacheId = -1;
     if (!item._batchDirty) {
       item._batchDirty = true;
       this._dirtyIndices![this._dirtyCount++] = index;
@@ -284,11 +260,10 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Swap the material for a slot
+   * Swaps the material for a slot
    *
-   * Triggers a draw command rebuild next frame. If the material has already been registered in the material store buffer
-   * (`_materialIndex !== -1`), writes its index into the store buffer
-   * immediately so the GPU picks it up without waiting for the dirty loop.
+   * Marks the slot dirty, so the next frame rebuilds its draw commands. A material that already has
+   * a row in the material store gets its index written into the slot's row straight away.
    * @param index - The slot index within this batch.
    * @param material - The slot's new material.
    */
@@ -308,12 +283,10 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Force a rebuild of a slot's pipeline state and batch assignment
+   * Forces a rebuild of a slot's shader, state and batch keys on the next frame
    *
-   * Geometry attributes and material bits are expected to be stable after the
-   * first render. If you dynamically modify the geometry layout (e.g. adding
-   * tangent attributes) or change a material's custom bits for an item in this
-   * batch, call this to flush the cached state.
+   * Slots don't watch their geometry's layout or their material's shader settings after the first
+   * render. Call this after changing either.
    * @param index - The slot index within this batch.
    */
   public invalidate(index: number): void {
@@ -327,9 +300,10 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Add or remove a slot from render pass views
+   * Sets which passes draw a slot
    *
-   * `DrawList` entries are created lazily on first activation.
+   * A pass's `DrawList` is created the first time a slot joins it. When the last slot leaves a pass,
+   * its command list releases its captures, so a pass that never rebuilds holds none of them.
    * @param index - The slot index within this batch.
    * @param passMask - New bitmask of RenderPassBit flags for this slot.
    */
@@ -345,8 +319,6 @@ export class Mesh3DBatch {
       const pd = this.drawLists[bit];
       pd.view.remove(item.uid);
       pd.drawDirtyId++;
-      // The last renderable leaving a pass is the one event that empties it: drop the build's captures
-      // here so a pass that never rebuilds retains none of them.
       if (pd.view.count === 0) pd.commandList.releaseCaptures();
       bits ^= bit;
     }
@@ -369,6 +341,28 @@ export class Mesh3DBatch {
   }
 
   /**
+   * This batch's frustum-culling mode
+   *
+   * Every pass that draws the batch resolves its cull producer from this alone: the scene batch
+   * takes its view's `cull` (View3D writes it), a {@link BatchedMesh3D}'s batch its own. Changing it
+   * invalidates the batch's draw lists, because some passes resolve the producer only when they
+   * rebuild.
+   */
+  public get cull(): CullMode {
+    return this._cull;
+  }
+
+  /**
+   * Sets this batch's frustum-culling mode, invalidating its draw lists when it changes
+   * @param value - The culling mode.
+   */
+  public set cull(value: CullMode) {
+    if (value === this._cull) return;
+    this._cull = value;
+    this.invalidateDrawCaches();
+  }
+
+  /**
    * Invalidate every cached draw program owned by this batch
    * @internal
    */
@@ -385,10 +379,10 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Gives back this batch's GPU memory without losing the CPU state that rebuilds
-   * it: the store buffer's GPU copy (and WebGL data texture) plus every pass's recorded
-   * draw program, bundles, and instance/indirect buffers. Idempotent; the next frame
-   * re-uploads and rebuilds.
+   * Gives back this batch's GPU memory and keeps the CPU state that rebuilds it
+   *
+   * Covers the store's GPU copies and every pass's recorded draw commands, bundles and instance
+   * and indirect buffers. The next frame re-uploads and rebuilds. Idempotent.
    * @internal
    */
   public unload(): void {
@@ -399,12 +393,10 @@ export class Mesh3DBatch {
   }
 
   /**
-   * Release this batch's exclusively-owned GPU resources: the store buffer and every per-pass `DrawList`
+   * Releases the store buffer and every pass's `DrawList`
    *
-   * `items` are intentionally left untouched — for the scene batch they are
-   * owned by `View3D._meshSlots`, and for a user batch they belong to the
-   * owning `BatchedMesh3D`. The meshes themselves are shared resources and are
-   * never destroyed here.
+   * A user batch's slots drop their reference to the batch. The scene batch's meshes belong to the
+   * View, and no geometry or material is destroyed here.
    */
   public destroy(): void {
     if (this.destroyed) return;

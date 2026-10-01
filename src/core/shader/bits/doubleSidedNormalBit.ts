@@ -1,14 +1,12 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Flips the shading normal on back faces when the material is double-sided
+ * Flips the shading normal on back faces, for a material with {@link BaseMaterial3D#doubleSided}
  *
- * Matches glTF / common practice: vertex normals still point the same way for
- * both triangles of a thin surface, so without this, lighting on the rear side
- * is wrong. Only injected when {@link BaseMaterial3D#doubleSided} is true (fixed
- * at material construction).
- *
- * Must run before any fragment code that reads `normal` (e.g. PBR lighting).
+ * A back face's normals point away from the viewer, so without the flip its lighting is wrong. The
+ * glTF spec asks for the same: a double-sided back face "must have its normals reversed before the
+ * lighting equation is evaluated". The renderer adds it ahead of the material's own bits, so
+ * everything that reads `normal` sees the flipped one.
  * @internal
  */
 export const doubleSidedNormalBit: ShaderBit = {

@@ -80,7 +80,7 @@ export type GraphDebugRecordResult = 'frame-limit' | 'inactive' | 'recorded';
  */
 export interface GraphDebugRecordingOptions {
   /**
-   * Frame cap for one recording — the safety limit that stops a forgotten recording growing forever
+   * Frame cap for one recording, so a forgotten recording can't grow forever
    *
    * Clamped to at least one frame; a non-finite value falls back to the default.
    * @default 3600
@@ -112,7 +112,7 @@ export class GraphDebugRecording {
     maxFrames: 3_600,
   };
 
-  private readonly _maxFrames: number;
+  private readonly _maxFrames: number = 0;
   private readonly _frames: GraphDebugRecordedFrame[] = [];
   private _active = false;
   private _startedAt = 0;

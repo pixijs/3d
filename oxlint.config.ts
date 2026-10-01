@@ -4,6 +4,7 @@ export default defineConfig({
   options: {
     typeAware: true,
     typeCheck: true,
+    reportUnusedDisableDirectives: 'error',
   },
   plugins: ['eslint', 'typescript', 'import', 'jsdoc', 'unicorn', 'vitest'],
   jsPlugins: [
@@ -89,6 +90,12 @@ export default defineConfig({
       },
     },
     {
+      files: ['src/**/*.ts'],
+      rules: {
+        'pixi3d/no-comments': 'error',
+      },
+    },
+    {
       files: ['examples/**/*', 'scripts/**/*'],
       rules: {
         'no-console': 'off',
@@ -100,7 +107,9 @@ export default defineConfig({
       rules: {
         'pixi3d/require-export-jsdoc': 'error',
         'pixi3d/require-member-api-doc': 'error',
+        'pixi3d/require-standard-example': 'error',
         'pixi3d/jsdoc-style': 'error',
+        'pixi3d/number-field-initializer': 'error',
       },
     },
     {
@@ -136,7 +145,7 @@ export default defineConfig({
       },
     },
     {
-      files: ['**/*.test.ts', '**/__tests__/**', 'tests/**', 'examples/**'],
+      files: ['**/*.test.ts', '**/__tests__/**', 'tests/**', 'examples/**', 'bench/**'],
       rules: {
         'jsdoc/require-param': 'off',
       },

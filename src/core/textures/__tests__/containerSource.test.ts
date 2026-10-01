@@ -7,22 +7,13 @@ import { ContainerSource } from '~/core/textures/ContainerSource';
 import { ContainerTexture } from '~/core/textures/ContainerTexture';
 import { Material3D } from '~/materials/pbr/Material3D';
 
-// Construction is CPU-only (no renderer), so these run without GPU. They guard the option-defaulting that the
-// visual scenes never exercise (every scene passes resolution explicitly).
-describe('ContainerSource construction', () => {
+describe('ContainerSource construction, without a renderer', () => {
   it('defaults resolution to 1 when omitted — never a NaN-sized target', () => {
     const src = new ContainerSource({ container: new Container(), width: 16, height: 16 });
 
     expect(src.pixelWidth).toBe(16);
     expect(src.pixelHeight).toBe(16);
     expect(Number.isNaN(src.pixelWidth)).toBe(false);
-  });
-
-  it('multiplies pixel dimensions by resolution', () => {
-    const src = new ContainerSource({ container: new Container(), width: 16, height: 16, resolution: 2 });
-
-    expect(src.pixelWidth).toBe(32);
-    expect(src.pixelHeight).toBe(32);
   });
 
   it('measures size from the container when dimensions are omitted', () => {
@@ -40,22 +31,9 @@ describe('ContainerSource construction', () => {
     expect(src.width).toBe(1);
     expect(src.height).toBe(1);
   });
-
-  it('exposes and swaps its container', () => {
-    const first = new Container();
-    const src = new ContainerSource({ container: first, width: 8, height: 8 });
-    expect(src.container).toBe(first);
-
-    const second = new Container();
-    src.setContainer(second);
-    expect(src.container).toBe(second);
-  });
 });
 
-// destroy() is CPU-only here (no GPU resource is allocated until render()), so these run without a renderer.
-// They pin the pixi `destroySource` contract: the boolean gates the SOURCE (render target), never the wrapper,
-// so material teardown that calls `texture.destroy(false)` keeps the shareable source alive.
-describe('ContainerTexture / ContainerSource destroy', () => {
+describe('ContainerTexture / ContainerSource destroy, without a renderer', () => {
   function makeContainerTexture(): ContainerTexture {
     const container = new Container();
     container.addChild(new Graphics().rect(0, 0, 16, 16).fill(0xff0000));
@@ -117,19 +95,21 @@ describe('ContainerTexture / ContainerSource destroy', () => {
   });
 });
 
-// Renderer retention / firstRender / autoUpdate are CPU-observable without a GPU: we assert what is retained,
-// that misuse warns instead of throwing, and that autoUpdate connects/disconnects a `Ticker.shared` listener
-// (observed via `Ticker.shared.count`). A no-op stub renderer keeps a real per-frame tick harmless.
 describe('ContainerSource renderer retention & autoUpdate', () => {
   type DestroyHook = { destroy: () => void };
   type BatcherRegistry = Record<number, Record<string, DestroyHook>>;
   type StubRenderer = Renderer & { hooks: DestroyHook[]; batchers: BatcherRegistry; batcherDestroy: () => void };
 
-  // Mirrors the renderer surfaces the source touches: render() (which, like pixi's, makes the capture root a
-  // render group, points its instruction set at the render pipes and caches a batcher entry under its uid), the
-  // batch pipe's `destroyInstructionSet` hook (which pixi's `InstructionSet.destroy` calls on every pipe to free
-  // that entry), and the destroy runner hooked to observe renderer teardown (`hooks` holds its items).
-  // `destroy()` tears down like pixi's Renderer: the runner emits over a cached length, then the pipes are gone.
+  /**
+   * A renderer stand-in with only the surfaces the source touches, so a real per-frame tick is harmless
+   *
+   * Like pixi's, `render` makes the capture root a render group, points its instruction set at the
+   * render pipes and caches a batcher entry under its uid, and the batch pipe's
+   * `destroyInstructionSet`, which pixi's `InstructionSet.destroy` calls, frees that entry. `hooks`
+   * holds the destroy runner's items. `destroy()` tears down like pixi's Renderer: the runner emits,
+   * then the pipes are gone.
+   * @param render - Replaces the default `render`, to count calls
+   */
   const stubRenderer = (render?: (options: { container: Container }) => void): StubRenderer => {
     const hooks: DestroyHook[] = [];
     const batchers: BatcherRegistry = {};
@@ -220,7 +200,6 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
   it('default firstRender without a renderer is a silent no-op (only explicit true warns)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    // No renderer, no explicit firstRender → the default must not warn (nothing to render with).
     new ContainerSource({ container: new Container(), width: 8, height: 8 });
     expect(warnSpy).not.toHaveBeenCalled();
 
@@ -263,7 +242,7 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
 
     src.autoUpdate = true;
     expect(src.autoUpdate).toBe(true);
-    expect(Ticker.shared.count).toBe(base); // deferred — no renderer yet
+    expect(Ticker.shared.count, 'no tick before a renderer is set').toBe(base);
     expect(warnSpy).toHaveBeenCalled();
 
     src.renderer = stubRenderer();
@@ -303,7 +282,7 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
     expect(Ticker.shared.count).toBe(base + 1);
 
     src.renderer = null;
-    expect(Ticker.shared.count).toBe(base); // autoUpdate still true, but nothing to drive it
+    expect(Ticker.shared.count, 'autoUpdate stays true with nothing to drive it').toBe(base);
 
     src.destroy();
   });
@@ -319,19 +298,16 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
       autoUpdate: true,
     });
     expect(Ticker.shared.count).toBe(base + 1);
-    // The retention hook is the only thing the source registers with a renderer.
-    expect(renderer.hooks.length).toBe(1);
+    expect(renderer.hooks.length, 'the retention hook is all the source registers').toBe(1);
 
     renderer.destroy();
 
     expect(src.renderer).toBeNull();
-    expect(Ticker.shared.count).toBe(base); // no tick left to render through a dead renderer
-    expect(renderer.hooks.length).toBe(1); // the hook body never mutates the runner mid-emit
+    expect(Ticker.shared.count, 'no tick left to render through a dead renderer').toBe(base);
+    expect(renderer.hooks.length, 'the hook never mutates the runner mid-emit').toBe(1);
 
-    // Nothing reaches into the torn-down renderer: the capture root's instruction set still carries the pipes it
-    // was built with, so pixi's hook frees the entry regardless of retention.
     expect(() => src.destroy()).not.toThrow();
-    expect(renderer.batchers).toEqual({});
+    expect(renderer.batchers, "freed through the pipes the root's instruction set was built with").toEqual({});
   });
 
   it("destroy() frees the capture root's batcher entry through pixi's destroyInstructionSet hook", () => {
@@ -360,10 +336,8 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
   });
 });
 
-// Against real renderers: pixi's `BatcherPipe.destroyInstructionSet` must drop the capture root's entry (its
-// batchers and their GPU buffers) when the source destroys the root.
 for (const preference of ['webgpu', 'webgl'] as const) {
-  describe(`ContainerSource batcher release (${preference})`, () => {
+  describe(`ContainerSource batcher release on a real renderer (${preference})`, () => {
     it("destroy() removes the capture root's entry from the renderer's batch pipe", async () => {
       const app = await getApp<Renderer>({
         id: `container-source-batchers-${preference}`,

@@ -1,10 +1,11 @@
-import { BindGroup, Texture, TextureStyle, UniformGroup } from 'pixi.js';
+import { BindGroup, Texture, TextureStyle } from 'pixi.js';
 import type { WebGPURenderer } from 'pixi.js';
 
 import { MAX_LIGHTS } from '../../../scene/View3D';
 import type { View3D } from '../../../scene/View3D';
 import { View3DGlobalData } from '../../../scene/View3DGlobalData';
 import { EMPTY_BUFFER_RESOURCE } from '../../buffers/emptyBufferResource';
+import { createGlobalUniformGroup } from '../../GlobalUniformGroup';
 import { MAX_SHADOW_SLOTS } from '../../render-passes/shadow/shadowPassUtils';
 import {
   RenderableStruct,
@@ -14,59 +15,51 @@ import {
   LightStructGpu,
 } from '../../shader/bits/shaderStructs';
 import type { ShaderBit } from '../../shader/ShaderBit';
-import { CUBETEXTURE_EMPTY, DEPTH_EMPTY, DEPTH_VIEW_PLACEHOLDER } from '../../textures/DefaultTextures';
+import { CUBETEXTURE_EMPTY, DEPTH_EMPTY, DEPTH_VIEW_PLACEHOLDER, UINT_EMPTY } from '../../textures/DefaultTextures';
 
 /**
- * WebGPU ShaderBit defining the global bind group layout for the 3D scene
+ * The scene globals every WebGPU 3D shader binds at group 0: the view's lights, fog and exposure,
+ * and every texture and buffer the batched draws read
  *
- * All 3D shaders share this single bind group (group 0). It provides the view's
- * lighting parameters, fog, and every GPU resource the batched pipeline needs.
- * The camera's lanes live in their own group at 1 (`cameraBit`), so a draw can
- * bind another camera against the same globals. The binding indices below must
- * stay in sync with the BindGroup created in `getGlobalGpuData`.
+ * The camera has its own group at 1 (`cameraBit`), so a draw can bind another camera against the
+ * same globals. The uniform members share binding 0; the textures and samplers follow in
+ * declaration order, then the storage buffers. Two things must match this bit: the `BindGroup`
+ * indices in `getGlobalGpuData`, and the key order of the group `createGlobalUniformGroup` builds,
+ * since pixi lays the uniform buffer out in key order while the shader reads the struct in
+ * declaration order.
  *
- * ### Bind group layout (group 0)
+ * | Binding | Name                       | Type                                                      |
+ * |---------|----------------------------|-----------------------------------------------------------|
+ * | 0       | uniform struct             | light params, time, fog, exposure, hemisphere, light list, shadow slots |
+ * | 1       | uSampler                   | sampler                                                   |
+ * | 2       | uEnvironmentTexture        | texture_cube<f32>                                         |
+ * | 3       | uBrdfLutTexture            | texture_2d<f32>                                           |
+ * | 4       | uBrdfLutSampler            | sampler                                                   |
+ * | 5       | uShadowMap                 | texture_depth_2d_array                                    |
+ * | 6       | uShadowSampler             | sampler_comparison                                        |
+ * | 7       | uOpaqueDepthTexture        | texture_depth_2d                                          |
+ * | 8       | uOpaqueColorTexture        | texture_2d<f32>                                           |
+ * | 9       | uMaterialStorage           | texture_2d<u32> (the material store's rows)               |
+ * | 10      | uRenderableStorage         | storage<Renderable>                                       |
+ * | 11      | uRenderableInstanceStorage | storage<RenderableInstance> (id + packed texture slots)   |
+ * | 12      | uBonePitStorage            | storage<BoneMatrix>                                       |
+ * | 13      | uMorphStorage              | storage<f32> (morph deltas + weights)                     |
+ * | 14      | uGeometryStorage           | storage<GeometryData> (per-geometry sphere + morph facts) |
  *
- * | Binding | Name                            | Type                      |
- * |---------|---------------------------------|---------------------------|
- * | 0       | uniform struct                  | fog, light params, time, packed light list, shadow slots |
- * | 1       | uSampler                        | sampler                   |
- * | 2       | uEnvironmentTexture             | texture_cube<f32>         |
- * | 3       | uBrdfLutTexture                 | texture_2d<f32>           |
- * | 4       | uBrdfLutSampler                 | sampler                   |
- * | 5       | uShadowMap                      | texture_depth_2d_array    |
- * | 6       | uShadowSampler                  | sampler_comparison        |
- * | 7       | uOpaqueDepthTexture             | texture_depth_2d          |
- * | 8       | uOpaqueColorTexture             | texture_2d<f32>           |
- * | 9       | uRenderableStorage              | storage<Renderable>       |
- * | 10      | uRenderableInstanceStorage      | storage<RenderableInstance> (id + packed texture slots) |
- * | 11      | uBonePitStorage                 | storage<BoneMatrix>       |
- * | 12      | uMorphStorage                   | storage<f32>       (shared morph deltas + weights)   |
- * | 13      | uGeometryStorage                | storage<GeometryData> (per-geometry sphere + morph facts) |
- * | 14      | uMaterialStorage                | storage<Material>  (from materialStorageBindingBit) |
+ * WebGPU's default `maxStorageBuffersPerShaderStage` is 8, and the five storage buffers here
+ * already use five. They are read only by the vertex transform, so each is tagged `'vertex'` and
+ * counts against the vertex budget alone, leaving the fragment stage's budget empty. The material
+ * rows are a data texture rather than a sixth buffer; `materialTextureAccessPlugin` says why.
+ * Morph deltas and weights share one buffer for the same reason.
  *
- * Group 0 holds six storage buffers (9–14). WebGPU caps
- * `maxStorageBuffersPerShaderStage` at 8. Each storage buffer is tagged (in
- * the `bindings` block below) with the stage that reads it, so it counts
- * against that stage's budget only: **vertex 6** {9 renderable, 10 instance,
- * 11 bones, 12 morph, 13 geometry, 14 material} · **fragment 1** {14 material}.
- * Material is the only both-stage buffer. Morph deltas and weights
- * deliberately share `uMorphStorage` rather than taking two slots.
+ * The light list and the shadow slots sit in the uniform struct, where WebGL reads them too: each
+ * is small, capped and read-only.
  *
- * The light list and the shadow slots live in the uniform struct as `uLightData`
- * and `uShadowData`, the same place and layout WebGL reads them from, because
- * each is small, capped and read-only.
- *
- * **uOpaqueDepthTexture (binding 7)** — A copy of the opaque pass's depth
- * buffer, produced by `CopyDepthPass`. Bound by the graph's auto-bind path
- * for consumers that declare `b.sample(opaqueDepthHandle, 7)`. Initialised
- * with the shared 1×1 `DEPTH_VIEW_PLACEHOLDER` so the bind-group
- * layout is valid before any consumer-bearing frame runs.
- *
- * **uOpaqueColorTexture (binding 8)** — A copy of the opaque pass's colour
- * buffer, produced by `CopyOpaquePass`. Bound by auto-bind for consumers
- * that declare `b.sample(opaqueColorHandle, 8)` (transmission, blended-
- * refraction). Initialised with a 1×1 placeholder (`Texture.EMPTY`).
+ * `uOpaqueDepthTexture` and `uOpaqueColorTexture` are the copies `CopyDepthPass` and
+ * `CopyOpaquePass` make of the opaque pass's output. The render graph binds them for passes that
+ * declare `b.sample(handle, pipe.globalSlots.opaqueDepth)` or `.opaqueColor`, such as transmission
+ * and blended refraction. Until then they hold 1×1 placeholders, so the layout is valid from the
+ * first frame.
  * @internal
  */
 export const globalBitGpu: ShaderBit = {
@@ -80,23 +73,46 @@ export const globalBitGpu: ShaderBit = {
   },
   bindings: {
     global: {
+      /**
+       * Ambient light in `xyz`, linear and premultiplied by intensity
+       *
+       * `LightingSystemGpu` also writes the light count into `w` every frame, but no shader reads
+       * it: the light loop walks the light-tile masks instead.
+       */
       uGlobalLightParams: 'vec4<f32>',
       uTime: 'f32',
-      uFogColor: 'vec3<f32>', // Linear fog color, premultiplied by uExposure
-      uFogParams: 'vec3<f32>', // (x: near, y: far, z: density). Linear reads x,y; exp/exp2 read z.
-      uExposure: 'f32', // Linear scene-radiance multiplier applied before tone-mapping
-      // Hemisphere fill — populated when `view3d.environment` is a
-      // Hemisphere, zero otherwise. Sky/ground are premultiplied by
-      // intensity on the CPU side; `up` is normalised.
+      /** Linear fog colour, premultiplied by `uExposure`, so fog mixes in the same space as the lit colour */
+      uFogColor: 'vec3<f32>',
+      /** Fog `(near, far, density)`: linear fog reads `x` and `y`, exponential fog reads `z` */
+      uFogParams: 'vec3<f32>',
+      /** Linear multiplier on the scene's light, applied before tone mapping */
+      uExposure: 'f32',
+      /**
+       * Hemisphere sky colour, linear and premultiplied by intensity
+       *
+       * `LightingSystemGpu` writes the three hemisphere members only while the view's environment is
+       * a `Hemisphere`. Under any other environment no bit reads them, and they keep stale values.
+       */
       uHemisphereSky: 'vec3<f32>',
+      /** Hemisphere ground colour, linear and premultiplied by intensity */
       uHemisphereGround: 'vec3<f32>',
+      /** Hemisphere up direction, normalized */
       uHemisphereUp: 'vec3<f32>',
-      // The packed light list, 4 vec4 per light (layout on `LightDataList`). Entries at and
-      // above the light count are stale; the tile mask never selects them.
+      /**
+       * The packed light list, four `vec4` per light as `LightDataList` lays them out
+       *
+       * Entries at and above the light count are stale; the light-tile masks never select them.
+       */
       uLightData: `array<vec4<f32>, ${MAX_LIGHTS * 4}>`,
-      // One shadow slot per (light, cascade), 6 vec4 each (layout on `ShadowDataList`).
+      /** One shadow slot per light and cascade, six `vec4` each as `ShadowDataList` lays them out */
       uShadowData: `array<vec4<f32>, ${MAX_SHADOW_SLOTS * 6}>`,
-      // --- textures & samplers (bindings 1–8) ---
+      /**
+       * The one sampler every batch texture and the environment cube sample through, with `repeat`
+       * addressing
+       *
+       * The batch group holds textures only, so a texture's own `TextureStyle` has no effect here;
+       * WebGL samples each texture with its own style.
+       */
       uSampler: 'sampler',
       uEnvironmentTexture: 'texture_cube<f32>',
       uBrdfLutTexture: 'texture_2d<f32>',
@@ -105,14 +121,12 @@ export const globalBitGpu: ShaderBit = {
       uShadowSampler: 'sampler_comparison',
       uOpaqueDepthTexture: 'texture_depth_2d',
       uOpaqueColorTexture: 'texture_2d<f32>',
+      /**
+       * The material store's rows, read in both stages through the `getMaterial()`
+       * `materialTextureAccessPlugin` generates; the `u32` texel type hands the shader exact bits
+       */
+      uMaterialStorage: 'texture_2d<u32>',
 
-      // --- storage buffers (bindings 9–13; material at 14 via materialStorageBindingBit) ---
-      // Per-stage visibility narrows each buffer to the stage(s) that read it, so
-      // it counts against only that stage's maxStorageBuffersPerShaderStage budget
-      // (see the header table). The renderable + instance rows, bones, morph, and
-      // geometry facts are read only in the vertex transform. uMaterialStorage (14)
-      // is read in BOTH stages, so it keeps the default 'both' (declared by
-      // materialStorageBindingBit).
       uRenderableStorage: { type: `storage<Renderable>`, visibility: 'vertex' },
       uRenderableInstanceStorage: { type: `storage<RenderableInstance>`, visibility: 'vertex' },
       uBonePitStorage: { type: `storage<BoneMatrix>`, visibility: 'vertex' },
@@ -120,11 +134,8 @@ export const globalBitGpu: ShaderBit = {
       uGeometryStorage: { type: `storage<GeometryData>`, visibility: 'vertex' },
     },
   },
+  /** Names for the `Light.kind` values `LightDataList` writes, declared once here for every bit that reads them */
   gpu: {
-    // Named constants for the numeric `light.kind` enum. Live on globalBitGpu so
-    // they're declared once per shader regardless of how many bits read
-    // `Light.kind` (factory-produced lighting bits, user-written effect bits,
-    // debug overlays, etc.). Values match the encoding in `LightDataList`.
     header: /*wgsl*/ `
 const LIGHT_DIRECTIONAL: f32 = 0.0;
 const LIGHT_POINT: f32 = 1.0;
@@ -139,6 +150,15 @@ const LIGHT_SPOT: f32 = 2.0;
  * Lives in the View's `_gpuData` slot for the renderer, which is also the View's payload in
  * pixi's renderer GC: pixi clears the slot when the View unloads or the renderer is destroyed,
  * and the next call mints a fresh one.
+ *
+ * `createGlobalUniformGroup` builds the uniform group. Its pixi `Buffer` is created here rather
+ * than at the first upload, so it can be kept out of the renderer GC before a render bundle bakes
+ * it.
+ *
+ * Every binding starts with a placeholder (the bone pit with the view's own buffer), so the group
+ * is valid before the first frame. `View3DPipeGpu` sets 3 once the view has an environment, 2
+ * when that environment is a cubemap, and 9 and 12 to 14 every frame. The forward passes set 10
+ * and 11 per batch, the shadow pass sets 5, and the render graph sets 7 and 8.
  * @param view3d - The View3D instance to get or create the global WebGPU data for.
  * @param renderer - The renderer whose slot on the View is read.
  * @returns The renderer's global data on the View.
@@ -147,37 +167,8 @@ const LIGHT_SPOT: f32 = 2.0;
 export function getGlobalGpuData(view3d: View3D, renderer: WebGPURenderer): View3DGlobalData {
   let data = view3d._gpuData[renderer.uid];
   if (!data) {
-    const globalUniformGroup = new UniformGroup({
-      uGlobalLightParams: {
-        value: new Float32Array([0, 0, 0, 0]),
-        type: 'vec4<f32>',
-      },
-      uTime: { value: 0, type: 'f32' },
-      // Written by View3DPipe as linear light premultiplied by exposure, so
-      // the fog bits can mix in the same space the lit colour is already in
-      // and the tone curve then shapes fog and scene together.
-      uFogColor: { value: new Float32Array([0, 0, 0]), type: 'vec3<f32>' },
-      uFogParams: { value: new Float32Array([0, 0, 0]), type: 'vec3<f32>' },
-      uExposure: { value: 1, type: 'f32' },
-      uHemisphereSky: { value: new Float32Array([0, 0, 0]), type: 'vec3<f32>' },
-      uHemisphereGround: { value: new Float32Array([0, 0, 0]), type: 'vec3<f32>' },
-      uHemisphereUp: { value: new Float32Array([0, 1, 0]), type: 'vec3<f32>' },
-      // These two arrays stay the last members of the group. The WGSL array sync pixi
-      // generates (`generateArraySyncWGSL`) writes past the end of a `vec4` array, so only
-      // a following array or the end of the buffer can take those extra writes.
-      //
-      // The view's packed light list itself, so packing a light is writing the uniform.
-      uLightData: { value: view3d._lightDataList.data, type: 'vec4<f32>', size: MAX_LIGHTS * 4 },
-      // The view's packed shadow list itself, so adding a slot is writing the uniform.
-      uShadowData: { value: view3d._shadowDataList.data, type: 'vec4<f32>', size: MAX_SHADOW_SLOTS * 6 },
-    });
+    const globalUniformGroup = createGlobalUniformGroup(view3d._lightDataList.data, view3d._shadowDataList.data);
 
-    globalUniformGroup.isStatic = true;
-    globalUniformGroup.ubo = false;
-
-    // Realize the group's GPU buffer now (pixi would otherwise create it at
-    // first upload) so it can be exempted from the renderer GC before any
-    // render bundle bakes a reference to it.
     renderer.ubo.ensureUniformGroup(globalUniformGroup);
     globalUniformGroup.buffer!.autoGarbageCollect = false;
 
@@ -191,21 +182,21 @@ export function getGlobalGpuData(view3d: View3D, renderer: WebGPURenderer): View
     brdfLutStyle.addressMode = 'clamp-to-edge';
 
     const globalBindGroup = new BindGroup({
-      0: globalUniformGroup, // uniform struct (fog, lights, time)
-      1: style, // uSampler
-      2: CUBETEXTURE_EMPTY.source, // uEnvironmentTexture
-      3: Texture.EMPTY.source, // uBrdfLutTexture
-      4: brdfLutStyle, // uBrdfLutSampler
-      5: DEPTH_EMPTY.source, // uShadowMap
-      6: shadowStyle, // uShadowSampler
-      7: DEPTH_VIEW_PLACEHOLDER, // uOpaqueDepthTexture (placeholder)
-      8: Texture.EMPTY.source, // uOpaqueColorTexture (placeholder)
-      9: EMPTY_BUFFER_RESOURCE, // uRenderableStorage (set per batch)
-      10: EMPTY_BUFFER_RESOURCE, // uRenderableInstanceStorage (set per batch)
-      11: view3d._bonePit.bufferResource, // uBonePitStorage
-      12: EMPTY_BUFFER_RESOURCE, // uMorphStorage (shared morph store, set per frame)
-      13: EMPTY_BUFFER_RESOURCE, // uGeometryStorage (shared geometry data store, set per frame)
-      14: EMPTY_BUFFER_RESOURCE, // uMaterialStorage (set per frame)
+      0: globalUniformGroup,
+      1: style,
+      2: CUBETEXTURE_EMPTY.source,
+      3: Texture.EMPTY.source,
+      4: brdfLutStyle,
+      5: DEPTH_EMPTY.source,
+      6: shadowStyle,
+      7: DEPTH_VIEW_PLACEHOLDER,
+      8: Texture.EMPTY.source,
+      9: UINT_EMPTY.source,
+      10: EMPTY_BUFFER_RESOURCE,
+      11: EMPTY_BUFFER_RESOURCE,
+      12: view3d._bonePit.bufferResource,
+      13: EMPTY_BUFFER_RESOURCE,
+      14: EMPTY_BUFFER_RESOURCE,
     });
 
     data = new View3DGlobalData(globalUniformGroup, globalBindGroup);

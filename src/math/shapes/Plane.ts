@@ -7,20 +7,22 @@ import type { Ray } from './Ray';
 import type { Sphere } from './Sphere';
 
 /**
- * The `Plane` object represents a 3D plane in Hessian normal form: `normal . p + constant = 0`
+ * An infinite flat plane: the points `p` where `normal · p + constant = 0`
  *
- * The `normal` is assumed to be unit length; methods that depend on this assumption call out the
- * requirement.
+ * `constant` is the origin's signed distance from the plane, so the ground `y = 0` is
+ * `new Plane(new Vector3(0, 1, 0), 0)` and the plane `y = 2` has a constant of `-2`. The side
+ * `normal` points to is the positive side.
  *
- * Math operations follow the unified mutating-default pattern: `a.normalize()` mutates `a`;
- * `a.normalize(out)` writes the result into `out` without mutating `a`.
+ * Keep `normal` unit length so distances come out in world units; {@link Plane#normalize} fixes
+ * one that isn't. Methods that change the plane do so in place, or write into an `out` plane when
+ * you pass one and leave this plane as it is.
  * @example
  * ```ts
- * // Plane with normal +Y, passing through origin (the XZ plane)
- * const plane = new Plane(new Vector3(0, 1, 0), 0);
+ * const water = new Plane(new Vector3(0, 1, 0), -waterLevel);
  *
- * plane.distanceToPoint({ x: 0, y: 5, z: 0 }); // 5
- * plane.intersectsSphere(sphere);
+ * app.ticker.add(() => {
+ *   underwaterFilter.enabled = water.distanceToPoint(camera.position) < 0;
+ * });
  * ```
  * @see {@link Box} For the axis-aligned bounding box counterpart
  * @see {@link Sphere} For the bounding-sphere counterpart
@@ -29,24 +31,38 @@ import type { Sphere } from './Sphere';
  * @standard
  */
 export class Plane {
-  /** The (unit-length) normal of the plane */
+  /**
+   * The unit-length direction the plane faces; its positive side
+   * @example
+   * ```ts
+   * const facingUp = slope.normal.y > 0.7;
+   * ```
+   */
   public readonly normal: Vector3;
-  /** The signed distance from the origin to the plane along `normal` */
-  public constant: number;
+  /**
+   * The origin's signed distance from the plane, negative when the origin is behind it
+   * @example
+   * ```ts
+   * water.constant = -waterLevel;
+   * ```
+   */
+  public constant = 0;
 
   /**
-   * The type of the object, mainly used to avoid `instanceof` checks
+   * Names the shape without an `instanceof` check, like the `type` on pixi's 2D shapes
    * @readonly
    * @default 'plane'
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'plane';
 
   /**
    * Creates a new `Plane`
    *
-   * The `normal` is assumed to be normalized.
+   * Left out, the plane is `x = 0` facing +X. A normal passed in becomes the plane's own; it is
+   * not copied, and it is assumed to be normalized.
    * @param normal - The unit-length normal of the plane
-   * @param constant - The signed distance from the origin to the plane
+   * @param constant - The origin's signed distance from the plane
    */
   constructor(normal?: Vector3, constant = 0) {
     this.normal = normal !== undefined ? normal : new Vector3(1, 0, 0);
@@ -54,9 +70,13 @@ export class Plane {
   }
 
   /**
-   * Sets the normal and constant of this plane
+   * Sets the normal and constant of this plane, copying the normal
+   * @example
+   * ```ts
+   * ceiling.set({ x: 0, y: -1, z: 0 }, roomHeight);
+   * ```
    * @param normal - The unit-length normal
-   * @param constant - The signed distance from the origin
+   * @param constant - The origin's signed distance from the plane
    * @returns This plane for chaining
    */
   public set(normal: PointData3D, constant: number): this {
@@ -67,10 +87,14 @@ export class Plane {
   }
 
   /**
-   * Sets the plane components from `(x, y, z, w)`
+   * Sets the normal to `(x, y, z)` and the constant to `w`, the four numbers of a plane equation
    *
-   * Equivalent to `set({ x, y, z }, w)`. Useful for extracting frustum planes from a projection
-   * matrix.
+   * Same as `set({ x, y, z }, w)`. Equations from elsewhere, such as rows of a projection matrix,
+   * rarely have a unit-length normal, so normalize after.
+   * @example
+   * ```ts
+   * clipPlane.setComponents(equation[0], equation[1], equation[2], equation[3]).normalize();
+   * ```
    * @param x - The x component of the normal
    * @param y - The y component of the normal
    * @param z - The z component of the normal
@@ -86,6 +110,10 @@ export class Plane {
 
   /**
    * Sets this plane from a unit-length `normal` and a coplanar `point`
+   * @example
+   * ```ts
+   * mirrorPlane.setFromNormalAndCoplanarPoint({ x: 0, y: 0, z: 1 }, mirror.position);
+   * ```
    * @param normal - The unit-length normal
    * @param point - A point on the plane
    * @returns This plane for chaining
@@ -99,6 +127,10 @@ export class Plane {
 
   /**
    * Copies `plane` into this plane
+   * @example
+   * ```ts
+   * reflectionPlane.copyFrom(water);
+   * ```
    * @param plane - The plane to copy from
    * @returns This plane for chaining
    */
@@ -111,6 +143,10 @@ export class Plane {
 
   /**
    * Copies this plane into `target` and returns it
+   * @example
+   * ```ts
+   * water.copyTo(reflectionPlane);
+   * ```
    * @param target - The plane to copy into
    * @returns The given `target`
    */
@@ -123,6 +159,10 @@ export class Plane {
 
   /**
    * Creates a new `Plane` with the same normal and constant
+   * @example
+   * ```ts
+   * const worldPlane = localPlane.clone().applyMatrix4(portal.worldTransform);
+   * ```
    * @returns The new plane
    */
   public clone(): Plane {
@@ -131,6 +171,10 @@ export class Plane {
 
   /**
    * Returns true when `normal` and `constant` match `plane` exactly (no epsilon tolerance)
+   * @example
+   * ```ts
+   * if (!clipPlane.equals(lastClipPlane)) rebuildClipping(clipPlane);
+   * ```
    * @param plane - The plane to compare with
    * @returns Whether the normal and constant match
    */
@@ -139,10 +183,14 @@ export class Plane {
   }
 
   /**
-   * Normalizes the plane so `normal` has unit length
+   * Scales the plane so `normal` has unit length
    *
    * The constant is scaled by the same factor so the plane equation is preserved. Calling on a
    * zero-length normal produces NaN.
+   * @example
+   * ```ts
+   * const slope = new Plane(new Vector3(0, 2, 1), 0).normalize();
+   * ```
    * @param out - Target to write the result into instead of mutating this plane
    * @returns The result plane for chaining
    */
@@ -157,6 +205,10 @@ export class Plane {
 
   /**
    * Returns the signed distance from `point` to this plane (positive on the side of `normal`)
+   * @example
+   * ```ts
+   * const depth = -water.distanceToPoint(diver.position);
+   * ```
    * @param point - The point to measure from
    * @returns The signed distance to the plane
    */
@@ -165,7 +217,14 @@ export class Plane {
   }
 
   /**
-   * Writes the projection of `point` onto this plane into `out` (or a new `Vector3`)
+   * Writes the closest point on this plane to `point` into `out` (or a new `Vector3`)
+   * @example
+   * ```ts
+   * const footprint = new Vector3();
+   *
+   * ground.projectPoint(ball.position, footprint);
+   * blobShadow.position.copyFrom(footprint);
+   * ```
    * @param point - The point to project
    * @param out - Optional vector to write into; a new `Vector3` when omitted
    * @returns The projected point
@@ -177,25 +236,37 @@ export class Plane {
   }
 
   /**
-   * Returns true when `box` straddles this plane
+   * Returns true when this plane passes through `box` or touches it; same as {@link Box#intersectsPlane}
+   * @example
+   * ```ts
+   * const halfSubmerged = water.intersectsBox(boatBounds);
+   * ```
    * @param box - The box to test
-   * @returns Whether the box straddles this plane
+   * @returns Whether the plane passes through or touches the box
    */
   public intersectsBox(box: Box): boolean {
     return box.intersectsPlane(this);
   }
 
   /**
-   * Returns true when `sphere` straddles this plane
+   * Returns true when this plane passes through `sphere` or touches it; never for an empty sphere
+   * @example
+   * ```ts
+   * const splashing = water.intersectsSphere(ball.boundingSphere);
+   * ```
    * @param sphere - The sphere to test
-   * @returns Whether the sphere straddles this plane
+   * @returns Whether the plane passes through or touches the sphere
    */
   public intersectsSphere(sphere: Sphere): boolean {
     return sphere.intersectsPlane(this);
   }
 
   /**
-   * Returns true when `ray` intersects this plane
+   * Returns true when `ray` hits this plane; same as {@link Ray#intersectsPlane}
+   * @example
+   * ```ts
+   * cursor.visible = ground.intersectsRay(pointerRay);
+   * ```
    * @param ray - The ray to test
    * @returns Whether the ray intersects this plane
    */
@@ -204,11 +275,21 @@ export class Plane {
   }
 
   /**
-   * Transforms this plane by `matrix`, assumed affine (bottom row `[0, 0, 0, 1]`)
+   * Transforms this plane by an affine `matrix`, so points on it stay on it
    *
-   * The normal is transformed by the cofactor matrix of the upper-left 3x3 (equivalent to
-   * det * inverse-transpose) and renormalized; the det-scaling drops out, so no determinant is
-   * computed.
+   * The normal goes through the cofactor matrix of the matrix's 3x3 part, which is the inverse
+   * transpose scaled by the determinant, then is normalized. That keeps it at right angles to the
+   * plane under non-uniform scale without inverting anything. The determinant's sign survives:
+   * a mirroring matrix also swaps which side of the plane is positive.
+   *
+   * Needs a unit-length `normal`. `matrix` must be affine (bottom row `[0, 0, 0, 1]`), as a
+   * {@link Container3D#worldTransform} always is.
+   * @example
+   * ```ts
+   * const worldMirror = new Plane();
+   *
+   * localMirror.applyMatrix4(mirror.worldTransform, worldMirror);
+   * ```
    * @param matrix - The affine matrix to transform by
    * @param out - Target to write the result into instead of mutating this plane
    * @returns The result plane for chaining
@@ -256,6 +337,7 @@ export class Plane {
   /**
    * Returns a string representation of this plane
    * @returns A string in the form `[pixi-3d/math:Plane normal=(1, 0, 0) constant=0]`
+   * @advanced
    */
   public toString(): string {
     return `[pixi-3d/math:Plane normal=(${this.normal.x}, ${this.normal.y}, ${this.normal.z}) constant=${this.constant}]`;

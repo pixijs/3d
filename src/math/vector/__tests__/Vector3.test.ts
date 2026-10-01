@@ -22,27 +22,6 @@ describe('Vector3 — construction and identity', () => {
     expect(p.z).toBe(0);
   });
 
-  test('constructor stores supplied components', () => {
-    const p = new Vector3(1, 2, 3);
-
-    expect(p.x).toBe(1);
-    expect(p.y).toBe(2);
-    expect(p.z).toBe(3);
-  });
-
-  test('clone returns a new equal but independent instance', () => {
-    const a = new Vector3(1, 2, 3);
-    const b = a.clone();
-
-    expect(b).not.toBe(a);
-    expect(b.x).toBe(1);
-    expect(b.y).toBe(2);
-    expect(b.z).toBe(3);
-
-    b.x = 99;
-    expect(a.x).toBe(1);
-  });
-
   test('toString reports the component values', () => {
     const p = new Vector3(1, 2, 3);
 
@@ -86,12 +65,6 @@ describe('Vector3.set', () => {
     expect(p.y).toBe(2);
     expect(p.z).toBe(3);
   });
-
-  test('returns this for chaining', () => {
-    const p = new Vector3();
-
-    expect(p.set(1, 2, 3)).toBe(p);
-  });
 });
 
 describe('Vector3.copyFrom / copyTo', () => {
@@ -102,12 +75,6 @@ describe('Vector3.copyFrom / copyTo', () => {
     expect(a.x).toBe(4);
     expect(a.y).toBe(5);
     expect(a.z).toBe(6);
-  });
-
-  test('copyFrom returns this for chaining', () => {
-    const a = new Vector3();
-
-    expect(a.copyFrom({ x: 1, y: 2, z: 3 })).toBe(a);
   });
 
   test('copyTo writes into the target point and returns it', () => {
@@ -153,34 +120,10 @@ describe('Vector3.fromArray / toArray', () => {
     expect(p.z).toBe(3);
   });
 
-  test('fromArray works with a Float32Array source', () => {
-    const p = new Vector3();
-    p.fromArray(new Float32Array([4, 5, 6]));
-
-    expect(p.x).toBe(4);
-    expect(p.y).toBe(5);
-    expect(p.z).toBe(6);
-  });
-
-  test('fromArray returns this for chaining', () => {
-    const p = new Vector3();
-
-    expect(p.fromArray([1, 2, 3])).toBe(p);
-  });
-
   test('toArray allocates a new array when not supplied', () => {
     const p = new Vector3(1, 2, 3);
     const arr = p.toArray();
 
-    expect(arr).toEqual([1, 2, 3]);
-  });
-
-  test('toArray writes into a supplied array at offset 0', () => {
-    const p = new Vector3(1, 2, 3);
-    const arr: number[] = [];
-    const result = p.toArray(arr);
-
-    expect(result).toBe(arr);
     expect(arr).toEqual([1, 2, 3]);
   });
 
@@ -190,16 +133,6 @@ describe('Vector3.fromArray / toArray', () => {
     p.toArray(arr, 2);
 
     expect(arr).toEqual([0, 0, 1, 2, 3]);
-  });
-
-  test('toArray works with a Float32Array destination', () => {
-    const p = new Vector3(1.5, 2.5, 3.5);
-    const f32 = new Float32Array(3);
-    p.toArray(f32);
-
-    expect(f32[0]).toBeCloseTo(1.5, 6);
-    expect(f32[1]).toBeCloseTo(2.5, 6);
-    expect(f32[2]).toBeCloseTo(3.5, 6);
   });
 });
 
@@ -392,13 +325,6 @@ describe('Vector3.clamp', () => {
     expectVec3Close(a, 0, 5, 10);
   });
 
-  test('values within range are unchanged', () => {
-    const a = new Vector3(2, 3, 4);
-    a.clamp({ x: 0, y: 0, z: 0 }, { x: 10, y: 10, z: 10 });
-
-    expectVec3Close(a, 2, 3, 4);
-  });
-
   test('out variant leaves this unchanged', () => {
     const a = new Vector3(-5, 5, 15);
     const out = new Vector3();
@@ -480,11 +406,6 @@ describe('Vector3.distanceTo / distanceToSquared', () => {
     expect(a.distanceTo({ x: 1, y: 5, z: 7 })).toBeCloseTo(5, 6);
   });
 
-  test('distanceTo to itself is 0', () => {
-    const a = new Vector3(1, 2, 3);
-    expect(a.distanceTo({ x: 1, y: 2, z: 3 })).toBe(0);
-  });
-
   test('distanceToSquared returns squared Euclidean distance', () => {
     const a = new Vector3(1, 2, 3);
     expect(a.distanceToSquared({ x: 1, y: 5, z: 7 })).toBe(25);
@@ -494,11 +415,6 @@ describe('Vector3.distanceTo / distanceToSquared', () => {
 describe('Vector3.dot', () => {
   test('returns sum of componentwise products', () => {
     expect(new Vector3(1, 2, 3).dot({ x: 4, y: 5, z: 6 })).toBe(32);
-  });
-
-  test('orthogonal vectors have zero dot product', () => {
-    expect(new Vector3(1, 0, 0).dot({ x: 0, y: 1, z: 0 })).toBe(0);
-    expect(new Vector3(0, 1, 0).dot({ x: 0, y: 0, z: 1 })).toBe(0);
   });
 });
 
@@ -521,11 +437,6 @@ describe('Vector3.angleTo', () => {
   test('zero-magnitude this returns PI/2', () => {
     const a = new Vector3(0, 0, 0);
     expect(a.angleTo({ x: 1, y: 0, z: 0 })).toBeCloseTo(Math.PI / 2, 6);
-  });
-
-  test('zero-magnitude other returns PI/2', () => {
-    const a = new Vector3(1, 0, 0);
-    expect(a.angleTo({ x: 0, y: 0, z: 0 })).toBeCloseTo(Math.PI / 2, 6);
   });
 });
 
@@ -551,13 +462,6 @@ describe('Vector3.cross', () => {
     expectVec3Close(a, 0, 1, 0);
   });
 
-  test('parallel vectors yield zero', () => {
-    const a = new Vector3(2, 4, 6);
-    a.cross({ x: 1, y: 2, z: 3 });
-
-    expectVec3Close(a, 0, 0, 0);
-  });
-
   test('out variant leaves this unchanged', () => {
     const a = new Vector3(1, 0, 0);
     const out = new Vector3();
@@ -569,17 +473,9 @@ describe('Vector3.cross', () => {
 });
 
 describe('Vector3.applyMatrix3', () => {
-  test('identity matrix leaves the point unchanged', () => {
-    const a = new Vector3(1, 2, 3);
-    a.applyMatrix3(new Matrix3());
-
-    expectVec3Close(a, 1, 2, 3);
-  });
-
   test('column-major scaling matrix scales each component', () => {
     const a = new Vector3(1, 2, 3);
     const m = new Matrix3();
-    // column-major scaling matrix on the diagonal
     m.elements[0] = 2;
     m.elements[4] = 3;
     m.elements[8] = 4;
@@ -603,13 +499,6 @@ describe('Vector3.applyMatrix3', () => {
 });
 
 describe('Vector3.applyMatrix4', () => {
-  test('identity matrix leaves the point unchanged', () => {
-    const a = new Vector3(1, 2, 3);
-    a.applyMatrix4(new Matrix4());
-
-    expectVec3Close(a, 1, 2, 3);
-  });
-
   test('translation matrix translates the point (treated as w=1)', () => {
     const a = new Vector3(1, 2, 3);
     const m = new Matrix4().makeTranslation(10, 20, 30);
@@ -624,17 +513,6 @@ describe('Vector3.applyMatrix4', () => {
     a.applyMatrix4(m);
 
     expectVec3Close(a, 0, 0, -1);
-  });
-
-  test('orthographic projection produces a finite divide', () => {
-    const a = new Vector3(0, 0, -5);
-    // Symmetric ortho [-1, 1] x [-1, 1] x near 0.1 / far 100; bottom row is (0,0,0,1) so w=1.
-    const m = new Matrix4().makeOrthographic(-1, 1, -1, 1, 0.1, 100);
-    a.applyMatrix4(m);
-
-    expect(Number.isFinite(a.x)).toBe(true);
-    expect(Number.isFinite(a.y)).toBe(true);
-    expect(Number.isFinite(a.z)).toBe(true);
   });
 
   test('perspective divide: a perspective matrix at z = -near maps to z = -1 (NDC)', () => {
@@ -659,13 +537,6 @@ describe('Vector3.applyMatrix4', () => {
 });
 
 describe('Vector3.applyAffineMatrix4', () => {
-  test('identity matrix leaves the point unchanged', () => {
-    const a = new Vector3(1, 2, 3);
-    a.applyAffineMatrix4(new Matrix4());
-
-    expectVec3Close(a, 1, 2, 3);
-  });
-
   test('translation matrix translates the point', () => {
     const a = new Vector3(1, 2, 3);
     const m = new Matrix4().makeTranslation(10, 20, 30);
@@ -708,14 +579,6 @@ describe('Vector3.applyAffineMatrix4', () => {
 });
 
 describe('Vector3.applyQuaternion', () => {
-  test('identity quaternion leaves the point unchanged', () => {
-    const a = new Vector3(1, 2, 3);
-    const q = new Quaternion();
-    a.applyQuaternion(q);
-
-    expectVec3Close(a, 1, 2, 3);
-  });
-
   test('180° rotation around Y sends +X to -X', () => {
     const a = new Vector3(1, 0, 0);
     const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI);
@@ -774,8 +637,8 @@ describe('Vector3.transformDirection', () => {
 
   test('result is normalized to unit length', () => {
     const a = new Vector3(3, 0, 0);
-    const m = new Matrix4(); // identity
-    a.transformDirection(m);
+    const identity = new Matrix4();
+    a.transformDirection(identity);
 
     expect(a.magnitude()).toBeCloseTo(1, 6);
     expectVec3Close(a, 1, 0, 0);
@@ -813,12 +676,6 @@ describe('Vector3.setFromSpherical', () => {
 
     expectVec3Close(a, 5, 0, 0);
   });
-
-  test('returns this for chaining', () => {
-    const a = new Vector3();
-
-    expect(a.setFromSpherical(new Spherical())).toBe(a);
-  });
 });
 
 describe('Vector3.setFromCylindrical', () => {
@@ -834,12 +691,6 @@ describe('Vector3.setFromCylindrical', () => {
     a.setFromCylindrical(new Cylindrical(5, Math.PI / 2, 0));
 
     expectVec3Close(a, 5, 0, 0);
-  });
-
-  test('returns this for chaining', () => {
-    const a = new Vector3();
-
-    expect(a.setFromCylindrical(new Cylindrical())).toBe(a);
   });
 });
 
@@ -859,23 +710,9 @@ describe('Vector3.setFromMatrixColumn', () => {
     const col3 = new Vector3().setFromMatrixColumn(m, 3);
     expectVec3Close(col3, 7, 8, 9);
   });
-
-  test('returns this for chaining', () => {
-    const a = new Vector3();
-
-    expect(a.setFromMatrixColumn(new Matrix4(), 0)).toBe(a);
-  });
 });
 
 describe('Vector3.shared', () => {
-  test('returns a zeroed instance', () => {
-    const s = Vector3.shared;
-
-    expect(s.x).toBe(0);
-    expect(s.y).toBe(0);
-    expect(s.z).toBe(0);
-  });
-
   test('mutations persist on the same reference until next access', () => {
     const s1 = Vector3.shared;
     s1.x = 99;

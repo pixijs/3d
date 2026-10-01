@@ -1,9 +1,7 @@
 /**
  * URLs the Draco worker loads the decoder from, defaulting to Google's hosted build
  *
- * Mirrors Pixi's Basis Universal `setBasisTranscoderPath` pattern. Users that prefer to
- * self-host can call {@link setDracoDecoderPath} with their own paths before loading any
- * Draco-compressed glTF assets.
+ * Change them with {@link setDracoDecoderPath}.
  * @category assets
  * @advanced
  */
@@ -15,10 +13,19 @@ export const dracoDecoderUrls = {
 /**
  * Overrides where the Draco decoder is fetched from, for self-hosted deployments
  *
- * Call before loading any Draco-compressed glTF assets.
+ * Works like pixi's `setBasisTranscoderPath`. Call it before loading the first Draco-compressed
+ * file: the decoder loads once, on that first decode. A relative URL resolves against the page's
+ * origin, not the page's path.
+ * @example
+ * ```ts
+ * setDracoDecoderPath({
+ *   jsUrl: '/draco/draco_wasm_wrapper.js',
+ *   wasmUrl: '/draco/draco_decoder.wasm',
+ * });
+ * ```
  * @param config - Replacement decoder JS/WASM URLs; omitted fields keep their current value
  * @category assets
- * @advanced
+ * @standard
  */
 export function setDracoDecoderPath(config: Partial<typeof dracoDecoderUrls>): void {
   Object.assign(dracoDecoderUrls, config);

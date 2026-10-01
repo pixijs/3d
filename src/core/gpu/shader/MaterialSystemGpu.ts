@@ -2,9 +2,11 @@ import type { ShaderGroups, WebGPURenderer } from 'pixi.js';
 import { DOMAdapter, ExtensionType, Shader } from 'pixi.js';
 
 import {
+  getMaterialLayout,
   validateMaterialStruct,
   validateMaterialTextureSlots,
 } from '../../../materials/utils/validateMaterialTextureSlots';
+import type { MaterialLayout } from '../../../materials/utils/validateMaterialTextureSlots';
 import type { View3D } from '../../../scene/View3D';
 import { Mesh3DBatcher } from '../../batcher/Mesh3DBatcher';
 import { MeshPassCache } from '../../batcher/Mesh3DData';
@@ -33,13 +35,44 @@ import { morphTargetBitGpu, morphTargetNormalBitGpu } from '../bits/morphTargetB
 import { shadowBitsGpu } from '../bits/shadowBitGpu';
 import { skinningBitGpu } from '../bits/skinningBitGpu';
 import { compileWgslSource } from '../codegen/compileWgslSource';
-import { materialStoragePaddingPlugin } from '../codegen/materialStoragePaddingPlugin';
+import { materialTextureAccessPlugin } from '../codegen/materialTextureAccessPlugin';
 import { globalBitGpu } from './globalBitGpu';
 import { createTexturesPluginGpu, prefersSelectSampler } from './texturesPluginGpu';
 
-/** Reusable descriptor — avoids allocating a new one each ensureMaterial call */
+/** Reused by every `ensureMaterial` call, so resolving a material allocates no descriptor */
 const scratchDescriptor = new ShaderDescriptor({});
 
+/**
+ * The WGSL module every material shader is built from, both stages in one source
+ *
+ * The vertex stage fills its slots in this order:
+ *
+ * - `vertexInput` decodes the attributes into the `position`, `normal`, `tangent` and `uv` locals.
+ *   `compileShader` appends the position, morph and skinning bits after every other bit, in
+ *   that order, so skinning sees the decoded, morphed position.
+ * - `vertexBeforeTransform` changes what feeds the world transform, such as particle motion.
+ * - The template builds `worldPosition`, `worldNormal` and `clipPosition` as `var`s.
+ * - `vertexAfterTransform` may rewrite those, as billboarding and fog depth do.
+ * - `vertexEnd` adjusts the locals last, as `uvTransformBit` does, and the template then writes
+ *   the varyings once.
+ *
+ * `normal` starts as +Z for a geometry with no normals, and `normalBit` overwrites it. The world
+ * normal is the model matrix's upper 3×3 times the normal divided by each column's squared length.
+ * For a rotation-and-scale matrix that equals the inverse transpose, which tilts a normal away
+ * from a stretched axis, at three dot products instead of an inverse. Tangents lie in the surface,
+ * so bits transform them by `modelMatrix3` directly. `modelMatrix3` is built after
+ * `vertexBeforeTransform`, so a bit there that replaces `modelMatrix` is picked up.
+ *
+ * The vertex stage sets the private `_textureSlots` the texture getters read, as the fragment stage
+ * does from `vTextureSlots`, so a displacement bit can sample with `sampleXDirect`. WebGL's getters
+ * read `vTextureSlots` itself, which its vertex stage has already written.
+ *
+ * The fragment stage declares `material` before any slot, so every bit can read it. `finalColor`
+ * starts as `albedo`, the unlit result, and lighting bits overwrite it in `fragmentLighting`. It
+ * is multiplied by `uExposure` before `fragmentEnd`, where fog and tone mapping run, and returned
+ * premultiplied by alpha for pixi's default `normal` blend mode. Textures stay straight alpha, as
+ * they are in 2D, so a transparent material needs no blend mode of its own.
+ */
 const gpuTemplate = /*wgsl*/ `
 
 
@@ -47,9 +80,6 @@ const gpuTemplate = /*wgsl*/ `
 {{textureGetters}}
 {{vertexHeader}}
 
-//=============================================================================
-// VERTEX SHADER
-//=============================================================================
 @vertex
 fn mainVertex(input: VertexInput,
   @builtin(instance_index) ii: u32,
@@ -58,8 +88,6 @@ fn mainVertex(input: VertexInput,
   var output: VertexOutput;
 
   var position: vec4<f32>;
-  // Default normal for geometries with no aNormal attribute; normalBit
-  // overwrites it in the input slot when the geometry has one.
   var normal = vec3<f32>(0.0, 0.0, 1.0);
   var tangent = vec3<f32>(0.0);
   var uv = vec2<f32>(0.0);
@@ -67,38 +95,21 @@ fn mainVertex(input: VertexInput,
   let inst = uRenderableInstanceStorage[ii];
   let renderable = uRenderableStorage[inst.id];
   let textureSlots = inst.texSlots;
-  let material = uMaterialStorage[renderable.materialIndex];
+  let vMaterialIndex = renderable.materialIndex;
+  {{vertexMaterialAccess}}
 
-  // Vertex-stage texture reads (displacement bits) go through the same
-  // sampleXxxDirect helpers as the fragment stage, and those read this private.
-  // WebGL gets it for free — vTextureSlots is a varying written in the vertex
-  // stage — so without this line the two backends silently disagree.
   _textureSlots = textureSlots;
 
   let batchWorldMatrix = uRenderableStorage[0].transform;
   var modelMatrix = batchWorldMatrix * renderable.transform;
 
-  // Stage 1 — attribute decode + raw input prep.
-  // positionBit, skinningBit, uvsBit, tangent decode live here.
   {{vertexInput}}
 
-  // Stage 2 — override values that feed the world/clip transform.
-  // Billboards, vertex displacement, custom skinning fallbacks.
   {{vertexBeforeTransform}}
 
-  // Standard transform. worldPosition / worldNormal / clipPosition are vars
-  // so afterTransform bits can reassign them.
   var worldPosition = modelMatrix * position;
-  // Directions take the rotation/scale block only — translation must not apply.
-  // Built after beforeTransform so instancing bits that reassign modelMatrix are
-  // picked up.
   let modelMatrix3 = mat3x3<f32>(modelMatrix[0].xyz, modelMatrix[1].xyz, modelMatrix[2].xyz);
 
-  // A normal transforms by the inverse-transpose, not by the matrix itself:
-  // non-uniform scale has to tilt it *away* from the stretched axis, not into
-  // it. Dividing by each column's squared length first is exactly that for any
-  // rotation-and-scale matrix, at three dot products instead of an inverse.
-  // Tangents lie along the surface, so they use modelMatrix3 directly.
   let normalScale = 1.0 / vec3<f32>(
     dot(modelMatrix3[0], modelMatrix3[0]),
     dot(modelMatrix3[1], modelMatrix3[1]),
@@ -107,16 +118,10 @@ fn mainVertex(input: VertexInput,
   var worldNormal = modelMatrix3 * (normal * normalScale);
   var clipPosition = camera.uViewProjectionMatrix * worldPosition;
 
-  // Stage 3 — modify worldPosition / clipPosition after the standard transform.
-  // Depth bias, projection tricks.
   {{vertexAfterTransform}}
 
-  // Stage 4 — modify the locals the template is about to publish as varyings.
   {{vertexEnd}}
 
-  // Publish varyings once, after end-slot bits have finished mutating locals
-  // (uvTransformBit -> uv, future bits may mutate worldNormal/uv/etc).
-  // NOTE: vMaterialIndex is u32, so it must be flat-interpolated in WGSL.
   output.position       = clipPosition;
   output.vPosition      = worldPosition.xyz;
   output.vNormal        = worldNormal;
@@ -127,9 +132,6 @@ fn mainVertex(input: VertexInput,
   return output;
 }
 
-//=============================================================================
-// FRAGMENT SHADER - MAIN
-//=============================================================================
 @fragment
 fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
   _textureSlots = input.vTextureSlots;
@@ -138,33 +140,24 @@ fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
   var finalColor: vec3<f32>;
   var alpha: f32 = 1.0;
 
-  // Per-fragment Material struct. Declared here so any bit can reference
-  // material.X regardless of its position in the descriptor.
-  var material = uMaterialStorage[input.vMaterialIndex];
+  let vMaterialIndex = input.vMaterialIndex;
+  {{fragmentMaterialAccess}}
 
   {{fragmentMaterial}}
 
-  // Unlit default — picks up modulation from any bit that wrote into albedo.
-  // Lighting bits (pbrLightingBit) overwrite finalColor in the lighting slot.
   finalColor = albedo;
 
   {{fragmentLighting}}
 
-  // Linear scene-radiance exposure, applied before any tone-mapping bit's
-  // curve runs. Default uExposure = 1.0 makes this a value-preserving op.
   finalColor *= global.uExposure;
 
   {{fragmentEnd}}
 
-  // Premultiply for Pixi's default 'normal' blend mode (SRC + DST*(1-α)).
-  // Source textures stay non-premultiplied (matching the 2D convention) and
-  // we bridge the gap here, so transparent 3D materials don't need a custom
-  // blendMode. See follow-up issue for the full premul-pipeline discussion.
   return vec4<f32>(finalColor * alpha, alpha);
 }
 `;
 
-/** Defines the shader's layout — forces a constant bind-group layout across material variants */
+/** The varyings the material template writes and its `HAS_UVS` override, declared for every material variant */
 const layoutBit: ShaderBit = {
   name: 'layout',
   overrideDefs: {
@@ -179,15 +172,6 @@ const layoutBit: ShaderBit = {
   },
 };
 
-const materialStorageBindingBit: ShaderBit = {
-  name: 'materialStorageBinding',
-  bindings: {
-    global: {
-      uMaterialStorage: 'storage<Material>',
-    },
-  },
-};
-
 const template: ShaderBitTemplate = {
   bindGroups: ['global', 'camera', 'batch'],
   gpu: gpuTemplate,
@@ -197,15 +181,15 @@ const template: ShaderBitTemplate = {
  * Manages shader compilation and caching for WebGPU 3D materials
  *
  * Materials provide their shader bits via `getPrimaryDescriptor()`. The system
- * adds structural bits (layout, UVs), infrastructure bits (skinning, shadows),
- * compiles once, and caches by a string key derived from all bit names.
+ * adds the bits that depend on the mesh and view (normals, UVs, normal mapping,
+ * skinning, morphing, fog, tone mapping, shadows), compiles once, and caches by
+ * a string key derived from all bit names.
  *
- * Also owns the single `Mesh3DBatcher` instance used by all render
- * passes — there's no per-material-type batcher, the generic batcher handles
- * everything via the flat `material._textures` array.
+ * Also owns the one `Mesh3DBatcher` every render pass uses; it handles every
+ * material type through the flat `material._textures` array.
  *
- * Registered as a WebGPU renderer system (`renderer.material3d`); the pipe
- * exposes it to backend-agnostic passes as `pipe.materialSystem`.
+ * Registered as a WebGPU renderer system, `renderer.material3d`, which is how
+ * the backend-neutral passes and the scene update reach it.
  * @internal
  */
 export class MaterialSystemGpu {
@@ -220,8 +204,8 @@ export class MaterialSystemGpu {
 
   private _destroyed = false;
   private readonly _renderer: WebGPURenderer;
-  /** Flat cache: string key → compiled Shader */
-  public _shaderCache = new Map<string, Shader>();
+  /** Flat cache: string key → compiled Shader, with the material layout its bits declare */
+  public _shaderCache = new Map<string, { shader: Shader; layout: MaterialLayout }>();
   /** Material compiler plugins, chosen for this renderer's GPU; built on first use, once the adapter exists */
   private _materialPlugins: ShaderCompilerPlugin[] | null = null;
 
@@ -250,10 +234,8 @@ export class MaterialSystemGpu {
   }
 
   /**
-   * Compile a standalone shader from a bit list + template (skybox, future screen passes),
-   * prepending the WebGPU `globalBitGpu` so it can read the View3D globals
-   *
-   * WGSL only — the shader only ever runs on a WebGPU renderer.
+   * Compile a standalone shader from a bit list + template (the background pass, post effects),
+   * prepending the WebGPU `globalBitGpu` and the camera bit so it can read the View3D globals
    * @param bits - The shader bits to compile, after the globals
    * @param template - The template supplying the vertex/fragment sources
    */
@@ -277,30 +259,31 @@ export class MaterialSystemGpu {
   /**
    * Compiles (or returns a cached) shader from a {@link ShaderDescriptor}
    *
-   * Prepends the `globalBitGpu` (scene globals at bind group 0) unless the
-   * descriptor sets `includeGlobal: false`, and appends mesh-specific
-   * infrastructure bits (skinning, morph targets in the future), so callers
-   * only provide the bits unique to their pass.
+   * Prepends `globalBitGpu` (scene globals at group 0) and the camera bit (group 1)
+   * unless the descriptor sets `includeGlobal: false` or `includeCamera: false`, and
+   * appends the mesh's position, morph and skinning bits, so callers only provide
+   * the bits unique to their pass. The position bit goes before the other two so
+   * they see dequantized positions, and morphing before skinning so the skin moves
+   * the morphed vertex. The bits added here aren't in the descriptor's key, so their
+   * names join the cache key, and variants with and without them never share an entry.
    *
-   * When `createMaterialSync` is true, a sync function is also created
-   * from the compiled Material struct and attached to `mesh.material`.
+   * With `validateMaterial`, the material's texture slots and struct are checked
+   * against the layout the bits declare, before a wrong match can render. The check
+   * reads the material, so it runs on cache hits too.
    *
    * Use this for custom render passes that need their own shader variant.
    * For the main material shader, use `ensureMaterial` instead.
    * @param descriptor - The shader descriptor containing bits, template, and overrides
-   * @param mesh - The mesh to compile for (used for skeleton detection and sync function)
+   * @param mesh - The mesh to compile for; its geometry and morph and skinning state pick the appended bits
    * @param plugins - Additional compiler plugins to run during compilation (e.g. batch textures)
-   * @param createMaterialSync - When true, generates a sync function to serialise material properties to GPU
+   * @param validateMaterial - Whether to check the mesh's material against the layout the bits declare
    */
   public compileShader(
     descriptor: ShaderDescriptor,
     mesh: Mesh3DData,
     plugins?: ShaderCompilerPlugin[],
-    createMaterialSync?: boolean,
+    validateMaterial?: boolean,
   ): Shader {
-    // Scene globals (bind group 0) and the camera bit (group 1) lead the bit list unless the
-    // descriptor opts out of each, so `global` keeps its binding slots; the names of the ones
-    // included join the key so injected and non-injected variants never alias in cache.
     const finalBits: ShaderBit[] = [];
     let key = '';
     if (descriptor.includeGlobal ?? true) {
@@ -315,23 +298,11 @@ export class MaterialSystemGpu {
     key += descriptor.keyGpu;
     assertCameraGroupProvided(finalBits, descriptor.template!);
 
-    // Position bit must run before skinning so the skin matrix multiplies
-    // dequantized positions. For KHR_mesh_quantization formats (snorm/unorm) the
-    // bit applies the normalization divisor; for float formats the multiply is a
-    // no-op. Either way, downstream bits see the same integer-space value.
-    //
-    // Appended bits aren't part of the descriptor, so their (registry-verified)
-    // names join the key here — `position:<format>` carries the variant.
     const positionBit = getPositionBit(mesh.geometry.attributes.aPosition.format!);
     assertBitIdentity(positionBit);
     finalBits.push(positionBit);
     key += `|${positionBit.name}`;
 
-    // Morph runs after position decode and before skinning, so the skin matrix
-    // multiplies the already-morphed position (and normal). Presence of the mesh's
-    // Morph object is the gate (like `mesh.skeleton` for skinning); the delta
-    // layout — positions-only vs position+normal texel pairs — picks the variant
-    // off the shared geometry. The loop is count-driven, so no per-count permutation.
     if (mesh.morph) {
       if (mesh.geometry.hasMorphNormals) {
         finalBits.push(morphTargetNormalBitGpu);
@@ -348,39 +319,61 @@ export class MaterialSystemGpu {
       key += `|${skinningBitGpu.name}`;
     }
 
-    // Material shaders pack textures from `material._textures` by position;
-    // the compiled sampleX indices walk these bits' `textures` declarations.
-    // Verify the two line up before the shader can render wrong (covers the
-    // cache-hit path too — the check is on the material, not the shader).
-    if (createMaterialSync) {
-      validateMaterialTextureSlots(finalBits, mesh.material);
-      validateMaterialStruct(finalBits, mesh.material);
+    const cached = this._shaderCache.get(key);
+    const layout = cached?.layout ?? getMaterialLayout(finalBits);
+
+    if (validateMaterial) {
+      validateMaterialTextureSlots(layout, mesh.material);
+      validateMaterialStruct(layout, mesh.material);
     }
 
-    let shader = this._shaderCache.get(key);
+    if (cached) return cached.shader;
 
-    if (!shader) {
-      const gpu = compileWgslSource({
-        bits: finalBits,
-        template: descriptor.template!,
-        extraPlugins: plugins,
-      });
+    const gpu = compileWgslSource({
+      bits: finalBits,
+      template: descriptor.template!,
+      extraPlugins: plugins,
+    });
 
-      shader = Shader.from({ gpu, overrides: descriptor.overrides });
-      this._shaderCache.set(key, shader);
-    }
+    const shader = Shader.from({ gpu, overrides: descriptor.overrides });
+    this._shaderCache.set(key, { shader, layout });
 
     return shader;
   }
 
   /**
-   * Makes the mesh's material fully resident for this pipe
+   * Makes the mesh's material resident and returns the shader its main pass draws with
    *
-   * Registers it in the material store (slot + store reference, so data mutations
-   * self-enqueue from then on) and returns a cached shader for its
-   * material + feature set, compiling one if it doesn't exist yet. Also
-   * attaches the material writer function and writes the shader into
-   * `mesh._passCache[..].shader` at the slot determined by `material._passBit`.
+   * Registers the material in the pipe's material store, which gives it a row and makes
+   * its data changes queue themselves for upload from then on. The store is looked up
+   * through `renderer.renderPipes` on each call, not held, because the renderer builds
+   * its pipes after its systems. Then builds the bit list, compiles it or takes the
+   * cached shader, and writes the shader, state and topology into `mesh._passCache` at
+   * the material's pass bit; `PassDescriptor` says how state and topology resolve.
+   *
+   * Bits run in list order and several write the same slots, so the order matters:
+   *
+   * - Flat shading goes after the back-face flip and before normal mapping, so a normal
+   *   map perturbs the face normal rather than being replaced by it.
+   * - Normal mapping goes before the material's bits, so a bit such as transmission
+   *   refracts along the perturbed normal.
+   * - Vertex colour goes before the material's bits, which then see the tinted `albedo`.
+   *   Metals pick up the tint through `pbrMaterialBit`'s `mix(F0, albedo, metallic)`. A
+   *   material sets `vertexColors: false` when its colour attribute carries data.
+   * - Billboarding goes before the material's bits and the fog bit. All three may write
+   *   `vertexAfterTransform`, and the other two read the `worldPosition` it rebuilds. Its
+   *   lit variant also turns the normal, which unlit materials never read.
+   * - Fog goes before tone mapping. Both write `fragmentEnd`, and fog is scattered light,
+   *   so it joins the scene in linear light and goes through the same tone curve.
+   * - Only lit materials get a shadow bit, since only they have a light loop calling
+   *   `calculateShadow`. It is the real sampler when the mesh receives shadows and a light
+   *   in the view has cast one, and `noShadowBit` otherwise.
+   *
+   * The material's own bits carry its environment lighting, because those bits read
+   * PBR-specific locals. On a mesh with a `TANGENT` attribute, `anisotropyTangentVariant`
+   * swaps an anisotropy bit for the variant that reads the vertex tangent instead of
+   * deriving one from UVs. The list starts with `globalBitGpu`, so the descriptor turns
+   * off `compileShader`'s own prepend of it and keeps the camera bit's.
    * @param mesh - The mesh whose material becomes resident
    * @param view3d - The view the mesh renders in; picks the material's primary descriptor
    */
@@ -388,95 +381,48 @@ export class MaterialSystemGpu {
     const geometry = mesh.geometry;
     const material = mesh.material;
 
-    // The store lives on the pipe (it feeds the pipe's per-frame upload);
-    // resolved lazily — pipes are constructed after systems at renderer init.
     this._renderer.renderPipes.view3d.materialStoreBuffer.register(material);
     const passBit = material._passBit & RenderPassBit.MATERIAL_PASS_MASK;
 
     const pd = material._passes[passBit];
     const materialDescriptor = material.getPrimaryDescriptor(view3d);
 
-    const bitsGpu: ShaderBit[] = [globalBitGpu, layoutBit, materialStorageBindingBit];
+    const bitsGpu: ShaderBit[] = [globalBitGpu, layoutBit];
 
     if (geometry.attributes.aNormal) bitsGpu.push(normalBit);
     if (geometry.attributes.aUV) bitsGpu.push(getUvsBit(geometry.attributes.aUV.format!));
     if (material.doubleSided) bitsGpu.push(doubleSidedNormalBit);
 
-    // After the back-face flip, before normal mapping, so a normal map perturbs
-    // the face normal instead of being overwritten by it.
     if (material.flatShading) bitsGpu.push(flatShadingBit);
 
-    // Normal mapping variant selection — must come before descriptor bits
-    // so that bits like transmissionBit see the perturbed normal for refraction.
     const normalTexture = material.textures.normal;
 
     if (normalTexture && normalTexture !== NORMAL_MAP && geometry.attributes.aUV) {
       bitsGpu.push(geometry.attributes.aTangent ? tangentNormalMappingBit : normalMappingBit);
     }
 
-    // Auto-inject vertex-color tint when geometry has aColor and the material
-    // wants it — `vertexColors: false` is the escape hatch for pipelines that
-    // use the color set to carry data rather than colour. Pushed BEFORE the
-    // material's own bits so albedo is pre-multiplied by vColor; pbrMaterialBit
-    // then computes `fresnelF0 = mix(F0, albedo, metallic)` against the tinted
-    // value, so metals correctly pick up vertex-colour tint.
     if (geometry.attributes.aColor && mesh.material.vertexColors) {
       bitsGpu.push(vertexColorBit);
     }
 
     const lit = mesh.material.lit;
 
-    // Billboarding, injected from mesh state like skinning and morph targets, so it
-    // composes with any material rather than being welded to one.
-    //
-    // Must be pushed before the material's own bits and before the fog bit below:
-    // all three write the vertex `afterTransform` slot, contributions concatenate in
-    // bit-list order, and both of those read the worldPosition this one rebuilds.
-    //
-    // The `lit` variant additionally rotates the normal into the billboard basis;
-    // unlit materials never read vNormal, so they compile without it.
     if (mesh.billboardMode !== 'none') {
       bitsGpu.push(getMeshBillboardBit(mesh.billboardMode, lit));
     }
 
-    // Env-fill bits (envSource* + iblBit) live inside the material's own
-    // `getPrimaryDescriptor(view3d)` — they read PBR-contract variables
-    // (`roughness` / `metallic` / `fresnelF0` / `f90` / `ambient`) and so
-    // aren't universal across every lit material. Custom lit materials
-    // compose their own lighting bits and skip env-fill naturally.
-    //
-    // Anisotropy's tangent frame is geometry-dependent (like normal mapping):
-    // when the mesh ships a `TANGENT` attribute, swap in the vertex-tangent
-    // variant for a smooth frame; otherwise keep the UV-derivative variant the
-    // material constructed with. This adds no work for non-anisotropic
-    // materials (the bit isn't present) and reuses the tangent the loader reads.
     const hasTangent = !!geometry.attributes.aTangent;
     for (let i = 0; i < materialDescriptor.bitsGpu.length; i++) {
       const bit = materialDescriptor.bitsGpu[i];
       bitsGpu.push(hasTangent ? anisotropyTangentVariant(bit) : bit);
     }
 
-    // The View's fog bit (linear / exponential / exp2). Added to every material
-    // when fog is enabled on the View; materials that own their own distance
-    // falloff (skyboxes, water) opt out via `material.fog = false`.
-    //
-    // Ordered before tone mapping deliberately: both bits write the `end`
-    // slot, and fog is scattered light, so it has to join the scene in linear
-    // radiance and be shaped by the same curve.
     const fogBit = view3d._fogBit;
     if (fogBit && material.fog) bitsGpu.push(fogBit);
 
-    // The View's tone-mapping bit. Only the main material pass tone-maps;
-    // shadow / depth-only passes go through `compileShader` directly and
-    // skip this. Materials opt out via `material.toneMapped = false`.
     const toneBit = view3d._toneMappingBit;
     if (mesh.material.toneMapped && toneBit) bitsGpu.push(toneBit);
 
-    // Shadow sampling. Gated on `lit` — unlit shaders have no light loop
-    // calling `calculateShadow()`, so both the sampler bit and its no-op
-    // stub would be dead code. Within lit materials, a mesh gets the real
-    // sampler when it receives shadows and the view has had a light casting
-    // them (`view3d._hasShadows`); otherwise the stub.
     if (lit) {
       bitsGpu.push(mesh.receiveShadow && view3d._hasShadows ? shadowBitsGpu[view3d.shadowFilter] : noShadowBit);
     }
@@ -488,8 +434,6 @@ export class MaterialSystemGpu {
         HAS_UVS: geometry.attributes.aUV ? 1 : 0,
         ...materialDescriptor.overrides,
       },
-      // bitsGpu already leads with globalBitGpu; opt out of that prepend (the camera bit still
-      // comes from compileShader).
       includeGlobal: false,
     });
 
@@ -517,11 +461,9 @@ export class MaterialSystemGpu {
         userAgent: DOMAdapter.get().getNavigator().userAgent,
       });
 
-      // Pack must precede padding (preCompile runs in array order) so `_pad`
-      // is computed from the packed layout and stays last.
       this._materialPlugins = [
         materialStructPackPlugin,
-        materialStoragePaddingPlugin,
+        materialTextureAccessPlugin,
         createTexturesPluginGpu(preferSelect ? 'select' : 'branch'),
       ];
     }
@@ -534,14 +476,14 @@ export class MaterialSystemGpu {
    *
    * `shader.destroy()` keeps the default `destroyPrograms = false`: the WebGPU
    * `GpuProgram` cache is shared with pixi's 2D program cache and is not ours to
-   * free. The `Mesh3DBatcher` owns no exclusive teardown of its own (its
-   * WebGPU bind-group cache is module-global and released elsewhere).
+   * free. The `Mesh3DBatcher` holds no GPU resources; the batch bind groups it fills
+   * belong to each draw list's `DrawCommandList`.
    */
   public destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
 
-    for (const shader of this._shaderCache.values()) shader.destroy();
+    for (const { shader } of this._shaderCache.values()) shader.destroy();
     this._shaderCache.clear();
     this._materialPlugins = null;
   }

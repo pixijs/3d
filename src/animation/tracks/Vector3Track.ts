@@ -2,16 +2,13 @@ import { Track } from './Track';
 import type { TrackOptions } from './Track';
 
 /**
- * Track for three-component point animation values
- *
- * Use this when manually authoring translation, scale, or other Vector3
- * animation channels.
+ * Track for a three-component vector property, such as a node's `position` or `scale`
  * @category animation
  * @advanced
  */
 export class Vector3Track extends Track {
   /**
-   * @param options - Keyframe data and binding label for the point channel
+   * @param options - Keyframes and target label
    */
   constructor(options: Omit<TrackOptions, 'valueSize'>) {
     super({ ...options, valueSize: 3 });

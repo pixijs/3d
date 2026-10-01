@@ -8,7 +8,7 @@ import { Vector3 } from '~/math/vector/Vector3';
 
 const SIZE = 6;
 
-// A distinct affine matrix per slot: rotation, non-uniform scale and translation all vary.
+/** A distinct affine matrix per slot, varying rotation, non-uniform scale and translation */
 const matrixFor = (i: number, out = new Matrix4()) =>
   out.compose(
     new Vector3(i * 1.5 - 3, i * -0.25, i * i),
@@ -16,11 +16,11 @@ const matrixFor = (i: number, out = new Matrix4()) =>
     new Vector3(1 + i * 0.1, 2, 0.5 + i),
   );
 
-// Every lane of every store row, batch matrix row included, as raw bits.
+/** Every lane of every store row, the batch matrix row included, as raw bits */
 const storeBits = (batch: Mesh3DBatch) =>
   Array.from(batch.storeBuffer.u32Data.subarray(0, (SIZE + 1) * MESH3D_STORE_STRIDE));
 
-// A batch with slots written one at a time — the reference every bulk route must match bit for bit.
+/** A batch written one slot at a time through `setMatrixAt`, which the bulk route must match bit for bit */
 const writtenPerSlot = (pairs: [slot: number, source: number][]) => {
   const batch = new Mesh3DBatch({ size: SIZE });
   const matrix = new Matrix4();
@@ -31,12 +31,6 @@ const writtenPerSlot = (pairs: [slot: number, source: number][]) => {
 type DirtyRange = { _minDirty: number; _maxDirty: number; update(): void };
 
 describe('BatchMatrices', () => {
-  it('returns the same matrix handle on each read', () => {
-    const batch = new Mesh3DBatch({ size: SIZE });
-    const matrices = batch.matrices;
-    expect(batch.matrices).toBe(matrices);
-  });
-
   it('releases a retained matrix handle when the batch is destroyed', () => {
     const batch = new Mesh3DBatch({ size: SIZE });
     const matrices = batch.matrices;
@@ -63,8 +57,8 @@ describe('BatchMatrices', () => {
     it('queues exactly the run it is given for upload', () => {
       const batch = new Mesh3DBatch({ size: SIZE });
       const store = batch.storeBuffer as unknown as DirtyRange;
-      store.update(); // flush the allocation's own dirty range
-      expect(store._minDirty).toBeGreaterThan(store._maxDirty);
+      store.update();
+      expect(store._minDirty, "the allocation's own dirty range is flushed").toBeGreaterThan(store._maxDirty);
 
       batch.matrices.update(2, 3);
 

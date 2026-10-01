@@ -1,8 +1,9 @@
 import { BufferUsage, getAttributeInfoFromFormat, Geometry, uid } from 'pixi.js';
-import type { Attribute } from 'pixi.js';
+import type { VertexFormat } from 'pixi.js';
 
 import { Buffer3D } from '../core/buffers/Buffer3D';
 import type { Geometry3D } from './Geometry3D';
+import { alignTo4Bytes } from './utils/Geometry3DUtils';
 
 /**
  * Tracks where a geometry's vertex/index data lives within the atlas
@@ -29,7 +30,7 @@ const DEFAULT_INDEX_CAPACITY = 2048;
  * @internal
  */
 interface GeometryAtlasOptions {
-  /** A geometry that defines the attribute layout; its data is NOT copied in, so call `add()` separately */
+  /** A geometry that defines the attribute layout; its data is not copied in, so call `add()` separately */
   referenceGeometry: Geometry3D;
   /**
    * Initial vertex capacity (vertices, not bytes)
@@ -42,64 +43,56 @@ interface GeometryAtlasOptions {
    */
   initialIndexCapacity?: number;
   /**
-   * Bake baseVertex into index values for WebGL 2
+   * Bake `baseVertex` into the index values; see {@link GeometryAtlas#rebaseIndices}
    * @default false
    */
   rebaseIndices?: boolean;
 }
 
 /**
- * Packs multiple {@link Geometry3D} instances with the same attribute layout into a
- * single shared vertex + index buffer so that draw calls for different
- * geometries can share buffers and benefit from instanced batching
+ * Packs {@link Geometry3D} instances that share an attribute layout into one vertex buffer and one
+ * index buffer, so draws of different geometries don't rebind buffers
  *
- * Geometries must share the same {@link Geometry3D#attributeKey} to be packable
- * together. Removed allocations leave dead space until {@link GeometryAtlas#defragment} (or
- * the next {@link GeometryAtlas#add} that triggers compaction) reclaims it.
+ * Geometries must share the same {@link Geometry3D#attributeKey} to be packable together. Removed
+ * allocations leave dead space until {@link GeometryAtlas#defragment} reclaims it.
  *
- * Constructed and managed exclusively by the WebGL/WebGPU render pipes; user
- * code interacts with the atlas indirectly through the
- * {@link Geometry3DOptions#dynamic} opt-out flag, never by instantiating this
- * class.
+ * {@link GeometryAtlasPool} builds and owns every atlas. A {@link Geometry3DOptions#dynamic}
+ * geometry never enters one.
  * @see {@link Geometry3D} For the per-mesh geometry that feeds the atlas
  * @internal
  */
 export class GeometryAtlas {
-  /** Unique ID for this atlas, used in sort keys and batcher grouping */
+  /** Unique ID for this atlas, used in sort keys */
   public readonly uid: number = uid('geometryAtlas');
 
   /** Attribute structure key shared by every geometry in this atlas */
   public readonly attributeKey: string;
 
   /** The vertex stride in bytes (same for all geometries in this atlas) */
-  public readonly vertexStride: number;
+  public readonly vertexStride: number = 0;
 
   private _vertexBuffer: Buffer3D;
   private _indexBuffer: Buffer3D;
   /**
-   * Vertex/index buffers orphaned by capacity growth
+   * Buffers that growth replaced
    *
-   * A {@link Buffer3D} is exempt from pixi's GC, so nothing reclaims them —
-   * retain each and free it in {@link GeometryAtlas#destroy}.
+   * Render bundles that other views recorded earlier in the frame still read them, so they live
+   * until {@link GeometryAtlas#destroy}. Nothing else frees them: a {@link Buffer3D} is exempt
+   * from pixi's GC.
    */
   private readonly _retiredBuffers: Buffer3D[] = [];
-  /**
-   * Merged {@link Geometry} wrappers orphaned by capacity growth
-   * (nothing else reclaims their GPU layout / VAO — the buffers behind them are
-   * {@link Buffer3D}s, which the renderer GC never touches)
-   *
-   * Their index buffer is detached at retire time (it is freed via
-   * `_retiredBuffers`); freed in {@link GeometryAtlas#destroy}.
-   */
+  /** Merged geometries that growth replaced, kept until {@link GeometryAtlas#destroy} like `_retiredBuffers` */
   private readonly _retiredGeometries: Geometry[] = [];
   private _vertexCount = 0;
   private _indexCount = 0;
-
-  // Dead space, reclaimed on defragment
   private _deadVertexCount = 0;
   private _deadIndexCount = 0;
 
-  // Live allocations, needed for compaction
+  /**
+   * Live allocations in offset order
+   *
+   * `add` appends at the end and `defragment` keeps the order, which its in-place slide relies on.
+   */
   private readonly _liveAllocations: GeometryAllocation[] = [];
 
   private _vertexDirtyMin = Infinity;
@@ -108,13 +101,10 @@ export class GeometryAtlas {
   private _indexDirtyMax = -Infinity;
 
   /**
-   * Monotonically increasing counter, bumped whenever cached draw state built against this
-   * atlas goes stale
+   * Bumped whenever draw commands recorded against this atlas go stale: when growth replaces a
+   * buffer, and on every {@link GeometryAtlas#defragment}
    *
-   * Raised when growth reallocates the vertex or index buffers, and by every
-   * {@link GeometryAtlas#defragment}, which moves live allocations or frees a tail range the next
-   * {@link GeometryAtlas#add} reuses. The owning pipe compares it against a per-View3D snapshot to
-   * detect stale GPU render bundles.
+   * {@link GeometryAtlasPool#allocate} watches it to version the pool.
    * @internal
    */
   public _bufferVersion = 0;
@@ -122,16 +112,19 @@ export class GeometryAtlas {
   /** The PixiJS Geometry that wraps the merged vertex + index buffers used for draw calls */
   public geometry: Geometry;
 
-  /** Attribute layout info for building the merged geometry */
-  private readonly _attributeInfo: { name: string; attr: Attribute }[];
+  /**
+   * Layout of each vertex attribute in the merged geometry, sorted by name
+   *
+   * Computed from the attribute formats alone, because the reference geometry may keep each
+   * attribute in its own buffer.
+   */
+  private readonly _attributeInfo: { name: string; format: VertexFormat; offset: number; byteSize: number }[];
 
   /**
-   * When true, indices are rebased during {@link GeometryAtlas#add} by baking `baseVertex`
-   * into each index value
+   * Whether {@link GeometryAtlas#add} bakes `baseVertex` into each index value
    *
-   * Removes the need for a `baseVertex` draw param, which WebGL 2 doesn't
-   * support. When false (default), indices are copied as-is and `baseVertex`
-   * is passed to `drawIndexed` at draw time (WebGPU).
+   * WebGL 2 has no `baseVertex` draw parameter, so it packs rebased indices. WebGPU copies indices
+   * as they are and passes `baseVertex` to `drawIndexed`.
    */
   public readonly rebaseIndices: boolean;
 
@@ -154,9 +147,6 @@ export class GeometryAtlas {
       throw new Error('GeometryAtlas: reference geometry has no vertex attributes');
     }
 
-    // Compute the interleaved layout from attribute formats.
-    // We can't trust the reference geometry's strides/offsets because it
-    // may be non-interleaved (each attribute in its own buffer at offset 0).
     let computedStride = 0;
 
     this._attributeInfo = [];
@@ -166,22 +156,18 @@ export class GeometryAtlas {
 
       if (srcAttr.instance) continue;
 
-      const byteSize = getAttributeInfoFromFormat(srcAttr.format!).stride;
+      const format = srcAttr.format!;
+      const byteSize = getAttributeInfoFromFormat(format).stride;
 
-      // Align offset to 4 bytes (WebGPU requirement)
-      computedStride = (computedStride + 3) & ~3;
+      computedStride = alignTo4Bytes(computedStride);
       const offset = computedStride;
 
       computedStride += byteSize;
 
-      this._attributeInfo.push({
-        name,
-        attr: { format: srcAttr.format, offset } as Attribute,
-      });
+      this._attributeInfo.push({ name, format, offset, byteSize });
     }
 
-    // Align total stride to 4 bytes
-    this.vertexStride = (computedStride + 3) & ~3;
+    this.vertexStride = alignTo4Bytes(computedStride);
 
     this._vertexBuffer = new Buffer3D({
       data: new Uint8Array(initialVertexCapacity * this.vertexStride),
@@ -209,14 +195,18 @@ export class GeometryAtlas {
    * Copies a geometry's vertex/index data into the atlas
    *
    * The geometry's {@link Geometry3D#attributeKey | attributeKey} must match this atlas; instance
-   * attributes are rejected. When the atlas is full, dead space is reclaimed
-   * by an automatic {@link GeometryAtlas#defragment} or the buffers are grown to fit.
+   * attributes are rejected. A geometry already in this atlas gets its allocation back. One still
+   * holding an allocation in another atlas, such as one {@link GeometryAtlasPool#clear} destroyed,
+   * is copied in afresh.
+   *
+   * When the atlas is full it runs {@link GeometryAtlas#defragment}, and grows its buffers too if
+   * the live data still doesn't fit. Vertex bytes copy in one block when the geometry already has
+   * the atlas layout, and otherwise attribute by attribute through byte views, so nothing is
+   * allocated per vertex.
    * @param geometry - The source mesh to merge in
    * @returns The allocation describing where the data lives in the merged buffers
    */
   public add(geometry: Geometry3D): GeometryAllocation {
-    // Only an allocation in THIS atlas is reusable — one pointing elsewhere is a
-    // torn-down atlas's and would draw from freed buffers.
     const existing = geometry._geometryAtlasAllocation;
     if (existing && existing.atlas === this) return existing;
 
@@ -239,7 +229,6 @@ export class GeometryAtlas {
     const srcIndices = geometry.indexBuffer.data;
     const indexCount = srcIndices.length;
 
-    // Ensure space: compact or grow as needed
     const vertexCapacity = this._vertexBuffer.data.byteLength / this.vertexStride;
     const indexCapacity = this._indexBuffer.data.length;
 
@@ -271,45 +260,30 @@ export class GeometryAtlas {
     const vertexData = this._vertexBuffer.data;
     const indexData = this._indexBuffer.data;
     const vertexStride = this.vertexStride;
+    const dstByteOffset = baseVertex * vertexStride;
+    const byteLength = vertexCount * vertexStride;
 
-    // Check if the vertex copy can use the fast path (interleaved and correct stride)
-    const firstAttrName = this._attributeInfo[0].name;
-    const firstAttr = geometry.attributes[firstAttrName];
-    const isInterleaved = this._isGeometryInterleaved(geometry);
-
-    if (isInterleaved && firstAttr.stride === vertexStride) {
-      // FAST PATH: bulk copy the entire interleaved buffer
-      const srcBytes = firstAttr.buffer.data;
-      const dstByteOffset = baseVertex * vertexStride;
-      vertexData.set(srcBytes, dstByteOffset);
-
-      this._markVertexDirty(dstByteOffset, dstByteOffset + srcBytes.byteLength);
+    if (this._matchesAtlasLayout(geometry)) {
+      const src = geometry.attributes[this._attributeInfo[0].name].buffer.data;
+      vertexData.set(new Uint8Array(src.buffer, src.byteOffset, byteLength), dstByteOffset);
     } else {
-      // GATHER PATH: copy attributes one by one
-      for (let i = 0; i < vertexCount; i++) {
-        const dstVertexOffset = (baseVertex + i) * vertexStride;
+      for (const { name, offset, byteSize } of this._attributeInfo) {
+        const attr = geometry.attributes[name];
+        const data = attr.buffer.data;
+        const srcBytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        const srcStride = attr.stride ?? byteSize;
+        let src = attr.offset ?? 0;
+        let dst = dstByteOffset + offset;
 
-        for (const info of this._attributeInfo) {
-          const attr = geometry.attributes[info.name];
-          const byteSize = getAttributeInfoFromFormat(info.attr.format!).stride;
-          const attrStride = attr.stride ?? byteSize;
-          const attrOffset = attr.offset ?? 0;
-          const data = attr.buffer.data;
-
-          const srcOffset = i * attrStride + attrOffset;
-          const dstOffset = dstVertexOffset + (info.attr.offset ?? 0);
-
-          const srcView = new Uint8Array(data.buffer, data.byteOffset + srcOffset, byteSize);
-
-          vertexData.set(srcView, dstOffset);
+        for (let i = 0; i < vertexCount; i++) {
+          for (let b = 0; b < byteSize; b++) vertexData[dst + b] = srcBytes[src + b];
+          src += srcStride;
+          dst += vertexStride;
         }
       }
-
-      const startByte = baseVertex * vertexStride;
-      const endByte = (baseVertex + vertexCount) * vertexStride;
-
-      this._markVertexDirty(startByte, endByte);
     }
+
+    this._markVertexDirty(dstByteOffset, dstByteOffset + byteLength);
 
     if (this.rebaseIndices) {
       for (let i = 0; i < indexCount; i++) {
@@ -337,8 +311,8 @@ export class GeometryAtlas {
   /**
    * Removes a geometry from the atlas
    *
-   * The freed range is dead space until the next {@link GeometryAtlas#defragment} (run by
-   * {@link GeometryAtlas#add} when the atlas is full but the live set fits). Nothing rebuilds on
+   * The freed range is dead space until the next {@link GeometryAtlas#defragment}, which
+   * {@link GeometryAtlas#add} runs when the atlas is full. Nothing rebuilds on
    * a removal: the vacated bytes stay where draw commands recorded for this geometry expect them
    * until that compaction, which versions the atlas itself.
    * @param geometry - The previously-added mesh to remove
@@ -380,26 +354,33 @@ export class GeometryAtlas {
     }
   }
 
-  private _isGeometryInterleaved(geometry: Geometry3D): boolean {
-    const firstBuffer = geometry.attributes[this._attributeInfo[0].name].buffer;
-    for (let i = 1; i < this._attributeInfo.length; i++) {
-      if (geometry.attributes[this._attributeInfo[i].name].buffer !== firstBuffer) {
+  /**
+   * Whether `add` can copy the geometry's vertex bytes in one block
+   *
+   * True when every vertex attribute reads from one shared buffer at the atlas's stride and at
+   * the atlas's offset for that attribute. Anything else takes the per-attribute copy.
+   * @param geometry - The geometry being added
+   */
+  private _matchesAtlasLayout(geometry: Geometry3D): boolean {
+    const attributes = geometry.attributes;
+    const buffer = attributes[this._attributeInfo[0].name].buffer;
+
+    for (const info of this._attributeInfo) {
+      const attr = attributes[info.name];
+
+      if (attr.buffer !== buffer || attr.stride !== this.vertexStride || (attr.offset ?? 0) !== info.offset) {
         return false;
       }
     }
+
     return true;
   }
 
   private _buildMergedGeometry(): Geometry {
     const geo = new Geometry();
 
-    for (const { name, attr } of this._attributeInfo) {
-      geo.addAttribute(name, {
-        buffer: this._vertexBuffer,
-        format: attr.format,
-        stride: this.vertexStride,
-        offset: attr.offset,
-      });
+    for (const { name, format, offset } of this._attributeInfo) {
+      geo.addAttribute(name, { buffer: this._vertexBuffer, format, stride: this.vertexStride, offset });
     }
 
     geo.addIndex(this._indexBuffer);
@@ -417,13 +398,7 @@ export class GeometryAtlas {
     if (endIndex > this._indexDirtyMax) this._indexDirtyMax = endIndex;
   }
 
-  /**
-   * Retires the current merged {@link Geometry} wrapper ahead of a capacity-growth rebuild
-   *
-   * Its vertex/index buffers are retired separately (so detach the shared index buffer here
-   * to avoid a double-free) and the wrapper is freed in {@link GeometryAtlas#destroy}. Kept
-   * alive (not destroyed inline) so in-flight render bundles from this frame stay valid.
-   */
+  /** Moves the current merged geometry to `_retiredGeometries` ahead of a growth rebuild */
   private _retireCurrentGeometry(): void {
     if (this.geometry) {
       this.geometry.indexBuffer = null!;
@@ -441,11 +416,8 @@ export class GeometryAtlas {
     const newData = new Uint8Array(capacity * this.vertexStride);
     newData.set(oldData);
 
-    // Retire the outgoing buffer (freed in destroy; see _retiredBuffers).
     this._retiredBuffers.push(this._vertexBuffer);
 
-    // Create a NEW Buffer so the old GPU buffer stays alive for in-flight
-    // render bundles recorded earlier in this frame by other View3D instances.
     this._vertexBuffer = new Buffer3D({
       data: newData,
       usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
@@ -453,11 +425,8 @@ export class GeometryAtlas {
       shrinkToFit: false,
     });
 
-    // All existing vertex data must be uploaded to the new GPU buffer.
     this._markVertexDirty(0, this._vertexCount * this.vertexStride);
 
-    // Retire the outgoing merged/instance geometry wrappers (their GPU layout
-    // would otherwise leak) before rebuilding onto the grown buffers.
     this._retireCurrentGeometry();
     this.geometry = this._buildMergedGeometry();
     this._bufferVersion++;
@@ -473,11 +442,8 @@ export class GeometryAtlas {
     const newData = new Uint32Array(capacity);
     newData.set(oldData);
 
-    // Retire the outgoing buffer (freed in destroy; see _retiredBuffers).
     this._retiredBuffers.push(this._indexBuffer);
 
-    // Create a NEW Buffer so the old GPU buffer stays alive for in-flight
-    // render bundles recorded earlier in this frame by other View3D instances.
     this._indexBuffer = new Buffer3D({
       data: newData,
       usage: BufferUsage.INDEX | BufferUsage.COPY_DST,
@@ -485,37 +451,25 @@ export class GeometryAtlas {
       shrinkToFit: false,
     });
 
-    // All existing index data must be uploaded to the new GPU buffer.
     this._markIndexDirty(0, this._indexCount);
 
-    // Retire the outgoing merged/instance geometry wrappers (their GPU layout
-    // would otherwise leak) before rebuilding onto the grown buffers.
     this._retireCurrentGeometry();
     this.geometry = this._buildMergedGeometry();
     this._bufferVersion++;
   }
 
   /**
-   * Releases the GPU resources exclusively owned by this atlas: the merged
-   * vertex + index buffers and the merged {@link GeometryAtlas#geometry}
+   * Frees the GPU resources this atlas owns: its buffers and merged geometry, and the ones growth
+   * replaced
    *
-   * Driven by the owning pipe's `destroy()`; one atlas pool exists per pipe.
-   *
-   * Geometries are destroyed without their buffers first so the shared
-   * vertex/index buffers can then be freed explicitly exactly once.
-   * References are nulled so a second call is a no-op.
-   *
-   * Externally-shared geometries the atlas merely copies data from (the
-   * reference geometry, each added {@link Geometry3D}) are never destroyed.
+   * Called by {@link GeometryAtlasPool#clear}. The merged geometries are destroyed without their
+   * buffers, and each buffer is then destroyed once. The geometries packed into the atlas are left
+   * alone and keep their allocations here, so the next {@link GeometryAtlas#add} into another
+   * atlas copies them in afresh. A second call does nothing.
    */
   public destroy(): void {
     if (this._vertexBuffer === null) return;
 
-    // The merged geometry shares this atlas's vertex + index buffers, and pixi's
-    // Geometry.destroy frees `indexBuffer` unconditionally (even with
-    // destroyBuffers = false). Detach the shared index buffer before destroying it so it
-    // isn't double-freed; the shared vertex / index buffers are then freed explicitly
-    // exactly once below.
     if (this.geometry) this.geometry.indexBuffer = null!;
     this.geometry?.destroy(false);
     this.geometry = null!;
@@ -523,9 +477,6 @@ export class GeometryAtlas {
     this._vertexBuffer.destroy();
     this._indexBuffer.destroy();
 
-    // Free the GPU layout of every geometry wrapper orphaned by growth (index
-    // already detached at retire time; shared buffers freed below). Then free
-    // every buffer orphaned by growth — pixi's GC never reclaims either.
     for (let i = 0; i < this._retiredGeometries.length; i++) {
       this._retiredGeometries[i].destroy(false);
     }
@@ -543,17 +494,17 @@ export class GeometryAtlas {
   }
 
   /**
-   * Compacts vertex and index buffers by sliding live allocations down
-   * to close gaps left by removed geometries
+   * Compacts the vertex and index buffers by sliding live allocations down over the gaps that
+   * removed geometries left
    *
-   * Updates every live allocation's offsets in place so external references stay valid.
-   * No-ops when there is no dead space.
+   * Updates every live allocation's offsets in place, so whoever holds one sees the new offsets.
+   * Does nothing when there is no dead space.
    *
-   * Every compaction bumps `_bufferVersion` — the same signal growth raises — because it always
-   * leaves recorded draw commands stale: a slide moves live allocations away from the
-   * `baseVertex` / `firstIndex` they bake, and dead space entirely at the tail still shrinks the
-   * live extent, so the next {@link GeometryAtlas#add} overwrites a range that a command recorded
-   * before the removal may still read.
+   * Every compaction bumps `_bufferVersion`, as growth does, because it always leaves recorded draw
+   * commands stale. A slide moves live allocations away from the `baseVertex` / `firstIndex` those
+   * commands bake. Dead space only at the tail still shrinks the live extent, so the next
+   * {@link GeometryAtlas#add} overwrites a range that a command recorded before the removal may
+   * still read.
    */
   public defragment(): void {
     if (this._deadVertexCount === 0 && this._deadIndexCount === 0) return;
@@ -566,7 +517,6 @@ export class GeometryAtlas {
 
     const rebase = this.rebaseIndices;
 
-    // Iteration order = insertion order = offset order (bump allocator)
     for (const alloc of this._liveAllocations) {
       const oldBaseVertex = alloc.baseVertex;
 
@@ -584,7 +534,6 @@ export class GeometryAtlas {
         alloc.firstIndex = writeIndex;
       }
 
-      // Fixup rebased indices when the vertex base shifted
       if (rebase && oldBaseVertex !== alloc.baseVertex) {
         const delta = alloc.baseVertex - oldBaseVertex;
         for (let i = 0; i < alloc.indexCount; i++) {

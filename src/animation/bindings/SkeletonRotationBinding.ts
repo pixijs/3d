@@ -2,7 +2,8 @@ import type { Skeleton } from '../../scene/Skeleton';
 import { Binding } from './Binding';
 
 /**
- * Writes four-component quaternion samples directly into a skeleton's local rotation buffer
+ * Writes four-component quaternion samples into a skeleton's local rotation buffer, renormalised
+ * as {@link QuaternionBinding} explains
  * @internal
  */
 export class SkeletonRotationBinding extends Binding {
@@ -20,8 +21,6 @@ export class SkeletonRotationBinding extends Binding {
     const y = value[1];
     const z = value[2];
     const w = value[3];
-    // Blended samples are a weighted average of unit quaternions (nlerp) —
-    // renormalize so bone matrices don't pick up a scale from short rotations.
     const lengthSq = x * x + y * y + z * z + w * w;
     const inv = lengthSq > 0 ? 1 / Math.sqrt(lengthSq) : 0;
 

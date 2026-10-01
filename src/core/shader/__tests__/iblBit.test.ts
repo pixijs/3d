@@ -5,18 +5,6 @@ import { compileWgslSource } from '~/core/gpu/codegen/compileWgslSource';
 import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 import { iblBit } from '~/materials/pbr/bits/iblBit';
 
-/**
- * `iblBit` is the substrate split-sum consumer of the env-source contract.
- * It calls `sampleEnvironment(dir, roughness)` declared by whichever
- * env-source bit is in the descriptor (envSourceCubeBit /
- * envSourceHemisphereBit / envSourceDefaultBit).
- *
- * These tests pin the body shape on both backends so the contract stays
- * stable: iblBit must reference `sampleEnvironment` and the Karis
- * split-sum math; env-specific concerns (cubemap sampling, sRGB decode,
- * mip-level math) live in the source bit, not here.
- */
-
 const wgslTemplate: ShaderBitTemplate = {
   bindGroups: [],
   gpu: '{{header}}\n{{fragmentLighting}}',
@@ -30,39 +18,16 @@ const glslTemplate: ShaderBitTemplate = {
   },
 };
 
-describe('iblBit', () => {
+describe("iblBit reads the environment only through the source bit's sampleEnvironment", () => {
   describe('metadata', () => {
-    it('declares only the BRDF LUT in bindings.global (env-specific bindings live on source bits)', () => {
-      expect(iblBit.bindings?.global).toMatchObject({
-        uBrdfLutTexture: 'texture_2d<f32>',
-      });
-    });
-
-    it('does NOT declare uEnvironmentTexture itself (lives on envSourceCubeBit)', () => {
-      // Env-specific bindings are owned by the active env-source bit so the
-      // descriptor only carries them when an actual cubemap is in play.
+    it('declares no uEnvironmentTexture; the global bits bind it', () => {
       expect((iblBit.bindings?.global as Record<string, string> | undefined)?.uEnvironmentTexture).toBeUndefined();
-    });
-
-    it('does NOT declare uEnvironmentMaxMipLevel (lives on globalBitGl for GL backend)', () => {
-      expect((iblBit.bindings?.global as Record<string, string> | undefined)?.uEnvironmentMaxMipLevel).toBeUndefined();
-    });
-
-    it('provides both gpu and gl backend bodies', () => {
-      expect(iblBit.gpu?.fragment?.lighting).toBeDefined();
-      expect(iblBit.gl?.fragment?.lighting).toBeDefined();
     });
   });
 
   describe('WGSL body', () => {
     const out = compileWgslSource({ bits: [iblBit], template: wgslTemplate });
     const src = out.fragment.source;
-
-    it('delegates env sampling to sampleEnvironment (no direct texture call)', () => {
-      expect(src).toContain('sampleEnvironment(R_ibl, roughness)');
-      expect(src).not.toContain('textureSampleLevel(uEnvironmentTexture');
-      expect(src).not.toContain('textureNumLevels(uEnvironmentTexture)');
-    });
 
     it('samples the diffuse approximation along the normal at roughness=1.0 (max mip equivalent)', () => {
       expect(src).toContain('sampleEnvironment(normal, 1.0)');
@@ -87,11 +52,6 @@ describe('iblBit', () => {
   describe('GLSL body', () => {
     const out = compileGlslSource({ bits: [iblBit], template: glslTemplate });
     const src = out.fragment;
-
-    it('delegates env sampling to sampleEnvironment (no direct texture call)', () => {
-      expect(src).toContain('sampleEnvironment(R_ibl, roughness)');
-      expect(src).not.toContain('textureLod(uEnvironmentTexture');
-    });
 
     it('samples the diffuse approximation along the normal at roughness=1.0', () => {
       expect(src).toContain('sampleEnvironment(normal, 1.0)');

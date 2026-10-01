@@ -7,24 +7,24 @@ import type { Mesh3DBatch } from './Mesh3DBatch';
 import type { Mesh3DData, MeshPassCache } from './Mesh3DData';
 
 /**
- * Lightweight item for user-created `Mesh3DBatch` slots
+ * One slot of a user `Mesh3DBatch`, the engine side of a {@link BatchedMesh3D} instance
  *
- * No scene graph, no transform hierarchy — set the matrix directly.
+ * It has no scene node or parent: its matrix is written straight into the batch's store.
  * @internal
  */
 export class Mesh3DSlot implements Mesh3DData {
-  /** Stable unique id within the owning batch */
-  public uid: number;
+  /** The slot's index in its batch, which makes it unique there */
+  public uid = 0;
   public _sortKey = 0;
-  public _storeIndex: number;
+  public _storeIndex = 0;
   public _batchDirty = true;
   public _lastRenderPass = 0;
   /** Slots are never skinned */
   public readonly skeleton = undefined;
   public _passCache: Record<number, MeshPassCache> = Object.create(null);
-  /** Geometry drawn for this slot; assigned via `Mesh3DBatch.setGeometryAt` */
+  /** Geometry drawn for this slot; set through `Mesh3DBatch.setGeometryAt` */
   public geometry!: Geometry3D;
-  /** Material for this slot; assigned via `Mesh3DBatch.setMaterialAt` */
+  /** Material for this slot; set through `Mesh3DBatch.setMaterialAt` */
   public material!: BaseMaterial3D;
 
   /** Whether the slot samples the shadow map */
@@ -32,16 +32,15 @@ export class Mesh3DSlot implements Mesh3DData {
   /**
    * Billboard the slot in the vertex stage
    *
-   * Declared here (not left `undefined`) so slots keep one hidden class. Changing it needs
-   * {@link BatchedMesh3D#invalidate}, as every slot-level shader change does.
+   * Changing it needs {@link BatchedMesh3D#invalidate}, as every slot-level shader change does.
    */
   public billboardMode: BillboardMode = 'none';
-  /** Slots are always visible — per-slot show/hide is a membership change via `setItemActive` */
+  /** Always 1: hiding a slot is a membership change through `setItemActive` */
   public readonly _worldVisible = 1;
 
   /** The owning batch whose store holds this slot's matrix `L` for `boundingSphere` */
   private readonly _batch: Mesh3DBatch;
-  /** Cached batch-local bounding sphere (`L × geometry sphere`); lazily built, CPU culling only */
+  /** The cached `boundingSphere`, built on first read */
   private _boundingSphere: Sphere | null = null;
   /**
    * The `Mesh3DBatch._matricesId` the cached bounding sphere was built against
@@ -62,12 +61,11 @@ export class Mesh3DSlot implements Mesh3DData {
   /**
    * Bounding {@link Sphere} in the batch's local frame
    *
-   * The geometry's local sphere transformed by this instance's store matrix
-   * `L`, i.e. **excluding** the batch/container transform (the cull folds that
-   * into the frustum planes instead, so a container move doesn't restamp
-   * this). Cached; rebuilt when the matrix or geometry changes. Dynamic
-   * geometry yields an empty sphere. Returns the shared cached instance — do
-   * not mutate it; `clone()` if you need a snapshot.
+   * The geometry's sphere under the slot's matrix `L`, read straight from the store, without the
+   * container's transform: the cull moves the frustum planes into this frame instead, so moving
+   * the container restamps nothing. The radius scales by the longest of `L`'s three axes. Rebuilt
+   * when the matrix or the geometry changes; dynamic geometry gives an empty sphere. Returns the
+   * shared instance, so don't mutate it; `clone()` it for a snapshot.
    */
   public get boundingSphere(): Sphere {
     const batch = this._batch;
@@ -79,7 +77,6 @@ export class Mesh3DSlot implements Mesh3DData {
       if (geometry.dynamic) {
         sphere.makeEmpty();
       } else {
-        // L × geometry sphere, read straight from the store (column-major).
         const f32 = batch.storeBuffer.data;
         const base = this._storeIndex * MESH3D_STORE_STRIDE;
         const { center, radius } = geometry.boundsSphere;

@@ -70,7 +70,7 @@ function buildScene(app: Application<Renderer>, cull: CullMode): View3D {
   return view3d;
 }
 
-/** Render the two-light scene on a backend at a cull mode and read the rendered pixels back. */
+/** Render the two-light scene on a backend at a cull mode and copy the pixels out before the app goes. */
 async function renderPixels(preference: 'webgl' | 'webgpu', cull: CullMode): Promise<Uint8Array> {
   const app = await getApp<Renderer>({
     id: `2light-${preference}-${cull}`,
@@ -79,7 +79,6 @@ async function renderPixels(preference: 'webgl' | 'webgpu', cull: CullMode): Pro
   try {
     const view3d = buildScene(app, cull);
     app.render();
-    // Copy the pixels off the returned view before the app (and its GPU buffers) are destroyed.
     return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
   } finally {
     app.destroy();
@@ -97,9 +96,6 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-// Both backends run the per-light shadow cull. CI's GPU adapters are unreliable, so — like the scene
-// suite — this runs locally. It's a *relative* comparison of three renders on one adapter, not a
-// golden match. ('gpu' degrades to 'cpu' on WebGL, so there it asserts the degrade path.)
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe.skipIf(isCI)(`two-light shadow-caster cull (${preference})`, () => {
     it('cull keeps every shadowing caster: cull-on matches cull-off, and cpu matches gpu', async () => {
@@ -107,14 +103,11 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       const cpu = await renderPixels(preference, 'cpu');
       const gpu = await renderPixels(preference, 'gpu');
 
-      // A correct shadow cull is invisible — a caster outside a light's frustum casts no shadow into the
-      // visible scene either way, and every caster here is inside both. So the only way these diverge is a
-      // bug that drops (or mis-binds) a caster that *should* shadow. GPU shading jitter only, hence a small
-      // budget rather than exact equality; a dropped shadow would change far more than this.
+      /** Room for GPU shading jitter between three renders on one adapter; a dropped shadow changes far more */
       const budget = Math.round((off.length / 4) * 0.005);
 
-      expect(differingPixels(off, cpu)).toBeLessThan(budget); // cull-on (cpu) == cull-off
-      expect(differingPixels(off, gpu)).toBeLessThan(budget); // cull-on (gpu) == cull-off  → transitively cpu == gpu
+      expect(differingPixels(off, cpu), "'cpu' cull matches no cull").toBeLessThan(budget);
+      expect(differingPixels(off, gpu), "'gpu' cull matches no cull; WebGL runs it as 'cpu'").toBeLessThan(budget);
     });
   });
 }

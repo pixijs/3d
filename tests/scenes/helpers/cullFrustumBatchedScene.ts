@@ -34,7 +34,8 @@ export function cullFrustumBatchedScene(cull: CullMode): TestScene {
       const geometry = new CubeGeometry({ width: CUBE, height: CUBE, depth: CUBE });
       const material = new FlatMaterial({ baseColor: 0x5b8cff });
 
-      const batched = new BatchedMesh3D({ size: SIDE * SIDE });
+      // a batch culls by its own mode, not the view's
+      const batched = new BatchedMesh3D({ size: SIDE * SIDE, cull });
       const half = ((SIDE - 1) / 2) * SPACING;
       const local = new Matrix4();
       for (let x = 0; x < SIDE; x++) {

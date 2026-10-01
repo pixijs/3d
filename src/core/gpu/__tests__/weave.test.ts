@@ -44,6 +44,9 @@ function addCubeView(parent: Container, cx: number, cy: number, size: number, co
  * Build "3D, 2D, 3D, 2D, …" across the stage (View3D insets with a 2D rect
  * between each pair, over a 2D grid backdrop), render a steady-state WebGPU
  * frame, and return how many `beginRenderPass` calls it took.
+ *
+ * Two warm-up frames come first: the first frames build pipelines and record bundles, which
+ * begin passes of their own.
  */
 async function countRenderPassBegins(cubeCount: number): Promise<number> {
   const app = new Application();
@@ -53,14 +56,13 @@ async function countRenderPassBegins(cubeCount: number): Promise<number> {
   const w = app.screen.width;
   const h = app.screen.height;
 
-  // 2D grid backdrop (a colour-only pass before any 3D).
+  /** A 2D grid drawn before any 3D, in a colour-only pass */
   const backdrop = new Graphics();
   for (let gx = 0; gx <= w; gx += 24) backdrop.moveTo(gx, 0).lineTo(gx, h);
   for (let gy = 0; gy <= h; gy += 24) backdrop.moveTo(0, gy).lineTo(w, gy);
   backdrop.stroke({ color: 0x2e6c8c, width: 1.5 });
   app.stage.addChild(backdrop);
 
-  // Interleave 3D / 2D in stage (= render) order: cube, rect, cube, rect, …
   for (let i = 0; i < cubeCount; i++) {
     const cx = ((i + 1) * w) / (cubeCount + 1);
     addCubeView(app.stage, cx, h / 2, 90, CUBE_COLORS[i % CUBE_COLORS.length]);
@@ -71,8 +73,6 @@ async function countRenderPassBegins(cubeCount: number): Promise<number> {
     }
   }
 
-  // Warm up: first frames build the BRDF LUT, pipelines/bundles, and prime depth
-  // (each of which begins its own pass), so the counted frame is steady state.
   app.render();
   app.render();
 
@@ -84,18 +84,11 @@ async function countRenderPassBegins(cubeCount: number): Promise<number> {
   return renderPasses;
 }
 
-describe('keep-encoder-open weave (WebGPU)', () => {
-  // Regression lock for the executor's bind model. With the weave, every View3D
-  // inset and the 2D between them draws into a single open render pass, so the
-  // number of `beginRenderPass` calls is independent of how many View3Ds there
-  // are. A broken weave (e.g. the establishing bind requesting a depth clear, so
-  // idempotent bind can't reuse the pass) begins a fresh pass per View3D — then
-  // `four` would exceed `two` by the extra cube count. Pixel tests can't catch
-  // this: the output is identical either way.
-  test('View3Ds + interleaved 2D fold into one pass regardless of count', async () => {
+describe('keep-encoder-open weave (WebGPU), which pixel tests cannot see', () => {
+  test('View3D insets and the 2D between them draw into one open render pass, whatever the View3D count', async () => {
     const two = await countRenderPassBegins(2);
     const four = await countRenderPassBegins(4);
 
-    expect(four).toBe(two);
+    expect(four, 'a broken weave begins a pass per View3D').toBe(two);
   });
 });

@@ -4,6 +4,11 @@ import { clampSegments } from './utils/clampSegments';
 
 /**
  * Options for {@link CapsuleGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<CapsuleGeometryOptions> = { radius: 0.25, height: 1.5 };
+ * const capsule = new CapsuleGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
@@ -11,30 +16,45 @@ export interface CapsuleGeometryOptions extends Geometry3DOptions {
   /**
    * The radius of the capsule, shared by the cylindrical mid-section and the hemispherical caps
    * @default 0.5
+   * @example
+   * ```ts
+   * const thin = new CapsuleGeometry({ radius: 0.1 });
+   * ```
    */
   radius: number;
   /**
    * The total height of the capsule along the Y axis, including the caps
    *
-   * The cylindrical portion is `height - 2 * radius` (clamped to `>= 0`); when
-   * `height <= 2 * radius` the result degenerates into a sphere.
+   * The cylindrical portion is `height - 2 * radius`; when `height <= 2 * radius` there is no
+   * cylinder and the capsule is a sphere.
    * @default 2
+   * @example
+   * ```ts
+   * const tall = new CapsuleGeometry({ radius: 0.5, height: 3 });
+   * ```
    */
   height: number;
   /**
    * The number of segments around the circumference
    *
-   * Clamped to a minimum of 3; fewer would collapse the ring into a degenerate shape. Cap detail
-   * is derived from this as `ceil(radialSegments / 2)`.
+   * Floored, and clamped to a minimum of 3. Each cap is split into `ceil(radialSegments / 2)`
+   * bands from rim to pole.
    * @default 32
+   * @example
+   * ```ts
+   * const lowPoly = new CapsuleGeometry({ radialSegments: 8 });
+   * ```
    */
   radialSegments: number;
   /**
-   * The number of segments along the cylindrical portion only; the hemispherical caps tessellate
-   * independently
+   * The number of segments along the cylindrical portion only; the caps follow `radialSegments`
    *
-   * Clamped to a minimum of 1.
+   * Floored, and clamped to a minimum of 1.
    * @default 8
+   * @example
+   * ```ts
+   * const bendable = new CapsuleGeometry({ height: 4, heightSegments: 32 });
+   * ```
    */
   heightSegments: number;
 }
@@ -46,9 +66,10 @@ export interface CapsuleGeometryOptions extends Geometry3DOptions {
  * The total `height` includes the caps, so the cylindrical portion measures `height - 2 * radius`
  * (clamped to `>= 0`); top sits at `+height/2` and bottom at `-height/2`.
  *
- * Normals are smooth across the cylinder/cap seam. UVs wrap once around the circumference
- * (`u` in `[0, 1]`) and run from bottom to top in `v`, with the bottom cap, cylinder, and top cap
- * each occupying a slice of `v` proportional to their height contribution.
+ * Normals are smooth across the seams, where the caps share the cylinder's end rings. UVs wrap
+ * once around the circumference (`u` from 0 to 1). `v` runs from 0 at the top pole to 1 at the
+ * bottom one, the top cap, cylinder and bottom cap each taking a share in proportion to its
+ * height.
  * @example
  * ```ts
  * const capsule = new CapsuleGeometry({
@@ -66,7 +87,13 @@ export interface CapsuleGeometryOptions extends Geometry3DOptions {
  * @standard
  */
 export class CapsuleGeometry extends Geometry3D {
-  /** Default options for {@link CapsuleGeometry} */
+  /**
+   * Default options for {@link CapsuleGeometry}
+   * @example
+   * ```ts
+   * CapsuleGeometry.defaultOptions.radialSegments = 16;
+   * ```
+   */
   public static defaultOptions: CapsuleGeometryOptions = {
     ...Geometry3D.defaultOptions,
     radius: 0.5,
@@ -118,8 +145,6 @@ export class CapsuleGeometry extends Geometry3D {
     const quadRows = totalRings - 1;
 
     const vertCount = totalRings * radialStride;
-    // Skip the degenerate triangle that touches the north pole on the first row and the
-    // degenerate triangle that touches the south pole on the last row.
     const indexCount = (quadRows - 1) * radialSegments * 6;
 
     const positions = new Float32Array(vertCount * 3);
@@ -133,7 +158,6 @@ export class CapsuleGeometry extends Geometry3D {
     let ui = 0;
     let ii = 0;
 
-    // Top hemisphere: y = 0 .. capSegments - 1 (skip last ring; body provides the seam ring)
     for (let y = 0; y < capSegments; y++) {
       const t = y * invCapSegments;
       const phi = (1 - t) * (Math.PI / 2);
@@ -161,7 +185,6 @@ export class CapsuleGeometry extends Geometry3D {
       }
     }
 
-    // Cylinder body: y = 0 .. heightSegments (provides both seam rings)
     for (let y = 0; y <= heightSegments; y++) {
       const t = y * invHeight;
       const posY = halfCylinderHeight - t * cylinderHeight;
@@ -185,7 +208,6 @@ export class CapsuleGeometry extends Geometry3D {
       }
     }
 
-    // Bottom hemisphere: y = 1 .. capSegments (skip first ring; body provides the seam ring)
     for (let y = 1; y <= capSegments; y++) {
       const t = y * invCapSegments;
       const phi = t * (Math.PI / 2);
@@ -215,10 +237,8 @@ export class CapsuleGeometry extends Geometry3D {
 
     const lastRow = quadRows - 1;
     for (let y = 0; y < quadRows; y++) {
-      // The first row collapses a/b to the north pole; emit only the fan triangle (b,d,c).
-      // The last row collapses c/d to the south pole; emit only the fan triangle (a,b,c).
-      const skipAbc = y === 0;
-      const skipBdc = y === lastRow;
+      const atNorthPole = y === 0;
+      const atSouthPole = y === lastRow;
 
       for (let x = 0; x < radialSegments; x++) {
         const a = y * radialStride + x;
@@ -226,12 +246,12 @@ export class CapsuleGeometry extends Geometry3D {
         const c = a + radialStride;
         const d = c + 1;
 
-        if (!skipAbc) {
+        if (!atNorthPole) {
           indices[ii++] = a;
           indices[ii++] = b;
           indices[ii++] = c;
         }
-        if (!skipBdc) {
+        if (!atSouthPole) {
           indices[ii++] = b;
           indices[ii++] = d;
           indices[ii++] = c;

@@ -9,6 +9,9 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 64;
 
+/** A GLB, whose embedded images load through blob URLs, and a glTF, whose images are separate files */
+const FILES = ['/TextureTransformMultiTest.glb', '/duck-quantized/Duck.gltf'];
+
 /** pixi keeps one GPU copy per renderer of a texture source, keyed by renderer uid. */
 function gpuCopyCount(sources: TextureSource[]): number {
   let n = 0;
@@ -63,8 +66,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       return () => view3d.destroy({ children: true });
     }
 
-    // A GLB embeds its images, which load through blob URLs; a glTF references image files
-    for (const file of ['/TextureTransformMultiTest.glb', '/duck-quantized/Duck.gltf']) {
+    for (const file of FILES) {
       it(`frees ${file} and the images it loaded, then loads it again`, async () => {
         await withApp(`unload-${file}`, async (app) => {
           const url = `${file}?unload-${preference}`;

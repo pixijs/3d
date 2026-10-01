@@ -11,11 +11,10 @@ const NESTED_MARKER_PATTERN = /\{\{(.*?)\}\}/g;
  * Collects slot names that appear as `{{name}}` markers inside any of the values about to be
  * injected
  *
- * These count as "indirectly referenced" — the master template doesn't mention them, but another
- * slot's body does, so they will be resolved by `fillTemplateSlots`'s recursive substitution.
- * This is what allows a host bit (e.g. `pbrLightingBit`'s `fragment.lighting`) to embed
- * `{{fragmentLobePerLight}}` in its body and have lobe bits emit into `fragment.lobePerLight`
- * without tripping the unused-slot warning.
+ * The template doesn't name these slots, but another slot's code does, and `fillTemplateSlots`
+ * fills them on a later pass. That is how the light loop `createLightingBit` emits into
+ * `fragment.lighting` can hold `{{fragmentLobePerLight}}` for lobe bits to fill without tripping
+ * the unused-slot warning.
  * @param values - Slot bodies about to be injected
  */
 function collectIndirectSlots(values: Iterable<string>): Set<string> {

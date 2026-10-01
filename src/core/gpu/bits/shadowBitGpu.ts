@@ -16,8 +16,8 @@ function fmt(n: number): string {
 /**
  * Emit the PCF accumulation body for a tap set (offsets in texel units)
  *
- * The comparison sampler does the depth test per tap; results are averaged. A
- * single centre tap skips the kernel entirely for the cheapest `'hard'` filter.
+ * The comparison sampler does the depth test per tap, and the results are averaged. The `'hard'`
+ * filter's single centre tap needs no texel size and no average.
  * @param taps - The filter's tap offsets, in texels
  */
 function pcfBody(taps: readonly ShadowTap[]): string {
@@ -39,13 +39,29 @@ function pcfBody(taps: readonly ShadowTap[]): string {
 }
 
 /**
- * Cascaded shadow-map sampling for WebGPU with PCF
+ * Build the WebGPU shadow bit for one filter. Its `calculateShadow` returns how much of one
+ * light reaches a fragment: 0 in full shadow, 1 in full light.
  *
- * Selects the appropriate cascade based on the fragment's view-space depth,
- * then samples the corresponding shadow map layer with PCF. The kernel comes
- * from `SHADOW_TAPS` for the requested {@link ShadowFilter}.
+ * A light's slots sit in `uShadowData`, six `vec4` each, as `ShadowDataList` lays them out. A light
+ * with no shadow has a `shadowDataIndex` of -1 and returns 1 straight away. A light with fewer than
+ * two cascades samples its one map. A cascaded light picks its cascade by counting the split
+ * planes the fragment's view depth has passed, which works because the splits are sorted and an
+ * unused one is a large sentinel. Over the last `CASCADE_BLEND_FRACTION` of each cascade's depth
+ * range, except the outermost one's, the result fades into the next cascade's. That cascade's
+ * near and far splits are picked with a one-hot dot product instead of indexing the vector.
  *
- * Falls back to standard single-map behaviour when cascadeCount <= 1.
+ * `sampleShadowAtIndex` moves the position along the normal by the slot's normal bias, scaled by
+ * `1 - NdotL`. The depth error across one shadow texel grows as the surface turns away from the
+ * light, so a surface facing the light needs almost no offset, and leaving it out there keeps the
+ * offset from eating short shadows. A position outside the map is lit. `pcfBody` builds the
+ * filter's kernel from `SHADOW_TAPS`.
+ *
+ * `calculateShadow` takes the light's `shadowDataIndex` and `cascadeCount` as two floats rather
+ * than the `Light` struct. On an Adreno 8xx phone in Chrome, a struct passed into a function by
+ * value arrived with wrong fields: a light with no shadow missed the early return, sampled an empty
+ * slot whose map size is 0, and the PCF offsets turned that into NaN, which drew as black.
+ *
+ * `shadowBitsGl` is the WebGL twin.
  * @param filter - The shadow filter whose PCF kernel the bit samples
  */
 function createShadowBitGpu(filter: ShadowFilter): ShaderBit {
@@ -66,7 +82,6 @@ function createShadowBitGpu(filter: ShadowFilter): ShaderBit {
       normal: vec3<f32>,
       NdotL: f32,
     ) -> f32 {
-      // Six vec4 per slot in the global uniforms (layout on ShadowDataList).
       let slot = idx * 6;
       let lightSpaceMatrix = mat4x4<f32>(
         global.uShadowData[slot],
@@ -76,10 +91,6 @@ function createShadowBitGpu(filter: ShadowFilter): ShaderBit {
       );
       let sp = global.uShadowData[slot + 4];
 
-      // Normal offset, tapered by how obliquely the light strikes the surface.
-      // Depth error across one shadow texel grows as the surface turns away from
-      // the light, so a face-on surface needs almost none — and taking none is
-      // what stops the offset eating short shadows.
       let biasedPos = worldPos + normal * (sp.y * (1.0 - NdotL));
       let lsp = lightSpaceMatrix * vec4<f32>(biasedPos, 1.0);
       let proj = lsp.xyz / lsp.w;
@@ -95,9 +106,6 @@ function createShadowBitGpu(filter: ShadowFilter): ShaderBit {
 ${pcfBody(SHADOW_TAPS[filter])}
     }
 
-    // Takes the light's two shadow fields, not the Light struct. Some mobile
-    // drivers misread a storage-buffer struct passed into a function by value,
-    // so a light with no shadow would miss the early return below.
     fn calculateShadow(
       shadowDataIndex: f32,
       cascadeCount: f32,
@@ -113,7 +121,6 @@ ${pcfBody(SHADOW_TAPS[filter])}
 
       let last = i32(cascadeCount) - 1;
 
-      // Not cascaded: one map, sampled directly.
       if (last < 1) {
         return sampleShadowAtIndex(baseIndex, worldPos, normal, NdotL);
       }
@@ -121,19 +128,15 @@ ${pcfBody(SHADOW_TAPS[filter])}
       let viewDepth = -(camera.uViewMatrix * vec4<f32>(worldPos, 1.0)).z;
       let splits = global.uShadowData[baseIndex * 6 + 5].xyz;
 
-      // Splits are sorted ascending, so the cascade is the number of split
-      // planes viewDepth is past, clamped to the light's cascade count.
       let crossed = step(splits, vec3<f32>(viewDepth));
       let cascadeIndex = i32(min(dot(crossed, vec3<f32>(1.0)), f32(last)));
 
       let shadow = sampleShadowAtIndex(baseIndex + cascadeIndex, worldPos, normal, NdotL);
 
-      // The outermost cascade has nothing to fade into.
       if (cascadeIndex == last) {
         return shadow;
       }
 
-      // This cascade's own near/far split, picked without indexing the vector.
       let hot = vec3<f32>(f32(cascadeIndex == 0), f32(cascadeIndex == 1), f32(cascadeIndex == 2));
       let splitFar = dot(splits, hot);
       let splitNear = dot(splits, vec3<f32>(hot.y, hot.z, 0.0));

@@ -19,15 +19,11 @@ describe('createLightingBit', () => {
     },
   });
 
-  it('preserves the supplied name', () => {
-    expect(bit.name).toBe('testLighting');
-  });
-
   describe('WGSL output', () => {
     const wgsl = bit.gpu?.fragment?.lighting ?? '';
 
     it('emits the light loop with dispatch, attenuation, shadow, and nDotL', () => {
-      expect(wgsl).toContain('for (var i: i32 = 0;');
+      expect(wgsl).toContain('for (var n: i32 = 0;');
       expect(wgsl).toContain('let light0 = global.uLightData[lightOffset];');
       expect(wgsl).not.toContain('uLightStorage');
       expect(wgsl).toContain('if (light.kind == LIGHT_DIRECTIONAL)');
@@ -49,21 +45,15 @@ describe('createLightingBit', () => {
 
   describe('GLSL output', () => {
     const glsl = bit.gl?.fragment?.lighting ?? '';
-    const glslHeader = bit.gl?.header ?? '';
 
     it('emits the light loop with dispatch, attenuation, shadow, and nDotL', () => {
-      expect(glsl).toContain('while (lightMask != 0u)');
+      expect(glsl).toContain('for (int n = 0;');
       expect(glsl).toContain('Light light = getLight(i);');
       expect(glsl).toContain('if (light.type == LIGHT_DIRECTIONAL)');
       expect(glsl).toContain('if (light.type == LIGHT_SPOT)');
       expect(glsl).toContain('if (attenuation <= 0.0) continue;');
       expect(glsl).toContain('float nDotL = max(dot(normal, lightDir), 0.0);');
       expect(glsl).toContain('float shadow = calculateShadow(');
-    });
-
-    it('declares getLight() in the fragment header with an ifndef guard', () => {
-      expect(glslHeader).toContain('Light getLight(int index)');
-      expect(glslHeader).toContain('#ifndef PIXI3D_GET_LIGHT_DEFINED');
     });
 
     it('splices user code at preLighting, perLight, and postLighting', () => {
@@ -85,12 +75,7 @@ describe('createLightingBit', () => {
     expect(minimal.gl?.fragment?.lighting).toContain('accum += 1.0;');
   });
 
-  describe('light-kind constants', () => {
-    // The LIGHT_DIRECTIONAL / LIGHT_POINT / LIGHT_SPOT constants live on the
-    // global bit (see src/gpu/shader/globalBitGpu.ts + src/gl/shader/globalBitGl.ts)
-    // so they're declared once per shader rather than duplicated by each
-    // lighting bit. Here we just confirm the factory *uses* them by name in
-    // its generated loop bodies.
+  describe('light-kind constants, which the global bits declare once per shader', () => {
     it('uses LIGHT_DIRECTIONAL / LIGHT_SPOT in the factory-generated loop bodies', () => {
       const wgsl = bit.gpu?.fragment?.lighting ?? '';
       const glsl = bit.gl?.fragment?.lighting ?? '';

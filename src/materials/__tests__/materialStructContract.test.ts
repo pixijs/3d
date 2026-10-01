@@ -10,7 +10,7 @@ import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
 import type { Material3DOptions } from '~/materials/pbr/Material3D';
-import { validateMaterialStruct } from '~/materials/utils/validateMaterialTextureSlots';
+import { getMaterialLayout, validateMaterialStruct } from '~/materials/utils/validateMaterialTextureSlots';
 import { View3D } from '~/scene/View3D';
 
 const wgslTemplate: ShaderBitTemplate = { bindGroups: [], gpu: '{{header}}' };
@@ -19,6 +19,12 @@ const glslTemplate: ShaderBitTemplate = {
   gl: { vertex: '{{header}}\nvoid main() {}', fragment: '{{header}}\nvoid main() {}' },
 };
 
+/**
+ * Material3D options that each add struct fields, plus an explicit `uvTransform`
+ *
+ * Every Material3D carries the `uvTransform` bit and its two struct fields; a construction matrix
+ * only seeds them.
+ */
 const FEATURES: { name: string; options: Material3DOptions }[] = [
   { name: 'emissive', options: { emissive: { color: 0xff0000 } } },
   { name: 'specular', options: { specular: { factor: 0.5 } } },
@@ -26,15 +32,13 @@ const FEATURES: { name: string; options: Material3DOptions }[] = [
   { name: 'transmission', options: { transmission: { factor: 0.5 } } },
   { name: 'clearcoat', options: { clearcoat: {} } },
   { name: 'sheen', options: { sheen: { color: 0xffffff } } },
-  // uvTransform's bit and two struct fields are unconditional; an explicit
-  // construction matrix simply seeds them (and suspends frame derivation).
   { name: 'uvTransform', options: { uvTransform: new Matrix().scale(2, 2) } },
 ];
 
 describe('Material struct contract — construction layout == compiled layout', () => {
   const view = new View3D({ width: 64, height: 64 });
 
-  it('holds across every feature combination, on both backends', () => {
+  it('holds for the descriptor bits and both compilers across every feature combination', () => {
     for (let mask = 0; mask < 1 << FEATURES.length; mask++) {
       const options: Material3DOptions = {};
       let label = 'plain';
@@ -47,13 +51,10 @@ describe('Material struct contract — construction layout == compiled layout', 
       const material = new Material3D(options);
       const descriptor = material.getPrimaryDescriptor(view);
 
-      // The descriptor's bit list must reproduce the construction snapshot…
-      expect(materialStructSnapshot(mergeMaterialStruct(descriptor.bitsGpu)), label).toBe(
-        material._materialStructSnapshot,
-      );
-      expect(() => validateMaterialStruct(descriptor.bitsGpu, material), label).not.toThrow();
+      const layout = getMaterialLayout(descriptor.bitsGpu);
+      expect(layout.structSnapshot, label).toBe(material._materialStructSnapshot);
+      expect(() => validateMaterialStruct(layout, material), label).not.toThrow();
 
-      // …and so must the structs both real compilers canonicalise.
       const gpu = compileWgslSource({
         bits: descriptor.bitsGpu,
         template: wgslTemplate,
@@ -84,27 +85,27 @@ describe('Material struct contract — construction layout == compiled layout', 
     const bits = [...material.getPrimaryDescriptor(view2).bitsGpu];
     const intruder: ShaderBit = { name: 'structIntruder', bindings: { material: { sneakyField: 'f32' } } };
 
-    expect(() => validateMaterialStruct([...bits, intruder], material)).toThrow(/construction-time/);
+    expect(() => validateMaterialStruct(getMaterialLayout([...bits, intruder]), material)).toThrow(/construction-time/);
   });
 
-  it('covers FlatMaterial and raw-descriptor materials too', () => {
+  it('holds for FlatMaterial across an alphaMode toggle, which rebuilds its bits but keeps alphaCutoff', () => {
     const view2 = makeViewLocal();
 
     const flat = new FlatMaterial({ uvTransform: new Matrix(), alphaMode: 'mask' });
     const flatDescriptor = flat.getPrimaryDescriptor(view2);
-    expect(() => validateMaterialStruct(flatDescriptor.bitsGpu, flat)).not.toThrow();
+    expect(() => validateMaterialStruct(getMaterialLayout(flatDescriptor.bitsGpu), flat)).not.toThrow();
 
-    // alphaMode toggling rebuilds the bit list but must not reshape the
-    // struct (alphaCutoff is declared by flatMaterialBit unconditionally).
     flat.alphaMode = 'opaque';
-    expect(() => validateMaterialStruct(flat.getPrimaryDescriptor(view2).bitsGpu, flat)).not.toThrow();
+    expect(() =>
+      validateMaterialStruct(getMaterialLayout(flat.getPrimaryDescriptor(view2).bitsGpu), flat),
+    ).not.toThrow();
   });
 });
 
 describe('uvTransform (unconditional)', () => {
   const view = new View3D({ width: 64, height: 64 });
 
-  it('runtime writes are data syncs, never a variant rebuild', () => {
+  it('runtime writes and clears are data syncs, never a variant rebuild', () => {
     const material = new Material3D({ uvTransform: new Matrix().translate(0.5, 0) });
     const before = material.getPrimaryDescriptor(view);
     expect(before.bitsGpu.some((b) => b.name === 'uvTransform')).toBe(true);
@@ -114,8 +115,6 @@ describe('uvTransform (unconditional)', () => {
     expect(material.data.uvOffset![0]).toBe(0.25);
     expect(material.getPrimaryDescriptor(view)).toBe(before);
 
-    // Clearing resets to identity (no framed baseColor to re-derive from);
-    // the descriptor is untouched — the bit is unconditional.
     material.uvTransform = undefined;
     expect(material.uvTransform).toBeUndefined();
     expect(material.data.uvTransformRow0![0]).toBe(1);
@@ -127,7 +126,6 @@ describe('uvTransform (unconditional)', () => {
     const material = new Material3D({});
     expect(material.getPrimaryDescriptor(view).bitsGpu.some((b) => b.name === 'uvTransform')).toBe(true);
 
-    // Writes work without any construction opt-in.
     material.uvTransform = new Matrix().scale(3, 3);
     expect(material.data.uvTransformRow0![0]).toBe(3);
     expect(material.uvTransform).toBeDefined();
@@ -135,7 +133,7 @@ describe('uvTransform (unconditional)', () => {
 });
 
 describe('mergeMaterialStruct', () => {
-  it('merges first-wins, skips resource/storage declarations, and packs', () => {
+  it('merges first-wins, skips resource/storage declarations, and packs vec4s before scalars', () => {
     const a: ShaderBit = {
       name: 'mergeA',
       bindings: { material: { scalarOne: 'f32', wide: 'vec4<f32>', deadTexture: 'texture_2d<f32>' } },
@@ -148,7 +146,6 @@ describe('mergeMaterialStruct', () => {
     const merged = mergeMaterialStruct([a, b]);
 
     expect(merged.deadTexture).toBeUndefined();
-    // Packed: the vec4 leads, scalars follow.
     expect(Object.keys(merged)).toEqual(['wide', 'scalarOne', 'scalarTwo']);
   });
 });

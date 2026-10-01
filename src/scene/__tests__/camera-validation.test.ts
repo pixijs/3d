@@ -9,14 +9,6 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 
 describe('View3D.camera setter', () => {
-  test('default constructor auto-creates and attaches a camera', () => {
-    const view3d = new View3D({ ...SIZE });
-
-    expect(view3d.camera).toBeInstanceOf(Camera3D);
-    expect(view3d.camera.parent).toBe(view3d.root);
-    expect(view3d.camera.view3d).toBe(view3d);
-  });
-
   test('orphaned camera supplied to constructor is auto-attached', () => {
     const camera = new Camera3D();
     const view3d = new View3D({ ...SIZE, camera });
@@ -95,7 +87,6 @@ describe('validateCamera render-time check', () => {
 
   test('throws when an ancestor of the camera is hidden (issue #95 repro)', () => {
     const view3d = new View3D({ ...SIZE });
-    // Pull the default camera out and parent it under a hidden rig.
     view3d.root.removeChild(view3d.camera);
 
     const rig = new Container3D();

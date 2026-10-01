@@ -26,33 +26,47 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 `;
 
+/**
+ * The compaction kernel, one thread per instance
+ *
+ * An instance record is `[storeIndex, packedTextureSlots]`, two `u32`. `store` is the batch's
+ * store read as raw `u32`, `MESH3D_STORE_STRIDE` lanes per row. Lanes 0 to 15 hold the instance's
+ * local matrix as `f32` bits, column-major: the same bytes the vertex shader reads as the
+ * renderable's `transform`. Row 0 holds the batch's world matrix, which the kernel never reads,
+ * since it culls in the batch's frame. `geomBounds` is the per-geometry store, two `vec4` per row,
+ * of which the kernel reads the first: the bounding sphere.
+ *
+ * Visibility is tested first, since it needs only the instance's id: a hidden instance skips the
+ * command search. The visibility lane mirrors `Container3D.worldVisible`, so hiding or showing a
+ * node needs no command rebuild.
+ *
+ * An instance's command is the last one whose `firstInstance` is at or below the instance's
+ * index. Instances are contiguous per command in draw order, so those lanes ascend and a binary
+ * search finds it.
+ *
+ * The frustum test places the sphere with the instance's local matrix alone: the CPU moved the
+ * planes into the batch's frame by `Bᵀ`, so the kernel never multiplies by the batch matrix. The
+ * radius scales by the longest basis column. The test can keep an instance that is off screen. A
+ * geometry the store never registered (`NO_BOUNDS` in the lane, its `_geometryDataIndex` of -1) or
+ * one with a negative radius (dynamic geometry, registered only for its morph facts) is never
+ * culled.
+ */
 const COMPACT_WGSL = /* wgsl */ `
 ${DRAW_ARGS_STRUCT}
 struct Frustum { planes: array<vec4<f32>, 6> };
 
-// Instance records are [storeIndex, packedTextureSlots] — 2 u32 each.
 @group(0) @binding(0) var<storage, read>       srcInstances: array<u32>;
 @group(0) @binding(1) var<storage, read_write> dstInstances: array<u32>;
 @group(0) @binding(2) var<storage, read_write> drawCalls:    array<DrawArgs>;
-// Batch store rows (see Mesh3DDataStoreBuffer's lane constants): row 'id' = the instance's local
-// matrix in lanes 0-15 (column-major mat4x4, bitcast) + the GEOM_LANE bounds slot + VIS_LANE flag.
-// (Row 0 holds the batch world matrix for the vertex shader; the cull works in batch-local space
-// so never reads it.)
 @group(0) @binding(3) var<storage, read>       store:        array<u32>;
-// Per-geometry data rows (stride 2 vec4s — see GeometryDataStoreBuffer), keyed
-// by the lane-18 slot. The cull reads only the first texel: the bounding sphere
-// (center.xyz, radius.w). radius < 0 = dynamic geometry — registered for its
-// morph texel but never frustum-culled (streamed contents, unknowable bounds).
 @group(0) @binding(4) var<storage, read>       geomBounds:   array<vec4<f32>>;
 @group(0) @binding(5) var<uniform>             frustum:      Frustum;
 
 const STRIDE: u32 = ${MESH3D_STORE_STRIDE}u;
 const GEOM_LANE: u32 = ${MESH3D_LANE_GEOMETRY}u;
-const VIS_LANE: u32 = ${MESH3D_LANE_VISIBILITY}u; // per-instance visibility: 0 = hidden, non-zero = visible
-const NO_BOUNDS: u32 = 0xffffffffu; // geometry-lane sentinel for dynamic / unregistered geometry
+const VIS_LANE: u32 = ${MESH3D_LANE_VISIBILITY}u;
+const NO_BOUNDS: u32 = 0xffffffffu;
 
-// Matrix lanes are stored as f32 bit patterns in the u32-bound store. Column-major,
-// the same bytes the vertex shader reads as the renderable's 'transform'.
 fn loadMatrix(base: u32) -> mat4x4<f32> {
   return mat4x4<f32>(
     bitcast<f32>(store[base + 0u]),  bitcast<f32>(store[base + 1u]),  bitcast<f32>(store[base + 2u]),  bitcast<f32>(store[base + 3u]),
@@ -68,15 +82,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let instanceCount = arrayLength(&srcInstances) / 2u;
   if (i >= instanceCount) { return; }
 
-  // Visibility first — it needs only the instance id, so a hidden instance skips the
-  // command binary-search entirely (a hidden subtree is warp-coherent, the win is real).
-  // Set from Container3D.worldVisible; lets a hide/show land without rebuilding the draw commands.
   let id = srcInstances[i * 2u];
   if (store[id * STRIDE + VIS_LANE] == 0u) { return; }
 
-  // Resolve this instance's draw command: the greatest command whose
-  // firstInstance <= i (instances are contiguous per command in draw order,
-  // so firstInstance lanes are cumulative and ascending).
   var lo = 0u;
   var hi = arrayLength(&drawCalls) - 1u;
   while (lo < hi) {
@@ -84,19 +92,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (drawCalls[mid].firstInstance <= i) { lo = mid; } else { hi = mid - 1u; }
   }
 
-  // Frustum cull in the batch's local frame. The instance's own matrix 'local' (store row 'id')
-  // places the geometry's bounding sphere; the frustum was transformed into this same frame on the
-  // CPU (by Bᵀ), so the batch world matrix never enters here — no per-instance B x L combine. The
-  // bound is loose: only false negatives (draw something off-screen), never false positives.
-  // Skipped when the geometry has no registered bounds.
   let boundsSlot = store[id * STRIDE + GEOM_LANE];
   if (boundsSlot != NO_BOUNDS) {
-    // Rows are two texels; the sphere is the first. radius < 0 = no bounds.
     let sphere = geomBounds[boundsSlot * 2u];
     if (sphere.w >= 0.0) {
       let local = loadMatrix(id * STRIDE);
       let center = local * vec4<f32>(sphere.xyz, 1.0);
-      // Conservative radius under scale: the longest basis column.
       let sx = dot(local[0].xyz, local[0].xyz);
       let sy = dot(local[1].xyz, local[1].xyz);
       let sz = dot(local[2].xyz, local[2].xyz);
@@ -149,32 +150,22 @@ interface CompactBindEntry {
 }
 
 /**
- * GPU compaction over the per-batch instance + draw-call buffers, dispatched in the graph's
- * prepare pre-sweep
+ * GPU compaction over the per-batch instance + draw-call buffers, recorded in the graph's
+ * prepare pre-sweep, or during the render of a pass that doesn't bundle
  *
  * Two compute passes per frame:
  *
  * 1. **zero** — one thread per draw command; resets each command's
  *    `instanceCount` lane to 0 so the compaction can accumulate from zero.
- * 2. **compact** — one thread per instance. Each thread resolves its draw
- *    command by binary-searching the draw-call buffer's `firstInstance` lanes
- *    (instances are laid out in draw-command order, so a command is a
- *    contiguous range and `firstInstance` is its cumulative start), then
- *    atomically appends its instance into the command's region of the compacted
- *    output buffer via `atomicAdd(&instanceCount)`. The command's `firstInstance`
- *    (baked, never rewritten) stays the region base, so the indirect draw reads
- *    the same slot range with a rebuilt (possibly shrunken) count.
+ * 2. **compact** — one thread per instance, `COMPACT_WGSL`. An instance that is
+ *    visible and inside the frustum finds its draw command and appends itself to
+ *    the command's region of the compacted output with `atomicAdd(&instanceCount)`.
+ *    The command's `firstInstance` (baked, never rewritten) stays the region base,
+ *    so the indirect draw reads the same slot range with a rebuilt, possibly
+ *    smaller count, and the bundle needs no re-record.
  *
  * The two passes run in that order so the pass boundary orders the zero writes
  * ahead of the compaction's atomics — WebGPU has no intra-pass barrier.
- *
- * The compact kernel gates each append on two predicates read from the batch
- * store row: a per-instance **visibility** flag (lane 19, mirrored from
- * `Container3D.worldVisible`) and a **frustum** test of the geometry's bounding
- * sphere. An instance that fails either is simply not appended — its command's
- * rebuilt `instanceCount` shrinks, while the survivors stay contiguous from the
- * baked `firstInstance`, so the indirect draw reads a smaller slice of the same
- * bundle (no re-record).
  *
  * Runs on its **own** command encoder, built and submitted in `renderEnd`: pixi
  * keeps the frame encoder's render pass open through the pre-sweep (locking it
@@ -197,10 +188,10 @@ export class ComputeSystemGpu {
   private readonly _renderer: WebGPURenderer;
   private _zeroPipeline: GPUComputePipeline | null = null;
   private _compactPipeline: GPUComputePipeline | null = null;
-  // Bind groups cached per draw-call GPUBuffer (the per-batch identity).
+  /** Bind groups cached per draw-call `GPUBuffer`, which identifies a batch's result */
   private _zeroBinds = new WeakMap<GPUBuffer, ZeroBindEntry>();
   private _compactBinds = new WeakMap<GPUBuffer, CompactBindEntry>();
-  // Reused job slots — dispatch() runs per batch per frame and must not allocate.
+  /** Job slots reused every frame, since `dispatch` runs per batch per frame and must not allocate */
   private readonly _jobs: CompactionJob[] = [];
   private _jobCount = 0;
 
@@ -222,7 +213,8 @@ export class ComputeSystemGpu {
    * `commandCount` × 5-u32 indirect args; `store` holds the instance rows (the cull reads each
    * instance's local matrix) and `bounds` the per-geometry sphere store. `planes` is the 6 frustum
    * planes (24 floats) already transformed into this batch's local frame (see
-   * `transformFrustumToBatch`), snapshotted into the slot's uniform.
+   * `transformFrustumToBatch`). They are copied into the slot's uniform, since the array is shared
+   * scratch the next call rewrites; `renderEnd` uploads it ahead of the compute.
    * @param drawCalls - The batch's indirect args, `commandCount` × 5 u32
    * @param src - The batch's instance records, 2 u32 each
    * @param dst - Receives the compacted survivors
@@ -269,9 +261,6 @@ export class ComputeSystemGpu {
     job.dst = dst;
     job.store = store;
     job.bounds = bounds;
-    // Snapshot this frame's planes into the slot's uniform (planes is a live,
-    // per-frame-mutated backing array — copy, don't alias). Upload is flushed
-    // by getGPUBuffer(params) in renderEnd, queue-ordered before the compute.
     job.paramsF32.set(planes);
     job.params.update();
     job.commandCount = commandCount;
@@ -285,6 +274,9 @@ export class ComputeSystemGpu {
    * A zero pass over every job's draw-call counts, then — after the pass boundary orders those
    * writes — a compact pass appending survivors. One submit, ahead of the render submit in
    * queue order. No-op if no batch dispatched this frame.
+   *
+   * Each job then drops its buffer references, so the pooled slots pin no destroyed batch between
+   * frames; `params` stays, since it is the slot's own uniform.
    */
   public renderEnd(): void {
     const jobCount = this._jobCount;
@@ -298,7 +290,6 @@ export class ComputeSystemGpu {
     const encoder = device.createCommandEncoder();
     const jobs = this._jobs;
 
-    // Pass 1 — zero every command's instanceCount (the accumulation baseline).
     const zeroPass = encoder.beginComputePass();
     zeroPass.setPipeline(zeroPipeline);
     for (let i = 0; i < jobCount; i++) {
@@ -309,7 +300,6 @@ export class ComputeSystemGpu {
     }
     zeroPass.end();
 
-    // Pass 2 — compact survivors + rebuild instanceCount.
     const compactPass = encoder.beginComputePass();
     compactPass.setPipeline(compactPipeline);
     for (let i = 0; i < jobCount; i++) {
@@ -321,8 +311,6 @@ export class ComputeSystemGpu {
 
     device.queue.submit([encoder.finish()]);
 
-    // Drop buffer references so a destroyed batch isn't pinned by the pooled array
-    // between frames. `params` stays — it's the slot's own reusable uniform.
     for (let i = 0; i < jobCount; i++) {
       jobs[i].drawCalls = null!;
       jobs[i].src = null!;

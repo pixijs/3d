@@ -11,7 +11,7 @@ import { View3D } from '~/scene/View3D';
 const SIZE = 64;
 const JOINTS = 4;
 
-/** A unit quad bound entirely to joint 0, so posing that joint moves the whole mesh. */
+/** A unit quad bound entirely to joint 0, so posing that joint moves the whole mesh */
 function skinnedQuad(): Mesh3D {
   const geometry = new Geometry3D({
     positions: new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]),
@@ -38,7 +38,7 @@ function skinnedQuad(): Mesh3D {
   });
 }
 
-/** Pixels that differ from the view's clear colour — how much of the mesh is on screen. */
+/** Counts the pixels brighter than the black clear colour, which is how much of the mesh is on screen */
 function drawnPixels(app: Application<Renderer>, view3d: View3D): number {
   const data = new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
   let n = 0;
@@ -50,10 +50,7 @@ function drawnPixels(app: Application<Renderer>, view3d: View3D): number {
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`skinned mesh bone-pit row (${preference})`, () => {
-    // Control for the test below: the same pose change, with nobody leaving the
-    // pit. Proves the mesh really does animate out of shot in one frame, so a
-    // failure there is the sibling's removal and not the posing itself.
-    it('poses itself out of shot when the scene is otherwise untouched', async () => {
+    it('poses itself out of shot in one frame when no sibling leaves, the control for the next test', async () => {
       const app = await getApp<Renderer>({
         id: `bone-pit-row-control-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x000000 },
@@ -86,7 +83,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it('keeps its own pose after a sibling skinned mesh leaves the scene', async () => {
+    it('keeps its skeleton-only pose when the sibling ahead of it in the pit leaves on the same frame', async () => {
       const app = await getApp<Renderer>({
         id: `bone-pit-row-sibling-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x000000 },
@@ -98,8 +95,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.camera.position.set(0, 0, 3);
         view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-        // `sibling` is added first, so it takes the front of the bone pit and
-        // pushes `subject` to a non-zero base.
+        /**
+         * Added first, so it takes the front of the bone pit and puts `subject` at a non-zero base;
+         * removing it slides `subject` to the front
+         */
         const sibling = skinnedQuad();
         sibling.position.set(-50, 0, 0);
         const subject = skinnedQuad();
@@ -109,10 +108,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.render();
         expect(drawnPixels(app, view3d)).toBeGreaterThan(0);
 
-        // The sibling leaves, which slides `subject` to the front of the pit …
         view3d.root.removeChild(sibling);
-        // … and on the same frame `subject` poses itself out of shot. Its mesh
-        // transform never changes — only the skeleton animates.
         subject.skeleton!.setLocalTRS(0, 500, 0, 0, 0, 0, 0, 1);
 
         app.render();

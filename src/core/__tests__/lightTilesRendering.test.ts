@@ -158,10 +158,13 @@ describe('light tile rendering (WebGL)', () => {
 
       app.render();
 
-      // The light reaches the image centre in both sizes. Using the 512px viewport for the
-      // 128px target instead looks up a tile in its lower-left corner, where the light cannot reach.
-      expect(pass.forward?.center[0]).toBeGreaterThan(30);
-      expect(readPixel(app.renderer.gl, size / 2, size / 2)[0]).toBeGreaterThan(30);
+      expect(
+        pass.forward?.center[0],
+        'the light reaches the 128px target centre, which the 512px viewport would map to a lower-left tile',
+      ).toBeGreaterThan(30);
+      expect(readPixel(app.renderer.gl, size / 2, size / 2)[0], 'the light reaches the canvas centre').toBeGreaterThan(
+        30,
+      );
     } finally {
       view3d.destroy(true);
       app.destroy();

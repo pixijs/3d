@@ -39,7 +39,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.root.addChild(batchA, batchB);
         app.stage.addChild(view3d);
 
-        // First render builds everything; the second proves the caches are settled.
         app.render();
         app.render();
 
@@ -48,7 +47,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const commandDirtyA = passA.commandList.dirtyId;
         const commandDirtyB = passB.commandList.dirtyId;
 
-        // Both materials are already registered, so this is a purely local slot change.
         batchA.setMaterialAt(0, materialB);
         app.render();
 
@@ -61,7 +59,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it('keeps bundle-only invalidation separate from draw rebuilding', async () => {
+    it('keeps the bundle-only invalidation a swapped texture causes apart from draw rebuilding', async () => {
       const app = await getApp<Renderer>({
         id: `bundle-dirty-isolation-${preference}`,
         appOptions: { preference, width: 128, height: 128 },
@@ -81,17 +79,13 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         const list = batch.batch.drawLists[RenderPassBit.OPAQUE];
         const commandDirtyId = list.commandList.dirtyId;
-        // WebGPU keeps the bundle on the pass's cull result for the batch; WebGL records none.
         const pass = view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass;
         const result = pass.cullResults.get(batch.batch);
         const bundle = result?.bundle ?? null;
 
-        // Bundle-only invalidation, as the render graph issues it when a sampled source swaps.
         list.gpuData.bundleDirtyId++;
         app.render();
 
-        // WebGPU re-records against the moved counter without touching the list; WebGL records
-        // nothing and holds no result at all.
         const rerecorded =
           result !== undefined && result.bundle !== bundle && result.lastBundleDirtyId === list.gpuData.bundleDirtyId;
         expect(list.commandList.dirtyId).toBe(commandDirtyId);

@@ -16,16 +16,40 @@ import { widenColorToRgba } from '../utils/widenColorToRgba';
 
 const GL_FLOAT = 5126;
 
+/**
+ * The topology for each glTF primitive `mode`
+ *
+ * WebGPU has no line loop or triangle fan. A line loop (2) draws as a line strip, without its
+ * closing segment. A triangle fan (6) draws as a triangle list with its indices unconverted, so it
+ * renders wrong.
+ */
 const topologyMap: Record<number, Topology> = {
   0: 'point-list',
   1: 'line-list',
   2: 'line-strip',
-  3: 'line-strip', // WebGPU doesn't strictly support LINE_LOOP
+  3: 'line-strip',
   4: 'triangle-list',
   5: 'triangle-strip',
-  6: 'triangle-list', // TRIANGLE_FAN not supported in WebGPU
+  6: 'triangle-list',
 };
 
+/**
+ * Builds the geometry for one primitive, decoding Draco first when the primitive uses it
+ *
+ * Some attributes need adapting for `Geometry3D`:
+ * - 8-bit indices widen to 16-bit, as neither `Geometry3D` nor WebGPU takes 8-bit indices.
+ * - Integer UVs get an explicit vertex format. Without one, `Geometry3D` reads any integer array
+ *   as normalized, which would squash unnormalized quantized UVs (`KHR_mesh_quantization`) into
+ *   0 to 1.
+ * - VEC3 colours widen to RGBA.
+ * - An attribute with no `Geometry3D` field is skipped with a warning.
+ *
+ * The bounds come from the `POSITION` accessor's `min` and `max`. For quantized positions those are
+ * in integer space, the space `computeBoundsFromPositions` describes, so they are used as they are.
+ * @param gltfRaw - Parsed glTF JSON
+ * @param buffers - Binary buffers holding the vertex and index data
+ * @param primitiveRaw - The primitive to build
+ */
 async function processPrimitive(
   gltfRaw: GltfFormat,
   buffers: ArrayBuffer[],
@@ -37,10 +61,6 @@ async function processPrimitive(
   if (dracoExt) {
     Object.assign(options, await decodeDracoPrimitive(gltfRaw, buffers, primitiveRaw, dracoExt));
   } else {
-    // Process indices. `getBuffer` returns the typed array matching the
-    // accessor's componentType (Uint8Array for 5121, Uint16Array for 5123,
-    // Uint32Array for 5125). Geometry3DOptions.indices accepts only 16/32-bit,
-    // and WebGPU doesn't support 8-bit index buffers at all — upcast UINT8.
     if (primitiveRaw.indices !== undefined) {
       const raw = getBuffer(gltfRaw, buffers, primitiveRaw.indices);
       options.indices = raw instanceof Uint8Array ? new Uint16Array(raw) : (raw as Uint16Array | Uint32Array);
@@ -51,15 +71,8 @@ async function processPrimitive(
       if (attributeName) {
         const accessorIndex = primitiveRaw.attributes[i];
         const data = getBuffer(gltfRaw, buffers, accessorIndex);
-
-        // UVs need explicit format when non-float: the Geometry3D typed-array
-        // heuristic treats any non-Float32Array as *normalized*, which auto-scales
-        // raw integer UVs (e.g. KHR_mesh_quantization uint16 in [0, 4095]) into
-        // [0, 1] before the shader sees them — collapsing the atlas transform.
         const accessor = gltfRaw.accessors?.[accessorIndex];
 
-        // Colors are VEC3 or VEC4 in glTF; widen here so Geometry3D always sees
-        // RGBA and shaders get one `vec4` contract.
         if ((attributeName === 'colors' || attributeName === 'colors1') && accessor) {
           (options as Record<string, unknown>)[attributeName] = widenColorToRgba(
             data as TypedArray,
@@ -80,24 +93,16 @@ async function processPrimitive(
           (options as Record<string, unknown>)[attributeName] = data;
         }
       } else {
-        // Custom attribute - strictly we could support this by adding to options.attributes
-        // But for now we'll warn as Geometry3D expects standard attributes for interleaving
         warnOnce(`pixi3d-custom-attribute-${i}`, `[pixi-3d] custom attribute ${i} skipped`);
       }
     }
 
-    // Morph targets — POSITION always, NORMAL when present (see decodeMorphTargets).
     if (primitiveRaw.targets) {
       const morphTargets = decodeMorphTargets(gltfRaw, buffers, primitiveRaw.targets);
       if (morphTargets) options.morphTargets = morphTargets;
     }
   }
 
-  // Extract bounds from POSITION accessor if available.
-  // Quantized non-normalized positions are in integer space — so are the shader-output
-  // vertex positions (the position bit multiplies aPosition by the divisor),
-  // so accessor.min/max are used as-is. Node TRS scale (S/D) maps both to world space.
-  // VEC3→VEC4 padding for non-float attributes is handled inside Geometry3D.
   const positionAccessorIndex = primitiveRaw.attributes.POSITION;
   if (positionAccessorIndex !== undefined && gltfRaw.accessors) {
     const positionAccessor = gltfRaw.accessors[positionAccessorIndex];
@@ -111,19 +116,17 @@ async function processPrimitive(
 
   options.topology = topologyMap[primitiveRaw.mode ?? 4];
 
-  // This will automatically handle interleaving, quantization and alignment!
   return new Geometry3D(options);
 }
 
 /**
- * Decodes a primitive's morph-target deltas: POSITION always, NORMAL when present
+ * Reads a primitive's morph-target offsets: `POSITION` always, `NORMAL` when present
  *
- * Sparse accessors are decoded to dense by `getBuffer`. Returns
- * `undefined` (rendering the base pose) when any target is non-float or lacks
- * POSITION — the GPU layout requires dense float deltas for every target.
- * NORMAL deltas are all-or-nothing per primitive (the packed delta stride is
- * uniform), so unusable or mixed normals degrade to positions-only morphing
- * rather than to the base pose.
+ * The renderer needs float `POSITION` offsets for every target, so if a target lacks them or stores
+ * them as integers this returns `undefined` and the mesh keeps its base pose. Normal offsets come for
+ * every target or none, as every target is packed with the same stride, so integer or missing
+ * normals on some targets fall back to morphing positions only. The offsets are copied out of the
+ * file's buffers, since the geometry keeps them.
  * @param gltfRaw - Parsed glTF JSON
  * @param buffers - Binary buffers holding the delta accessors
  * @param targets - The primitive's morph targets, each mapping an attribute semantic to an accessor index
@@ -149,10 +152,6 @@ function decodeMorphTargets(
       return undefined;
     }
 
-    // Deltas outlive the source glTF ArrayBuffer (the renderer packs them into the
-    // shared delta buffer on first render), so ask getBuffer for owned arrays. It
-    // copies only a view result; sparse/interleaved decodes are already owned, so
-    // the common sparse case is decoded once, not decoded-then-copied.
     const entry: { positions: Float32Array; normals?: Float32Array } = {
       positions: getBuffer(gltfRaw, buffers, accessorIndex, true) as Float32Array,
     };
@@ -181,6 +180,8 @@ function decodeMorphTargets(
 
 /**
  * Converts every glTF mesh's primitives into `Geometry3D` instances on the source
+ *
+ * A mesh's primitives share one set of morph weights, so it warns when their target counts differ.
  * @param gltfRaw - Parsed glTF JSON
  * @param buffers - Binary buffers holding the vertex and index data
  * @param source - Receives the geometries
@@ -195,9 +196,6 @@ export async function processMeshes(gltfRaw: GltfFormat, buffers: ArrayBuffer[],
         meshRaw.primitives.map((primitiveRaw) => processPrimitive(gltfRaw, buffers, primitiveRaw)),
       );
 
-      // All primitives of a mesh share one weights array, so their target counts
-      // must agree. A mismatch means the shared weights can't drive every
-      // primitive — warn rather than render inconsistently.
       const targetCount = geometries[0]?.morphTargetCount ?? 0;
       for (let p = 1; p < geometries.length; p++) {
         if (geometries[p].morphTargetCount !== targetCount) {

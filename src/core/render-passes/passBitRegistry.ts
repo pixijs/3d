@@ -3,29 +3,24 @@ import { warn } from 'pixi.js';
 /**
  * Global name → bit registry for render passes
  *
- * Pass bits are allocated once globally rather than per-pipe so that a
- * material can reference passes by name (`passes: { outline: true }`)
- * without needing to know about any specific pipe. Whatever code path
- * touches a name first — pass instantiation, material construction, or
- * `enablePass()` — allocates the bit; later references look up the same
- * bit. Materials and passes "rendezvous" on the global map regardless of
- * construction order, and the same material instance can be used across
- * multiple `View3D` instances because every pipe sees the same name → bit
- * mapping.
+ * One map for the whole page rather than one per pipe, so a material can name a pass
+ * (`passes: { outline: true }`) without knowing any pipe, and one material works in several
+ * views. Whatever uses a name first allocates its bit: the pass's constructor, a material's
+ * `passes` option, or `enablePass()`. Later uses get the same bit, in any order.
  *
- * Bits 0-7 are reserved for built-in passes. Custom passes start at
- * `1 << 8` and shift left for each new name. JS bitwise ops are 32-bit
- * signed, so ~23 custom-pass slots are usable in practice — plenty for
- * typical rendering setups but worth being aware of if a project
- * programmatically generates many distinct pass names.
+ * Bits 0-7 are reserved for built-in passes. Custom passes start at `1 << 8` and shift left for
+ * each new name. JS bitwise ops are 32-bit signed, so about 23 custom names fit, which only a
+ * project that generates pass names needs to worry about.
  * @internal
  */
 class PassBitRegistry {
-  // Built-in pass bits are inlined here rather than imported from
-  // `RenderPass.ts` to break a module-load cycle (RenderPass imports
-  // this registry). Values must match `RenderPassBit` in RenderPass.ts.
-  // Passes that take no meshes (the graph operations, the fullscreen effects) register
-  // themselves at `RenderPassBit.NONE` rather than burning one of the custom slots.
+  /**
+   * Bits by pass name, seeded with the built-in passes
+   *
+   * The seed repeats the values of `RenderPassBit` in `RenderPass.ts` by name, since importing them
+   * would make a module cycle (`RenderPass.ts` imports this registry); change the two together.
+   * Passes that take no meshes register at `RenderPassBit.NONE` and use up no custom bit.
+   */
   private _bitsByName: Record<string, number> = Object.assign(Object.create(null), {
     shadow: 1 << 0,
     opaque: 1 << 1,
@@ -39,12 +34,9 @@ class PassBitRegistry {
   /**
    * Looks up the bit allocated to a pass name, allocating a fresh one if the name has
    * never been seen
-   * @param name - The pass's `name` (the same string used in `RenderPass`'s
-   *   `name` option and in materials' `passes: { ... }` keys).
-   * @param explicitBit - Optional fixed bit (used by built-in passes that
-   *   reserve a stable bit constant). When provided on first registration,
-   *   pins the bit. When provided on a subsequent registration with a
-   *   different value, a warning is emitted and the original bit is kept.
+   * @param name - The pass's `name`, as a material's `passes` option keys it
+   * @param explicitBit - Fixed bit a built-in pass asks for. It pins the bit for a new name; for a
+   *   name that already has a different bit, it warns and keeps the old one.
    * @returns The bit allocated for `name`.
    */
   public getOrAllocate(name: string, explicitBit?: number): number {
@@ -64,8 +56,7 @@ class PassBitRegistry {
   /**
    * Returns the bit registered for `name` without allocating one if absent
    *
-   * Used by `disablePass` so disabling a never-registered name is a no-op rather than
-   * wasting a bit on an entry that will never have a pass instance behind it.
+   * `disablePass` uses it, so disabling a name nothing has used costs no bit.
    * @param name - The pass name to look up
    * @returns The registered bit, or `undefined` when the name has never been seen
    */

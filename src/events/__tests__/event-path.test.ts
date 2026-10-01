@@ -1,5 +1,3 @@
-// Load pixi's 2D events mixin (isInteractive etc.) — normally installed lazily at Application.init,
-// which these tests never run; without it `EventBoundary.hitTest` throws.
 import 'pixi.js/browser';
 import { Container, EventBoundary, FederatedPointerEvent, Rectangle } from 'pixi.js';
 import { describe, expect, test } from 'vitest';
@@ -17,76 +15,18 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-// View-local probe points for the two-cube scene built by `makeScene` (camera
-// at z=10, fov 60): A sits at world x=-2, B at x=+2.
+/** View-local point over cube A of `makeScene`, at world x = -2 (camera at z = 10, fov 60) */
 const AT_A = { x: 31, y: 50 };
+/** View-local point over cube B of `makeScene`, at world x = +2 */
 const AT_B = { x: 69, y: 50 };
 
-// A 2×2×2 cube centred at origin, so each face sits one unit from the centre.
+/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
-    -1,
-    -1,
-    -1,
-    1,
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    -1,
-    1,
-    -1, // back
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    1,
-    1,
-    1,
-    1,
-    -1,
-    1,
-    1, // front
+    -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
   ]);
   const indices = new Uint16Array([
-    0,
-    1,
-    2,
-    0,
-    2,
-    3, // back
-    4,
-    6,
-    5,
-    4,
-    7,
-    6, // front
-    0,
-    4,
-    5,
-    0,
-    5,
-    1, // bottom
-    2,
-    6,
-    7,
-    2,
-    7,
-    3, // top
-    1,
-    5,
-    6,
-    1,
-    6,
-    2, // right
-    0,
-    3,
-    7,
-    0,
-    7,
-    4, // left
+    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 2, 6, 7, 2, 7, 3, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4,
   ]);
   const geometry = new Geometry3D({
     positions,
@@ -96,8 +36,7 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-// Run the transform pass + camera projection so worldTransform / viewProjection
-// reflect the current scene state. These tests sit outside the render loop.
+/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -105,9 +44,7 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-// Two sibling cubes under an interactive group, and pixi's REAL EventBoundary
-// over a 2D root holding the View — real pooled events need a real boundary
-// behind `composedPath()`.
+/** Two sibling cubes under an interactive group, and a real pixi `EventBoundary` over a 2D root holding the View */
 function makeScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -132,8 +69,10 @@ function makeScene() {
   return { view3d, group, a, b, boundary };
 }
 
-// Hit test through the boundary the way pixi does before every dispatch,
-// asserting the pick landed where the test intends so probe drift fails loudly.
+/**
+ * Hit-tests through the boundary as pixi does before every dispatch, asserting the pick lands on
+ * `expected` so a drifted probe point fails loudly
+ */
 function hitAt(boundary: EventBoundary, view3d: View3D, point: { x: number; y: number }, expected: Container3D): void {
   expect(boundary.hitTest(point.x, point.y)).toBe(view3d);
   expect(view3d.events._currentPick3D).toBe(expected);
@@ -148,9 +87,10 @@ interface EventInit3D {
   timeStamp?: number;
 }
 
-// A REAL pooled-event stand-in: `composedPath()` needs `manager`, so the synthetic
-// object literals other dispatcher tests use would throw here. The dispatcher
-// itself only reads the fields set below.
+/**
+ * A real `FederatedPointerEvent` on the scene's boundary, since `composedPath()` needs one; the
+ * object-literal events of the other dispatcher tests have no `composedPath()` at all
+ */
 function makeEvent(boundary: EventBoundary, type: string, init: EventInit3D = {}): FederatedPointerEvent {
   const event = new FederatedPointerEvent(boundary);
   event.type = type;
@@ -163,8 +103,7 @@ function makeEvent(boundary: EventBoundary, type: string, init: EventInit3D = {}
   return event;
 }
 
-// `composedPath()` is typed against 2D Containers; during a 3D chain it carries
-// Container3D entries.
+/** `event.composedPath()`, typed as the `Container3D` chain it holds during a 3D dispatch */
 function composed3D(event: FederatedPointerEvent): Container3D[] {
   return event.composedPath() as unknown as Container3D[];
 }
@@ -214,7 +153,6 @@ describe('event.path during 3D dispatch', () => {
     expect(refs.length).toBe(3);
     expect(refs[1]).toBe(refs[0]);
     expect(refs[2]).toBe(refs[0]);
-    // Contents asserted from copies: the pooled array is cleared once the dispatch ends.
     for (const copy of copies) {
       expect(copy.length).toBe(3);
       expect(copy[0]).toBe(view3d.root);
@@ -241,10 +179,9 @@ describe('event.path during 3D dispatch', () => {
     expect(atTarget[2]).toBe(a);
   });
 
-  test('event.path is restored after the dispatch — no pooled 3D array left installed', () => {
+  test('event.path is restored after a dispatch whose listener read composedPath(), leaving no pooled 3D array installed', () => {
     const { view3d, a, boundary } = makeScene();
     a.on('pointerdown', (event) => {
-      // Force the install to be observed (and would-be caching to happen).
       event.composedPath();
     });
 
@@ -256,7 +193,7 @@ describe('event.path during 3D dispatch', () => {
     expect(event.path).toBe(before);
   });
 
-  test('release after a reparent: frozen pointerup chain, click re-rooted at the mounted press target', () => {
+  test('release after reparenting the pressed node: no upoutside, and the click re-roots at its still-mounted old parent', () => {
     const { view3d, group, a, b, boundary } = makeScene();
     let upPath: Container3D[] = [];
     let upOutsideFired = false;
@@ -280,22 +217,17 @@ describe('event.path during 3D dispatch', () => {
     const beforeUp = up.path;
     view3d.emit('pointerup', up);
 
-    // The pointerup chain froze the release path before any listener ran.
     expect(upPath).toEqual([view3d.root, group, b]);
-    // The reparent broke the stored press path at `a`, so the mounted press target
-    // is `group` — which is on the release chain: no upoutside walk runs.
     expect(upOutsideFired).toBe(false);
     expect(up.path).toBe(beforeUp);
 
-    // The click re-roots at that mounted press target, and its chain dispatch
-    // freezes the target's own path.
     const click = makeEvent(boundary, 'click', { nativeEvent: nUp });
     view3d.emit('click', click);
     expect(clickPath).toEqual([view3d.root, group]);
     expect(click.path).toBe(beforeUp);
   });
 
-  test('upoutside walk: composedPath() resolves from the walk target, nothing leaks after', () => {
+  test('upoutside walk: composedPath() resolves from the press target, nothing leaks after', () => {
     const { view3d, group, a, b, boundary } = makeScene();
     let upOutsidePath: Container3D[] = [];
     a.on('pointerupoutside', (event) => {
@@ -309,8 +241,6 @@ describe('event.path during 3D dispatch', () => {
     const beforeUp = up.path;
     view3d.emit('pointerup', up);
 
-    // Each walked node is its own target, so composedPath() recomputes the press
-    // target's ancestry live (2D parity) rather than reading a frozen chain.
     expect(upOutsidePath).toEqual([view3d.root, group, a]);
     expect(up.path).toBe(beforeUp);
   });
@@ -329,5 +259,53 @@ describe('event.path during 3D dispatch', () => {
 
     expect(enterPath).toEqual([view3d.root, group, a]);
     expect(move.path).toBe(before);
+  });
+});
+
+describe('contextmenu through the real boundary', () => {
+  /**
+   * Feeds `mapEvent` the root event pixi's `EventSystem` builds for a native `contextmenu`, so pixi's
+   * own mapping hit-tests and dispatches it, and returns the native event to read `defaultPrevented` from
+   */
+  function contextMenuAt(boundary: EventBoundary, point: { x: number; y: number }): MouseEvent {
+    const nativeEvent = new MouseEvent('contextmenu', { cancelable: true });
+    const from = makeEvent(boundary, 'contextmenu', { button: 2, nativeEvent });
+
+    from.global.set(point.x, point.y);
+    boundary.mapEvent(from);
+
+    return nativeEvent;
+  }
+
+  test('reaches the picked node with its hit, and preventDefault there keeps the menu closed', () => {
+    const { view3d, a, boundary } = makeScene();
+    let target: Container3D | null = null;
+    let hit = false;
+    a.on('contextmenu', (event) => {
+      target = event.target3D;
+      hit = event.hit3D !== null;
+      event.preventDefault();
+    });
+
+    hitAt(boundary, view3d, AT_A, a);
+    const nativeEvent = contextMenuAt(boundary, AT_A);
+
+    expect(target).toBe(a);
+    expect(hit).toBe(true);
+    expect(nativeEvent.defaultPrevented).toBe(true);
+  });
+
+  test("stopPropagation on the node keeps the View's own listener silent", () => {
+    const { view3d, a, boundary } = makeScene();
+    let viewHeard = false;
+    a.on('contextmenu', (event) => event.stopPropagation());
+    view3d.on('contextmenu', () => {
+      viewHeard = true;
+    });
+
+    hitAt(boundary, view3d, AT_A, a);
+    contextMenuAt(boundary, AT_A);
+
+    expect(viewHeard).toBe(false);
   });
 });

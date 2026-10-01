@@ -78,8 +78,6 @@ export class ForwardRenderPass extends RenderPass {
       cache: options.cache,
       textures: options.textures,
     };
-    // Distance-sorted passes recompute draw order per-frame in the pipe, so the
-    // per-mesh sorted-view key is meaningless for them.
     this._updatesViewKey = options.sort === 'key';
   }
 

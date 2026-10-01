@@ -10,14 +10,6 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// The shader reads each instance's morph-weight offset from its store row
-// (MESH3D_LANE_MORPH_WEIGHT). Slots in the shared morph store are persistent —
-// assigned when a mesh joins the scene, freed when it leaves — so these tests
-// pin the slot contract: offsets hold still through neighbour add/remove,
-// freed slots are recycled bucket-for-bucket, the one legitimate move (delta
-// arena growth shifting the weights base) re-emits the affected rows, and
-// weight changes land through the walk's per-frame diff with no invalidation.
-
 /** A one-triangle geometry with `targetCount` morph targets (unique per call). */
 function createMorphedTriangle(targetCount: number): Geometry3D {
   const morphTargets: { positions: Float32Array }[] = [];
@@ -38,8 +30,8 @@ const weightLane = (view3d: View3D, mesh: Mesh3D): number =>
 
 const getPipe = (app: Application<WebGPURenderer>): View3DPipeGpu => app.renderer.renderPipes.view3d;
 
-describe('morph weight-slot plumbing (store lane 20)', () => {
-  it('keeps existing offsets still when new morphed meshes join', async () => {
+describe('morph weight slots, held from joining the scene to leaving it, and their store lane 20', () => {
+  it('keeps existing offsets still when new morphed meshes join, and atlases and registers the morphed geometry', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'morph-slot-stable',
       appOptions: { preference: 'webgpu', width: 128, height: 128 },
@@ -57,19 +49,15 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
       const indexA = meshA.morph!._weightIndex;
       expect(weightLane(view3d, meshA)).toBe(indexA);
 
-      // A second morphed geometry packs into the arena reservation — nothing
-      // about meshA moves.
       const meshB = new Mesh3D({ geometry: createMorphedTriangle(2), material });
       view3d.root.addChild(meshB);
       app.render();
 
-      expect(meshA.morph!._weightIndex).toBe(indexA);
+      expect(meshA.morph!._weightIndex, 'a second geometry packs into the arena reservation').toBe(indexA);
       expect(weightLane(view3d, meshA)).toBe(indexA);
       expect(weightLane(view3d, meshB)).toBe(meshB.morph!._weightIndex);
       expect(meshB.morph!._weightIndex).not.toBe(indexA);
 
-      // Morphed geometry is a first-class citizen: atlased, registered in the
-      // geometry store, and its row carries the per-geometry morph facts.
       const geometry = meshA.geometry;
       expect(geometry._geometryDataIndex).toBeGreaterThanOrEqual(0);
       expect(geometry._geometryAtlasAllocation).toBeTruthy();
@@ -78,14 +66,13 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
       expect(geomStore.u32Data[rowBase + 4]).toBe(geometry._morphDeltaBase);
       expect(geomStore.u32Data[rowBase + 5]).toBe(2);
       expect(geomStore.u32Data[rowBase + 6]).toBe(geometry._geometryAtlasAllocation!.baseVertex);
-      // Sphere expanded by the conservative morph reach — never negative here.
-      expect(geomStore.data[rowBase + 3]).toBeGreaterThan(0);
+      expect(geomStore.data[rowBase + 3], 'the radius grows by the morph reach').toBeGreaterThan(0);
     } finally {
       app.destroy();
     }
   });
 
-  it('registers dynamic morphed geometry with a no-cull sentinel', async () => {
+  it('registers dynamic morphed geometry in the store, outside the atlas, with a no-cull sentinel, and morphs it', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'morph-dynamic-combo',
       appOptions: { preference: 'webgpu', width: 128, height: 128 },
@@ -108,18 +95,14 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
 
       app.render();
 
-      // Dynamic keeps it out of the atlas but no longer out of the store: the
-      // row exists (morph texel live, baseVertex 0 = already vertex-local) with
-      // a sentinel radius so it is never frustum-culled.
       expect(geometry.dynamic).toBe(true);
       expect(geometry._geometryAtlasAllocation).toBeFalsy();
       expect(geometry._geometryDataIndex).toBeGreaterThanOrEqual(0);
       const geomStore = getPipe(app).geometryDataStoreBuffer;
       const rowBase = geometry._geometryDataIndex * GEOMETRY_DATA_STRIDE;
-      expect(geomStore.data[rowBase + 3]).toBeLessThan(0);
-      expect(geomStore.u32Data[rowBase + 6]).toBe(0);
+      expect(geomStore.data[rowBase + 3], 'a negative radius keeps it from being frustum-culled').toBeLessThan(0);
+      expect(geomStore.u32Data[rowBase + 6], 'outside an atlas its vertex ids are already local').toBe(0);
 
-      // And it morphs: slot allocated, weights diffed into the shared store.
       const morph = mesh.morph!;
       expect(morph._slot).toBeGreaterThanOrEqual(0);
       expect(getPipe(app)._morphStoreBuffer.data[morph._weightIndex]).toBeCloseTo(0.25);
@@ -138,7 +121,6 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
       app.stage.addChild(view3d);
       view3d.camera.position.set(0, 0, 5);
 
-      // A and D share a weight-count bucket (4); B and C must not move when A goes.
       const material = new Material3D({ baseColor: 0xffffff });
       const meshA = new Mesh3D({ geometry: createMorphedTriangle(4), material });
       const meshB = new Mesh3D({ geometry: createMorphedTriangle(3), material });
@@ -153,7 +135,7 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
       const indexC = meshC.morph!._weightIndex;
 
       view3d.root.removeChild(meshA);
-      expect(meshA.morph!._slot).toBe(-1); // slot released with scene membership
+      expect(meshA.morph!._slot, 'the slot goes with scene membership').toBe(-1);
 
       app.render();
       expect(meshB.morph!._weightIndex).toBe(indexB);
@@ -161,11 +143,10 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
       expect(weightLane(view3d, meshB)).toBe(indexB);
       expect(weightLane(view3d, meshC)).toBe(indexC);
 
-      // Same bucket as A → the freed slot is reused, not fresh space.
       const meshD = new Mesh3D({ geometry: createMorphedTriangle(4), material });
       view3d.root.addChild(meshD);
       app.render();
-      expect(meshD.morph!._weightIndex).toBe(indexA);
+      expect(meshD.morph!._weightIndex, "D has as many targets as A, so it reuses A's freed slot").toBe(indexA);
       expect(weightLane(view3d, meshD)).toBe(indexA);
     } finally {
       app.destroy();
@@ -190,18 +171,16 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
       const indexA = meshA.morph!._weightIndex;
       const slotA = meshA.morph!._slot;
 
-      // 3 verts × 340 targets × 4 floats = 4080 — with meshA's 24 already
-      // packed this overflows the 4096-float default reservation, doubling the
-      // arena and shifting every weight slot's absolute offset.
+      /** 3 vertices × 340 targets × 4 floats = 4080, which with meshA's 24 overflows the default 4096-float arena */
       const big = new Mesh3D({ geometry: createMorphedTriangle(340), material });
       view3d.root.addChild(big);
       app.render();
 
       const store = getPipe(app)._morphStoreBuffer as unknown as { _deltaCapacity: number };
       expect(store._deltaCapacity).toBeGreaterThan(4096);
-      expect(meshA.morph!._slot).toBe(slotA); // relative slot survives the move
-      expect(meshA.morph!._weightIndex).not.toBe(indexA); // absolute offset shifted...
-      expect(weightLane(view3d, meshA)).toBe(meshA.morph!._weightIndex); // ...and the row followed
+      expect(meshA.morph!._slot, 'the slot is relative to the weights base').toBe(slotA);
+      expect(meshA.morph!._weightIndex, 'the arena doubled, moving the weights base').not.toBe(indexA);
+      expect(weightLane(view3d, meshA), 'the store row followed').toBe(meshA.morph!._weightIndex);
       expect(weightLane(view3d, big)).toBe(big.morph!._weightIndex);
     } finally {
       app.destroy();
@@ -229,8 +208,6 @@ describe('morph weight-slot plumbing (store lane 20)', () => {
       const store = getPipe(app)._morphStoreBuffer;
       expect(store.data[mesh.morph!._weightIndex]).toBeCloseTo(0.25);
 
-      // The walk diffs weights against the slot each frame, so a raw array
-      // write lands on the next render with no invalidation ceremony.
       mesh.weights![0] = 0.75;
       app.render();
       expect(store.data[mesh.morph!._weightIndex]).toBeCloseTo(0.75);

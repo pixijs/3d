@@ -17,8 +17,8 @@ function fmt(n: number): string {
 /**
  * Emit the PCF sampling body for a tap set (offsets in texel units)
  *
- * The comparison sampler (`sampler2DArrayShadow`) does the depth test per tap;
- * results are averaged. A single centre tap skips the kernel for `'hard'`.
+ * The comparison sampler (`sampler2DArrayShadow`) does the depth test per tap, and the results
+ * are averaged. A single centre tap, as for `'hard'`, returns its one test.
  * @param taps - The filter's tap offsets, in texels
  */
 function pcfBody(taps: readonly ShadowTap[]): string {
@@ -41,20 +41,17 @@ function pcfBody(taps: readonly ShadowTap[]): string {
 }
 
 /**
- * Shadow mapping for WebGL using PCF (Percentage Closer Filtering)
+ * Shadow mapping for WebGL using PCF (Percentage Closer Filtering), the GLSL twin of
+ * `createShadowBitGpu`, which documents the algorithm: the slot layout, the normal-offset taper,
+ * the cascade pick and the blend between cascades
  *
- * Expects a shadow map texture array and a packed uniform array of shadow data
- * (light space matrices, biases, etc.). The PCF kernel comes from
- * `SHADOW_TAPS` for the requested {@link ShadowFilter}.
+ * What differs on WebGL:
  *
- * Layout (stride = 6 vec4s = 24 floats per cascade entry, packed by `ShadowDataList`; WebGPU
- * reads the same array):
- * - [0..3]  lightSpaceMatrix (mat4 as 4 vec4s)
- * - [4]     shadowParams (bias, normalBias, mapSize, cascadeCount)
- * - [5]     cascadeSplits (view-space split depths, cascade 0 only)
- *
- * One entry per (light, cascade) slot; a light's cascade `c` lives at
- * `light.shadowDataIndex + c` and samples the matching texture-array layer.
+ * - Light-space depth is in [-1, 1], because `ShadowRenderPassGl` keeps GL's native clip range, so
+ *   the sampler maps it to the [0, 1] the depth texture holds. GL textures and clip space both put
+ *   `y` up, so unlike WebGPU there's no flip.
+ * - `calculateShadow` takes the whole `Light`. The WebGPU twin passes two of its fields instead, to
+ *   avoid a driver bug seen with storage-buffer structs.
  * @param filter - The shadow filter whose PCF kernel the bit samples
  */
 function createShadowBitGl(filter: ShadowFilter): ShaderBit {
@@ -81,18 +78,12 @@ function createShadowBitGl(filter: ShadowFilter): ShaderBit {
         uShadowData[offset + 2],
         uShadowData[offset + 3]
       );
-      sd.shadowParams = uShadowData[offset + 4];   // bias, normalBias, mapSize, cascadeCount
-      sd.cascadeSplits = uShadowData[offset + 5];  // view-space split depths (cascade 0)
+      sd.shadowParams = uShadowData[offset + 4];
+      sd.cascadeSplits = uShadowData[offset + 5];
       return sd;
     }
 
-    // Samples one shadow-map array layer with PCF.
-    // params = (bias, normalBias, mapSize).
     float sampleShadowLayer(int layer, mat4 lightSpaceMatrix, vec3 worldPos, vec3 normal, vec3 params, float NdotL) {
-      // Normal offset, tapered by how obliquely the light strikes the surface.
-      // Depth error across one shadow texel grows as the surface turns away from
-      // the light, so a face-on surface needs almost none -- and taking none is
-      // what stops the offset eating short shadows.
       vec3 biasedPos = worldPos + normal * (params.y * (1.0 - NdotL));
       vec4 lightSpacePos = lightSpaceMatrix * vec4(biasedPos, 1.0);
       vec3 projPos = lightSpacePos.xyz / lightSpacePos.w;
@@ -116,16 +107,13 @@ ${pcfBody(SHADOW_TAPS[filter])}
     ) {
       int baseIndex = int(light.shadowDataIndex);
 
-      // -1 means this light does not cast shadows
       if (baseIndex == -1) {
         return 1.0;
       }
 
-      // cascadeCount + splits live on the light's first cascade entry.
       ShadowData base = getShadowData(baseIndex);
       int last = int(base.shadowParams.w) - 1;
 
-      // Not cascaded: one map, sampled directly.
       if (last < 1) {
         return sampleShadowLayer(baseIndex, base.lightSpaceMatrix, worldPos, normal, base.shadowParams.xyz, NdotL);
       }
@@ -133,8 +121,6 @@ ${pcfBody(SHADOW_TAPS[filter])}
       float viewDepth = -(uViewMatrix * vec4(worldPos, 1.0)).z;
       vec3 splits = base.cascadeSplits.xyz;
 
-      // Splits are sorted ascending, so the cascade is the number of split
-      // planes viewDepth is past, clamped to the light's cascade count.
       vec3 crossed = step(splits, vec3(viewDepth));
       int cascadeIndex = int(min(dot(crossed, vec3(1.0)), float(last)));
 
@@ -142,12 +128,10 @@ ${pcfBody(SHADOW_TAPS[filter])}
       ShadowData sd = getShadowData(idx);
       float shadow = sampleShadowLayer(idx, sd.lightSpaceMatrix, worldPos, normal, sd.shadowParams.xyz, NdotL);
 
-      // The outermost cascade has nothing to fade into.
       if (cascadeIndex == last) {
         return shadow;
       }
 
-      // This cascade's own near/far split, picked without indexing the vector.
       vec3 hot = vec3(float(cascadeIndex == 0), float(cascadeIndex == 1), float(cascadeIndex == 2));
       float splitFar = dot(splits, hot);
       float splitNear = dot(splits, vec3(hot.y, hot.z, 0.0));
@@ -170,7 +154,7 @@ ${pcfBody(SHADOW_TAPS[filter])}
 }
 
 /**
- * WebGL shadow sampler bits keyed by filter tier; selected per-View in `MaterialSystemGl`
+ * WebGL shadow sampler bits keyed by filter; `MaterialSystemGl` picks one by `View3D.shadowFilter`
  * @internal
  */
 export const shadowBitsGl: Record<ShadowFilter, ShaderBit> = {

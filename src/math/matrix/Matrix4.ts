@@ -7,26 +7,21 @@ import type { PointLike3D } from '../vector/PointLike3D';
 import { Vector3 } from '../vector/Vector3';
 
 /**
- * The `Matrix4` object represents a 4x4 column-major matrix used for 3D transformations and
- * projection
+ * A 4x4 matrix for 3D transforms and projections
  *
- * The 16 elements are stored in column-major order matching the WebGL/WebGPU uniform layout, so
- * the underlying buffer can be uploaded to the GPU without conversion.
+ * {@link Matrix4#elements} holds the sixteen values column by column, the order shaders use, and a
+ * `Matrix4` can be the value of a `mat4x4<f32>` uniform as it is. Points are columns, so in `a * b`
+ * the matrix `b` applies to a point first: `projection * view * world` takes a point on a model
+ * to clip space.
  *
- * Math operations follow the unified mutating-default pattern: `a.multiply(b)` mutates `a`;
- * `a.multiply(b, out)` writes the result into `out` without mutating `a`.
+ * Methods that change the matrix do so in place, or write into an `out` matrix when you pass one
+ * and leave this matrix as it is.
  * @example
  * ```ts
- * // Build a view-projection matrix
- * const view = new Matrix4().lookAt({ x: 0, y: 0, z: 5 }, { x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
- * const projection = new Matrix4().makePerspective(Math.PI / 4, 16 / 9, 0.1, 1000);
- *
- * // Combine: viewProjection = projection * view (mutates `projection`)
- * projection.multiply(view);
- *
- * // Pixi-style aliases
- * projection.append(view);  // same as multiply
- * view.prepend(projection); // same as premultiply
+ * const cameraWorld = new Matrix4().lookAt(eye, target, { x: 0, y: 1, z: 0 }).setPosition(eye);
+ * const view = new Matrix4().getInverse(cameraWorld);
+ * const projection = new Matrix4().makePerspective(Math.PI / 3, width / height, 0.1, 500);
+ * const viewProjection = new Matrix4().multiplyMatrices(projection, view);
  * ```
  * @see {@link Matrix3} For the 3x3 counterpart
  * @see {@link Vector3#applyMatrix4} For applying this matrix to a point
@@ -34,44 +29,72 @@ import { Vector3 } from '../vector/Vector3';
  * @standard
  */
 export class Matrix4 {
-  /** Column-major Float32 storage of the 16 matrix elements, suitable for direct GPU upload */
+  /**
+   * The sixteen values, column by column: the translation sits at indices 12, 13 and 14
+   * @example
+   * ```ts
+   * const worldHeight = mesh.worldTransform.elements[13];
+   * ```
+   */
   public elements: TypedFixedArray<16>;
 
   /**
-   * Float64 view aliasing the same memory as {@link Matrix4#elements}
+   * A `Float64Array` over the same memory as {@link Matrix4#elements}, for copying the matrix as
+   * eight 64-bit moves instead of sixteen 32-bit ones
    *
-   * Used by the renderer for fast 2-element-at-a-time `Float64Array.set()` copies into shared
-   * batch buffers.
+   * The renderer copies world matrices into its shared buffers through it.
    *
-   * > [!IMPORTANT] Reading individual entries as Float64 numbers is meaningless — each Float64 slot
-   * > reinterprets two adjacent Float32 slots. Treat as opaque storage for bulk copy only.
+   * > [!IMPORTANT] Each entry is two of the matrix's floats read as one 64-bit number, which means
+   * > nothing on its own. Use it only to copy into another `Float64Array` view of float data.
+   * @example
+   * ```ts
+   * const instanceData = new Float32Array(instanceCount * 16);
+   * const instanceData64 = new Float64Array(instanceData.buffer);
+   *
+   * instanceData64.set(mesh.worldTransform.elements64, index * 8);
+   * ```
+   * @advanced
    */
   public elements64: Float64Array;
 
   /**
-   * Lazily-allocated Float32Array populated by {@link Matrix4#toArray}
+   * The array {@link Matrix4#toArray} writes into when given no `out`; `null` until its first call
+   * @example
+   * ```ts
+   * worldMatrix.toArray(true);
+   * const rowMajor = worldMatrix.array!;
+   * ```
    * @default null
+   * @advanced
    */
   public array: Float32Array | null = null;
 
   /**
-   * Multiplies two affine matrices and writes the result as three rows of four
+   * Multiplies two affine matrices, `out = a * b`, and writes the result as three rows of four
    *
-   * The fourth row of an affine matrix is always `(0, 0, 0, 1)`, so storing it wastes four
-   * floats per matrix and four component loads per read. This writes the twelve that carry
-   * information, row-major: `[m00 m01 m02 m03][m10 m11 m12 m13][m20 m21 m22 m23]`.
+   * The fourth row of an affine matrix is always `(0, 0, 0, 1)`, so storing it wastes four floats
+   * per matrix and four loads per read. This writes the twelve values that carry information, row
+   * by row: `[m00 m01 m02 m03][m10 m11 m12 m13][m20 m21 m22 m23]`, the last value of each row being
+   * the translation. The bottom rows of `a` and `b` are never read.
    *
-   * A shader reads the three rows as `vec4`s and transforms a point with three dot products
-   * rather than a `mat4` multiply, which is both fewer loads and fewer ALU ops — the `mat4`
-   * form computes a `w` that is always 1 and always discarded. Writing the constant lanes as
-   * literals at the reconstruction site also lets the shader compiler fold them, which it
-   * cannot do while they arrive from a fetch.
+   * A shader reads the three rows as `vec4`s and transforms a point with three dot products. That
+   * takes fewer loads and fewer operations than a `mat4` multiply, which also computes a `w` that
+   * is always 1 and thrown away. Bone matrices for skinning are stored this way.
+   * @example
+   * ```ts
+   * const boneRows = new Float32Array(boneCount * 12);
+   *
+   * for (let i = 0; i < boneCount; i++) {
+   *   Matrix4.multiplyAffineTo3x4(boneRows, i * 12, boneWorlds, i * 16, inverseBinds, i * 16);
+   * }
+   * ```
    * @param out - Destination, 12 floats per entry.
    * @param outOffset - Float offset of the destination entry.
    * @param a - Left operand, 16 floats per entry (column-major).
    * @param aOffset - Float offset of the left entry.
    * @param b - Right operand, 16 floats per entry (column-major).
    * @param bOffset - Float offset of the right entry.
+   * @advanced
    */
   public static multiplyAffineTo3x4(
     out: Float32Array,
@@ -107,7 +130,6 @@ export class Matrix4 {
     const b31 = b[bOffset + 13];
     const b32 = b[bOffset + 14];
 
-    // Row 0: the x components of each product column, then the x translation.
     out[outOffset + 0] = a00 * b00 + a10 * b01 + a20 * b02;
     out[outOffset + 1] = a00 * b10 + a10 * b11 + a20 * b12;
     out[outOffset + 2] = a00 * b20 + a10 * b21 + a20 * b22;
@@ -125,19 +147,24 @@ export class Matrix4 {
   }
 
   /**
-   * Multiplies two affine 4x4 matrices stored in raw Float32 buffers, skipping the bottom-row math
+   * Multiplies two affine matrices held in flat arrays, `out = a * b`, skipping the bottom row
    *
-   * Saves 16 multiplies and 12 adds per call vs. a full 4x4 multiply; used in the world-transform
-   * hot path where the bottom row is always `[0, 0, 0, 1]`.
-   *
-   * The `out` block is written under the assumption that `out[outOffset + 3, +7, +11] = 0` and
-   * `out[outOffset + 15] = 1`.
+   * Reads only the top three rows of `a` and `b` and writes `0, 0, 0, 1` as the bottom row, so it
+   * does 36 multiplies where a full 4x4 product does 64. The engine's world-transform update uses
+   * it. `out` may be the same array as `a` or `b`.
+   * @example
+   * ```ts
+   * for (let i = 0; i < nodeCount; i++) {
+   *   Matrix4.multiplyAffine(worlds, i * 16, worlds, parentIndices[i] * 16, locals, i * 16);
+   * }
+   * ```
    * @param out - Buffer receiving the product
    * @param outOffset - Index of the product's first element in `out`
    * @param a - Buffer holding the left operand
    * @param aOffset - Index of the left operand's first element in `a`
    * @param b - Buffer holding the right operand
    * @param bOffset - Index of the right operand's first element in `b`
+   * @advanced
    */
   public static multiplyAffine(
     out: Float32Array,
@@ -195,9 +222,13 @@ export class Matrix4 {
   }
 
   /**
-   * A static `Matrix4` reset to identity on every access
+   * A shared `Matrix4`, reset to identity on every access, for a one-off calculation
    *
    * > [!IMPORTANT] This matrix is shared and temporary. Do not store references to it.
+   * @example
+   * ```ts
+   * localHit.copyFrom(worldHit).applyMatrix4(Matrix4.shared.getInverse(mesh.worldTransform));
+   * ```
    */
   static get shared(): Matrix4 {
     return _sharedMatrix.identity();
@@ -208,6 +239,10 @@ export class Matrix4 {
    *
    * > [!IMPORTANT] This is a shared instance; do not mutate it. Use {@link Matrix4.shared} when you
    * > need a writable temporary.
+   * @example
+   * ```ts
+   * const atRest = bone.localTransform.equals(Matrix4.IDENTITY);
+   * ```
    */
   static get IDENTITY(): Readonly<Matrix4> {
     return _identityMatrix.identity();
@@ -215,7 +250,9 @@ export class Matrix4 {
 
   /**
    * Creates a new `Matrix4`, defaulting to the identity matrix
-   * @param elements - Optional column-major 16-element backing array
+   * @param elements - Optional column-major backing array of 16 floats, kept rather than copied. It
+   *   must be a `Float32Array` whose byte offset is a multiple of 8, because
+   *   {@link Matrix4#elements64} views the same memory; any other offset throws.
    */
   constructor(elements?: TypedFixedArray<16>) {
     this.elements =
@@ -227,6 +264,17 @@ export class Matrix4 {
 
   /**
    * Sets the 16 elements from row-major arguments (`nRC` = row R, column C)
+   *
+   * The arguments read like the matrix written out on paper; they are stored column by column.
+   * @example
+   * ```ts
+   * const shearX = new Matrix4().set(
+   *   1, 0.5, 0, 0,
+   *   0, 1, 0, 0,
+   *   0, 0, 1, 0,
+   *   0, 0, 0, 1,
+   * );
+   * ```
    * @param n11 - Row 1, column 1
    * @param n12 - Row 1, column 2
    * @param n13 - Row 1, column 3
@@ -287,6 +335,10 @@ export class Matrix4 {
 
   /**
    * Resets this matrix to the identity matrix
+   * @example
+   * ```ts
+   * transform.identity().setPosition(spawnPoint);
+   * ```
    * @returns This matrix
    */
   public identity(): this {
@@ -295,6 +347,10 @@ export class Matrix4 {
 
   /**
    * Checks whether this matrix equals the identity matrix exactly
+   * @example
+   * ```ts
+   * const untouched = node.localTransform.isIdentity();
+   * ```
    * @returns True when every element matches the identity matrix
    */
   public isIdentity(): boolean {
@@ -322,6 +378,10 @@ export class Matrix4 {
 
   /**
    * Copies the elements of `m` into this matrix
+   * @example
+   * ```ts
+   * previousWorld.copyFrom(mesh.worldTransform);
+   * ```
    * @param m - Matrix to copy from
    * @returns This matrix
    */
@@ -351,6 +411,10 @@ export class Matrix4 {
 
   /**
    * Copies this matrix's elements into `target`
+   * @example
+   * ```ts
+   * mesh.worldTransform.copyTo(previousWorld);
+   * ```
    * @param target - Matrix to copy into
    * @returns The given target matrix
    */
@@ -380,6 +444,10 @@ export class Matrix4 {
 
   /**
    * Checks whether all 16 elements of this matrix match `m` exactly (no epsilon tolerance)
+   * @example
+   * ```ts
+   * const moved = !mesh.worldTransform.equals(previousWorld);
+   * ```
    * @param m - Matrix to compare against
    * @returns True when every element matches
    */
@@ -409,6 +477,10 @@ export class Matrix4 {
 
   /**
    * Creates a new `Matrix4` with the same elements
+   * @example
+   * ```ts
+   * const restPose = bone.localTransform.clone();
+   * ```
    * @returns The new matrix
    */
   public clone(): Matrix4 {
@@ -418,6 +490,7 @@ export class Matrix4 {
   /**
    * Formats this matrix as a readable row-by-row string
    * @returns The string representation
+   * @advanced
    */
   public toString(): string {
     const e = this.elements;
@@ -427,6 +500,10 @@ export class Matrix4 {
 
   /**
    * Reads the 16 elements from `array` (column-major) starting at `offset`
+   * @example
+   * ```ts
+   * const instanceMatrix = new Matrix4().fromArray(instanceData, index * 16);
+   * ```
    * @param array - Source array of column-major elements
    * @param offset - Index of the first element to read
    * @returns This matrix
@@ -457,8 +534,13 @@ export class Matrix4 {
   /**
    * Writes this matrix's elements into a Float32Array
    *
-   * The result lives in the lazily-allocated {@link Matrix4#array} field on first call when no
-   * `out` is supplied.
+   * Without `out`, writes into and returns {@link Matrix4#array}, allocated on the first call.
+   * @example
+   * ```ts
+   * const rowMajor = new Float32Array(16);
+   *
+   * mesh.worldTransform.toArray(true, rowMajor);
+   * ```
    * @param transpose - When `true`, writes row-major; default writes column-major (matching {@link Matrix4#elements})
    * @param out - Optional destination array
    * @returns The populated array
@@ -508,7 +590,13 @@ export class Matrix4 {
   }
 
   /**
-   * Multiplies this matrix by `m`: `this = this * m`
+   * Multiplies this matrix by `m`: `this = this * m`, so `m` applies to a point first
+   * @example
+   * ```ts
+   * const muzzleWorld = new Matrix4();
+   *
+   * gun.worldTransform.multiply(muzzleOffset, muzzleWorld);
+   * ```
    * @param m - Matrix to multiply by
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -520,7 +608,13 @@ export class Matrix4 {
   }
 
   /**
-   * Pre-multiplies this matrix by `m`: `this = m * this`
+   * Pre-multiplies this matrix by `m`: `this = m * this`, so `m` applies to a point last
+   * @example
+   * ```ts
+   * const spin = new Matrix4().makeRotationY(0.01);
+   *
+   * app.ticker.add(() => orbit.premultiply(spin));
+   * ```
    * @param m - Matrix to pre-multiply by
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -532,7 +626,11 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to `a * b`
+   * Sets this matrix to `a * b`, so `b` applies to a point first
+   * @example
+   * ```ts
+   * const toClip = new Matrix4().multiplyMatrices(camera.viewProjection, mesh.worldTransform);
+   * ```
    * @param a - Left operand
    * @param b - Right operand
    * @param out - Optional target; defaults to writing into this matrix
@@ -549,6 +647,7 @@ export class Matrix4 {
    * @param s - Scalar to multiply by
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
+   * @advanced
    */
   public multiplyScalar(s: number, out: Matrix4 = this): this {
     const te = out.elements;
@@ -575,9 +674,11 @@ export class Matrix4 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix4#multiply}
-   *
-   * Combines two matrices: `this = this * m`.
+   * Pixi-style alias for {@link Matrix4#multiply}: `this = this * m`
+   * @example
+   * ```ts
+   * gun.worldTransform.append(muzzleOffset, muzzleWorld);
+   * ```
    * @param m - Matrix to append
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -587,9 +688,11 @@ export class Matrix4 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix4#premultiply}
-   *
-   * Combines two matrices: `this = m * this`.
+   * Pixi-style alias for {@link Matrix4#premultiply}: `this = m * this`
+   * @example
+   * ```ts
+   * orbit.prepend(spin);
+   * ```
    * @param m - Matrix to prepend
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -599,9 +702,11 @@ export class Matrix4 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix4#multiplyMatrices}
-   *
-   * Sets this matrix to `a * b`.
+   * Pixi-style alias for {@link Matrix4#multiplyMatrices}: this matrix becomes `a * b`
+   * @example
+   * ```ts
+   * viewProjection.appendFrom(camera.projection, camera.view);
+   * ```
    * @param a - Left operand
    * @param b - Right operand
    * @param out - Optional target; defaults to writing into this matrix
@@ -613,6 +718,13 @@ export class Matrix4 {
 
   /**
    * Computes the determinant of this matrix
+   *
+   * Negative when the transform mirrors, as a negative scale does, and 0 when it flattens a
+   * dimension and can't be inverted.
+   * @example
+   * ```ts
+   * const mirrored = mesh.worldTransform.determinant() < 0;
+   * ```
    * @returns The determinant
    */
   public determinant(): number {
@@ -648,6 +760,10 @@ export class Matrix4 {
 
   /**
    * Transposes this matrix
+   * @example
+   * ```ts
+   * const normalMatrix = new Matrix4().getInverse(mesh.worldTransform).transpose();
+   * ```
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
    */
@@ -696,7 +812,11 @@ export class Matrix4 {
    * Sets this matrix to the inverse of `m`
    *
    * When `m` is non-invertible (determinant is 0) the matrix is reset to identity. By default this
-   * also emits a console warning; pass `throwOnDegenerate = true` to throw instead.
+   * also logs a warning; pass `throwOnDegenerate = true` to throw instead.
+   * @example
+   * ```ts
+   * const worldToLocal = new Matrix4().getInverse(mesh.worldTransform);
+   * ```
    * @param m - Matrix to invert
    * @param throwOnDegenerate - When `true`, throws on a non-invertible matrix instead of warning
    * @param out - Optional target; defaults to writing into this matrix
@@ -798,6 +918,19 @@ export class Matrix4 {
 
   /**
    * Composes this matrix from a translation, rotation and scale
+   *
+   * A point is scaled first, then rotated, then moved: the order a {@link Container3D} builds its
+   * {@link Container3D#localTransform} in.
+   * @example
+   * ```ts
+   * const instance = new Matrix4();
+   * const unitScale = { x: 1, y: 1, z: 1 };
+   *
+   * for (let i = 0; i < treeCount; i++) {
+   *   instance.compose(treePositions[i], treeRotations[i], unitScale);
+   *   instanceData.set(instance.elements, i * 16);
+   * }
+   * ```
    * @param position - Translation component
    * @param quaternion - Rotation component
    * @param scale - Scale component
@@ -856,12 +989,21 @@ export class Matrix4 {
    * Decomposes this matrix into translation, rotation and scale, writing each component into the
    * corresponding output
    *
-   * Negative determinants flip the X scale to keep the rotation proper.
+   * A mirroring matrix (negative determinant) comes back with a negative X scale, so the rotation
+   * stays a rotation. A sheared matrix has no exact split; the result only approximates it.
+   * @example
+   * ```ts
+   * const position = new Vector3();
+   * const rotation = new Quaternion();
+   * const scale = new Vector3();
+   *
+   * mesh.worldTransform.decompose(position, rotation, scale);
+   * ```
    * @param position - Receives the translation component
    * @param quaternion - Receives the rotation component
    * @param scale - Receives the scale component
-   * @param out - Optional matrix that receives a copy of this matrix first
-   * @returns The matrix the decomposition was read from
+   * @param out - Matrix that receives a copy of this one first; decomposing changes no matrix
+   * @returns `out`, which is this matrix when omitted
    */
   public decompose(position: Vector3, quaternion: Quaternion, scale: Vector3, out: Matrix4 = this): this {
     if (out !== this) out.copyFrom(this);
@@ -914,6 +1056,10 @@ export class Matrix4 {
 
   /**
    * Sets this matrix to a pure translation by `(x, y, z)`
+   * @example
+   * ```ts
+   * const eyeOffset = new Matrix4().makeTranslation(0, 1.7, 0);
+   * ```
    * @param x - Translation along x
    * @param y - Translation along y
    * @param z - Translation along z
@@ -924,7 +1070,11 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to a uniform-or-non-uniform scale `(x, y, z)`
+   * Sets this matrix to a scale by `(x, y, z)`; a negative factor mirrors that axis
+   * @example
+   * ```ts
+   * const mirrorX = new Matrix4().makeScale(-1, 1, 1);
+   * ```
    * @param x - Scale along x
    * @param y - Scale along y
    * @param z - Scale along z
@@ -935,10 +1085,18 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to a shear `(x, y, z)`
-   * @param x - Shear factor on the x axis
-   * @param y - Shear factor on the y axis
-   * @param z - Shear factor on the z axis
+   * Sets this matrix to a shear, where each factor adds that multiple of a point's coordinate on
+   * its axis to the point's other two coordinates
+   *
+   * With `y = 0.2`, a point 1 unit up moves 0.2 along both x and z. To shear one axis only, write
+   * the matrix with {@link Matrix4#set}.
+   * @example
+   * ```ts
+   * const lean = new Matrix4().makeShear(0, 0.2, 0);
+   * ```
+   * @param x - How much a point's x adds to its y and z
+   * @param y - How much a point's y adds to its x and z
+   * @param z - How much a point's z adds to its x and y
    * @returns This matrix
    */
   public makeShear(x: number, y: number, z: number): this {
@@ -946,7 +1104,12 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to a rotation of `theta` radians around the X axis
+   * Sets this matrix to a rotation of `theta` radians around the X axis; positive angles turn +Y
+   * toward +Z
+   * @example
+   * ```ts
+   * const layFlat = new Matrix4().makeRotationX(-Math.PI / 2);
+   * ```
    * @param theta - Rotation angle in radians
    * @returns This matrix
    */
@@ -958,7 +1121,12 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to a rotation of `theta` radians around the Y axis
+   * Sets this matrix to a rotation of `theta` radians around the Y axis; positive angles turn +Z
+   * toward +X
+   * @example
+   * ```ts
+   * const heading = new Matrix4().makeRotationY(yaw);
+   * ```
    * @param theta - Rotation angle in radians
    * @returns This matrix
    */
@@ -970,7 +1138,12 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to a rotation of `theta` radians around the Z axis
+   * Sets this matrix to a rotation of `theta` radians around the Z axis; positive angles turn +X
+   * toward +Y
+   * @example
+   * ```ts
+   * const roll = new Matrix4().makeRotationZ(bankAngle);
+   * ```
    * @param theta - Rotation angle in radians
    * @returns This matrix
    */
@@ -983,6 +1156,13 @@ export class Matrix4 {
 
   /**
    * Sets this matrix to a rotation of `angle` radians around the (unit) `axis`
+   *
+   * Positive angles turn counter-clockwise as seen from the tip of `axis`, like the single-axis
+   * methods.
+   * @example
+   * ```ts
+   * const wobble = new Matrix4().makeRotationAxis(new Vector3(1, 0, 1).normalize(), 0.2);
+   * ```
    * @param axis - Unit-length rotation axis
    * @param angle - Rotation angle in radians
    * @returns This matrix
@@ -1019,7 +1199,14 @@ export class Matrix4 {
 
   /**
    * Sets this matrix to a rotation derived from XYZ Euler angles in `rotation` (radians)
-   * @param rotation - Euler angles in radians, applied in XYZ order
+   *
+   * The matrix is `Rx * Ry * Rz`, the convention {@link Container3D#rotation} and
+   * {@link Quaternion#setFromEuler} use, so the same angles give the same orientation.
+   * @example
+   * ```ts
+   * const facing = new Matrix4().makeRotationFromEuler({ x: 0, y: Math.PI / 2, z: 0 });
+   * ```
+   * @param rotation - Euler angles in radians
    * @returns This matrix
    */
   public makeRotationFromEuler(rotation: PointData3D): this {
@@ -1063,6 +1250,11 @@ export class Matrix4 {
 
   /**
    * Sets this matrix to a rotation derived from the quaternion `q`
+   * @example
+   * ```ts
+   * const quarterTurn = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2);
+   * const rotation = new Matrix4().makeRotationFromQuaternion(quarterTurn);
+   * ```
    * @param q - Rotation quaternion
    * @returns This matrix
    */
@@ -1071,7 +1263,19 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to a perspective projection from a vertical field-of-view (radians)
+   * Sets this matrix to a perspective projection from a vertical field-of-view (radians), for a
+   * camera looking down -Z
+   *
+   * Clip-space depth runs from -1 at `near` to 1 at `far`, as WebGL expects. A {@link Camera3D}
+   * builds its projection this way too, and the renderer remaps the copy it binds on WebGPU, whose
+   * depth runs from 0 to 1. A matrix you bind yourself on WebGPU needs the same remap. Leave out
+   * `far`, or pass `Infinity`, to put the far plane at infinity.
+   *
+   * `fovy` is in radians, unlike {@link Camera3D#fov}, which is in degrees.
+   * @example
+   * ```ts
+   * const projection = new Matrix4().makePerspective(Math.PI / 3, width / height, 0.1, 500);
+   * ```
    * @param fovy - Vertical field-of-view in radians
    * @param aspect - Viewport width / height
    * @param near - Near clip distance
@@ -1111,7 +1315,15 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to an orthographic projection
+   * Sets this matrix to an orthographic projection of the box between the given planes, for a
+   * camera looking down -Z
+   *
+   * `top` comes before `bottom` in the arguments. Clip-space depth runs from -1 at `near` to 1 at
+   * `far`, as with {@link Matrix4#makePerspective}.
+   * @example
+   * ```ts
+   * const shadowProjection = new Matrix4().makeOrthographic(-20, 20, 20, -20, 0.5, 100);
+   * ```
    * @param left - Left clip plane
    * @param right - Right clip plane
    * @param top - Top clip plane
@@ -1147,11 +1359,18 @@ export class Matrix4 {
   }
 
   /**
-   * Modifies this matrix's rotation so it looks from `eye` toward `target` with the given `up`
-   * direction
+   * Sets this matrix's rotation so its -Z axis points from `eye` toward `target`, with its +Y axis
+   * as close to `up` as it can be
    *
-   * Only the rotation portion is modified; translation and the bottom row of `this` are preserved
-   * (and copied into `out` first when `out !== this`).
+   * That turns a camera at `eye` to face `target`. Only the rotation part is written; the
+   * translation and bottom row stay (copied into `out` first when it is another matrix). Set the
+   * position and invert the result to get the camera's view matrix. When `up` lies along the view
+   * direction, the direction is nudged slightly so the result is still a rotation.
+   * @example
+   * ```ts
+   * const cameraWorld = new Matrix4().lookAt(eye, target, { x: 0, y: 1, z: 0 }).setPosition(eye);
+   * const view = new Matrix4().getInverse(cameraWorld);
+   * ```
    * @param eye - Viewer position
    * @param target - Point to look toward
    * @param up - Up direction
@@ -1206,6 +1425,10 @@ export class Matrix4 {
 
   /**
    * Writes `(v.x, v.y, v.z)` into the translation column of this matrix, leaving the rest intact
+   * @example
+   * ```ts
+   * const spawn = new Matrix4().makeRotationY(heading).setPosition(spawnPoint);
+   * ```
    * @param v - Position to write
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -1222,7 +1445,14 @@ export class Matrix4 {
   }
 
   /**
-   * Multiplies the upper 3x3 columns of this matrix by `(v.x, v.y, v.z)`
+   * Scales this matrix along its own axes by `(v.x, v.y, v.z)`
+   *
+   * Multiplies the first three columns, which is the same as multiplying by
+   * {@link Matrix4#makeScale} on the right: the scale applies to a point first.
+   * @example
+   * ```ts
+   * const doubled = mesh.worldTransform.clone().scale({ x: 2, y: 2, z: 2 });
+   * ```
    * @param v - Per-axis scale factors
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -1252,6 +1482,10 @@ export class Matrix4 {
 
   /**
    * Writes the translation column into `out`
+   * @example
+   * ```ts
+   * const worldPosition = mesh.worldTransform.extractPosition(new Vector3());
+   * ```
    * @param out - Point that receives the translation
    * @returns The given output point
    */
@@ -1265,6 +1499,13 @@ export class Matrix4 {
 
   /**
    * Writes the per-axis scale (column magnitudes) into `out`
+   *
+   * The lengths are never negative, so a mirrored axis reads as a positive scale;
+   * {@link Matrix4#decompose} reports the mirror.
+   * @example
+   * ```ts
+   * const worldScale = mesh.worldTransform.extractScale(new Vector3());
+   * ```
    * @param out - Point that receives the scale
    * @returns The given output point
    */
@@ -1283,7 +1524,16 @@ export class Matrix4 {
   /**
    * Writes the three basis vectors of this matrix into `xAxis`, `yAxis` and `zAxis`
    *
-   * `out` receives a copy of this matrix when supplied (otherwise this matrix is left unchanged).
+   * They are the first three columns: the matrix's own axes, scale included. Reading them changes
+   * no matrix; `out`, when supplied, only receives a copy of this one.
+   * @example
+   * ```ts
+   * const right = new Vector3();
+   * const up = new Vector3();
+   * const back = new Vector3();
+   *
+   * camera.worldTransform.extractBasis(right, up, back);
+   * ```
    * @param xAxis - Receives the X basis vector
    * @param yAxis - Receives the Y basis vector
    * @param zAxis - Receives the Z basis vector
@@ -1300,7 +1550,13 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix using the three basis vectors as its columns
+   * Sets this matrix using the three basis vectors as its columns, with no translation
+   *
+   * Unit-length axes at right angles to each other make a rotation.
+   * @example
+   * ```ts
+   * const orientation = new Matrix4().makeBasis(right, up, back);
+   * ```
    * @param xAxis - X basis vector
    * @param yAxis - Y basis vector
    * @param zAxis - Z basis vector
@@ -1330,7 +1586,12 @@ export class Matrix4 {
   /**
    * Writes the rotation portion of `m` into this matrix (with each basis re-normalized)
    *
-   * Reflection matrices (negative determinant) are not supported.
+   * The translation is cleared. Scaling each column to unit length only removes scale: a mirroring
+   * matrix (negative determinant) gives a mirrored result, and shear stays.
+   * @example
+   * ```ts
+   * const rotationOnly = new Matrix4().extractRotation(mesh.worldTransform);
+   * ```
    * @param m - Matrix to extract the rotation from
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -1368,6 +1629,13 @@ export class Matrix4 {
 
   /**
    * Writes the negated Z column (forward direction, length 1) into `out`
+   *
+   * That is the way a {@link Camera3D} or a light faces. Other {@link Container3D}s, such as meshes,
+   * face +Z, so for them this points backwards.
+   * @example
+   * ```ts
+   * const aim = camera.worldTransform.extractForward(new Vector3());
+   * ```
    * @param out - Point that receives the direction
    * @returns The given output point
    */
@@ -1387,6 +1655,11 @@ export class Matrix4 {
 
   /**
    * Writes the X column (right direction, length 1) into `out`
+   * @example
+   * ```ts
+   * camera.worldTransform.extractRight(right);
+   * player.position.addScaledVector(right, strafeSpeed);
+   * ```
    * @param out - Point that receives the direction
    * @returns The given output point
    */
@@ -1406,6 +1679,10 @@ export class Matrix4 {
 
   /**
    * Writes the Y column (up direction, length 1) into `out`
+   * @example
+   * ```ts
+   * drone.worldTransform.extractUp(thrustDirection);
+   * ```
    * @param out - Point that receives the direction
    * @returns The given output point
    */
@@ -1424,9 +1701,16 @@ export class Matrix4 {
   }
 
   /**
-   * Computes the largest of the three axis scales
+   * Computes the largest of the three axis scales: the length of the longest of the first three
+   * columns
    *
-   * Useful for bounding-volume scaling.
+   * Scaling a bounding radius by it covers rotation and per-axis scale. Under shear, as when a
+   * non-uniformly scaled parent holds a rotated child, the matrix can stretch some other direction
+   * further; {@link Matrix4#getMaxSingularValueSq} measures that.
+   * @example
+   * ```ts
+   * const worldRadius = localRadius * mesh.worldTransform.getMaxScaleOnAxis();
+   * ```
    * @returns The largest axis scale
    */
   public getMaxScaleOnAxis(): number {
@@ -1440,23 +1724,27 @@ export class Matrix4 {
   }
 
   /**
-   * Largest singular value of the upper-3x3, squared
+   * Largest singular value of the upper-3x3, squared: the square of the most this matrix
+   * stretches any direction
    *
-   * The maximum factor by which this matrix stretches any direction. Unlike
-   * {@link Matrix4.getMaxScaleOnAxis} (longest column), a singular value stays
-   * exact under shear, so this is a strictly conservative scale bound for
-   * transformed bounding volumes even when a non-uniformly scaled parent
-   * composes with a rotated child. For shear-free transforms (rotation, uniform
-   * or axis-aligned scale) it equals `getMaxScaleOnAxis²`.
+   * Unlike {@link Matrix4#getMaxScaleOnAxis}, the length of the longest column, it stays exact
+   * under shear, as when a non-uniformly scaled parent holds a rotated child. A bounding radius
+   * scaled by its square root therefore always covers the transformed shape. Without shear it
+   * equals the square of `getMaxScaleOnAxis`. It comes back squared so callers comparing squared
+   * distances skip a square root.
    *
-   * Computed as the largest eigenvalue of `MᵀM` via the analytic 3x3 symmetric
-   * eigenvalue solution, and returned squared so callers comparing squared
-   * distances skip a `sqrt`.
+   * It is the largest eigenvalue of `MᵀM`, whose entries are the dot products of the columns,
+   * found with Smith's closed-form solution for symmetric 3x3 matrices. When the columns are at
+   * right angles, `MᵀM` is diagonal and the answer is its largest entry. The arccosine's input is
+   * clamped to `[-1, 1]` so rounding can't produce `NaN`.
+   * @example
+   * ```ts
+   * const worldRadius = localRadius * Math.sqrt(mesh.worldTransform.getMaxSingularValueSq());
+   * ```
    * @returns The squared largest singular value, clamped at 0
    */
   public getMaxSingularValueSq(): number {
     const e = this.elements;
-    // Upper-3x3 columns (column-major storage).
     const c0x = e[0];
     const c0y = e[1];
     const c0z = e[2];
@@ -1467,7 +1755,6 @@ export class Matrix4 {
     const c2y = e[9];
     const c2z = e[10];
 
-    // A = MᵀM (symmetric, positive semi-definite): Aij = column_i · column_j.
     const a11 = c0x * c0x + c0y * c0y + c0z * c0z;
     const a22 = c1x * c1x + c1y * c1y + c1z * c1z;
     const a33 = c2x * c2x + c2y * c2y + c2z * c2z;
@@ -1477,18 +1764,15 @@ export class Matrix4 {
 
     const p1 = a12 * a12 + a13 * a13 + a23 * a23;
     if (p1 === 0) {
-      // Diagonal — eigenvalues are the diagonal entries.
       return Math.max(a11, a22, a33);
     }
 
-    // Largest eigenvalue of the symmetric 3x3 (Smith's analytic method).
     const q = (a11 + a22 + a33) / 3;
     const d11 = a11 - q;
     const d22 = a22 - q;
     const d33 = a33 - q;
     const p = Math.sqrt((d11 * d11 + d22 * d22 + d33 * d33 + 2 * p1) / 6);
 
-    // r = det((A - qI) / p) / 2, clamped to acos's domain.
     const b11 = d11 / p;
     const b22 = d22 / p;
     const b33 = d33 / p;

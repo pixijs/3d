@@ -13,8 +13,8 @@ const NO_PACKED_FRAMES = new Uint16Array(0);
  * bytes out, computed once.
  *
  * Returns an empty array for a single frame, whose vertices carry no frame
- * attribute at all — eight bytes saved on every streamed vertex; its framing rides
- * the material's `uvTransform` derivation instead. Multiple frames must share
+ * attribute at all, saving eight bytes on every vertex; its framing comes from
+ * the material's `uvTransform` instead. Multiple frames must share
  * one `TextureSource` (a sprite sheet), because a particle system is a single
  * draw call binding a single texture.
  * @param textures - The flipbook frames, in frame-index order

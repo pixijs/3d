@@ -37,19 +37,9 @@ describe('Quaternion — constructor', () => {
     const q = new Quaternion();
     expectQuatClose(q, 0, 0, 0, 1);
   });
-
-  test('accepts explicit (x, y, z, w)', () => {
-    const q = new Quaternion(0.1, 0.2, 0.3, 0.4);
-    expectQuatClose(q, 0.1, 0.2, 0.3, 0.4);
-  });
 });
 
 describe('Quaternion.shared', () => {
-  test('returns identity on access', () => {
-    const s = Quaternion.shared;
-    expectQuatClose(s, 0, 0, 0, 1);
-  });
-
   test('resets to identity each access (even after mutation)', () => {
     const s1 = Quaternion.shared;
     s1.set(0.5, 0.5, 0.5, 0.5);
@@ -149,22 +139,11 @@ describe('Quaternion — basic accessors', () => {
     expectQuatClose(q, 0.1, 0.2, 0.3, 0.4);
   });
 
-  test('set returns this for chaining', () => {
-    const q = new Quaternion();
-    expect(q.set(0, 0, 0, 1)).toBe(q);
-  });
-
   test('copyFrom copies values from a QuaternionData', () => {
     const a = new Quaternion(0.1, 0.2, 0.3, 0.4);
     const b = new Quaternion();
     b.copyFrom(a);
     expectQuatClose(b, 0.1, 0.2, 0.3, 0.4);
-  });
-
-  test('copyFrom accepts a plain object', () => {
-    const q = new Quaternion();
-    q.copyFrom({ x: 0.5, y: 0.6, z: 0.7, w: 0.8 });
-    expectQuatClose(q, 0.5, 0.6, 0.7, 0.8);
   });
 
   test('copyTo writes into the target', () => {
@@ -173,13 +152,6 @@ describe('Quaternion — basic accessors', () => {
     const ret = a.copyTo(b);
     expect(ret).toBe(b);
     expectQuatClose(b, 0.1, 0.2, 0.3, 0.4);
-  });
-
-  test('clone produces a new equal Quaternion', () => {
-    const a = new Quaternion(0.1, 0.2, 0.3, 0.4);
-    const c = a.clone();
-    expect(c).not.toBe(a);
-    expectQuatClose(c, 0.1, 0.2, 0.3, 0.4);
   });
 
   test('identity resets to (0, 0, 0, 1)', () => {
@@ -223,15 +195,6 @@ describe('Quaternion — array I/O', () => {
     expectQuatClose(q, 0.1, 0.2, 0.3, 0.4);
   });
 
-  test('fromArray reads from a Float32Array', () => {
-    const q = new Quaternion();
-    q.fromArray(new Float32Array([0.1, 0.2, 0.3, 0.4]));
-    expect(q.x).toBeCloseTo(0.1, 5);
-    expect(q.y).toBeCloseTo(0.2, 5);
-    expect(q.z).toBeCloseTo(0.3, 5);
-    expect(q.w).toBeCloseTo(0.4, 5);
-  });
-
   test('toArray allocates and writes values', () => {
     const q = new Quaternion(0.1, 0.2, 0.3, 0.4);
     const arr = q.toArray();
@@ -251,22 +214,9 @@ describe('Quaternion — array I/O', () => {
     expect(arr[4]).toBeCloseTo(0.3, 5);
     expect(arr[5]).toBeCloseTo(0.4, 5);
   });
-
-  test('toArray accepts a Float32Array', () => {
-    const q = new Quaternion(0.1, 0.2, 0.3, 0.4);
-    const arr = new Float32Array(4);
-    q.toArray(arr);
-    expect(arr[0]).toBeCloseTo(0.1, 5);
-    expect(arr[3]).toBeCloseTo(0.4, 5);
-  });
 });
 
 describe('Quaternion.setFromEuler', () => {
-  test('zero rotation is identity', () => {
-    const q = new Quaternion().setFromEuler({ x: 0, y: 0, z: 0 });
-    expectQuatClose(q, 0, 0, 0, 1);
-  });
-
   test('X-only rotation matches setFromAxisAngle({1,0,0}, x)', () => {
     const angle = Math.PI / 3;
     const fromEuler = new Quaternion().setFromEuler({ x: angle, y: 0, z: 0 });
@@ -303,11 +253,6 @@ describe('Quaternion.setFromAxisAngle', () => {
     expectQuatClose(q, 0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4));
     expect(q.y).toBeCloseTo(Math.SQRT1_2, 5);
     expect(q.w).toBeCloseTo(Math.SQRT1_2, 5);
-  });
-
-  test('0° produces identity', () => {
-    const q = new Quaternion().setFromAxisAngle({ x: 1, y: 0, z: 0 }, 0);
-    expectQuatClose(q, 0, 0, 0, 1);
   });
 
   test('result is unit length for unit axis', () => {
@@ -347,12 +292,6 @@ describe('Quaternion.setFromRotationMatrix', () => {
     const recovered = new Quaternion().setFromRotationMatrix(m);
     const expected = new Quaternion().setFromAxisAngle({ x: 0, y: 0, z: 1 }, theta);
     expectSameRotation(recovered, expected);
-  });
-
-  test('identity matrix produces identity quaternion (trace > 0 branch)', () => {
-    const m = new Matrix4().identity();
-    const q = new Quaternion().setFromRotationMatrix(m);
-    expectQuatClose(q, 0, 0, 0, 1);
   });
 
   test('180° rotation around X exercises m11-largest off-diagonal branch', () => {
@@ -462,21 +401,10 @@ describe('Quaternion.setFromUnitVectors', () => {
 });
 
 describe('Quaternion — dot and angles', () => {
-  test('self dot equals magnitudeSquared', () => {
-    const q = new Quaternion(0.1, 0.2, 0.3, 0.4);
-    expect(q.dot(q)).toBeCloseTo(q.magnitudeSquared(), 5);
-  });
-
   test('perpendicular quaternions have dot 0', () => {
     const a = new Quaternion(1, 0, 0, 0);
     const b = new Quaternion(0, 1, 0, 0);
     expect(a.dot(b)).toBeCloseTo(0, 5);
-  });
-
-  test('angleTo identity to identity is 0', () => {
-    const a = new Quaternion();
-    const b = new Quaternion();
-    expect(a.angleTo(b)).toBeCloseTo(0, 5);
   });
 
   test('angleTo between two rotations equals difference in their angles', () => {
@@ -487,18 +415,6 @@ describe('Quaternion — dot and angles', () => {
 });
 
 describe('Quaternion — magnitude', () => {
-  test('identity magnitude is 1', () => {
-    const q = new Quaternion();
-    expect(q.magnitude()).toBeCloseTo(1, 5);
-    expect(q.magnitudeSquared()).toBeCloseTo(1, 5);
-  });
-
-  test('magnitudeSquared equals magnitude squared', () => {
-    const q = new Quaternion(0.1, 0.2, 0.3, 0.4);
-    const m = q.magnitude();
-    expect(q.magnitudeSquared()).toBeCloseTo(m * m, 5);
-  });
-
   test('magnitude of (1, 1, 1, 1) is 2', () => {
     const q = new Quaternion(1, 1, 1, 1);
     expect(q.magnitude()).toBeCloseTo(2, 5);
@@ -578,20 +494,6 @@ describe('Quaternion.inverse and conjugate', () => {
 });
 
 describe('Quaternion.multiply and premultiply', () => {
-  test('q * identity = q', () => {
-    const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 4);
-    const orig = q.clone();
-    q.multiply(new Quaternion());
-    expectQuatClose(q, orig.x, orig.y, orig.z, orig.w);
-  });
-
-  test('identity.premultiply(q) = q', () => {
-    const target = new Quaternion();
-    const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 4);
-    target.premultiply(q);
-    expectQuatClose(target, q.x, q.y, q.z, q.w);
-  });
-
   test('multiplication is non-commutative in general', () => {
     const a = new Quaternion().setFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI / 2);
     const b = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2);

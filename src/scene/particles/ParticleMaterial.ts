@@ -12,16 +12,20 @@ import { getParticleBit } from './bits/particleBit';
 import type { ParticleBillboardMode } from './bits/particleBit';
 
 /**
- * Blending applied to a particle material
+ * How particles blend over the scene
  *
- * The subset of pixi's `BLEND_MODES` the 3D pass can express as fixed-function
- * GPU blends. The advanced 2D modes (`'overlay'`, `'color-dodge'`, …) are
- * filter-based and have no meaning here.
+ * The pixi blend modes the GPU can do directly. The advanced 2D modes, such as `'overlay'` and
+ * `'color-dodge'`, need filters and aren't available.
  *
- * - `'normal'` composites over the scene — smoke, dust, debris
- * - `'add'` only brightens — fire, sparks, magic, anything that glows
- * - `'multiply'` only darkens — stains, shadowy wisps, dark smoke
- * - `'screen'` brightens softly, never clipping — glows and hazes
+ * - `'normal'` covers what's behind: smoke, dust, debris
+ * - `'add'` only brightens: fire, sparks, magic, anything that glows
+ * - `'multiply'` only darkens: stains, shadowy wisps, dark smoke
+ * - `'screen'` brightens softly without blowing out: glows and hazes
+ * @example
+ * ```ts
+ * const blendMode: ParticleBlendMode = glowing ? 'add' : 'normal';
+ * const particles = new ParticleSystem3D({ blendMode });
+ * ```
  * @category scene
  * @standard
  */
@@ -35,78 +39,86 @@ export type ParticleBlendMode = Extract<BLEND_MODES, 'normal' | 'add' | 'multipl
 export interface ParticleMaterialOptions {
   /** The sprite (or whole sprite sheet, for flipbooks) every particle samples */
   texture?: Texture;
-  /** How each quad is oriented before its corners expand @default 'spherical' */
+  /**
+   * How each quad faces the camera
+   * @default 'spherical'
+   */
   billboard?: ParticleBillboardMode;
   /**
-   * Whether the geometry streams a per-particle `aParticleUVFrame` attribute,
-   * for a system that picks frames at spawn
+   * Whether the geometry carries a per-particle `aParticleUVFrame` flipbook window
    *
-   * Must match the geometry, and `texture` must then be the whole sheet,
-   * unframed, so the derived uv transform is identity and the per-particle
-   * frames own all UV remapping.
+   * Must match the geometry. `texture` must then be the whole sheet, not one frame of it, so the
+   * material's UV transform is identity and the per-particle windows do all the UV mapping;
+   * `ParticleContainer3D` binds such a whole-sheet texture for a flipbook.
    * @default false
    */
   useFrames?: boolean;
-  /** Whether particle centres are emitter-local rather than world-space @default false */
+  /**
+   * Whether particle positions are relative to the mesh rather than in world space
+   * @default false
+   */
   localSpace?: boolean;
-  /** How particles blend over the scene — see {@link ParticleBlendMode} @default 'normal' */
+  /**
+   * How particles blend over the scene; see {@link ParticleBlendMode}
+   *
+   * Ignored unless `alphaMode` is `'blend'`: pixi turns blending on for any blend mode but
+   * `'none'`, which `'mask'` and `'opaque'` must keep off.
+   * @default 'normal'
+   */
   blendMode?: ParticleBlendMode;
   /**
-   * Which of the standard material alpha modes the particles use
-   *
-   * `'blend'` composites particles over the scene. `'mask'` makes hard cutouts
-   * that write depth — no inter-system sorting artifacts, hidden fragments
-   * early-z rejected instead of paying blend fill rate; the pick for leaves,
-   * debris and stylized effects. `'opaque'` renders the whole quad solid —
-   * only right for textures with no transparent texels (solid squares,
-   * block-game debris), where it's the cheapest mode of all. `blendMode` only
-   * applies under `'blend'`.
+   * How particle transparency works; see {@link ParticleContainer3DOptions.alphaMode}
    * @default 'blend'
    */
   alphaMode?: AlphaMode;
-  /** Coverage threshold for `'mask'` — texels below it are discarded @default 0.5 */
+  /**
+   * Alpha below which a texel is cut away under `alphaMode: 'mask'`
+   * @default 0.5
+   */
   alphaCutoff?: number;
-  /** Extra shader bits composed after the particle bit — soft particles, custom fades */
+  /** Extra shader bits composed after the particle bit; see {@link ParticleContainer3DOptions.extraBits} */
   extraBits?: readonly ShaderBit[];
   /** Textures for the extra bits' declarations, by name, as `BaseMaterial3DOptions.textures` */
   textures?: Record<string, Texture | undefined>;
   /**
-   * Whether the View's distance fog reaches these particles
+   * Whether the view's fog reaches these particles
    *
-   * Defaults to the blend policy: `'normal'` particles fog like everything
-   * else, every other mode opts out — fog lerps toward the fog colour, while
-   * add/screen/multiply contributions should fade toward their neutral element
-   * (black or white), so fogged quads would read as glowing or staining
-   * rectangles.
+   * Defaults to `true` for `'normal'` blending only. Fog fades a particle toward the fog colour,
+   * but an added or screened particle has to fade toward black to vanish, and a multiplied one
+   * toward white, so fogged quads would show as glowing or staining rectangles.
    */
   fog?: boolean;
 }
 
 /**
- * The material half of a particle system: unlit flat shading with the particle
- * bit composed in
+ * The material half of a particle system: unlit, flat shading with the particle bit composed in
  *
- * Billboarding, per-particle size, rotation, tint and flipbook frame all read
- * from the streamed vertex layout. `alphaMode` supports the full triad — see
- * {@link ParticleMaterialOptions.alphaMode}; the mask cutoff is the only
- * shader variant.
+ * Billboarding, and each particle's size, rotation, tint and flipbook frame, all come from the
+ * particle vertex layout. Every `alphaMode` works; `'mask'` adds the cutoff to the shader.
  *
- * Built (and owned) by {@link ParticleContainer3D}, which derives the
- * `useFrames` / `localSpace` flags from its own geometry so the two halves of
- * the contract can't disagree. Reusable standalone only on geometry that
- * carries the same particle attribute layout. Blending lives on pixi state —
- * `material.state.blendMode` — and changing it on a rendering mesh needs that
- * mesh invalidated, which {@link ParticleContainer3D#blendMode} does for you.
+ * {@link ParticleContainer3D} builds and owns one, passing `useFrames` and `localSpace` to
+ * match its own geometry. Use it on its own only with geometry that has the same particle
+ * attributes. The blend mode lives on pixi's `material.state.blendMode`, and changing it on a
+ * mesh that is already drawing needs that mesh invalidated, which
+ * {@link ParticleContainer3D#blendMode} does for you.
  * @category scene
  * @advanced
  */
 export class ParticleMaterial extends BaseMaterial3D {
-  /** Unlit by definition — opt out of the View's tone-mapping curve */
+  /** Unlit, so the view's tone mapping is skipped */
   public override toneMapped = false;
 
-  /** Unlit by definition; declares no lighting accumulators, so the view's env and shadow bits are skipped */
+  /** Unlit, so the view's environment and shadow bits are skipped */
   public override lit = false;
 
+  /**
+   * The shader bits, fixed for the material's lifetime so the material data layout never shifts
+   *
+   * `FlatMaterial`'s composition plus the particle bit: base colour sample, UV transform, the
+   * particle attributes, then the extra bits, which see the sampled `albedo` and `alpha`.
+   * `ParticleContainer3D` builds its vertex layout from the particle bit and the extra bits
+   * alone, since the first two declare no attributes; one that did would need adding there too.
+   */
   private readonly _bits: readonly ShaderBit[];
 
   constructor(options: ParticleMaterialOptions = {}) {
@@ -116,22 +128,16 @@ export class ParticleMaterial extends BaseMaterial3D {
 
     super({
       baseColorTexture: options.texture,
-      // Blend routes through the transparent pass (no depth write, quads
-      // composite); mask routes opaque with a cutoff discard and depth writes.
       alphaMode: options.alphaMode ?? 'blend',
       alphaCutoff: options.alphaCutoff,
       extraBits: options.extraBits,
       doubleSided: true,
-      // Fog is only correct for 'normal': every other mode's neutral element
-      // (black for add/screen, white for multiply) isn't the fog colour, so
-      // fogged quads would read as glowing or staining rectangles.
       fog: options.fog ?? (options.blendMode ?? 'normal') === 'normal',
     });
 
     if (useFrames && options.texture !== undefined) {
       const { frame, source } = options.texture;
 
-      // A framed texture would derive a uv transform on top of the frames.
       if (frame.x !== 0 || frame.y !== 0 || frame.width !== source.width || frame.height !== source.height) {
         throw new Error('[ParticleMaterial] useFrames needs the whole sheet as its texture, not one frame of it.');
       }
@@ -139,10 +145,6 @@ export class ParticleMaterial extends BaseMaterial3D {
 
     this._descriptor = new ShaderDescriptor({});
 
-    // The same composition FlatMaterial assembles, plus the particle bit: base
-    // colour sample, then the uv transform, then particle attributes — user
-    // extras see the post-baseColor `albedo` / `alpha`. Fixed for the
-    // material's lifetime, so the struct snapshot never shifts.
     this._bits = [
       flatMaterialBit,
       uvTransformBit,
@@ -151,8 +153,6 @@ export class ParticleMaterial extends BaseMaterial3D {
     ];
     this._deriveLayoutFromBits(this._bits, { baseColor: options.texture, ...options.textures });
 
-    // Any blend mode but 'none' switches blending on, so mask and opaque keep
-    // the state the alpha mode chose.
     if (this._alphaMode === 'blend') this.state.blendMode = options.blendMode ?? 'normal';
   }
 

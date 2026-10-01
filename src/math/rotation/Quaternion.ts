@@ -3,42 +3,74 @@ import { clamp } from '../utils/clamp';
 import type { PointData3D } from '../vector/PointData3D';
 
 /**
- * Interface for objects with `(x, y, z, w)` quaternion components
+ * Minimal `{ x, y, z, w }` shape of a quaternion, accepted across the math API
  *
- * Implemented by {@link Quaternion} and {@link ObservableQuaternion} and accepted as a lightweight
- * read/write shape across the math API.
+ * {@link Quaternion} and {@link ObservableQuaternion} implement it, and so does any plain object with
+ * these four numbers. For a turn of `angle` radians around the unit vector `axis`, `(x, y, z)` is
+ * `axis * sin(angle / 2)` and `w` is `cos(angle / 2)`.
+ * @example
+ * ```ts
+ * const quarterTurnAroundY: QuaternionData = { x: 0, y: Math.SQRT1_2, z: 0, w: Math.SQRT1_2 };
+ *
+ * door.quaternion.copyFrom(quarterTurnAroundY);
+ * ```
  * @category maths
  * @standard
  */
 export interface QuaternionData {
-  /** The x component */
+  /**
+   * The x component
+   * @example
+   * ```ts
+   * const axisX = rotation.x / Math.sqrt(1 - rotation.w * rotation.w);
+   * ```
+   */
   x: number;
-  /** The y component */
+  /**
+   * The y component
+   * @example
+   * ```ts
+   * const axisY = rotation.y / Math.sqrt(1 - rotation.w * rotation.w);
+   * ```
+   */
   y: number;
-  /** The z component */
+  /**
+   * The z component
+   * @example
+   * ```ts
+   * const axisZ = rotation.z / Math.sqrt(1 - rotation.w * rotation.w);
+   * ```
+   */
   z: number;
-  /** The w component */
+  /**
+   * The w component
+   * @example
+   * ```ts
+   * const angle = 2 * Math.acos(rotation.w);
+   * ```
+   */
   w: number;
 }
 
 /**
- * The `Quaternion` object represents a rotation in 3D space using `(x, y, z, w)`
+ * A rotation in 3D, stored as four numbers `(x, y, z, w)`
  *
- * Quaternions avoid gimbal lock and interpolate smoothly via {@link Quaternion#slerp}. Most
- * methods assume a unit-length quaternion; call {@link Quaternion#normalize} after operations that
- * may drift.
+ * Unlike Euler angles, a quaternion doesn't lose a degree of freedom when two axes line up, and
+ * {@link Quaternion#slerp} blends between two of them smoothly. {@link QuaternionData} says what the
+ * four numbers mean. A rotation quaternion has length 1. Most methods assume so, and long chains of
+ * {@link Quaternion#multiply} drift from it, which {@link Quaternion#normalize} fixes.
  *
- * Math operations follow the unified mutating-default pattern: `a.multiply(b)` mutates `a`;
- * `a.multiply(b, out)` writes the result into `out` without mutating `a`.
+ * Methods change the quaternion they're called on and return it, so calls chain. Pass an `out`
+ * target last to write the result there instead and leave this one as it is.
  * @example
  * ```ts
- * const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2);
+ * const up = { x: 0, y: 1, z: 0 };
+ * const spin = new Quaternion();
  *
- * // Compose with another rotation
- * q.multiply(other);
- *
- * // Smooth interpolation
- * q.slerp(target, 0.25);
+ * app.ticker.add((ticker) => {
+ *   spin.setFromAxisAngle(up, spinSpeed * (ticker.deltaMS / 1000));
+ *   coin.quaternion.multiply(spin);
+ * });
  * ```
  * @see {@link QuaternionData} For the basic `(x, y, z, w)` interface
  * @see {@link ObservableQuaternion} For the observable counterpart
@@ -47,19 +79,47 @@ export interface QuaternionData {
  * @standard
  */
 export class Quaternion implements QuaternionData {
-  /** The x component of this quaternion */
-  public x: number;
-  /** The y component of this quaternion */
-  public y: number;
-  /** The z component of this quaternion */
-  public z: number;
-  /** The w component of this quaternion */
-  public w: number;
+  /**
+   * The x component; {@link QuaternionData} says what it means
+   * @example
+   * ```ts
+   * const axisX = rotation.x / Math.sqrt(1 - rotation.w * rotation.w);
+   * ```
+   */
+  public x = 0;
+  /**
+   * The y component; {@link QuaternionData} says what it means
+   * @example
+   * ```ts
+   * const axisY = rotation.y / Math.sqrt(1 - rotation.w * rotation.w);
+   * ```
+   */
+  public y = 0;
+  /**
+   * The z component; {@link QuaternionData} says what it means
+   * @example
+   * ```ts
+   * const axisZ = rotation.z / Math.sqrt(1 - rotation.w * rotation.w);
+   * ```
+   */
+  public z = 0;
+  /**
+   * The w component; {@link QuaternionData} says what it means
+   * @example
+   * ```ts
+   * const angle = 2 * Math.acos(rotation.w);
+   * ```
+   */
+  public w = 0;
 
   /**
-   * A static `Quaternion` reset to identity `(0, 0, 0, 1)` on every access
+   * A static `Quaternion` reset to identity on every access, for a result used straight away
    *
    * > [!IMPORTANT] This quaternion is shared and temporary. Do not store references to it.
+   * @example
+   * ```ts
+   * kickOffset.applyQuaternion(Quaternion.shared.setFromEuler(recoil));
+   * ```
    */
   static get shared(): Quaternion {
     _shared.x = 0;
@@ -71,9 +131,15 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * SLERPs two flat quaternion arrays into `dst`
+   * Spherically interpolates between two quaternions stored in flat arrays, writing the result into
+   * `dst` without creating a `Quaternion`
    *
-   * Used by animation tracks to avoid `Quaternion` allocations on every keyframe.
+   * Animation tracks use it to blend keyframes stored back to back in one array. Like
+   * {@link Quaternion#slerp} it takes the shorter way round.
+   * @example
+   * ```ts
+   * Quaternion.slerpFlat(pose, boneIndex * 4, keyframes, frame * 4, keyframes, (frame + 1) * 4, blend);
+   * ```
    * @param dst - The array to write the result into
    * @param dstOffset - The offset into `dst` to write at
    * @param src0 - The array holding the start quaternion
@@ -81,6 +147,7 @@ export class Quaternion implements QuaternionData {
    * @param src1 - The array holding the end quaternion
    * @param srcOffset1 - The offset into `src1` to read from
    * @param t - The interpolation factor in `[0, 1]`
+   * @advanced
    */
   public static slerpFlat(
     dst: number[],
@@ -112,24 +179,25 @@ export class Quaternion implements QuaternionData {
         dot = -dot;
       }
 
-      let s = 1 - t;
+      let k0 = 1 - t;
+      let k1 = t;
 
       if (dot < 0.9995) {
         const theta = Math.acos(dot);
         const sin = Math.sin(theta);
 
-        s = Math.sin(s * theta) / sin;
-        t = Math.sin(t * theta) / sin;
+        k0 = Math.sin(k0 * theta) / sin;
+        k1 = Math.sin(t * theta) / sin;
 
-        x0 = x0 * s + x1 * t;
-        y0 = y0 * s + y1 * t;
-        z0 = z0 * s + z1 * t;
-        w0 = w0 * s + w1 * t;
+        x0 = x0 * k0 + x1 * k1;
+        y0 = y0 * k0 + y1 * k1;
+        z0 = z0 * k0 + z1 * k1;
+        w0 = w0 * k0 + w1 * k1;
       } else {
-        x0 = x0 * s + x1 * t;
-        y0 = y0 * s + y1 * t;
-        z0 = z0 * s + z1 * t;
-        w0 = w0 * s + w1 * t;
+        x0 = x0 * k0 + x1 * k1;
+        y0 = y0 * k0 + y1 * k1;
+        z0 = z0 * k0 + z1 * k1;
+        w0 = w0 * k0 + w1 * k1;
 
         const f = 1 / Math.sqrt(x0 * x0 + y0 * y0 + z0 * z0 + w0 * w0);
         x0 *= f;
@@ -161,6 +229,10 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Sets the components of this quaternion
+   * @example
+   * ```ts
+   * rotation.set(0, Math.SQRT1_2, 0, Math.SQRT1_2);
+   * ```
    * @param x - The x component
    * @param y - The y component
    * @param z - The z component
@@ -178,6 +250,10 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Copies `q` into this quaternion
+   * @example
+   * ```ts
+   * savedRotation.copyFrom(door.quaternion);
+   * ```
    * @param q - The quaternion to copy from
    * @returns This quaternion for chaining
    */
@@ -192,6 +268,10 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Copies this quaternion into `target` and returns it
+   * @example
+   * ```ts
+   * savedRotation.copyTo(door.quaternion);
+   * ```
    * @param target - The quaternion to copy into
    * @returns The given `target`
    */
@@ -206,6 +286,10 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Creates a new `Quaternion` with the same values
+   * @example
+   * ```ts
+   * const restRotation = aimRotation.clone();
+   * ```
    * @returns The new quaternion
    */
   public clone(): Quaternion {
@@ -213,7 +297,11 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Resets this quaternion to identity `(0, 0, 0, 1)`
+   * Resets this quaternion to identity `(0, 0, 0, 1)`, no rotation
+   * @example
+   * ```ts
+   * aimOffset.identity();
+   * ```
    * @returns This quaternion for chaining
    */
   public identity(): this {
@@ -227,6 +315,12 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Returns true when `x`, `y`, `z` and `w` match `q` exactly (no epsilon tolerance)
+   *
+   * `q` and its negation are the same rotation but don't compare equal.
+   * @example
+   * ```ts
+   * if (!aimRotation.equals(lastAimRotation)) updateCrosshair();
+   * ```
    * @param q - The quaternion to compare with
    * @returns Whether all components match
    */
@@ -235,9 +329,16 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from Euler angles in XYZ order (radians)
+   * Sets this quaternion from Euler angles in radians
+   *
+   * Uses the XYZ order of {@link Container3D#rotation}, so it gives the rotation a node with those
+   * angles has.
+   * @example
+   * ```ts
+   * const facing = new Quaternion().setFromEuler({ x: 0, y: heading, z: 0 });
+   * ```
    * @param rotation - The Euler angles as `(x, y, z)` radians
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromEuler(rotation: PointData3D, out: QuaternionData = this): this {
@@ -260,10 +361,16 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from a unit-length `axis` and `angle` in radians
+   * Sets this quaternion to a turn of `angle` radians around the unit-length `axis`
+   * @example
+   * ```ts
+   * const up = { x: 0, y: 1, z: 0 };
+   *
+   * Quaternion.shared.setFromAxisAngle(up, yaw, rigidBody.quaternion);
+   * ```
    * @param axis - The unit-length rotation axis
    * @param angle - The rotation angle in radians
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion, such as a physics body's rotation
    * @returns The result quaternion for chaining
    */
   public setFromAxisAngle(axis: PointData3D, angle: number, out: QuaternionData = this): this {
@@ -279,12 +386,17 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from rotation matrix `m`
+   * Sets this quaternion to the rotation in `m`
    *
-   * Assumes the upper-left 3x3 of `m` is a pure rotation (unscaled). Use
-   * {@link Quaternion#setFromScaledRotationMatrix} for matrices with scale.
+   * The upper-left 3x3 of `m` must be a pure rotation, with no scale. Use
+   * {@link Quaternion#setFromScaledRotationMatrix} for a matrix with scale, such as a node's world
+   * transform.
+   * @example
+   * ```ts
+   * const cameraRotation = new Quaternion().setFromRotationMatrix(new Matrix4().lookAt(eye, target, up));
+   * ```
    * @param m - The rotation matrix to extract from
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromRotationMatrix(m: Matrix4, out: QuaternionData = this): this {
@@ -296,11 +408,16 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion from a TRS-composed matrix that may carry per-axis scale
+   * Sets this quaternion to the rotation in `m`, a transform that may also scale each axis
    *
-   * Strips column scales inline before extraction.
-   * @param m - The TRS matrix to extract from
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * Divides the scale out of each column before reading the rotation. A matrix with a zero scale has
+   * no rotation to read and gives `NaN`.
+   * @example
+   * ```ts
+   * const worldRotation = new Quaternion().setFromScaledRotationMatrix(node.worldTransform);
+   * ```
+   * @param m - The transform to extract from
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromScaledRotationMatrix(m: Matrix4, out: QuaternionData = this): this {
@@ -336,12 +453,17 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion to the rotation that takes unit-length `vFrom` to unit-length `vTo`
+   * Sets this quaternion to the shortest turn that takes unit-length `vFrom` to unit-length `vTo`
    *
-   * Antiparallel inputs (where `vFrom = -vTo`) pick an arbitrary perpendicular axis.
+   * When `vTo` points exactly opposite `vFrom`, the result is a half turn around some axis at right
+   * angles to `vFrom`.
+   * @example
+   * ```ts
+   * const tilt = new Quaternion().setFromUnitVectors({ x: 0, y: 1, z: 0 }, groundNormal);
+   * ```
    * @param vFrom - The unit-length start direction
    * @param vTo - The unit-length end direction
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromUnitVectors(vFrom: PointData3D, vTo: PointData3D, out: QuaternionData = this): this {
@@ -371,6 +493,13 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Returns the dot product of this quaternion and `q`
+   *
+   * For unit quaternions its absolute value is the cosine of half the angle between the two rotations:
+   * 1 for the same rotation.
+   * @example
+   * ```ts
+   * const sameRotation = Math.abs(current.dot(target)) > 0.99999;
+   * ```
    * @param q - The other quaternion
    * @returns The dot product
    */
@@ -379,18 +508,26 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Returns the angle in radians between this quaternion and `q`
+   * Returns the angle of the turn from this rotation to `q`
    *
    * Both quaternions are assumed unit-length.
+   * @example
+   * ```ts
+   * if (aimRotation.angleTo(targetRotation) < 0.01) fire();
+   * ```
    * @param q - The other quaternion
-   * @returns The angle in radians
+   * @returns The angle in radians, from 0 to π
    */
   public angleTo(q: QuaternionData): number {
     return 2 * Math.acos(Math.abs(clamp(this.dot(q), -1, 1)));
   }
 
   /**
-   * Returns the magnitude (length) of this quaternion as a 4D vector
+   * Returns the length of this quaternion as a 4D vector, 1 for a rotation
+   * @example
+   * ```ts
+   * if (Math.abs(rotation.magnitude() - 1) > 1e-6) rotation.normalize();
+   * ```
    * @returns The magnitude
    */
   public magnitude(): number {
@@ -398,9 +535,13 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Returns the squared magnitude of this quaternion
+   * Returns the squared length of this quaternion
    *
-   * Cheaper than {@link Quaternion#magnitude} for comparisons.
+   * Cheaper than {@link Quaternion#magnitude} and enough to check for drift.
+   * @example
+   * ```ts
+   * if (Math.abs(rotation.magnitudeSquared() - 1) > 1e-6) rotation.normalize();
+   * ```
    * @returns The squared magnitude
    */
   public magnitudeSquared(): number {
@@ -408,10 +549,14 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Normalizes this quaternion to unit length
+   * Scales this quaternion to unit length, undoing the drift of repeated multiplies
    *
-   * Zero-magnitude quaternions become identity.
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * A zero quaternion becomes identity.
+   * @example
+   * ```ts
+   * rotation.multiply(step).normalize();
+   * ```
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public normalize(out: QuaternionData = this): this {
@@ -433,11 +578,16 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Inverts this quaternion
+   * Inverts this rotation, so it turns the other way
    *
-   * Equivalent to {@link Quaternion#conjugate} for unit-length quaternions, which this method
-   * assumes.
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * Computes the {@link Quaternion#conjugate | conjugate}, which is the inverse of a unit quaternion.
+   * For any other quaternion, call {@link Quaternion#normalize} first.
+   * @example
+   * ```ts
+   * parentWorldRotation.inverse(worldToLocal);
+   * direction.applyQuaternion(worldToLocal);
+   * ```
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public inverse(out: QuaternionData = this): this {
@@ -445,8 +595,14 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Sets this quaternion to its conjugate (negates the imaginary part)
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * Negates `x`, `y` and `z`, leaving `w`, which reverses a unit quaternion's turn
+   *
+   * The same as {@link Quaternion#inverse} for a unit quaternion.
+   * @example
+   * ```ts
+   * recoil.conjugate(recovery);
+   * ```
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public conjugate(out: QuaternionData = this): this {
@@ -460,8 +616,16 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Multiplies this quaternion by `q` (`this = this * q`)
+   *
+   * The result turns by `q` first, then by this. On a node's rotation, that turns by `q` around the
+   * node's own axes; {@link Quaternion#premultiply} turns around its parent's axes.
+   * @example
+   * ```ts
+   * roll.setFromAxisAngle(forwardAxis, rollSpeed * dt);
+   * shipRotation.multiply(roll);
+   * ```
    * @param q - The quaternion to multiply by
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public multiply(q: QuaternionData, out: QuaternionData = this): this {
@@ -470,8 +634,16 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Pre-multiplies this quaternion by `q` (`this = q * this`)
+   *
+   * The result turns by this first, then by `q`. On a node's rotation, that turns by `q` around the
+   * parent's axes; {@link Quaternion#multiply} turns around the node's own.
+   * @example
+   * ```ts
+   * spin.setFromAxisAngle(worldUp, spinSpeed * dt);
+   * globeRotation.premultiply(spin);
+   * ```
    * @param q - The quaternion to pre-multiply by
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public premultiply(q: QuaternionData, out: QuaternionData = this): this {
@@ -479,12 +651,15 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Spherically interpolates between this quaternion and `qb` by `t` in `[0, 1]`
-   *
-   * Always picks the shorter arc.
+   * Blends from this rotation toward `qb` by `t`, turning at an even rate the shorter way round
+   * @example
+   * ```ts
+   * aimRotation.slerp(targetRotation, 1 - Math.exp(-turnRate * dt));
+   * fromRotation.slerp(toRotation, t, blended);
+   * ```
    * @param qb - The quaternion to interpolate towards
    * @param t - The interpolation factor in `[0, 1]`
-   * @param out - Target to write the result into instead of mutating this quaternion
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public slerp(qb: QuaternionData, t: number, out: QuaternionData = this): this {
@@ -525,32 +700,37 @@ export class Quaternion implements QuaternionData {
       dot = -dot;
     }
 
-    let s = 1 - t;
+    let k0 = 1 - t;
+    let k1 = t;
     if (dot < 0.9995) {
       const theta = Math.acos(dot);
       const sin = Math.sin(theta);
 
-      s = Math.sin(s * theta) / sin;
-      t = Math.sin(t * theta) / sin;
+      k0 = Math.sin(k0 * theta) / sin;
+      k1 = Math.sin(t * theta) / sin;
 
-      out.x = x0 * s + qbx * t;
-      out.y = y0 * s + qby * t;
-      out.z = z0 * s + qbz * t;
-      out.w = w0 * s + qbw * t;
+      out.x = x0 * k0 + qbx * k1;
+      out.y = y0 * k0 + qby * k1;
+      out.z = z0 * k0 + qbz * k1;
+      out.w = w0 * k0 + qbw * k1;
 
       return out as this;
     }
 
-    out.x = x0 * s + qbx * t;
-    out.y = y0 * s + qby * t;
-    out.z = z0 * s + qbz * t;
-    out.w = w0 * s + qbw * t;
+    out.x = x0 * k0 + qbx * k1;
+    out.y = y0 * k0 + qby * k1;
+    out.z = z0 * k0 + qbz * k1;
+    out.w = w0 * k0 + qbw * k1;
 
     return _normalize(out) as this;
   }
 
   /**
    * Reads `x`, `y`, `z`, `w` from `array` starting at `offset`
+   * @example
+   * ```ts
+   * keyRotation.fromArray(keyframes, frame * 4);
+   * ```
    * @param array - The array to read from
    * @param offset - The offset into `array` to read at
    * @returns This quaternion for chaining
@@ -568,6 +748,10 @@ export class Quaternion implements QuaternionData {
    * Writes this quaternion's values into `array` starting at `offset`
    *
    * Allocates a new array when one is not supplied.
+   * @example
+   * ```ts
+   * rotation.toArray(instanceRotations, instanceIndex * 4);
+   * ```
    * @param array - The array to write into; a new array when omitted
    * @param offset - The offset into `array` to write at
    * @returns The written array
@@ -583,6 +767,10 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Returns a string representation of this quaternion
+   * @example
+   * ```ts
+   * console.log(aimRotation.toString());
+   * ```
    * @returns A string in the form `[pixi-3d/math:Quaternion x=0 y=0 z=0 w=1]`
    */
   public toString(): string {

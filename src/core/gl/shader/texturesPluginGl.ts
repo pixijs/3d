@@ -1,13 +1,20 @@
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
-const header = `
-//=============================================================================
-// BATCH TEXTURE HELPERS
-//=============================================================================
-uint _unpackSlot(uint slots, uint shift) {
-  return (slots >> shift) & 15u;
-}
+/**
+ * The GLSL that reads one texture's 4-bit slot out of the packed `vTextureSlots`
+ * @param shift - The slot's bit offset, four per texture in declaration order
+ */
+const slotOf = (shift: number) => `(vTextureSlots >> ${shift}u) & 15u`;
 
+/**
+ * The GLSL `sampleBatchSlotGrad`, which samples the batch texture unit a slot names
+ *
+ * Slots 0 to 9 are the batch units. `Mesh3DBatcherGl` gives the three textures it never binds slot
+ * 13 + their uid, and the shader returns their colour without a fetch: 13 is `Texture.EMPTY`,
+ * transparent black; 14 is `Texture.WHITE`; 15 is `NORMAL_MAP`, a flat normal. Slots 10 to 12
+ * fall back to unit 9.
+ */
+const header = `
 vec4 sampleBatchSlotGrad(uint slot, vec2 uv, vec2 uvDx, vec2 uvDy) {
   if (slot == 0u) return textureGrad(uBatchTexture0, uv, uvDx, uvDy);
   if (slot == 1u) return textureGrad(uBatchTexture1, uv, uvDx, uvDy);
@@ -20,29 +27,30 @@ vec4 sampleBatchSlotGrad(uint slot, vec2 uv, vec2 uvDx, vec2 uvDy) {
   if (slot == 8u) return textureGrad(uBatchTexture8, uv, uvDx, uvDy);
   if (slot == 9u) return textureGrad(uBatchTexture9, uv, uvDx, uvDy);
 
-  // Reserved slots (match Mesh3DBatcher: slot = 13 + uid; uid: 0=EMPTY, 1=WHITE, 2=NORMAL)
   if (slot == 13u) return vec4(0.0);
   if (slot == 14u) return vec4(1.0);
   if (slot == 15u) return vec4(0.5, 0.5, 1.0, 1.0);
 
   return textureGrad(uBatchTexture9, uv, uvDx, uvDy);
 }
-
-vec4 sampleBatchTexture(uint slots, uint shift, vec2 uv, vec2 uvDx, vec2 uvDy) {
-  return sampleBatchSlotGrad(_unpackSlot(slots, shift), uv, uvDx, uvDy);
-}
 `;
 
 /**
- * GLSL compiler plugin that collects `textures` from each bit and generates one `sampleX(uv)`
- * function per declared slot in the `textureGetters` slot (both vertex and fragment stages)
+ * GLSL compiler plugin that collects `textures` from each bit and generates a fragment-only
+ * `sampleX(uv)` and a `sampleXDirect(uv)` for both stages per declared texture, in the
+ * `textureGetters` slot
  *
- * Also auto-injects the batch texture bindings before the core GLSL plugins process them.
+ * `sampleX` takes its mip level from the UV derivatives, which only the fragment stage has.
+ * `sampleXDirect` passes zero gradients, so it reads mip 0 and works in the vertex stage too. A
+ * texture's slot is the 4-bit field of `vTextureSlots` at its position across the bits' `textures`
+ * lists, the order in which `Mesh3DBatcherGl` packs `material._textures`.
+ *
+ * Also adds the batch texture bindings as a bit of their own, unless one is already there, before
+ * the core GLSL plugins read the bits.
  * @internal
  */
 export const texturesPluginGl: ShaderCompilerPlugin = {
   collectData(context) {
-    // Auto-inject the batch texture bindings (if not already present).
     if (!context.bits.some((b) => b.name === 'batchTexturesBindings')) {
       context.bits.unshift({
         name: 'batchTexturesBindings',
@@ -78,18 +86,16 @@ export const texturesPluginGl: ShaderCompilerPlugin = {
         const funcName = `sample${name[0].toUpperCase()}${name.slice(1)}`;
         const shift = nextIndex * 4;
 
-        // sampleXxxDirect — zero gradients (LOD 0), works in any stage
         lines.push(
           `vec4 ${funcName}Direct(vec2 uv) {`,
-          `  return sampleBatchTexture(vTextureSlots, ${shift}u, uv, vec2(0.0), vec2(0.0));`,
+          `  return sampleBatchSlotGrad(${slotOf(shift)}, uv, vec2(0.0), vec2(0.0));`,
           `}`,
         );
 
-        // sampleXxx — auto derivatives for mipmapping, fragment only
         if (isFragment) {
           lines.push(
             `vec4 ${funcName}(vec2 uv) {`,
-            `  return sampleBatchTexture(vTextureSlots, ${shift}u, uv, dFdx(uv), dFdy(uv));`,
+            `  return sampleBatchSlotGrad(${slotOf(shift)}, uv, dFdx(uv), dFdy(uv));`,
             `}`,
           );
         }

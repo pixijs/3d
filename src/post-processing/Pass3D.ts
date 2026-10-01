@@ -11,10 +11,16 @@ import type { ColorHandle, DepthHandle } from '../core/render-graph/ResourceHand
  *   a security-camera feed, a mirror, a portal.
  * - `'afterOpaque'` — straight after the opaque draw, before the opaque colour and depth
  *   copies are taken. The pass is part of the opaque world: glass refracts it and
- *   transparents draw over it. The natural slot for hull outlines and decals.
+ *   transparents draw over it. The natural slot for hull outlines and decals. A pass on a
+ *   camera with a render texture draws into that camera's own target at every stage, so the
+ *   view's copies leave it out.
  * - `'afterTransparent'` — after every scene draw, before the post chain. Overlays, gizmos,
  *   debug wireframes.
  * - `'post'` — the fullscreen post chain, reserved for {@link PostEffect}.
+ * @example
+ * ```ts
+ * view.passes = [new MeshPass({ name: 'gizmo', stage: 'afterTransparent' })];
+ * ```
  * @category rendering
  * @standard
  */
@@ -40,40 +46,70 @@ export interface PassContext {
 
 /**
  * Constructor options shared by every {@link Pass3D}
+ * @example
+ * ```ts
+ * interface MyGridPassOptions extends Pass3DOptions {
+ *   spacing?: number;
+ * }
+ * ```
  * @category rendering
  * @standard
  */
 export interface Pass3DOptions {
   /**
-   * Whether the pass is included in the compiled graph
+   * Whether the pass runs; {@link Pass3D#enabled} covers what toggling it costs
    * @default true
+   * @example
+   * ```ts
+   * view.passes = [new MeshPass({ name: 'wireframe', enabled: false })];
+   * ```
    */
   enabled?: boolean;
 }
 
 /**
- * Something a user adds to {@link View3D#passes}: a renderer-free object that installs one or
- * more render passes into the view's graph at a declared {@link PassStage}
+ * Base class for everything added to {@link View3D#passes}
  *
- * The object is the user's handle — constructed with no renderer, surviving every graph
- * rebuild, shareable across views, carrying the live properties the user tunes. At graph
- * build it contributes real passes via {@link Pass3D#build}; the stage decides where in the
- * default graph that call happens, so a user never orders scene passes against post effects
- * by hand. Array order only matters between passes at the same stage.
+ * A pass object is the handle on an extra rendering step. It is constructed without a renderer,
+ * survives every graph rebuild, can be shared across views, and carries the live properties you
+ * tune. When a view builds its graph it calls {@link Pass3D#build} at the pass's
+ * {@link PassStage}, and the pass adds its render passes there. The stage places the pass, so
+ * scene passes are never ordered against post effects by hand; array order only matters between
+ * passes at the same stage.
  *
  * Two built-in shapes cover most needs: {@link MeshPass} redraws opted-in meshes with an
  * override shader, and {@link PostEffect} runs a fullscreen fragment over the frame. Anything
  * else subclasses this directly and talks to the graph.
+ * @example
+ * ```ts
+ * class MyRearViewPass extends Pass3D {
+ *   public readonly stage = 'afterTransparent';
+ *
+ *   public build(graph: RenderGraph, ctx: PassContext): void {
+ *     graph.addPass(
+ *       new ForwardRenderPass({ renderer: ctx.renderer, name: 'opaque', sort: 'key', camera: rearCamera }),
+ *     );
+ *   }
+ * }
+ *
+ * view.passes = [new MyRearViewPass()];
+ * ```
  * @category rendering
  * @standard
  */
 export abstract class Pass3D {
   /**
-   * Whether this pass is included in the compiled graph
+   * Whether this pass runs
    *
    * Flipping it rebuilds the view's graph on the next render and re-keys every mesh against
    * the new pass set: fine for a settings toggle, not a per-frame lever. Animate an effect's
    * own properties instead; those are plain uniform writes.
+   * @example
+   * ```ts
+   * const wireframe = new MeshPass({ name: 'wireframe' });
+   * view.passes = [wireframe];
+   * wireframe.enabled = false;
+   * ```
    */
   public enabled: boolean;
 
@@ -96,10 +132,17 @@ export abstract class Pass3D {
   public abstract build(graph: RenderGraph, ctx: PassContext): void;
 
   /**
-   * Teardown seam for passes that own GPU resources outside the graph
+   * Release GPU resources the pass owns outside the graph; the base implementation does nothing
    *
-   * Graph passes and their shaders are torn down with the view's graph; a plain
-   * `UniformGroup` needs no release. Reassigning `view.passes` never calls this.
+   * Override it only for such resources: the passes added in `build` and their shaders are torn
+   * down with the view's graph, and a plain `UniformGroup` needs no release. The view never calls
+   * this, on reassigning `view.passes` or on its own destroy, because a pass may be shared across
+   * views. Call it yourself when the pass is retired.
+   * @example
+   * ```ts
+   * view.passes = [];
+   * wireframe.destroy();
+   * ```
    */
   public destroy(): void {}
 }

@@ -5,49 +5,43 @@ import { ContainerSource } from './ContainerSource';
 import type { ContainerSourceOptions } from './ContainerSource';
 
 /**
- * Options for {@link ContainerTexture} — identical to {@link ContainerSourceOptions}
+ * Options for {@link ContainerTexture}, the same as {@link ContainerSourceOptions}
+ * @example
+ * ```ts
+ * const options: ContainerTextureOptions = { container: gameUi, width: 512, height: 256 };
+ * const screen = new ContainerTexture({ ...options, renderer: app.renderer });
+ * ```
  * @category rendering
  * @standard
  */
 export type ContainerTextureOptions = ContainerSourceOptions;
 
 /**
- * A {@link Texture} whose pixels are a live 2D PixiJS {@link Container}
+ * A {@link Texture} that shows a live 2D PixiJS {@link Container}
  *
- * The ergonomic, one-texture front end for {@link ContainerSource}. Construction makes a
- * `ContainerSource` and a single full-frame `Texture` view over it; assign it to any material
- * texture slot, on any geometry.
+ * Use it in any material texture slot, on any geometry. It renders into a render target of its
+ * own; to make several textures over one live container, build a {@link ContainerSource} and
+ * create `Texture`s from it.
  *
- * The live machinery (reparenting, render-into-framebuffer) lives on the source; this class just forwards
- * to it. When you need several views over the same live container, build a {@link ContainerSource} directly
- * and create your own `Texture`s from it.
+ * Nothing redraws it for you. Call {@link ContainerTexture#render} once after setup for static
+ * content, or every frame for animated content, before you render your scene. Pass the renderer
+ * each time, or keep one with the `renderer` option and call `render()` with no argument. With a
+ * kept renderer, {@link ContainerTexture#autoUpdate} re-renders every frame instead.
  *
- * By default nothing drives it for you: call {@link ContainerTexture#render} when you want the texture
- * redrawn — once after setup, or every frame for animated content. Pass the renderer, or retain one via the
- * `renderer` option so you can call `render()` with no argument. It is otherwise an ordinary `Texture` you own
- * and `destroy()` like any other. A manual `render()` must run at a safe point (before you render your scene),
- * never inside a render pass.
+ * A texture that was never rendered is transparent black, so a mesh using it draws black. With
+ * a `renderer` option, it renders once during construction unless
+ * {@link ContainerSourceOptions#firstRender | firstRender} is `false`.
  *
- * For animated content you can instead opt in to {@link ContainerTexture#autoUpdate} (needs a retained
- * `renderer`), which re-renders every frame off `Ticker.shared`, sequenced just before the application's
- * render.
- *
- * **Render at least once before the texture is sampled** — a fresh render target is empty (transparent/black)
- * until its first draw, so a mesh using a never-rendered ContainerTexture shows black. Passing a `renderer`
- * does this for you once on construction by default (see {@link ContainerTextureOptions#firstRender}).
- *
- * The capture is stored screen-oriented (it renders with Pixi's `flipY`), so it samples **upright on 3D
- * geometry** with ordinary UVs — no per-material flip needed. Presenting it on a 2D `Sprite` instead needs a
- * vertical flip (`sprite.scale.y = -1`), since the capture is oriented for 3D, not for 2D sprites.
+ * The picture is stored upright for 3D geometry with ordinary UVs, so no material needs a flip. On
+ * a 2D `Sprite` it shows upside down; set `sprite.scale.y = -1`.
  * @example
  * ```ts
- * // Manual: draw it once after setup.
- * const ui = new ContainerTexture({ container: myHud, resolution: 2 });
- * mesh.material = new FlatMaterial({ baseColorTexture: ui });
- * ui.render(renderer);
+ * const label = new ContainerTexture({ container: labelText, resolution: 2 });
+ * sign.material = new FlatMaterial({ baseColorTexture: label });
+ * label.render(app.renderer);
  *
- * // Self-driving: retain the renderer, render once now, then re-render every frame.
- * const live = new ContainerTexture({ container: myHud, renderer, firstRender: true, autoUpdate: true });
+ * const screen = new ContainerTexture({ container: gameUi, renderer: app.renderer, autoUpdate: true });
+ * monitor.material = new FlatMaterial({ baseColorTexture: screen });
  * ```
  * @category rendering
  * @standard
@@ -57,49 +51,88 @@ export class ContainerTexture extends Texture {
     super({ source: new ContainerSource(options) });
   }
 
-  /** The {@link ContainerSource} backing this texture */
+  /**
+   * The {@link ContainerSource} that holds this texture's render target and does the rendering
+   * @example
+   * ```ts
+   * import { Rectangle, Texture } from 'pixi.js';
+   *
+   * const corner = new Texture({ source: screen.containerSource, frame: new Rectangle(0, 0, 64, 64) });
+   * ```
+   */
   public get containerSource(): ContainerSource {
     return this.source as ContainerSource;
   }
 
-  /** The 2D {@link Container} drawn into this texture */
+  /**
+   * The 2D {@link Container} drawn into this texture
+   * @example
+   * ```ts
+   * screen.container.addChild(scoreText);
+   * screen.render();
+   * ```
+   */
   public get container(): Container {
     return this.containerSource.container;
   }
 
-  /** The retained {@link Renderer}, or `null`; see {@link ContainerSource#renderer} */
+  /**
+   * The renderer kept for {@link ContainerTexture#render} calls with no argument, or `null`
+   *
+   * {@link ContainerTexture#autoUpdate} needs one, and stops while it is `null`.
+   * @example
+   * ```ts
+   * screen.renderer = app.renderer;
+   * screen.render();
+   * ```
+   */
   public get renderer(): Renderer | null {
     return this.containerSource.renderer;
   }
 
   /**
-   * Retains a renderer for parameterless {@link ContainerTexture#render} calls, or `null` to release it
-   * @param value - Renderer to retain, or `null` to release it
+   * Keeps a renderer, or releases it with `null`
+   * @param value - Renderer to keep, or `null` to release it
    */
   public set renderer(value: Renderer | null) {
     this.containerSource.renderer = value;
   }
 
-  /** Whether the texture re-renders every frame off `Ticker.shared`; see {@link ContainerSource#autoUpdate} */
+  /**
+   * Whether the texture re-renders every frame; {@link ContainerSourceOptions#autoUpdate} has the details
+   * @example
+   * ```ts
+   * screen.autoUpdate = !paused;
+   * ```
+   */
   public get autoUpdate(): boolean {
     return this.containerSource.autoUpdate;
   }
 
   /**
-   * Starts or stops the per-frame re-render; requires a retained {@link ContainerTexture#renderer}
+   * Starts or stops the per-frame render; warns when turned on with no kept renderer
    * @param value - `true` to re-render every frame, `false` to stop
    */
   public set autoUpdate(value: boolean) {
     this.containerSource.autoUpdate = value;
   }
 
-  /** The capture transform applied to the container (offset/scale); see {@link ContainerSource#transform} */
+  /**
+   * The matrix applied to the container when it is captured; see {@link ContainerSourceOptions#transform}
+   *
+   * Assign a new matrix or change this one in place, then render again.
+   * @example
+   * ```ts
+   * screen.transform = new Matrix().translate(-scrollX, 0);
+   * screen.render();
+   * ```
+   */
   public get transform(): Matrix {
     return this.containerSource.transform;
   }
 
   /**
-   * Replaces the capture transform; takes effect on the next render
+   * Copies `value` into the texture's capture matrix, for the next render
    * @param value - The new capture transform
    */
   public set transform(value: Matrix) {
@@ -107,9 +140,15 @@ export class ContainerTexture extends Texture {
   }
 
   /**
-   * Swaps the {@link Container} this texture renders
+   * Swaps the {@link Container} this texture renders, reusing its render target
    *
-   * See {@link ContainerSource#setContainer}.
+   * The new container moves out of its current parent and the old one is left detached. The size
+   * stays the same, and the old picture stays until the next {@link ContainerTexture#render}.
+   * @example
+   * ```ts
+   * screen.setContainer(pauseMenu);
+   * screen.render();
+   * ```
    * @param container - The new container to render
    */
   public setContainer(container: Container): void {
@@ -117,43 +156,60 @@ export class ContainerTexture extends Texture {
   }
 
   /**
-   * Renders the container into this texture
+   * Draws the container into this texture
    *
-   * You own when this happens — call it once after setup (the texture is empty/black until its first
-   * render), or each frame for animated content. Pass a `renderer`, or omit it to use the retained one (see
-   * {@link ContainerTexture#renderer}). Must be called at a safe point (before you render your scene), never
-   * inside a render pass.
-   * @param renderer - Renderer to draw with; omit to use the retained one
+   * Call it before you render your scene, never from code that runs during a render. A renderer
+   * passed here is kept for later calls with no argument; with none passed or kept, it warns and
+   * draws nothing.
+   * @example
+   * ```ts
+   * scoreText.text = `${score}`;
+   * scoreboard.render(app.renderer);
+   * ```
+   * @param renderer - Renderer to draw with, kept for later calls; omit to use the kept one
    */
   public render(renderer?: Renderer): void {
     this.containerSource.render(renderer);
   }
 
   /**
-   * Tears down this texture view
+   * Destroys this texture, and optionally its source and its container
    *
-   * The boolean follows pixi's {@link Texture#destroy} `destroySource` contract: `destroy(true)` also frees
-   * the backing {@link ContainerSource} (its render target), while `destroy()` / `destroy(false)` leaves the
-   * source alive — sources are shareable and a material's `destroy({ texture: true })` calls `destroy(false)`
-   * to keep the source. Pass `{ source, container }` to additionally destroy the reparented 2D `container`
-   * and its children (which implies freeing the source, since the source has nothing left to render).
+   * As with pixi's {@link Texture#destroy}, `destroy()` leaves the {@link ContainerSource} alive,
+   * since other textures may share it; a material's `destroy({ texture: true })` relies on that.
+   * `destroy(true)` also frees the source's render target. The container is yours unless you pass
+   * `{ container: true }`, which destroys it with its children and frees the source too.
+   * @example
+   * ```ts
+   * screen.destroy(true);
+   * ```
    * @param options - `true` also frees the source; an object picks `source` and `container` separately
    */
   public override destroy(
     options:
       | boolean
       | {
-          /** Also free the backing {@link ContainerSource} (its render target) */
+          /**
+           * Also free the {@link ContainerSource} and its render target
+           * @example
+           * ```ts
+           * screen.destroy({ source: true });
+           * ```
+           */
           source?: boolean;
-          /** Also destroy the reparented 2D container and its children; implies freeing the source */
+          /**
+           * Also destroy the 2D container and its children, which frees the source too
+           * @example
+           * ```ts
+           * screen.destroy({ container: true });
+           * ```
+           */
           container?: boolean;
         } = false,
   ): void {
     const destroySource = typeof options === 'boolean' ? options : (options.source ?? false);
     const destroyContainer = typeof options === 'boolean' ? false : (options.container ?? false);
 
-    // Free the source exactly once, here — never via super.destroy(true) — so it isn't double-freed when
-    // both this and a material's source loop run. Destroying the container implies freeing the source.
     if (destroySource || destroyContainer) {
       this.containerSource.destroy(destroyContainer);
     }

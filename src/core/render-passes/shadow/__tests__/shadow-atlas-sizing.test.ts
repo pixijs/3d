@@ -42,10 +42,8 @@ function sun(cascades: 1 | 2 | 3 | 4): DirectionalLight {
   return light;
 }
 
-describe('shadow atlas sizing', () => {
+describe('shadow atlas sizing, which the pass base shares between backends, so WebGL covers it in CI', () => {
   beforeAll(async () => {
-    // Everything asserted here lives in the backend-shared pass base, so WebGL covers it
-    // and the test still runs in CI.
     app = await getApp({ id: 'shadow-atlas-sizing', appOptions: { preference: 'webgl' } });
 
     view3d = new View3D({ width: 128, height: 128, shadowQuality: 'low' });

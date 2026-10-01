@@ -1,16 +1,17 @@
 import type { View3D } from '../scene/View3D';
 
 /**
- * Validates that the View3D's camera is in a renderable state
+ * Validates that the View3D's camera is in a renderable state, throwing if not
  *
- * Called by the render pipes after the transform cascade has run, so `worldVisible` reflects
- * the current frame.
+ * Called by the per-frame scene update (`updateView3DScene`) right after the transform walk, so
+ * `worldVisible` reflects the current frame.
  *
- * The setter on `View3D.camera` catches misconfiguration eagerly at assign time
- * (orphaned cameras get auto-attached, wrong-tree cameras throw). This function
- * is the safety net for the dynamic cases the setter can't see:
+ * The setter on `View3D.camera` catches misconfiguration eagerly at assign time (orphaned cameras
+ * get auto-attached, wrong-tree cameras throw). This function is the safety net for what the
+ * setter can't see:
  *  - visibility drift (an ancestor was hidden after the camera was assigned)
  *  - graph drift (the camera was removed from the scene graph after assignment)
+ *  - a render texture set on the view's own camera, which only a pass camera may draw into
  * @param view3d - The View whose camera is checked
  * @internal
  */

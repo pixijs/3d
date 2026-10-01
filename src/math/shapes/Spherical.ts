@@ -3,16 +3,20 @@ import { clamp } from '../utils/clamp';
 import type { PointData3D } from '../vector/PointData3D';
 
 /**
- * The `Spherical` object represents a 3D point in spherical coordinates `(radius, phi, theta)`
+ * A point given as `radius`, `phi` and `theta` around the origin: its distance, its angle down
+ * from +Y, and its angle around +Y, measured from +Z toward +X
  *
- * `phi` is the polar angle measured from +Y; `theta` is the azimuthal angle measured from +Z.
- * Use {@link Vector3#setFromSpherical} for the inverse (Cartesian) direction.
+ * Use it for anything that orbits: convert a position in, change the angles, then convert back
+ * with {@link Vector3#setFromSpherical}.
  * @example
  * ```ts
- * const s = new Spherical().setFromCartesianCoords(0, 1, 0);
- * // s.radius = 1, s.phi = 0, s.theta = 0
+ * const orbit = new Spherical().setFromPoint3D(camera.position);
  *
- * const p = new Vector3().setFromSpherical(s);
+ * orbit.theta += 0.01;
+ * orbit.phi -= 0.005;
+ * orbit.makeSafe();
+ * camera.position.setFromSpherical(orbit);
+ * camera.lookAt({ x: 0, y: 0, z: 0 });
  * ```
  * @see {@link Vector3#setFromSpherical} For converting back to Cartesian
  * @see {@link Cylindrical} For cylindrical coordinates
@@ -20,18 +24,38 @@ import type { PointData3D } from '../vector/PointData3D';
  * @standard
  */
 export class Spherical {
-  /** Radius (distance from origin) */
-  public radius: number;
-  /** Polar angle (radians) measured from +Y */
-  public phi: number;
-  /** Azimuthal angle (radians) measured from +Z */
-  public theta: number;
+  /**
+   * Distance from the origin
+   * @example
+   * ```ts
+   * orbit.radius = Math.max(2, orbit.radius - wheelDelta * 0.01);
+   * ```
+   */
+  public radius = 0;
+  /**
+   * Angle in radians down from +Y: `0` points straight up, `π / 2` lies level, `π` points straight
+   * down
+   * @example
+   * ```ts
+   * orbit.phi = Math.PI / 3;
+   * ```
+   */
+  public phi = 0;
+  /**
+   * Angle in radians around +Y, measured from +Z toward +X
+   * @example
+   * ```ts
+   * orbit.theta += ticker.deltaMS * 0.0005;
+   * ```
+   */
+  public theta = 0;
 
   /**
-   * The type of the object, mainly used to avoid `instanceof` checks
+   * Names the shape without an `instanceof` check, like the `type` on pixi's 2D shapes
    * @readonly
    * @default 'spherical'
    */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'spherical';
 
   /**
@@ -48,6 +72,10 @@ export class Spherical {
 
   /**
    * Sets `radius`, `phi` and `theta`
+   * @example
+   * ```ts
+   * const sunDirection = new Vector3().setFromSpherical(new Spherical().set(1, sunPolarAngle, sunAzimuth));
+   * ```
    * @param radius - Distance from origin
    * @param phi - Polar angle (radians) measured from +Y
    * @param theta - Azimuthal angle (radians) measured from +Z
@@ -63,6 +91,10 @@ export class Spherical {
 
   /**
    * Copies `other` into this spherical
+   * @example
+   * ```ts
+   * savedView.copyFrom(orbit);
+   * ```
    * @param other - The spherical to copy from
    * @returns This spherical, for chaining
    */
@@ -76,6 +108,10 @@ export class Spherical {
 
   /**
    * Copies this spherical into `target`
+   * @example
+   * ```ts
+   * orbit.copyTo(savedView);
+   * ```
    * @param target - The spherical to copy into
    * @returns The target with values updated
    */
@@ -89,6 +125,10 @@ export class Spherical {
 
   /**
    * Creates a copy of this spherical
+   * @example
+   * ```ts
+   * const resetView = orbit.clone();
+   * ```
    * @returns A new `Spherical` with the same values
    */
   public clone(): Spherical {
@@ -97,6 +137,10 @@ export class Spherical {
 
   /**
    * Checks whether `other` matches this spherical
+   * @example
+   * ```ts
+   * if (!orbit.equals(lastOrbit)) saveCameraState(orbit);
+   * ```
    * @param other - The spherical to compare with
    * @returns `true` when `radius`, `phi` and `theta` match exactly (no epsilon tolerance)
    */
@@ -105,9 +149,15 @@ export class Spherical {
   }
 
   /**
-   * Restricts `phi` to `(EPS, PI - EPS)` so the polar angle never sits exactly at a pole
+   * Keeps `phi` a millionth of a radian away from both poles
    *
-   * Essential for orbit controls; without it, the camera flips when crossing the +Y or -Y pole.
+   * A camera that looks at its target with +Y as up has no sideways direction exactly at a pole,
+   * so it flips there. Call this after changing `phi` and before converting back.
+   * @example
+   * ```ts
+   * orbit.phi -= pointerDeltaY * 0.01;
+   * orbit.makeSafe();
+   * ```
    * @returns This spherical, for chaining
    */
   public makeSafe(): this {
@@ -121,6 +171,10 @@ export class Spherical {
    * Sets this spherical from the Cartesian point `v`
    *
    * Equivalent to `setFromCartesianCoords(v.x, v.y, v.z)`.
+   * @example
+   * ```ts
+   * const orbit = new Spherical().setFromPoint3D(camera.position);
+   * ```
    * @param v - The Cartesian point to convert
    * @returns This spherical, for chaining
    */
@@ -132,6 +186,10 @@ export class Spherical {
    * Sets this spherical from Cartesian `(x, y, z)`
    *
    * Zero-radius inputs collapse `theta` and `phi` to 0.
+   * @example
+   * ```ts
+   * orbit.setFromCartesianCoords(eye.x - target.x, eye.y - target.y, eye.z - target.z);
+   * ```
    * @param x - Position on the x axis
    * @param y - Position on the y axis
    * @param z - Position on the z axis
@@ -153,7 +211,8 @@ export class Spherical {
 
   /**
    * Returns a readable string representation of this spherical
-   * @returns A string describing the spherical's components
+   * @returns A string in the form `[pixi-3d/math:Spherical radius=1 phi=0 theta=0]`
+   * @advanced
    */
   public toString(): string {
     return `[pixi-3d/math:Spherical radius=${this.radius} phi=${this.phi} theta=${this.theta}]`;

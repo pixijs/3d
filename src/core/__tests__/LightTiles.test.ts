@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   binLightTiles,
   LIGHT_DEPTH_BINS,
-  LIGHT_TILE_COUNT,
+  LIGHT_DEPTH_LANES,
   LIGHT_TILE_LANES,
   LIGHT_TILES_X,
   LIGHT_TILES_Y,
@@ -31,9 +31,20 @@ function packLights(lights: { position: number[]; type?: number; range: number }
   return data;
 }
 
+/** Depth masks for the tests that only read tiles */
+const scratchDepthMasks = new Int32Array(LIGHT_DEPTH_LANES * 4);
+
 function bin(lights: Float32Array, viewProjection: Matrix4): Int32Array {
   const out = new Int32Array(LIGHT_TILE_LANES * 4);
-  binLightTiles(out, lights, lights.length / FLOATS_PER_LIGHT, viewProjection, identity, new Float32Array(4));
+  binLightTiles(
+    out,
+    lights,
+    lights.length / FLOATS_PER_LIGHT,
+    viewProjection,
+    identity,
+    scratchDepthMasks,
+    new Float32Array(4),
+  );
   return out;
 }
 
@@ -67,7 +78,7 @@ function lcg(seed: number): () => number {
 }
 
 describe('binLightTiles', () => {
-  // The camera sits at the origin looking down -z.
+  /** A camera at the origin looking down -z */
   const perspective = new Matrix4().makePerspective(1.2, 16 / 9, 0.1, 200);
 
   it('sets every tile for a directional light and for a light with no range', () => {
@@ -123,7 +134,7 @@ describe('binLightTiles', () => {
       { position: [0, 0, 0], type: LIGHT_DIRECTIONAL, range: 0 },
     ]);
 
-    binLightTiles(out, lights, 2, perspective, identity, new Float32Array(4));
+    binLightTiles(out, lights, 2, perspective, identity, scratchDepthMasks, new Float32Array(4));
 
     for (let t = 0; t < TILE_COUNT; t++) expect(out[t]).toBe(0b10);
   });
@@ -142,9 +153,7 @@ describe('binLightTiles', () => {
     expect(tilesSet(masks, 30)).toBe(0);
   });
 
-  // The other half of the bound: it is no looser than a tile. A loose bound draws the same
-  // picture, only slower, so nothing else would notice.
-  it('covers no column or row beyond the ones the sphere lands in, give or take a tile', () => {
+  it('covers no column or row more than a tile past the sphere, a looseness only this test would notice', () => {
     const random = lcg(11);
 
     for (let n = 0; n < 100; n++) {
@@ -152,12 +161,14 @@ describe('binLightTiles', () => {
       const position = [(random() - 0.5) * 60, (random() - 0.5) * 30, -15 - random() * 50];
       const masks = bin(packLights([{ position, range }]), perspective);
 
+      /**
+       * The columns and rows the sphere's surface samples land in, bounded separately: a sample
+       * counts toward an axis whenever it is on screen along that axis
+       */
       let hitX0 = Infinity;
       let hitX1 = -Infinity;
       let hitY0 = Infinity;
       let hitY1 = -Infinity;
-      // Columns and rows are bounded separately, so a sample counts toward an axis whenever
-      // it is on screen along that axis.
       const e = perspective.elements;
       for (let s = 0; s < 4000; s++) {
         const theta = random() * Math.PI * 2;
@@ -195,11 +206,7 @@ describe('binLightTiles', () => {
     }
   });
 
-  // The property that matters: a point a light can reach never lands in a tile whose bit is
-  // clear. Off-axis lights are where a centre-plus-radius bound fails, so the lights are
-  // scattered wide and the projections include a flipped, a lens-shifted and a rolled one. Many of
-  // the lights cross the camera plane.
-  it('never clears the bit of a tile a reachable point lands in', () => {
+  it('never clears the bit of a tile a reachable point lands in, whatever the projection', () => {
     const flipped = new Matrix4().makePerspective(1.2, 16 / 9, 0.1, 200);
     flipped.elements[5] *= -1;
 
@@ -221,7 +228,6 @@ describe('binLightTiles', () => {
         const masks = bin(packLights([{ position, range }]), projection);
 
         for (let s = 0; s < 200; s++) {
-          // A point inside the range sphere: a random direction, a random distance.
           const theta = random() * Math.PI * 2;
           const cosPhi = random() * 2 - 1;
           const sinPhi = Math.sqrt(1 - cosPhi * cosPhi);
@@ -240,12 +246,15 @@ describe('binLightTiles', () => {
       }
     }
 
-    expect(dropped).toEqual([]);
+    expect(
+      dropped,
+      'off-axis lights, scattered wide and often across the camera plane, are where a centre-plus-radius bound fails',
+    ).toEqual([]);
   });
 });
 
 describe('LightTiles', () => {
-  // The camera sits at the origin looking down -z.
+  /** A camera at the origin looking down -z */
   const viewProjection = new Matrix4().makePerspective(1, 1, 0.5, 40);
 
   /** A session holding only what `prepare` reads */
@@ -275,13 +284,11 @@ describe('LightTiles', () => {
     expect(tiles.prepare(session, viewProjection, identity)).toBe(true);
     expect(tiles.masks.every((mask) => mask === 0)).toBe(true);
 
-    // Same session: preparing again changes nothing.
     tiles.masks.fill(7);
-    expect(tiles.prepare(session, viewProjection, identity)).toBe(false);
+    expect(tiles.prepare(session, viewProjection, identity), 'the same session bins nothing').toBe(false);
     expect(tiles.masks[0]).toBe(7);
 
-    // A new session bins again.
-    expect(tiles.prepare(sessionFor(view3d), viewProjection, identity)).toBe(true);
+    expect(tiles.prepare(sessionFor(view3d), viewProjection, identity), 'a new session bins again').toBe(true);
     expect(tiles.masks[0]).toBe(0);
 
     view3d.destroy();
@@ -295,12 +302,20 @@ function depthMask(grid: LightTiles, x: number, y: number, z: number): number {
     Math.fround(Math.fround(Math.fround(x) * p[0]) + Math.fround(Math.fround(y) * p[1])) +
       Math.fround(Math.fround(Math.fround(z) * p[2]) + p[3]),
   );
-  return grid.masks[LIGHT_TILE_COUNT + Math.floor(Math.max(0, Math.min(LIGHT_DEPTH_BINS - 1, dot)))];
+  return grid.depthMasks[Math.floor(Math.max(0, Math.min(LIGHT_DEPTH_BINS - 1, dot)))];
 }
 
 function binGrid(lights: Float32Array, projection: Matrix4, view: Matrix4 = identity): LightTiles {
   const grid = new LightTiles();
-  binLightTiles(grid.masks, lights, lights.length / FLOATS_PER_LIGHT, projection, view, grid.depthPlane);
+  binLightTiles(
+    grid.masks,
+    lights,
+    lights.length / FLOATS_PER_LIGHT,
+    projection,
+    view,
+    grid.depthMasks,
+    grid.depthPlane,
+  );
   return grid;
 }
 
@@ -332,7 +347,7 @@ describe('camera-depth masks', () => {
     );
     expect(depthMask(grid, 0, 0, -50)).toBe(0b11);
     expect(grid.depthPlane.every(Number.isFinite)).toBe(true);
-    for (let i = LIGHT_TILE_COUNT; i < grid.masks.length; i++) expect(grid.masks[i] & 1).toBe(1);
+    for (const mask of grid.depthMasks) expect(mask & 1).toBe(1);
   });
 
   it('preserves bit 31 and resets the depth transform when the list is emptied', () => {
@@ -342,8 +357,9 @@ describe('camera-depth masks', () => {
     const grid = binGrid(lights, projection);
     expect(depthMask(grid, 0, 0, -50)).toBe(1 << 31);
     expect(depthMask(grid, 0, 0, -5)).toBe(0x7fffffff);
-    binLightTiles(grid.masks, lights, 0, projection, identity, grid.depthPlane);
+    binLightTiles(grid.masks, lights, 0, projection, identity, grid.depthMasks, grid.depthPlane);
     expect(grid.masks.every((mask) => mask === 0)).toBe(true);
+    expect(grid.depthMasks.every((mask) => mask === 0)).toBe(true);
     expect(Array.from(grid.depthPlane)).toEqual([0, 0, 0, 0]);
   });
 
@@ -357,6 +373,21 @@ describe('camera-depth masks', () => {
       projection,
     );
     expect(depthMask(grid, 0, 0, -7.5)).toBe(0);
+  });
+
+  it('spends no depth intervals behind a perspective camera', () => {
+    const grid = binGrid(
+      packLights([
+        { position: [0, 0, 0], range: 10 },
+        { position: [0, 0, -9], range: 0.5 },
+      ]),
+      projection,
+    );
+    expect(
+      depthMask(grid, 0, 0, -8.25),
+      "intervals start at the camera plane; fitted to the whole sphere they'd be twice as deep",
+    ).toBe(0b01);
+    expect(depthMask(grid, 0, 0, -9)).toBe(0b11);
   });
 
   it('bins depth along the camera axis, including a scaled view transform', () => {

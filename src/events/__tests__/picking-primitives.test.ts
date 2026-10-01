@@ -1,5 +1,3 @@
-// Every built-in primitive geometry should pick with hitVolume='geometry'. One
-// case per primitive, so a failure names the shape that broke.
 import { Rectangle } from 'pixi.js';
 import { describe, expect, test } from 'vitest';
 

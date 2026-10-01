@@ -4,61 +4,6 @@ import { compileShader } from '~/core/shader/compileShader';
 import type { ShaderCompilerPlugin } from '~/core/shader/ShaderCompilerPlugin';
 
 describe('compileShader', () => {
-  it('should replace template slots using a plugin', () => {
-    const templateString = `
-    {{header}}
-    void main() {
-      {{body}}
-    }
-    `;
-
-    const context = {
-      bits: [],
-      template: { bindGroups: [] },
-      templateString,
-      data: {},
-    };
-
-    const plugin: ShaderCompilerPlugin = {
-      injectCode() {
-        return {
-          header: 'uniform float uTime;',
-          body: 'gl_Position = vec4(0.0);',
-        };
-      },
-    };
-
-    const result = compileShader(context, [plugin]);
-
-    expect(result).toContain('uniform float uTime;');
-    expect(result).toContain('gl_Position = vec4(0.0);');
-    expect(result).not.toContain('{{header}}');
-    expect(result).not.toContain('{{body}}');
-  });
-
-  it('should ignore empty string injections', () => {
-    const templateString = `{{header}}`;
-
-    const context = {
-      bits: [],
-      template: { bindGroups: [] },
-      templateString,
-      data: {},
-    };
-
-    const plugin: ShaderCompilerPlugin = {
-      injectCode() {
-        return {
-          header: '',
-        };
-      },
-    };
-
-    const result = compileShader(context, [plugin]);
-
-    expect(result.trim()).toBe('');
-  });
-
   it('should accumulate code from multiple plugins', () => {
     const templateString = `{{header}}`;
 

@@ -8,12 +8,11 @@ import type { MorphStoreBuffer } from './buffers/MorphStoreBuffer';
  * Whether a shared GPU buffer the View3D's cached draw state was built against
  * has been reallocated since the View last rendered
  *
- * Covers the geometry atlas, the material store, the morph store, and the
- * geometry data store; a reallocation leaves the View's cached VAOs (WebGL) or
- * render bundles (WebGPU) stale. Compares against the last-seen versions on
- * the renderer's global data for the View, updates them in place and returns
- * true on change; the caller then invalidates the affected per-batch draw
- * caches.
+ * Covers the geometry atlas, the material store, the morph store, and the geometry data store; a
+ * reallocation leaves the View's cached VAOs (WebGL) or render bundles (WebGPU) stale. Compares
+ * against the last-seen versions on the renderer's global data for the View, updates them in
+ * place and returns true on change; the caller then rebuilds every batch's draw commands
+ * (`View3D._invalidateDrawCaches`).
  * @param atlases - The renderer's shared geometry atlas pool.
  * @param materialStore - The pipe's material store.
  * @param data - The renderer's global data on the view, holding the last-seen versions; updated in place.

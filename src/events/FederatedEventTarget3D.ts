@@ -9,15 +9,13 @@ import type { Pointer3DEventHandler, Wheel3DEventHandler } from './Pointer3DEven
 import { resolveHitVolume } from './resolveHitVolume';
 
 /**
- * The interactive members mixed into every {@link Container3D}
+ * The pointer-event members of every {@link Container3D}
  *
- * The 3D counterpart of pixi.js's `IFederatedContainer`. Implemented by `FederatedContainer3D`
- * and applied to `Container3D.prototype` with `extensions.mixin`, exactly as 2D applies
- * `FederatedContainer` to `Container`.
- *
- * State-backing members live on the prototype with inert defaults (`null` / `undefined`), so a node
- * that never opts into interaction carries no per-instance storage; the first write shadows the
- * default with an own property.
+ * They work as on a pixi.js `Container`. Set {@link IFederatedContainer3D#eventMode | eventMode}
+ * to `'static'` and the node is picked by a ray from the pointer and fires its listeners. A
+ * {@link Mesh3D} is picked against its geometry's bounding box unless you set a
+ * {@link IFederatedContainer3D#hitVolume | hitVolume}. A plain `Container3D` has no shape of its
+ * own, so it only hears events from its children.
  * @example
  * ```ts
  * mesh.eventMode = 'static'; // pickable, and fires listeners
@@ -31,69 +29,62 @@ import { resolveHitVolume } from './resolveHitVolume';
  * mesh.onpointerleave = () => mesh.scale.set(1);
  * ```
  * @remarks
- * - A set on-handler runs before that node's emitter listeners at every propagation phase, so an
- *   ancestor's handler fires in both the capture and the bubble pass. A 2D quirk, kept for parity.
- * - `Pointer3DEvent` payloads are pooled and reused; see {@link Event3DFields} before holding on to one.
+ * - An `on*` handler property runs before the node's `on()` listeners in every phase, so an
+ *   ancestor's handler runs twice per event, in the capture pass and again in the bubble pass. 2D
+ *   does the same.
+ * - Event objects are reused; see {@link Event3DFields} before keeping one.
  * @see {@link View3D#raycast} For a one-off pick that needs no listeners.
  * @category events
  * @standard
  */
 export interface IFederatedContainer3D {
   /**
-   * Backing store for {@link IFederatedContainer3D#eventMode | eventMode} — `undefined`
-   * until first set, read as `'passive'`. Public so the picker's hot loop (ancestor prune) reads the
-   * field directly instead of going through the accessor.
+   * Backing field for {@link IFederatedContainer3D#eventMode | eventMode}, `undefined` until set
+   *
+   * The ancestor walks on the pick path read it directly rather than through the accessor.
    * @internal
    */
   _eventMode?: EventMode;
 
   /**
-   * How this node takes part in 3D picking
+   * How this node takes part in pointer events, as on a pixi.js `Container`
    *
-   * Mirrors pixi 2D's `Container.eventMode`.
+   * - `'none'`: never picked, and neither is anything below it. The subtree leaves the View's pick
+   *   list, so it costs nothing per pointer event.
+   * - `'passive'` (default): fires no listeners and is never the target. Under an interactive
+   *   ancestor it is still picked, and the hit goes to that ancestor with this node's surface
+   *   data. So one `'static'` group makes its whole subtree clickable, with the group as target.
+   * - `'auto'`: picked like `'passive'`, and kept for 2D parity. Unlike `'passive'`, it is
+   *   ray-tested even with no interactive ancestor, so prefer `'passive'`.
+   * - `'static'`: picked against its {@link IFederatedContainer3D#hitVolume | hitVolume}, and fires
+   *   listeners.
+   * - `'dynamic'`: as `'static'`, and the {@link View3D} also picks again while the pointer is
+   *   still, so a node that moves under a still pointer gets its enter and leave events.
    *
-   * Available modes:
-   *
-   * - `'none'`: never picked, and a barrier for the whole subtree: every descendant is unregistered
-   *   from the View's pick list — not merely skipped, so a dead subtree costs nothing per pointer
-   *   event. The full opt-out.
-   * - `'passive'`: **(default)** never the event target and fires no listeners of its own, but while
-   *   an interactive ancestor exists the node is still ray-tested and a hit reports that ancestor as
-   *   the target, carrying this node's surface data — as in 2D. So making a group `'static'` makes its
-   *   whole subtree clickable with the group as target, no per-child setup.
-   * - `'auto'`: behaves exactly like `'passive'` at pick time — ray-tested on behalf of the nearest
-   *   interactive ancestor, never the target itself, no listeners. Kept for 2D parity; the default
-   *   already gives the "click anywhere on this group" pattern.
-   * - `'static'`: picked against its {@link IFederatedContainer3D#hitVolume | hitVolume} (a `Mesh3D`
-   *   defaults to its live geometry AABB) and fires listeners.
-   * - `'dynamic'`: as `'static'`, and the owning {@link View3D} upgrades itself to `'dynamic'` so
-   *   pixi's ticker re-picks while the pointer is stationary — animated scenes, orbiting cameras.
-   *
-   * An unset mode always resolves to `'passive'`. The renderer / `Application` `eventMode` init
-   * option (pixi's `EventSystem.defaultEventMode`) applies only to 2D containers — a deliberate
-   * divergence: 3D keeps an explicit pick list so hit-test cost scales with interactive nodes, and
-   * a global interactive default would register the entire scene. Set `eventMode` per node (or per
-   * group; the default already covers the subtree under it).
+   * The renderer's `eventMode` option only sets the default for 2D containers, and the View warns
+   * once when it isn't `'passive'`. A 3D node stays `'passive'` until you set it, because a
+   * scene-wide interactive default would put every node on the pick list, and picking cost grows
+   * with that list. Set the mode on the nodes and groups that need it.
    * @default 'passive'
    * @example
    * ```ts
-   * button.eventMode = 'static';   // standard clickable mesh
+   * button.eventMode = 'static';   // a clickable mesh
    * spinner.eventMode = 'dynamic'; // it moves under a still pointer
    * panel.eventMode = 'none';      // decoration; skip it and its children
    *
-   * // A whole model that answers as one target — child meshes need no setup
+   * // A whole model that answers as one target; its meshes need no setup
    * robot.eventMode = 'static';
    * ```
    */
   eventMode: EventMode;
 
   /**
-   * Boolean sugar over {@link IFederatedContainer3D#eventMode | eventMode}, matching pixi 2D
+   * Shorthand for {@link IFederatedContainer3D#eventMode | eventMode}, as on a pixi.js `Container`
    *
-   * `true` sets `'static'`, `false` sets `'passive'`; reads `true` for both `'static'` and `'dynamic'`.
-   * Note that `false` is not a full opt-out: under an interactive ancestor a `'passive'` node is still
-   * ray-tested with that ancestor as target. Set `eventMode = 'none'` to remove a node — and its
-   * subtree — from picking entirely.
+   * `true` sets `'static'` and `false` sets `'passive'`. It reads `true` for `'static'` and
+   * `'dynamic'`. `false` doesn't stop picking: under an interactive ancestor, a `'passive'` node is
+   * still picked on that ancestor's behalf. Set `eventMode = 'none'` to take a node and its
+   * subtree out of picking.
    * @example
    * ```ts
    * mesh.interactive = true;  // eventMode = 'static'
@@ -105,8 +96,8 @@ export interface IFederatedContainer3D {
   /**
    * Whether this node fires listeners and can be an event target
    *
-   * True for `eventMode` `'static'` and `'dynamic'`, mirroring pixi 2D. An `'auto'` node reads
-   * `false`: it is ray-tested, but its hits target the nearest interactive ancestor.
+   * True for `eventMode` `'static'` and `'dynamic'`, as in 2D. An `'auto'` node reads `false`: it
+   * can be ray-tested, but its hits go to the nearest interactive ancestor.
    * @returns `true` when the node fires listeners and can be an event target.
    * @example
    * ```ts
@@ -114,39 +105,33 @@ export interface IFederatedContainer3D {
    * mesh.isInteractive(); // true
    *
    * mesh.eventMode = 'auto';
-   * mesh.isInteractive(); // false — hit tested, but never the target
+   * mesh.isInteractive(); // false: hit-tested, but never the target
    * ```
    */
   isInteractive(): boolean;
 
   /**
-   * Backing store for {@link IFederatedContainer3D#interactiveChildren | interactiveChildren}
+   * Backing field for {@link IFederatedContainer3D#interactiveChildren | interactiveChildren}
    *
-   * Public so ancestor walks (`getAncestorPickState`, the pick-time prune) read the field directly
-   * instead of going through the accessor.
+   * The ancestor walks on the pick path read it directly rather than through the accessor.
    * @internal
    */
   _interactiveChildren: boolean;
 
   /**
-   * Whether this container's descendants take part in picking
+   * Whether this node's descendants can be picked, as on a pixi.js `Container`
    *
-   * `false` makes the node a barrier, like `eventMode: 'none'` seen from below: descendants neither
-   * pick nor occlude. The node itself is untouched — it still picks by its own `eventMode` and
-   * volume, so the group can answer for the whole subtree. Mirrors pixi 2D's
-   * `Container.interactiveChildren`.
-   *
-   * More than a pick-time filter: flipping it registers / unregisters the subtree on the owning
-   * View's pick list at mutation time, so a disabled group costs nothing per pointer event — no
-   * broadphase, no ray tests. Every descendant's `eventMode` survives intact for the flip back.
+   * `false` takes the whole subtree out of picking: descendants neither hit nor block what is
+   * behind them. The node itself still picks by its own `eventMode` and volume, so it can answer
+   * for the subtree. The subtree leaves the View's pick list, so it costs nothing per pointer
+   * event, and every descendant keeps its `eventMode` for when you turn it back on.
    * @default true
    * @example
    * ```ts
-   * menu.interactiveChildren = false; // dim the menu: nothing in it can be picked
-   * menu.interactiveChildren = true;  // ...and back, with every button's eventMode intact
+   * menu.interactiveChildren = false; // nothing in the menu can be picked
+   * menu.interactiveChildren = true;  // every button picks again, eventMode intact
    *
-   * // Group collider: one registered node, one ray test, whole-subtree semantics.
-   * // The explicit volume also clips as usual — see {@link IFederatedContainer3D#hitVolume}.
+   * // One sphere answers for the whole robot: one ray test instead of one per mesh
    * robot.eventMode = 'static';
    * robot.hitVolume = new Sphere(new Vector3(), 2);
    * robot.interactiveChildren = false;
@@ -155,15 +140,11 @@ export interface IFederatedContainer3D {
   interactiveChildren: boolean;
 
   /**
-   * CSS cursor to show while the pointer is over this node
+   * CSS cursor shown while this node is the pointer's target
    *
-   * `null` (the default) falls back to the owning {@link View3D}'s own cursor. There is no
-   * per-ancestor inheritance walk — 2D reads only the hit target's cursor, and the View-level fallback
-   * is the one 3D addition.
-   *
-   * The View3D's interaction layer forwards the picked node's cursor to pixi's cursor system on every
-   * pointer move. Typed as pixi's `Cursor` for keyword completion, widened with `string` so any other
-   * CSS cursor value — `url(...)` and friends — is accepted too.
+   * Only the target's own cursor counts, as in 2D: a hit on a `'passive'` child shows its
+   * interactive ancestor's cursor, so set it on the node with the listeners. `null` shows the
+   * {@link View3D}'s own cursor. Any CSS cursor value works, `url(...)` included.
    * @default null
    * @example
    * ```ts
@@ -176,52 +157,44 @@ export interface IFederatedContainer3D {
   cursor: Cursor | (string & {}) | null;
 
   /**
-   * The verbatim hit volume the user set — what the getter returns
+   * The value last assigned to `hitVolume`, which its getter returns
    * @internal
    */
   _hitVolumeInput: HitVolume3DInput | null;
 
   /**
-   * The resolved shape used at pick time (`Box`, `Sphere`, or `Geometry3D`). Strings are
-   * resolved against this node at set time; raw shapes are stored as-is. Read by the pick loop directly.
+   * The shape `resolveHitVolume` made of `_hitVolumeInput`, which the pick loop tests
+   *
+   * `null` when the input is `null` or invalid.
    * @internal
    */
   _hitVolumeResolved: HitVolume3D | null;
 
   /**
-   * Hit shape used when picking this node — the 3D analogue of pixi 2D's `hitArea`
+   * Shape the pointer ray is tested against when picking this node, like `hitArea` in 2D
    *
-   * Purely the shape: picking is opted into through
-   * {@link IFederatedContainer3D#eventMode | eventMode} / `interactive`. On a `'none'` node the
-   * volume is inert; on a `'passive'` / `'auto'` node it is ray-tested only while an interactive
-   * ancestor exists, targeting that ancestor — as in 2D.
+   * Setting it doesn't make the node interactive; {@link IFederatedContainer3D#eventMode | eventMode}
+   * does that. Left `null`, a {@link Mesh3D} uses its geometry's bounding box and a plain
+   * `Container3D` has no shape, so it only hears events from its children. Use `'box'` or
+   * `'geometry'` to derive the shape from the node, a `Box`, `Sphere` or `Geometry3D` to give one
+   * in the node's local space, or an {@link IHitVolume3D} of your own. {@link HitVolume3DInput}
+   * covers each option.
    *
-   * When `null` (the default) an interactive `Mesh3D` falls back to its live geometry AABB; a plain
-   * interactive `Container3D` has no implicit shape and only hears events bubbled from descendants
-   * (2D `Container` parity).
-   *
-   * Accepts strings for the common cases — `'box'` for an AABB read from this node's bounds,
-   * `'geometry'` for per-triangle against this `Mesh3D`'s own geometry — a raw `Box` / `Sphere` /
-   * `Geometry3D` instance for snapshot semantics and Unity-style proxy colliders, or any
-   * {@link IHitVolume3D} for shapes of your own.
-   *
-   * An **explicit** volume also clips this node's descendants, exactly as a 2D `hitArea` does: a
-   * descendant's hit counts only while the hit point lies inside every explicit ancestor volume on
-   * its chain, whatever those ancestors' `eventMode`s are, and a clipped hit is skipped without
-   * occluding what's behind it. Default volumes (the `Mesh3D` AABB fallback) never clip — like an
-   * unset 2D `hitArea`. Containment is exact for `Box` / `Sphere`, by the `bounds3D` AABB for a
-   * `Geometry3D`, and through the optional `containsPoint` of an {@link IHitVolume3D} (absent, it
-   * never clips). A clip volume doubles as a broadphase gate for its subtree: a ray that misses it
-   * skips every covered descendant with a single test.
+   * A shape you set also clips the node's descendants, as `hitArea` does in 2D: a descendant only
+   * hits where the hit point is inside every such shape above it, whatever those nodes'
+   * `eventMode`. A clipped hit doesn't block what is behind it. A `Geometry3D` clips by its bounding
+   * box, an {@link IHitVolume3D} only through its optional `containsPoint`, and the default
+   * bounding box never clips. A ray that misses the shape skips the exact test of every
+   * descendant under it.
    * @default null
    * @example
    * ```ts
-   * mesh.interactive = true;                  // pickable via its AABB
-   * mesh.hitVolume = 'geometry';              // opt into per-triangle precision
-   * mesh.hitVolume = new Sphere(center, 0.4); // custom / optimised shape
-   * mesh.hitVolume = null;                    // back to the default AABB
+   * mesh.interactive = true;                  // picked by its bounding box
+   * mesh.hitVolume = 'geometry';              // picked per triangle
+   * mesh.hitVolume = new Sphere(center, 0.4); // a cheaper or tighter shape
+   * mesh.hitVolume = null;                    // back to the bounding box
    *
-   * // Clip: children of the porthole only pick inside its sphere
+   * // Children of the porthole only pick inside its sphere
    * porthole.hitVolume = new Sphere(new Vector3(), 1);
    * ```
    * @see {@link HitVolume3DInput} For what each accepted value resolves to.
@@ -229,61 +202,63 @@ export interface IFederatedContainer3D {
   hitVolume: HitVolume3DInput | null;
 
   /**
-   * Per-pick memo for the ancestor-clip prefilter: the pick stamp this node's clip volume
-   * was last ray-tested under. Compared against a module-global counter in `EventBoundary3D`, so a
-   * clip ancestor is ray-tested once per pick however many descendants it covers.
+   * The pick this node's clip volume was last ray-tested in, compared against `_clipPickStamp` in
+   * `EventBoundary3D`, so a clipping ancestor is tested once per pick however many descendants it
+   * covers
    * @internal
    */
   _clipRayStamp: number;
 
   /**
-   * The memoized verdict of the clip-prefilter ray test for `_clipRayStamp`'s pick
+   * Whether the ray hit this node's clip volume in the pick `_clipRayStamp` names
    * @internal
    */
   _clipRayHit: boolean;
 
   /**
-   * Whether this node's own mode makes it a pick candidate — `'static'`, `'dynamic'` or
-   * `'auto'`. Candidacy registers the node while no ancestor is a barrier (`eventMode: 'none'` or
-   * `interactiveChildren: false`); a `'passive'` node can additionally be registered implicitly when
-   * it bears a volume under an interactive ancestor. See
-   * `_pickIndex`.
+   * Whether this node's own mode, `'static'`, `'dynamic'` or `'auto'`, puts it on the pick list
+   *
+   * It goes on the list while no ancestor is a barrier (`eventMode: 'none'` or
+   * `interactiveChildren: false`). A `'passive'` node can also go on it, when it has a volume and an
+   * interactive ancestor.
    * @returns `true` when the node's own mode makes it a candidate.
    * @internal
    */
   _isPickCandidate(): boolean;
 
   /**
-   * This node's slot in its View's flat pick list, `-1` while off the list. The single
-   * source of truth every registration path diffs against — the `eventMode` / `interactiveChildren` /
-   * `hitVolume` setters, attach / detach, and the subtree cascades — so adds and removes stay exact
-   * and idempotent, and what lets a removal swap-fill its slot in O(1). Written only by
-   * `EventBoundary3D._addInteractive` / `_removeInteractive`.
+   * This node's slot in its View's pick list, `-1` while off it
+   *
+   * Every registration path checks it: the `eventMode`, `interactiveChildren` and `hitVolume`
+   * setters, attach and detach, and the subtree updates. That keeps adds and removes exact and safe
+   * to repeat, and lets a removal fill the freed slot in O(1). Only
+   * `EventBoundary3D._addInteractive` and `_removeInteractive` write it.
    * @internal
    */
   _pickIndex: number;
 
   /**
-   * Whether picking this node has a shape to test — an explicit
-   * {@link IFederatedContainer3D#hitVolume | hitVolume}, or a default volume (a `Mesh3D`'s live
-   * geometry AABB). Gates implicit registration of `'passive'` nodes: a volume-less container can
-   * never be struck, so it stays off the pick list.
+   * Whether the node has a shape to test: a `hitVolume`, or a default one such as a mesh's
+   * bounding box
+   *
+   * A `'passive'` node without one can never be struck, so it stays off the pick list.
    * @returns `true` when the node has a shape the pick ray can test.
    * @internal
    */
   _hasPickVolume(): boolean;
 
   /**
-   * Hit shape used when the node is interactive but `hitVolume` is unset. Base containers
-   * have none (2D `Container` parity — bubble-only); `Mesh3D` overrides with its live geometry AABB,
-   * the Sprite-bounds analogue.
+   * The shape picked against when `hitVolume` is `null`
+   *
+   * A plain container has none, like a 2D `Container`; `Mesh3D` returns its geometry's bounding
+   * box, as a 2D `Sprite` uses its bounds.
    * @returns The implicit hit volume, or `null` when the node has none.
    * @internal
    */
   _getDefaultHitVolume(): HitVolume3D | null;
 
   /**
-   * Lazily allocated on first pick, so the non-interactive majority carries no matrix
+   * Allocated on the first pick, so nodes that are never picked carry no matrix
    * @internal
    */
   _invWorldTransform: Matrix4 | null;
@@ -294,7 +269,7 @@ export interface IFederatedContainer3D {
   _invWorldTransformId: number;
 
   /**
-   * Cached conservative world-space scale factor, squared — see `_getWorldScaleSq`
+   * Cached result of `_getWorldScaleSq`
    * @internal
    */
   _worldScaleSq: number;
@@ -305,22 +280,23 @@ export interface IFederatedContainer3D {
   _worldScaleSqId: number;
 
   /**
-   * Inverse of `worldTransform`, recomputed only when the transform pass bumps
-   * `_worldTransformId`. The pick loop uses it to bring the pick ray into local space and to build the
-   * normal matrix, so a static interactive node costs one inverse in total rather than one per pointer
-   * event.
+   * Inverse of `worldTransform`, recomputed only when the transform pass changes
+   * `_worldTransformId`
+   *
+   * The pick loop uses it to bring the ray into local space and to build the normal matrix, so a
+   * node that doesn't move costs one inverse in total rather than one per pointer event.
    * @returns The cached inverse world transform, owned by this node.
    * @internal
    */
   _getInverseWorldTransform(): Matrix4;
 
   /**
-   * Conservative squared world-space scale factor — the squared largest singular value of
-   * `worldTransform` — cached against `_worldTransformId`. The picker sizes its broadphase sphere by
-   * multiplying this with the volume's squared local bounding radius, read at pick time so in-place
-   * volume edits stay tracked; both are squared so no `sqrt` is needed. Uses the true singular value
-   * rather than the max axis scale, so the bound stays conservative even when a non-uniformly scaled
-   * ancestor shears the transform.
+   * The squared largest singular value of `worldTransform`, cached against `_worldTransformId`
+   *
+   * The picker sizes a node's broadphase sphere by multiplying it with the volume's squared local
+   * radius, which it reads per pick so edits to the volume count; squaring both avoids a `sqrt`.
+   * The singular value, unlike the largest axis scale, stays an upper bound when a non-uniformly
+   * scaled ancestor shears the transform.
    * @returns The squared world-space scale factor.
    * @internal
    */
@@ -329,7 +305,7 @@ export interface IFederatedContainer3D {
   /**
    * Property-based handler for the `click` event
    *
-   * Fired when a pointer completes a click on this node.
+   * Fired when a mouse click on this node completes, with any button but the right one.
    * @default null
    * @example
    * ```ts
@@ -338,33 +314,64 @@ export interface IFederatedContainer3D {
    *   if (e.hit3D) spawnDecal(e.hit3D.point, e.hit3D.normal);
    * };
    * ```
+   * @see {@link IFederatedContainer3D#onpointertap} For the equivalent for every pointer type.
    */
   onclick: Pointer3DEventHandler | null;
 
   /**
+   * Property-based handler for the `contextmenu` event
+   *
+   * Fired when the browser is about to open its context menu over this node; call
+   * `preventDefault()` to keep it closed.
+   * @default null
+   * @example
+   * ```ts
+   * mesh.oncontextmenu = (e) => {
+   *   e.preventDefault();
+   *   openMenuFor(mesh, e.global);
+   * };
+   * ```
+   */
+  oncontextmenu: Pointer3DEventHandler | null;
+
+  /**
    * Property-based handler for the `mousedown` event
    *
-   * Fired when a mouse button goes down over this node.
+   * Fired when a mouse button other than the right one goes down over this node.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerdown} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onmousedown = (e) => {
+   *   if (e.button === 1) startPan(e.global); // middle button
+   * };
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerdown} For the equivalent for every pointer type.
    */
   onmousedown: Pointer3DEventHandler | null;
 
   /**
    * Property-based handler for the `mouseenter` event
    *
-   * Fired when the mouse enters this node. Does not bubble.
+   * Fired when the mouse enters this node. Doesn't bubble.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerenter} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onmouseenter = () => (tooltip.visible = true);
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerenter} For the equivalent for every pointer type.
    */
   onmouseenter: Pointer3DEventHandler | null;
 
   /**
    * Property-based handler for the `mouseleave` event
    *
-   * Fired when the mouse leaves this node. Does not bubble.
+   * Fired when the mouse leaves this node. Doesn't bubble.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerleave} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onmouseleave = () => (tooltip.visible = false);
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerleave} For the equivalent for every pointer type.
    */
   onmouseleave: Pointer3DEventHandler | null;
 
@@ -373,7 +380,11 @@ export interface IFederatedContainer3D {
    *
    * Fired while the mouse moves across this node.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointermove} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onmousemove = (e) => tooltip.position.copyFrom(e.global);
+   * ```
+   * @see {@link IFederatedContainer3D#onpointermove} For the equivalent for every pointer type.
    */
   onmousemove: Pointer3DEventHandler | null;
 
@@ -382,7 +393,13 @@ export interface IFederatedContainer3D {
    *
    * Fired on every mouse move over the canvas, wherever the pointer is.
    * @default null
-   * @see {@link IFederatedContainer3D#onglobalpointermove} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onglobalmousemove = (e) => {
+   *   if (dragging) dragTo(e.global);
+   * };
+   * ```
+   * @see {@link IFederatedContainer3D#onglobalpointermove} For the equivalent for every pointer type.
    */
   onglobalmousemove: Pointer3DEventHandler | null;
 
@@ -391,7 +408,11 @@ export interface IFederatedContainer3D {
    *
    * Fired when the mouse moves off this node. Bubbles, unlike `mouseleave`.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerout} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * shelf.onmouseout = (e) => unhighlight(e.target3D);
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerout} For the equivalent for every pointer type.
    */
   onmouseout: Pointer3DEventHandler | null;
 
@@ -400,16 +421,27 @@ export interface IFederatedContainer3D {
    *
    * Fired when the mouse moves onto this node. Bubbles, unlike `mouseenter`.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerover} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * // One handler on the shelf hears every item on it
+   * shelf.onmouseover = (e) => highlight(e.target3D);
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerover} For the equivalent for every pointer type.
    */
   onmouseover: Pointer3DEventHandler | null;
 
   /**
    * Property-based handler for the `mouseup` event
    *
-   * Fired when a mouse button is released over this node.
+   * Fired when a mouse button other than the right one is released over this node.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerup} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onmouseup = (e) => {
+   *   if (e.button === 1) endPan();
+   * };
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerup} For the equivalent for every pointer type.
    */
   onmouseup: Pointer3DEventHandler | null;
 
@@ -418,23 +450,33 @@ export interface IFederatedContainer3D {
    *
    * Fired when a mouse button that went down on this node is released anywhere else.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerupoutside} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onmouseupoutside = () => endPan();
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerupoutside} For the equivalent for every pointer type.
    */
   onmouseupoutside: Pointer3DEventHandler | null;
 
   /**
    * Property-based handler for the `pointercancel` event
    *
-   * Exists for API parity only: pixi's federated layer never delivers pointer cancellation, so this
-   * handler does not fire. 2D behaves identically.
+   * Never called: pixi delivers no pointer cancellation, in 2D either. It exists so the 3D API
+   * matches the 2D one.
    * @default null
+   * @example
+   * ```ts
+   * // End a drag on these two instead
+   * handle.onpointerup = endDrag;
+   * handle.onpointerupoutside = endDrag;
+   * ```
    */
   onpointercancel: Pointer3DEventHandler | null;
 
   /**
    * Property-based handler for the `pointerdown` event
    *
-   * Fired when a pointer goes down on this node — mouse, touch or pen alike.
+   * Fired when a pointer goes down on this node: mouse, touch or pen alike.
    * @default null
    * @example
    * ```ts
@@ -451,7 +493,7 @@ export interface IFederatedContainer3D {
   /**
    * Property-based handler for the `pointerenter` event
    *
-   * Fired when a pointer enters this node. Does not bubble, so an ancestor hears it only when the
+   * Fired when a pointer enters this node. Doesn't bubble, so an ancestor hears it only when the
    * pointer enters the ancestor itself.
    * @default null
    * @example
@@ -465,7 +507,7 @@ export interface IFederatedContainer3D {
   /**
    * Property-based handler for the `pointerleave` event
    *
-   * Fired when a pointer leaves this node. Does not bubble.
+   * Fired when a pointer leaves this node. Doesn't bubble.
    * @default null
    * @example
    * ```ts
@@ -484,7 +526,7 @@ export interface IFederatedContainer3D {
    * // Trail the cursor across the surface it is over
    * table.eventMode = 'static';
    * table.onpointermove = (e) => {
-   *   if (e.hit3D) cursor3D.position.copyFrom(e.hit3D.point);
+   *   if (e.hit3D) cursorMarker.position.copyFrom(e.hit3D.point);
    * };
    * ```
    */
@@ -498,7 +540,7 @@ export interface IFederatedContainer3D {
    * @default null
    * @example
    * ```ts
-   * // Keep a drag alive once the pointer runs off the dragged mesh
+   * // Keep a drag going once the pointer runs off the dragged mesh
    * mesh.onglobalpointermove = (e) => {
    *   const hit = dragging && view3d.screenToWorld(e.global, ground);
    *   if (hit) mesh.position.copyFrom(hit);
@@ -512,6 +554,10 @@ export interface IFederatedContainer3D {
    *
    * Fired when a pointer moves off this node. Bubbles, unlike `pointerleave`.
    * @default null
+   * @example
+   * ```ts
+   * shelf.onpointerout = (e) => unhighlight(e.target3D);
+   * ```
    */
   onpointerout: Pointer3DEventHandler | null;
 
@@ -520,17 +566,22 @@ export interface IFederatedContainer3D {
    *
    * Fired when a pointer moves onto this node. Bubbles, unlike `pointerenter`.
    * @default null
+   * @example
+   * ```ts
+   * // One handler on the shelf hears every item on it
+   * shelf.onpointerover = (e) => highlight(e.target3D);
+   * ```
    */
   onpointerover: Pointer3DEventHandler | null;
 
   /**
    * Property-based handler for the `pointertap` event
    *
-   * Fired when a pointer completes a tap on this node — the pointer-type-agnostic `click` / `tap`.
+   * Fired when a pointer completes a tap on this node: `click` and `tap` for any pointer type.
    * @default null
    * @example
    * ```ts
-   * // Works for mouse and touch alike
+   * // Works for mouse, touch and pen alike
    * mesh.eventMode = 'static';
    * mesh.onpointertap = (e) => select(e.target3D);
    * ```
@@ -544,7 +595,9 @@ export interface IFederatedContainer3D {
    * @default null
    * @example
    * ```ts
-   * handle.onpointerup = () => { dragging = false; };
+   * handle.onpointerup = () => {
+   *   dragging = false;
+   * };
    * ```
    */
   onpointerup: Pointer3DEventHandler | null;
@@ -553,13 +606,14 @@ export interface IFederatedContainer3D {
    * Property-based handler for the `pointerupoutside` event
    *
    * Fired when a pointer that went down on this node is released anywhere else. The event's
-   * `target3D` names this node, but the surface fields read as a miss because the release ray landed
-   * elsewhere.
+   * `target3D` is this node, and `hit3D` is what the pointer was released over, if anything.
    * @default null
    * @example
    * ```ts
    * // The release that ends a drag usually happens off the mesh
-   * handle.onpointerupoutside = () => { dragging = false; };
+   * handle.onpointerupoutside = () => {
+   *   dragging = false;
+   * };
    * ```
    */
   onpointerupoutside: Pointer3DEventHandler | null;
@@ -567,8 +621,12 @@ export interface IFederatedContainer3D {
   /**
    * Property-based handler for the `rightclick` event
    *
-   * Fired when a right-click completes on this node.
+   * Fired when a right click completes on this node.
    * @default null
+   * @example
+   * ```ts
+   * mesh.onrightclick = () => openMenuFor(mesh);
+   * ```
    */
   onrightclick: Pointer3DEventHandler | null;
 
@@ -577,6 +635,10 @@ export interface IFederatedContainer3D {
    *
    * Fired when the right mouse button goes down over this node.
    * @default null
+   * @example
+   * ```ts
+   * mesh.onrightdown = (e) => startRotate(e.global);
+   * ```
    */
   onrightdown: Pointer3DEventHandler | null;
 
@@ -585,6 +647,10 @@ export interface IFederatedContainer3D {
    *
    * Fired when the right mouse button is released over this node.
    * @default null
+   * @example
+   * ```ts
+   * mesh.onrightup = endRotate;
+   * ```
    */
   onrightup: Pointer3DEventHandler | null;
 
@@ -593,6 +659,10 @@ export interface IFederatedContainer3D {
    *
    * Fired when the right mouse button that went down on this node is released anywhere else.
    * @default null
+   * @example
+   * ```ts
+   * mesh.onrightupoutside = endRotate;
+   * ```
    */
   onrightupoutside: Pointer3DEventHandler | null;
 
@@ -601,16 +671,28 @@ export interface IFederatedContainer3D {
    *
    * Fired when a touch completes a tap on this node.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointertap} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.ontap = (e) => {
+   *   if (e.detail === 2) focusOn(mesh); // double tap
+   * };
+   * ```
+   * @see {@link IFederatedContainer3D#onpointertap} For the equivalent for every pointer type.
    */
   ontap: Pointer3DEventHandler | null;
 
   /**
    * Property-based handler for the `touchcancel` event
    *
-   * Exists for API parity only: pixi's federated layer never delivers touch cancellation, so this
-   * handler does not fire. 2D behaves identically.
+   * Never called: pixi delivers no touch cancellation, in 2D either. It exists so the 3D API
+   * matches the 2D one.
    * @default null
+   * @example
+   * ```ts
+   * // End a drag on these two instead
+   * handle.ontouchend = endDrag;
+   * handle.ontouchendoutside = endDrag;
+   * ```
    */
   ontouchcancel: Pointer3DEventHandler | null;
 
@@ -619,7 +701,11 @@ export interface IFederatedContainer3D {
    *
    * Fired when a touch lifts off this node.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerup} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * handle.ontouchend = endDrag;
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerup} For the equivalent for every pointer type.
    */
   ontouchend: Pointer3DEventHandler | null;
 
@@ -628,7 +714,11 @@ export interface IFederatedContainer3D {
    *
    * Fired when a touch that started on this node lifts off anywhere else.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerupoutside} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * handle.ontouchendoutside = endDrag;
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerupoutside} For the equivalent for every pointer type.
    */
   ontouchendoutside: Pointer3DEventHandler | null;
 
@@ -637,7 +727,13 @@ export interface IFederatedContainer3D {
    *
    * Fired while a touch moves across this node.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointermove} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * canvasMesh.ontouchmove = (e) => {
+   *   if (e.hit3D) paintAt(e.hit3D.uv);
+   * };
+   * ```
+   * @see {@link IFederatedContainer3D#onpointermove} For the equivalent for every pointer type.
    */
   ontouchmove: Pointer3DEventHandler | null;
 
@@ -646,7 +742,13 @@ export interface IFederatedContainer3D {
    *
    * Fired on every touch move over the canvas, wherever the touch is.
    * @default null
-   * @see {@link IFederatedContainer3D#onglobalpointermove} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * mesh.onglobaltouchmove = (e) => {
+   *   if (dragging) dragTo(e.global);
+   * };
+   * ```
+   * @see {@link IFederatedContainer3D#onglobalpointermove} For the equivalent for every pointer type.
    */
   onglobaltouchmove: Pointer3DEventHandler | null;
 
@@ -655,7 +757,11 @@ export interface IFederatedContainer3D {
    *
    * Fired when a touch lands on this node.
    * @default null
-   * @see {@link IFederatedContainer3D#onpointerdown} For the pointer-type-agnostic equivalent.
+   * @example
+   * ```ts
+   * handle.ontouchstart = (e) => startDrag(e.pointerId);
+   * ```
+   * @see {@link IFederatedContainer3D#onpointerdown} For the equivalent for every pointer type.
    */
   ontouchstart: Pointer3DEventHandler | null;
 
@@ -666,9 +772,11 @@ export interface IFederatedContainer3D {
    * @default null
    * @example
    * ```ts
-   * // Scroll to push the hit surface away from the camera
+   * // Scroll to push the panel away from the camera
    * panel.eventMode = 'static';
-   * panel.onwheel = (e) => { panel.position.z += e.deltaY * 0.01; };
+   * panel.onwheel = (e) => {
+   *   panel.position.z += e.deltaY * 0.01;
+   * };
    * ```
    */
   onwheel: Wheel3DEventHandler | null;
@@ -681,14 +789,20 @@ export interface IFederatedContainer3D {
 type OnHandlerKey = Extract<keyof IFederatedContainer3D, `on${string}`>;
 
 /**
- * The interaction options merged into {@link Container3DOptions}
+ * The pointer-event options of {@link Container3DOptions}
  *
- * `eventMode`, `interactive`, `interactiveChildren`, `cursor`, `hitVolume`, and every `on*` handler
- * property, typed exactly as their {@link IFederatedContainer3D} counterparts.
- *
- * Constructor-set event state is safe before the node is attached: the setters defer registration
- * work while `view3d` is `null`, and the attach walk derives it when the node joins a View's scene
- * graph.
+ * `eventMode`, `interactive`, `interactiveChildren`, `cursor`, `hitVolume`, and every `on*`
+ * handler, as on {@link IFederatedContainer3D}. They can be set before the node joins a scene; it
+ * goes on the pick list when it is added.
+ * @example
+ * ```ts
+ * const door = new Container3D({
+ *   eventMode: 'static',
+ *   cursor: 'pointer',
+ *   hitVolume: new Box(new Vector3(-1, 0, -0.1), new Vector3(1, 2, 0.1)),
+ *   onpointertap: () => openDoor(),
+ * });
+ * ```
  * @category events
  * @standard
  */
@@ -700,35 +814,38 @@ export interface Federated3DOptions extends Partial<
 > {}
 
 /**
- * An ancestor is a **barrier** — `eventMode: 'none'` or `interactiveChildren: false` —
- * so nothing below it registers, own-mode candidates included.
+ * An ancestor is a barrier (`eventMode: 'none'` or `interactiveChildren: false`), so nothing below
+ * it goes on the pick list, whatever its own mode
  * @internal
  */
 export const PICK_BLOCKED = 0;
 /**
- * No barrier above, but no interactive ancestor either: an implicit hit could not resolve
+ * No barrier above, but no interactive ancestor either, so a hit on a `'passive'` node would have
+ * no target
  * @internal
  */
 export const PICK_BARE = 1;
 /**
- * An interactive ancestor exists with no barrier above: implicit registration applies
+ * An interactive ancestor and no barrier above, so a `'passive'` node with a volume goes on the
+ * pick list
  * @internal
  */
 export const PICK_COVERED = 2;
 
 /**
- * What a node's ancestor chain means for pick registration
+ * What a node's ancestors mean for putting it on the pick list
  * @internal
  */
 export type AncestorPickState = typeof PICK_BLOCKED | typeof PICK_BARE | typeof PICK_COVERED;
 
 /**
- * Classifies `node`'s ancestor chain for pick registration
+ * Classifies `node`'s ancestors for putting it on the pick list
  *
- * A **barrier** is a node with `eventMode: 'none'` or `interactiveChildren: false`, as seen by its
- * descendants — the node's own registration is untouched. Mirrors the pruning in
- * `EventBoundary3D._resolvePickTarget`: a barrier anywhere on the chain blocks outright, otherwise
- * an interactive ancestor makes hits on a `'passive'` node resolvable.
+ * A barrier is a node with `eventMode: 'none'` or `interactiveChildren: false`, as its
+ * descendants see it; its own place on the list doesn't depend on it. A barrier anywhere above
+ * blocks; otherwise an interactive ancestor covers the node. Two other places apply the same rule
+ * and must agree with it: `EventBoundary3D._resolvePickTarget` at pick time, and `View3D._attach`,
+ * which passes the state down a subtree as it attaches it.
  * @param node - Node whose ancestors are inspected.
  * @returns The ancestor state.
  * @internal
@@ -746,12 +863,13 @@ export function getAncestorPickState(node: Container3D): AncestorPickState {
 }
 
 /**
- * Re-derives every registration below `node` after its barrier cleared
+ * Puts every node below `node` that belongs on the pick list back on it, after a barrier at
+ * `node` cleared
  *
- * Registers own-mode candidates (static / dynamic / auto) and, under an interactive ancestor,
- * volume-bearing `'passive'` descendants. Descent prunes at barrier children — nothing below one may
- * register — while the barrier child itself registers per its own rule, since its registration is
- * governed by its ancestors, not its own barrier.
+ * Adds nodes whose own mode makes them candidates (`'static'`, `'dynamic'`, `'auto'`) and, under
+ * an interactive ancestor, `'passive'` nodes with a volume. It doesn't descend below a barrier
+ * child, where nothing may register, but the barrier child itself registers by its own rule: a
+ * node's barrier only affects its descendants.
  * @param node - Root of the cascade; only descendants are touched.
  * @param events - The owning View's boundary.
  * @param underInteractive - Whether nodes at this depth have an interactive ancestor.
@@ -771,13 +889,12 @@ function registerSubtree(node: Container3D, events: EventBoundary3D, underIntera
 }
 
 /**
- * Strips every registration below `node` after it became a barrier — the inverse of
+ * Takes every node below `node` off the pick list after `node` became a barrier; the inverse of
  * `registerSubtree`
  *
- * Unregisters every registered descendant, own-mode candidates included; `_removeInteractive` reads
- * each descendant's current mode, so a stripped `'dynamic'` node unwinds the View's dynamic count.
- * Descent prunes at barrier children — nothing was registered below them — after unregistering the
- * barrier child itself.
+ * `_removeInteractive` reads each node's current mode, so removing a `'dynamic'` node lowers the
+ * View's dynamic count. It doesn't descend below a barrier child, since nothing below one is on
+ * the list, but it removes the barrier child itself.
  * @param node - Root of the cascade; only descendants are touched.
  * @param events - The owning View's boundary.
  */
@@ -791,11 +908,11 @@ function unregisterSubtree(node: Container3D, events: EventBoundary3D): void {
 }
 
 /**
- * Adds implicit registrations below `node` after a plain interactive flip gave its subtree cover
+ * Adds the `'passive'` nodes with a volume below `node`, after `node` became interactive with no
+ * interactive ancestor of its own
  *
- * Registers every volume-bearing `'passive'` descendant reachable without crossing a barrier.
- * Descent also stops at interactive descendants — their subtrees were covered before and are
- * unchanged — and below a non-descending barrier child nothing may register anyway.
+ * It doesn't descend below a barrier, where nothing may register, or below an interactive
+ * descendant, whose subtree was already covered.
  * @param node - Root of the cascade; only descendants are touched.
  * @param events - The owning View's boundary.
  */
@@ -813,12 +930,11 @@ function registerCoveredSubtree(node: Container3D, events: EventBoundary3D): voi
 }
 
 /**
- * Removes implicit registrations below `node` after a plain interactive flip lost its subtree the
- * cover — the inverse of `registerCoveredSubtree`
+ * Removes the `'passive'` nodes below `node` from the pick list, after `node` stopped being
+ * interactive with no interactive ancestor of its own; the inverse of `registerCoveredSubtree`
  *
- * Unregisters every implicitly registered `'passive'` descendant. Barrier children are not descended
- * into — nothing below one is registered — and interactive descendants' subtrees are skipped too,
- * since they keep their own cover.
+ * It doesn't descend below a barrier, where nothing is registered, or below an interactive
+ * descendant, which still covers its own subtree.
  * @param node - Root of the cascade; only descendants are touched.
  * @param events - The owning View's boundary.
  */
@@ -836,14 +952,18 @@ function unregisterCoveredSubtree(node: Container3D, events: EventBoundary3D): v
 }
 
 /**
- * The mixin applied to `Container3D.prototype` by `events/init.ts` — the 3D counterpart of
- * pixi.js's `FederatedContainer`. Property descriptors are copied verbatim, accessors included, so
- * every `Container3D` gains the interactive API without paying a per-instance cost for it.
- * {@link IFederatedContainer3D} is where these members are documented.
+ * What `events/init.ts` mixes into `Container3D.prototype`, as pixi.js mixes `FederatedContainer`
+ * into `Container`
+ *
+ * `extensions.mixin` copies the property descriptors, accessors included. State lives on the
+ * prototype with inert defaults (`null`, `undefined`, `-1`), so a node that never uses events
+ * carries no storage for them; the first write gives the node its own property.
+ * {@link IFederatedContainer3D} documents the members.
  * @internal
  */
 export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D> = {
   onclick: null,
+  oncontextmenu: null,
   onmousedown: null,
   onmouseenter: null,
   onmouseleave: null,
@@ -883,6 +1003,25 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
     return this._eventMode ?? 'passive';
   },
 
+  /**
+   * Updates the pick list for the new mode: this node first, then its subtree
+   *
+   * This node belongs on the list when no ancestor is a barrier and either its own mode makes it a
+   * candidate or it is `'passive'` with a volume under an interactive ancestor. `'none'` and a
+   * `'passive'` node without a volume fail before the ancestor walk; the walk's result is shared
+   * with the subtree step, and `ancestorState` is `-1` until it runs. A node that stays on the list
+   * while switching to or from `'dynamic'` only changes the View's dynamic count, which also sets
+   * the View's own `eventMode`.
+   *
+   * Descendants see this node in one of three roles: a barrier (`'none'`, or
+   * `interactiveChildren: false`), an interactive ancestor that covers `'passive'` descendants, or
+   * neither. The subtree only changes when the role does, never while the node stays a barrier,
+   * and never while an ancestor blocks it. Becoming a barrier takes the whole subtree off, which
+   * also covers losing interactivity. Clearing a barrier works the subtree out again from scratch.
+   * Gaining or losing interactivity with no interactive ancestor adds or removes the `'passive'`
+   * descendants; with one, they were covered before and still are.
+   * @param value - The new mode.
+   */
   set eventMode(value: EventMode) {
     const prev = this._eventMode ?? 'passive';
     this._eventMode = value;
@@ -892,12 +1031,8 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
     const events = this._view3d.events;
     const wasDynamic = prev === 'dynamic';
 
-    // The ancestor walk is shared between the own-registration check and the cascade; -1 = not yet
-    // computed.
     let ancestorState: AncestorPickState | -1 = -1;
 
-    // Own registration: attached, no barrier above, and (own-mode candidate, or 'passive' with a
-    // volume under an interactive ancestor). 'none' and volume-less 'passive' fail without the walk.
     let shouldRegister = false;
     if (value !== 'none' && (this._isPickCandidate() || this._hasPickVolume())) {
       ancestorState = getAncestorPickState(this);
@@ -914,15 +1049,9 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
         events._removeInteractive(this, wasDynamic);
       }
     } else if (registered && wasDynamic !== (value === 'dynamic')) {
-      // Registered before and after while flipping to/from 'dynamic' — keep the View's
-      // dynamic-node count (and its own 2D eventMode) in sync.
       events._changeDynamicCount(value === 'dynamic' ? 1 : -1);
     }
 
-    // Subtree cascade. Descendants care about this node in one of three roles: barrier ('none'
-    // here, or `interactiveChildren: false` — unregisters everything below), interactive (covers
-    // 'passive' descendants), or neutral ('passive' / 'auto'). No role change, no cascade; a node
-    // that stays a barrier throughout keeps its subtree stripped whatever else changed.
     const wasInteractive = prev === 'static' || prev === 'dynamic';
     const nowInteractive = value === 'static' || value === 'dynamic';
     const wasBarrier = prev === 'none' || !this._interactiveChildren;
@@ -936,19 +1065,13 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
     }
 
     if (ancestorState === -1) ancestorState = getAncestorPickState(this);
-    // Blocked from above: nothing below is registered, and nothing may become so.
     if (ancestorState === PICK_BLOCKED) return;
 
     if (nowBarrier) {
-      // Becoming a barrier strips the whole subtree — a cover loss below needs no separate pass.
       unregisterSubtree(this, events);
     } else if (wasBarrier) {
-      // The barrier cleared: re-derive the subtree's registrations from scratch, cover included.
       registerSubtree(this, events, nowInteractive || ancestorState === PICK_COVERED);
     } else if (ancestorState !== PICK_COVERED) {
-      // Interactive flip with no cover from above: 'passive' descendants gain or lose their only
-      // interactive ancestor. Interactive descendants keep covering their own subtrees, so descent
-      // prunes there. With cover from above, descendants were and remain covered — no-op.
       if (nowInteractive) {
         registerCoveredSubtree(this, events);
       } else {
@@ -985,18 +1108,24 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
     return this._interactiveChildren;
   },
 
+  /**
+   * Takes the subtree off the pick list, or works it out again, when the barrier this node forms
+   * appears or clears
+   *
+   * The node's own place on the list doesn't change: descendants are the only ones that see a
+   * barrier. Nothing changes while `eventMode` is `'none'`, which is a barrier on its own, or while
+   * an ancestor blocks the subtree.
+   * @param value - Whether descendants can be picked.
+   */
   set interactiveChildren(value: boolean) {
     const prev = this._interactiveChildren;
     this._interactiveChildren = value;
 
-    // Own registration is untouched — the barrier is only visible to descendants.
     if (!this._view3d || value === prev || this.children.length === 0) return;
 
-    // The barrier flips only when 'none' isn't holding it up on its own.
     if (this._eventMode === 'none') return;
 
     const ancestorState = getAncestorPickState(this);
-    // Blocked from above: nothing below is registered, and nothing may become so.
     if (ancestorState === PICK_BLOCKED) return;
 
     const events = this._view3d.events;
@@ -1018,6 +1147,15 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
     return this._hitVolumeInput;
   },
 
+  /**
+   * Resolves the shape and keeps the View's pick state in step with it
+   *
+   * Going between `null` and a volume changes the View's clip-volume count, which gates all clip
+   * work per pick. A `'passive'` node is only on the pick list while it has a volume under an
+   * interactive ancestor, so it is added or removed here; the other modes don't depend on the
+   * shape.
+   * @param value - The new hit volume.
+   */
   set hitVolume(value: HitVolume3DInput | null) {
     const wasExplicit = this._hitVolumeInput !== null;
     this._hitVolumeInput = value;
@@ -1025,14 +1163,10 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
 
     if (!this._view3d) return;
 
-    // Explicit volumes clip descendants; the boundary's count gates all per-pick clip work.
     if (wasExplicit !== (value !== null)) {
       this._view3d.events._clipVolumeCount += value !== null ? 1 : -1;
     }
 
-    // A 'passive' node's implicit registration tracks volume presence: gaining a first volume under
-    // an interactive ancestor registers it, losing the only volume unregisters. Own-mode
-    // registrations (static / dynamic / auto) don't depend on the shape.
     if (this._eventMode !== undefined && this._eventMode !== 'passive') return;
     if (this._hasPickVolume() && getAncestorPickState(this) === PICK_COVERED) {
       this._view3d.events._addInteractive(this);
@@ -1073,13 +1207,10 @@ export const FederatedContainer3D: IFederatedContainer3D & ThisType<Container3D>
 
 declare global {
   namespace PixiMixins {
-    // oxlint-disable-next-line no-empty-object-type
     interface Container3D extends IFederatedContainer3D {}
 
-    // oxlint-disable-next-line no-empty-object-type
     interface Container3DOptions extends Federated3DOptions {}
 
-    // oxlint-disable-next-line no-empty-object-type
     interface Container3DEvents extends FederatedEventEmitterTypes3D {}
   }
 }

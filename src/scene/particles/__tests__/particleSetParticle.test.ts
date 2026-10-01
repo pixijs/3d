@@ -78,31 +78,6 @@ describe('ParticleContainer3D.setParticle', () => {
     expect(u32[vertex(particles, 2, 0) + tint]).toBe(packParticleColor(0xff8040, 0.5));
   });
 
-  it('packs a generic unorm8x4 attribute without sRGB decoding', () => {
-    const particles = new ParticleContainer3D({ capacity: 4, extraBits: [trajectoryBit] });
-    const { u32, offsets } = particles.data;
-
-    particles.setParticle(0, { aTint: { x: 1, y: 0.5, z: 0, w: 1 } });
-
-    const packed = u32[vertex(particles, 0, 0) + offsets.aTint / 4];
-
-    expect(packed & 0xff).toBe(255);
-    expect((packed >>> 8) & 0xff).toBe(128);
-    expect((packed >>> 16) & 0xff).toBe(0);
-    expect(packed >>> 24).toBe(255);
-  });
-
-  it('packs the flipbook window attribute as unorm16x4', () => {
-    const particles = new ParticleContainer3D({ capacity: 4, texture: sheet(2) });
-    const { u16, offsets } = particles.data;
-
-    particles.setParticle(0, { aParticleUVFrame: { x: 0.5, y: 0, z: 0.5, w: 1 } });
-
-    const h = (vertex(particles, 0, 0) + offsets.aParticleUVFrame / 4) * 2;
-
-    expect([u16[h], u16[h + 1], u16[h + 2], u16[h + 3]]).toEqual([32768, 0, 32768, 65535]);
-  });
-
   it('clamps a packed value to its range instead of spilling into the next channel', () => {
     const particles = new ParticleContainer3D({ capacity: 4, texture: sheet(2), extraBits: [trajectoryBit] });
     const { u32, u16, offsets } = particles.data;

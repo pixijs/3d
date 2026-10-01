@@ -9,15 +9,6 @@ import { View3D } from '~/scene/View3D';
 
 import { RenderPassBit } from '../../render-passes/RenderPass';
 
-// A draw command carries one render state and one topology for its whole run, taken from
-// the first mesh in it. Two meshes that agree on shader and geometry but disagree on state
-// are therefore not interchangeable, and the batch key has to say so — otherwise they fuse
-// and the later ones silently render with the first's state.
-//
-// The materials here share a shader variant (identical options) and a geometry, so the key
-// is the only thing that can separate them. State is set before the first render, so this
-// is about the key's contents rather than any staleness.
-
 const build = (material: Material3D, geometry: CubeGeometry, x: number): Mesh3D => {
   const mesh = new Mesh3D({ geometry, material, castShadow: false });
   mesh.position.set(x, 0, 0);
@@ -53,14 +44,12 @@ for (const preference of ['webgl', 'webgpu'] as const) {
         const cacheA = meshA._passCache[bit];
         const cacheB = meshB._passCache[bit];
 
-        // The setup: one shader, one geometry, genuinely different state values.
         expect(cacheA.shader).toBe(cacheB.shader);
         expect(meshA.geometry).toBe(meshB.geometry);
         expect(matA.state.data).not.toBe(matB.state.data);
 
         expect(cacheA.batchKey).not.toBe(cacheB.batchKey);
 
-        // Two commands, each applying its own material's state to its own instance.
         const pd = view3d._sceneBatch.drawLists[bit];
         expect(pd.commandList.count).toBe(2);
 
@@ -84,8 +73,6 @@ for (const preference of ['webgl', 'webgpu'] as const) {
         app.stage.addChild(view3d);
         view3d.camera.position.set(0, 0, 8);
 
-        // Distinct material objects with equal state — `stateFor3D()` gives each its own
-        // `State`, so a key comparing state by identity would split these into two draws.
         const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1 });
         const meshA = build(new Material3D({ baseColor: 0xff0000 }), geometry, -1);
         const meshB = build(new Material3D({ baseColor: 0x00ff00 }), geometry, 1);
@@ -94,7 +81,10 @@ for (const preference of ['webgl', 'webgpu'] as const) {
         app.render();
 
         const bit = RenderPassBit.OPAQUE;
-        expect(meshA.material.state).not.toBe(meshB.material.state);
+        expect(
+          meshA.material.state,
+          'each material has its own equal State, which a key comparing state by identity would split',
+        ).not.toBe(meshB.material.state);
         expect(meshA._passCache[bit].batchKey).toBe(meshB._passCache[bit].batchKey);
 
         const pd = view3d._sceneBatch.drawLists[bit];

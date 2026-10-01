@@ -1,48 +1,48 @@
 import type { Mesh3DData } from './Mesh3DData';
 
 /**
- * Lightweight per-pass sorted view into a shared mesh array
+ * One pass's sorted view of a batch's items
  *
- * Stores indices into the master mesh list + parallel sort keys.
- * Dense storage with swap-and-pop for O(1) add/remove.
- * After sort(), `indices` contains resolved master indices in sorted order,
- * so consumers read `items[indices[i]]` directly.
+ * Holds indices into the shared item array with a sort key each, packed densely so add and remove
+ * are O(1), remove by swapping in the last entry. After `sort()`, `items[indices[i]]` is the i-th
+ * item in draw order.
  * @internal
  */
 export class SortedMesh3DView<T extends Mesh3DData> {
-  /** Reference to the shared master mesh array, set once and never copied */
+  /** The batch's item array, shared with its other views and never copied */
   public items: T[];
 
   /** Number of items in this pass view */
   public count = 0;
 
-  /** Dirty flag — set on add/remove/updateKey, cleared by sort */
+  /** Whether `indices` is out of date: set by `add`, `remove`, a changed key and `clear`, cleared by a sort */
   public dirty = true;
 
-  /**
-   * Sorted output: master mesh indices in sort order
-   * After sort(), `items[indices[i]]` gives the i-th item in sorted order.
-   */
+  /** Item indices in draw order, as of the last sort */
   public indices: Uint32Array;
 
-  /** Dense map: local position -> master mesh index */
+  /**
+   * Item indices in insertion order, with removals swapped out
+   *
+   * Stays current through every `add()` and `remove()`, while `indices` only changes in a sort. A
+   * walk that needs no order and runs before the pass sorts reads this array.
+   */
   public renderableIndices: Uint32Array;
 
-  /** Parallel sort keys (Float64 for >32-bit integer support) */
+  /** Sort key of each `renderableIndices` entry; Float64 so a 53-bit key stays exact */
   private _sortKeys: Float64Array;
 
-  /** Temp array for sorting local indices by key */
+  /** Scratch for sorting positions by key */
   private _localIndices: Uint32Array;
 
-  /** UID -> local index for O(1) removal */
+  /** Each item's position in `renderableIndices` by uid, or -1 once removed */
   private _uidToLocal: Record<number, number> = Object.create(null);
 
   /**
-   * @param items - Shared master mesh array.
-   * @param initialCapacity - Pre-size all typed arrays to this capacity (avoids grow/copy cycles).
-   *   One view exists per (batch, pass) and its four parallel arrays cost ~20 bytes a slot,
-   *   so the default stays small — most views hold a handful of meshes, and anything that
-   *   outgrows it jumps straight to the 256 grow floor, keeping copies rare either way.
+   * @param items - The batch's item array.
+   * @param initialCapacity - Entries the arrays start with. There is one view per batch and pass,
+   *   at 20 bytes an entry, so the default is small: most views hold a few meshes, and a view that
+   *   outgrows it jumps straight to 256 entries.
    */
   constructor(items: T[], initialCapacity = 32) {
     this.items = items;
@@ -97,12 +97,12 @@ export class SortedMesh3DView<T extends Mesh3DData> {
   }
 
   /**
-   * Update the sort key for an item in O(1)
+   * Updates an item's sort key in O(1)
    *
-   * An unchanged key can't change the order, so it doesn't dirty the view — dirtying
-   * buys a comparator sort, a JS callback run ~n log n times. Materials get reassigned
-   * to *equivalent* ones (same shader, state and texture sources) far more often than
-   * to something that actually re-sorts.
+   * An unchanged key leaves the view clean, since a dirty view costs a comparator sort, a JS
+   * callback run about n log n times. A material swapped for an equivalent one, with the same
+   * shader, state and texture sources, re-keys to the same value, and that is far more common than
+   * a swap that re-sorts.
    * @param uid - The item's UID
    * @param key - The new sort key
    */
@@ -114,7 +114,7 @@ export class SortedMesh3DView<T extends Mesh3DData> {
     this.dirty = true;
   }
 
-  /** Sort and produce the `indices` array (master indices in sorted order) */
+  /** Sorts by key into `indices`, if anything changed since the last sort */
   public sort(): void {
     const count = this.count;
     if (count === 0) return;
@@ -139,10 +139,10 @@ export class SortedMesh3DView<T extends Mesh3DData> {
   }
 
   /**
-   * Sort with a forced key recalculation from the items
+   * Re-reads every key from its item and sorts, whether or not the view is dirty
    *
-   * Used by the transparent pass — distance-based keys change every frame.
-   * @param getKey - Key extractor function.
+   * For the transparent pass, whose distance keys change every frame.
+   * @param getKey - Reads an item's key.
    */
   public sortForced(getKey: (item: T) => number): void {
     const count = this.count;
@@ -176,8 +176,8 @@ export class SortedMesh3DView<T extends Mesh3DData> {
   }
 
   /**
-   * Find the UID stored at a given local index via the items array
-   * @param local - Index into this view's sorted order
+   * The uid of the item at a position in `renderableIndices`
+   * @param local - Position in `renderableIndices`, not in sorted order
    */
   private _getUidAtLocal(local: number): number {
     const renderableIdx = this.renderableIndices[local];

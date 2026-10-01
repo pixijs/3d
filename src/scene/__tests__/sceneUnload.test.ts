@@ -151,7 +151,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('walks a nested container down to every mesh', async () => {
+    it('walks a nested container down to every mesh, unloading geometry but leaving the shared materials', async () => {
       await withApp('container-unload-walk', (app) => {
         const view3d = buildView(app);
         const texture = makeTexture('#44aaff');
@@ -173,7 +173,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         expect(bufferResidency(near.geometry)).toBe(0);
         expect(bufferResidency(deep.geometry)).toBe(0);
-        // The walk is geometry-only; materials are shared and go through their own unload.
         expect(residency(texture.source)).toBeGreaterThan(0);
       });
     });
@@ -204,14 +203,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('is a no-op on an empty container', async () => {
-      await withApp('container-unload-empty', () => {
-        const empty = new Container3D();
-        expect(() => empty.unload()).not.toThrow();
-      });
-    });
-
-    it('gives back a model’s geometry and its distinct materials’ textures', async () => {
+    it('gives back a model’s geometry and its materials’ textures, unloading a shared material once', async () => {
       await withApp('model-unload', (app) => {
         const view3d = buildView(app);
         const skin = makeTexture('#ff8800');
@@ -221,7 +213,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const body = makeMesh(skin, -1.6);
         const arm = makeMesh(skin, 0);
         const badge = makeMesh(trim, 1.6);
-        // Two meshes share one material: the walk must reach it once, not twice.
         arm.material = body.material;
         const limb = new Container3D();
         limb.addChild(arm);
@@ -246,7 +237,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('unloads a nested model’s materials once', async () => {
+    it('unloads a nested model’s materials once, through a plain container between the two models', async () => {
       await withApp('model-unload-nested', (app) => {
         const view3d = buildView(app);
         const outerSkin = makeTexture('#ff8800');
@@ -257,7 +248,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const outerMesh = makeMesh(outerSkin, -1.6);
         const innerMesh = makeMesh(innerSkin, 1.6);
         inner.addChild(innerMesh);
-        // The nested model hangs off a plain container, so the walk crosses both kinds of child.
         const mount = new Container3D();
         mount.addChild(inner);
         outer.addChild(outerMesh, mount);

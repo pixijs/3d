@@ -4,12 +4,7 @@ import { Geometry3D } from '~/geometry/Geometry3D';
 import { GeometryAtlas } from '~/geometry/GeometryAtlas';
 import { GeometryAtlasPool } from '~/geometry/GeometryAtlasPool';
 
-// Compaction is the one path besides growth that leaves recorded draw commands stale: it slides
-// live allocations to new `baseVertex` / `firstIndex` offsets, or frees a tail range the next add
-// overwrites. Anything watching `_bufferVersion` needs to see both. A removal on its own changes
-// nothing a command reads, so it stays silent.
-
-/** A geometry of `vertexCount` vertices, indexed as a fan so the index count tracks it. */
+/** A geometry with `vertexCount` vertices and as many indices */
 function makeGeometry(vertexCount: number): Geometry3D {
   const positions = new Float32Array(vertexCount * 3);
   for (let i = 0; i < vertexCount; i++) positions[i * 3] = i;
@@ -19,6 +14,14 @@ function makeGeometry(vertexCount: number): Geometry3D {
 
   return new Geometry3D({ positions, indices });
 }
+
+/**
+ * Vertex count of each geometry in the pool tests
+ *
+ * Three overflow the atlas's default 1024-vertex capacity but two fit, so a third add after a
+ * removal fits the live set and `add` compacts rather than grows.
+ */
+const POOL_GEOMETRY_VERTICES = 400;
 
 describe('GeometryAtlas.defragment', () => {
   it('versions a compaction that slides live allocations', () => {
@@ -32,7 +35,6 @@ describe('GeometryAtlas.defragment', () => {
     expect(secondAlloc.baseVertex).toBe(64);
     const version = atlas._bufferVersion;
 
-    // Free the allocation *below* `second`, so compaction has to slide it down.
     atlas.remove(first);
     atlas.defragment();
 
@@ -41,7 +43,7 @@ describe('GeometryAtlas.defragment', () => {
     expect(atlas._bufferVersion).not.toBe(version);
   });
 
-  it('versions a compaction that only shrinks the tail', () => {
+  it('versions a compaction that only shrinks the tail, but not the removal before it', () => {
     const atlas = new GeometryAtlas({ referenceGeometry: makeGeometry(4) });
 
     const first = makeGeometry(64);
@@ -51,9 +53,6 @@ describe('GeometryAtlas.defragment', () => {
 
     const version = atlas._bufferVersion;
 
-    // Only the last allocation goes, so nothing slides and the removal itself is silent. The
-    // compaction still has to version: the tail is where the next add lands, and a command
-    // recorded for `second` before its removal would read that add's bytes.
     atlas.remove(second);
     expect(atlas._bufferVersion).toBe(version);
 
@@ -67,18 +66,16 @@ describe('GeometryAtlas.defragment', () => {
   it('surfaces a compaction through the pool version', () => {
     const pool = new GeometryAtlasPool({ rebaseIndices: false });
 
-    // Sized so the third add doesn't fit the high watermark but does fit the live set,
-    // which is the branch `add` resolves by compacting rather than growing.
-    const first = makeGeometry(400);
-    const second = makeGeometry(400);
-    const third = makeGeometry(400);
+    const first = makeGeometry(POOL_GEOMETRY_VERTICES);
+    const second = makeGeometry(POOL_GEOMETRY_VERTICES);
+    const third = makeGeometry(POOL_GEOMETRY_VERTICES);
 
     pool.allocate(first);
     const secondAlloc = pool.allocate(second);
     const version = pool.bufferVersion;
 
     first.destroy();
-    expect(pool.allocate(third).baseVertex).toBe(400);
+    expect(pool.allocate(third).baseVertex).toBe(POOL_GEOMETRY_VERTICES);
 
     expect(secondAlloc.baseVertex).toBe(0);
     expect(pool.bufferVersion).not.toBe(version);
@@ -89,21 +86,17 @@ describe('GeometryAtlas.defragment', () => {
   it('versions a tail reuse through allocate, never through the removal', () => {
     const pool = new GeometryAtlasPool({ rebaseIndices: false });
 
-    const first = makeGeometry(400);
-    const second = makeGeometry(400);
-    const third = makeGeometry(400);
+    const first = makeGeometry(POOL_GEOMETRY_VERTICES);
+    const second = makeGeometry(POOL_GEOMETRY_VERTICES);
+    const third = makeGeometry(POOL_GEOMETRY_VERTICES);
 
     pool.allocate(first);
     const secondAlloc = pool.allocate(second);
     const version = pool.bufferVersion;
 
-    // Vacating the tail moves nothing, so no View sharing the pool rebuilds for it.
     second.destroy();
     expect(pool.bufferVersion).toBe(version);
 
-    // 800 + 400 overflows the 1024-vertex watermark but the live 400 + 400 fits, so allocate
-    // compacts: the extent shrinks and `third` lands on `second`'s old range. Commands recorded
-    // for `second` before its removal would now draw `third`'s bytes, so the version has to move.
     expect(pool.allocate(third).baseVertex).toBe(secondAlloc.baseVertex);
     expect(pool.bufferVersion).not.toBe(version);
 

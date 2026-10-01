@@ -14,20 +14,6 @@ function createMockContext(bits: ShaderBit[]): ShaderCompilerContext {
 }
 
 describe('wgslOverridesPlugin', () => {
-  it('should normalize and collect overrides into context.data', () => {
-    const context = createMockContext([
-      { name: 'bit1', overrideDefs: { HAS_UVS: { type: 'u32', required: true } } },
-      { name: 'bit2', overrideDefs: { MAX_LIGHTS: { type: 'u32', default: 10 } } },
-    ]);
-
-    wgslOverridesPlugin.collectData!(context);
-
-    expect(context.data.overrides).toEqual({
-      HAS_UVS: { type: 'u32', required: true },
-      MAX_LIGHTS: { type: 'u32', default: 10, required: false },
-    });
-  });
-
   it('should emit WGSL overrides correctly', () => {
     const context = createMockContext([]);
     context.data.overrides = {

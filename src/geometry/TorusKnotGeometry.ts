@@ -4,39 +4,65 @@ import { clampSegments } from './utils/clampSegments';
 
 /**
  * Options for {@link TorusKnotGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<TorusKnotGeometryOptions> = { p: 3, q: 5, tube: 0.2 };
+ * const knot = new TorusKnotGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
 export interface TorusKnotGeometryOptions extends Geometry3DOptions {
   /**
-   * The overall scale of the knot, controlling how far the centerline is pushed from the origin
+   * The overall scale of the knot; the centerline stays between `0.5 * radius` and `1.5 * radius`
+   * from the Y axis
    * @default 1
+   * @example
+   * ```ts
+   * const big = new TorusKnotGeometry({ radius: 4, tube: 0.8 });
+   * ```
    */
   radius: number;
   /**
-   * The minor radius (tube thickness) extruded along the knot path
+   * The radius of the tube swept along the knot path
    * @default 0.4
+   * @example
+   * ```ts
+   * const wire = new TorusKnotGeometry({ tube: 0.05 });
+   * ```
    */
   tube: number;
   /**
    * The number of segments along the knot's centerline
    *
-   * Clamped to a minimum of 3.
+   * Floored, and clamped to a minimum of 3. Tightly wound knots need more to stay smooth.
    * @default 64
+   * @example
+   * ```ts
+   * const smooth = new TorusKnotGeometry({ p: 3, q: 7, tubularSegments: 256 });
+   * ```
    */
   tubularSegments: number;
   /**
    * The number of segments around the tube cross-section
    *
-   * Clamped to a minimum of 3.
+   * Floored, and clamped to a minimum of 3.
    * @default 8
+   * @example
+   * ```ts
+   * const roundTube = new TorusKnotGeometry({ radialSegments: 16 });
+   * ```
    */
   radialSegments: number;
   /**
    * The number of times the knot winds around its axis of rotational symmetry
    *
-   * Should be coprime with `q` for a true `(p, q)` torus knot.
+   * Share no factor with `q` for a true `(p, q)` torus knot.
    * @default 2
+   * @example
+   * ```ts
+   * const cinquefoil = new TorusKnotGeometry({ p: 2, q: 5 });
+   * ```
    */
   p: number;
   /**
@@ -44,6 +70,10 @@ export interface TorusKnotGeometryOptions extends Geometry3DOptions {
    *
    * Together with `p` chooses the knot type; `(2, 3)` is a trefoil, `(3, 7)` is more wound.
    * @default 3
+   * @example
+   * ```ts
+   * const trefoil = new TorusKnotGeometry({ p: 2, q: 3 });
+   * ```
    */
   q: number;
 }
@@ -53,14 +83,9 @@ export interface TorusKnotGeometryOptions extends Geometry3DOptions {
  *
  * The centerline winds `p` times around the +Y axis (the torus's axis of symmetry) and `q` times
  * through its hole; for example `(2, 3)` is a trefoil and `(3, 7)` produces a more tightly wound
- * knot. `p` and `q` should be coprime to make a single closed loop instead of a multi-component
- * link.
+ * knot. When `p` and `q` share a factor, the tube runs over the same loop more than once.
  *
- * The frame is built per-segment from the path's analytic tangent and a Frenet-like
- * binormal/normal pair so the tube cross-section twists smoothly along the curve. This frame can
- * flip orientation at points where the tangent passes through certain alignments, which may
- * produce a visible cross-section seam for unusual `(p, q)` combinations; the common knots
- * (`(2, 3)`, `(3, 5)`, `(3, 7)`, `(5, 2)`) are not affected.
+ * For whole-number `p` and `q` the tube's two ends meet exactly.
  * @example
  * ```ts
  * const trefoil = new TorusKnotGeometry({
@@ -79,7 +104,13 @@ export interface TorusKnotGeometryOptions extends Geometry3DOptions {
  * @standard
  */
 export class TorusKnotGeometry extends Geometry3D {
-  /** Default options for {@link TorusKnotGeometry} */
+  /**
+   * Default options for {@link TorusKnotGeometry}
+   * @example
+   * ```ts
+   * TorusKnotGeometry.defaultOptions.tubularSegments = 128;
+   * ```
+   */
   public static defaultOptions: TorusKnotGeometryOptions = {
     ...Geometry3D.defaultOptions,
     radius: 1,
@@ -133,13 +164,10 @@ export class TorusKnotGeometry extends Geometry3D {
       const cosKu = Math.cos(k * u);
       const sinKu = Math.sin(k * u);
       const radial = (2 + cosKu) * 0.5;
-      // Curve sits in the XZ plane (+Y is the torus's axis of symmetry, matching the rest of the
-      // primitive set). The y bobble comes from sin(ku); the in-plane sweep comes from u.
       const cx = radius * radial * cosU;
       const cy = radius * sinKu * 0.5;
       const cz = radius * radial * sinU;
 
-      // Analytic tangent dC/du; component-by-component derivative of the curve above.
       const tx = radius * 0.5 * (-k * sinKu * cosU - (2 + cosKu) * sinU);
       const ty = radius * 0.5 * k * cosKu;
       const tz = radius * 0.5 * (-k * sinKu * sinU + (2 + cosKu) * cosU);

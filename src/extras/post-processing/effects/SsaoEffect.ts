@@ -5,14 +5,22 @@ import { FullscreenPass } from '../../../post-processing/effects/FullscreenPass'
 import { PostEffect } from '../../../post-processing/effects/PostEffect';
 import type { EffectFragment, EffectIO, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
 
-// -- Pass 1: AO compute -----------------------------------------------------
-// Reconstructs view position + a robust face normal from depth (4 neighbour
-// taps, tangents from the side that doesn't cross a depth edge), samples a
-// normal-oriented hemisphere with per-pixel interleaved-gradient-noise
-// rotation, and writes raw AO. Depth access, reconstruction, and texel maths
-// all come from the std effect header (sampleDepth/viewPos/linearDepth/texel).
-// uParams = (radius, bias, intensity, power); uRange = (maxDistance, sampleCount, _, _).
-
+/**
+ * First pass: raw ambient occlusion from the scene depth
+ *
+ * Rebuilds the view-space position and a face normal from depth. Of the four neighbour taps it
+ * takes each tangent from the side whose depth is nearer the centre's, so the normal holds at a
+ * depth edge. Samples lie on a golden-angle spiral (2.3999632 radians apart) over a hemisphere
+ * around the normal, and interleaved gradient noise rotates the spiral per pixel, so the blur
+ * pass has high-frequency noise to dissolve rather than fixed banding.
+ *
+ * An occluder counts in full when its depth is close to the shaded point's and fades out by
+ * `maxDistance`. That cutoff is separate from `radius`, so a wide radius gives smooth occlusion
+ * without halos from distant occluders around silhouettes.
+ *
+ * Reads `uParams` = (radius, bias, intensity, power) and `uRange` = (maxDistance, samples, unused,
+ * unused).
+ */
 const COMPUTE_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -30,8 +38,6 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
   var N = normalize(cross(ddx, ddy));
   if (dot(N, -P) < 0.0) { N = -N; }
 
-  // Per-pixel kernel rotation (interleaved gradient noise) so the blur has
-  // high-frequency noise to dissolve rather than fixed banding.
   let fc = uv / t;
   let ign = fract(52.9829189 * fract(dot(fc, vec2<f32>(0.06711056, 0.00583715))));
   let rc = cos(ign * 6.2831853);
@@ -57,8 +63,6 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
 
     let sUv = vec2<f32>(samplePos.x * fxh.uFxClip.z, samplePos.y * fxh.uFxClip.w) / (-samplePos.z) * 0.5 + 0.5;
     let sceneZ = -linearDepth(sampleDepth(sUv));
-    // Range cutoff decoupled from radius: wide sample radius (smooth AO)
-    // without silhouette halos from distant occluders.
     let rangeCheck = 1.0 - smoothstep(0.0, fx.uRange.x, abs(P.z - sceneZ));
     occ += select(0.0, rangeCheck, sceneZ >= samplePos.z + bias);
   }
@@ -120,10 +124,11 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-// -- Pass 2: box blur ---------------------------------------------------------
-// 5×5 box over the raw AO — dissolves the per-sample noise into the smooth
-// "proper AO" look. uBlur = (step in texels, _, _, _).
-
+/**
+ * Second pass: a 5×5 box blur over the raw occlusion, which dissolves the per-pixel noise
+ *
+ * Reads `uBlur` = (step in texels, unused, unused, unused).
+ */
 const BLUR_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -153,10 +158,12 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-// -- Pass 3: merge -----------------------------------------------------------
-// Multiply the blurred AO onto the chain image. RGB-only so occlusion darkens
-// light, not coverage — correct on alpha-composited inset edges.
-
+/**
+ * Last pass: multiplies the blurred occlusion onto the chain image
+ *
+ * Only RGB is multiplied, so occlusion darkens light but not coverage, and the edges of a view
+ * composited over 2D content keep their alpha.
+ */
 const MERGE_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -174,62 +181,104 @@ vec4 effect(vec2 uv) {
 
 /**
  * Constructor options for {@link SsaoEffect}
+ * @example
+ * ```ts
+ * const options: SsaoEffectOptions = { radius: 0.5, intensity: 1.2, resolution: 1 };
+ * view3d.passes = [new SsaoEffect(options)];
+ * ```
  * @category extras:post-processing
  * @standard
  */
 export interface SsaoEffectOptions extends PostEffectOptions {
   /**
-   * Hemisphere sampling radius in world units — how wide the AO reaches
+   * How far around each point the effect looks for occluders, in world units
    * @default 0.35
+   * @example
+   * ```ts
+   * new SsaoEffect({ radius: 1 });
+   * ```
    */
   radius?: number;
   /**
-   * Maximum depth distance an occluder may be to count — the halo cutoff
+   * Depth gap in world units at which an occluder stops counting
    *
-   * Decoupled from `radius`.
+   * An occluder's contribution fades from full at no gap to nothing at this one, which stops dark
+   * halos where a near object overlaps a distant one. Set apart from `radius` so a wide radius
+   * doesn't widen the halos too.
    * @default radius * 0.65
+   * @example
+   * ```ts
+   * new SsaoEffect({ radius: 1, maxDistance: 0.3 });
+   * ```
    */
   maxDistance?: number;
   /**
    * Strength of the darkening
    * @default 0.9
+   * @example
+   * ```ts
+   * new SsaoEffect({ intensity: 1.5 });
+   * ```
    */
   intensity?: number;
   /**
-   * Self-occlusion bias in world units
+   * Depth offset in world units that stops a surface occluding itself
+   *
+   * Raise it if flat surfaces show speckled shading; lower it if contact shadows vanish.
    * @default 0.025
+   * @example
+   * ```ts
+   * new SsaoEffect({ bias: 0.05 });
+   * ```
    */
   bias?: number;
   /**
-   * Contrast curve on the AO term
+   * Exponent on the occlusion term; higher values darken the occluded areas further
    * @default 1.5
+   * @example
+   * ```ts
+   * new SsaoEffect({ power: 2 });
+   * ```
    */
   power?: number;
   /**
-   * Hemisphere samples per pixel
+   * Samples per pixel; the cost of the occlusion pass grows with it
    * @default 16
+   * @example
+   * ```ts
+   * new SsaoEffect({ samples: 8 });
+   * ```
    */
   samples?: number;
   /**
-   * Blur kernel step in texels
+   * Spacing between blur taps, in texels of the occlusion buffer
    * @default 1.5
+   * @example
+   * ```ts
+   * new SsaoEffect({ blurStep: 2 });
+   * ```
    */
   blurStep?: number;
   /**
-   * AO buffer resolution in device pixels per logical pixel — pixi's meaning, as on filters
+   * Texels per logical pixel for the occlusion buffers, as `resolution` means on a pixi filter
    *
-   * `'inherit'` matches the view; `1` is one texel per logical pixel, the usual choice on
-   * high-DPI screens where full-resolution AO is the cost that hurts.
+   * `'inherit'` matches the view. On a high-DPI screen `1` is the usual choice: one texel per
+   * logical pixel, a quarter of the work at a device pixel ratio of 2. Fixed at construction.
    * @default 'inherit'
+   * @example
+   * ```ts
+   * new SsaoEffect({ resolution: 1 });
+   * ```
    */
   resolution?: number | 'inherit';
 }
 
 /**
- * Screen-space ambient occlusion
+ * Screen-space ambient occlusion: darkens creases, corners and contact points
  *
- * Three passes: hemisphere AO from the scene depth (grabbed straight off the graph), a box
- * blur, and a multiply merge onto the chain image. Every property is a live uniform write.
+ * Three passes: occlusion from the scene depth, a blur, and a multiply onto the frame. The first
+ * two draw at `resolution`. Every property is a plain uniform write, so it can change every frame;
+ * `resolution` is fixed at construction.
  * @example
  * ```ts
  * view.passes = [new SsaoEffect({ radius: 0.35, resolution: 1 })];
@@ -288,9 +337,15 @@ export class SsaoEffect extends PostEffect {
   }
 
   /**
-   * Add the AO, blur and merge passes for this slot in the chain
+   * Add the occlusion, blur and merge passes for this slot in the chain
    * @param graph - Render graph being built.
    * @param io - Input/output handles for this slot in the chain.
+   * @example
+   * ```ts
+   * const occluded = graph.createColor({ label: 'occluded' });
+   * ssao.build(graph, { ...io, output: occluded });
+   * ```
+   * @advanced
    */
   public override build(graph: RenderGraph, io: EffectIO): void {
     const ao = graph.createColor({ resolution: this._resolution, format: 'rgba8unorm', label: 'ssaoAO' });
@@ -328,21 +383,31 @@ export class SsaoEffect extends PostEffect {
     );
   }
 
-  // --- Live params: plain lane writes, visible next frame ---
-
-  /** Hemisphere sampling radius in world units */
+  /**
+   * How far around each point the effect looks for occluders, in world units
+   * @example
+   * ```ts
+   * ssao.radius = 0.6;
+   * ```
+   */
   public get radius(): number {
     return (this._computeUniforms.uniforms.uParams as Float32Array)[0];
   }
   /**
-   * Sets the hemisphere sampling radius
+   * Sets how far around each point the effect looks for occluders
    * @param value - Radius in world units.
    */
   public set radius(value: number) {
     this.writeLane(this._computeUniforms, 'uParams', 0, value);
   }
 
-  /** Self-occlusion bias in world units */
+  /**
+   * Depth offset in world units that stops a surface occluding itself
+   * @example
+   * ```ts
+   * ssao.bias = 0.05;
+   * ```
+   */
   public get bias(): number {
     return (this._computeUniforms.uniforms.uParams as Float32Array)[1];
   }
@@ -354,55 +419,87 @@ export class SsaoEffect extends PostEffect {
     this.writeLane(this._computeUniforms, 'uParams', 1, value);
   }
 
-  /** Strength of the darkening */
+  /**
+   * Strength of the darkening
+   *
+   * `0` hides the darkening, but every pass still runs; set `enabled` to `false` to skip them.
+   * @example
+   * ```ts
+   * ssao.intensity = 0.5;
+   * ```
+   */
   public get intensity(): number {
     return (this._computeUniforms.uniforms.uParams as Float32Array)[2];
   }
   /**
    * Sets the darkening strength
-   * @param value - Multiplier on the occlusion; 0 turns the darkening off.
+   * @param value - Multiplier on the occlusion.
    */
   public set intensity(value: number) {
     this.writeLane(this._computeUniforms, 'uParams', 2, value);
   }
 
-  /** Contrast curve on the AO term */
+  /**
+   * Exponent on the occlusion term; higher values darken the occluded areas further
+   * @example
+   * ```ts
+   * ssao.power = 2;
+   * ```
+   */
   public get power(): number {
     return (this._computeUniforms.uniforms.uParams as Float32Array)[3];
   }
   /**
-   * Sets the contrast curve on the AO term
-   * @param value - Exponent applied to the AO term; higher values darken the occluded areas further.
+   * Sets the exponent on the occlusion term
+   * @param value - Exponent applied to the occlusion term.
    */
   public set power(value: number) {
     this.writeLane(this._computeUniforms, 'uParams', 3, value);
   }
 
-  /** Maximum occluder depth distance — the halo cutoff */
+  /**
+   * Depth gap in world units at which an occluder stops counting; {@link SsaoEffectOptions#maxDistance} has the details
+   * @example
+   * ```ts
+   * ssao.maxDistance = ssao.radius * 0.5;
+   * ```
+   */
   public get maxDistance(): number {
     return (this._computeUniforms.uniforms.uRange as Float32Array)[0];
   }
   /**
-   * Sets the maximum occluder depth distance
+   * Sets the depth gap at which an occluder stops counting
    * @param value - Depth gap in world units at which an occluder's contribution fades to zero.
    */
   public set maxDistance(value: number) {
     this.writeLane(this._computeUniforms, 'uRange', 0, value);
   }
 
-  /** Hemisphere samples per pixel */
+  /**
+   * Samples per pixel; the cost of the occlusion pass grows with it
+   * @example
+   * ```ts
+   * ssao.samples = isMobile ? 8 : 16;
+   * ```
+   */
   public get samples(): number {
     return (this._computeUniforms.uniforms.uRange as Float32Array)[1];
   }
   /**
-   * Sets the hemisphere sample count per pixel
-   * @param value - Samples per pixel; the cost of the AO pass grows with it.
+   * Sets the samples per pixel
+   * @param value - Samples per pixel.
    */
   public set samples(value: number) {
     this.writeLane(this._computeUniforms, 'uRange', 1, value);
   }
 
-  /** Blur kernel step in texels */
+  /**
+   * Spacing between blur taps, in texels of the occlusion buffer
+   * @example
+   * ```ts
+   * ssao.blurStep = 2;
+   * ```
+   */
   public get blurStep(): number {
     return (this._blurUniforms.uniforms.uBlur as Float32Array)[0];
   }

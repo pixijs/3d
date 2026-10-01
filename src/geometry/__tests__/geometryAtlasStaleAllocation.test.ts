@@ -23,15 +23,11 @@ describe('GeometryAtlas.add stale-allocation guard', () => {
     const firstAllocation = first.add(shared);
     expect(firstAllocation.atlas).toBe(first);
 
-    // A renderer going away takes its atlas with it, but process-wide shared
-    // geometry (the Sprite3D quad) outlives it still holding the allocation.
     first.destroy();
 
     const second = makeAtlas(reference);
     const secondAllocation = second.add(shared);
 
-    // Reusing the stale allocation would draw the geometry from the freed atlas's
-    // buffers.
     expect(secondAllocation).not.toBe(firstAllocation);
     expect(secondAllocation.atlas).toBe(second);
     expect(shared._geometryAtlasAllocation).toBe(secondAllocation);
@@ -59,27 +55,17 @@ describe('GeometryAtlas.add stale-allocation guard', () => {
 });
 
 describe('GeometryAtlasPool.from', () => {
-  it('hands every caller the same pool for one packing convention', () => {
-    expect(GeometryAtlasPool.from({ rebaseIndices: false })).toBe(GeometryAtlasPool.from({ rebaseIndices: false }));
-    expect(GeometryAtlasPool.from({ rebaseIndices: true })).toBe(GeometryAtlasPool.from({ rebaseIndices: true }));
-  });
-
-  it('keeps the two conventions apart', () => {
-    // WebGL bakes baseVertex into index values, WebGPU leaves them
-    // geometry-local, so the packed bytes differ and the pools cannot be one.
+  it('keeps rebased and geometry-local index packing in separate pools', () => {
     const rebased = GeometryAtlasPool.from({ rebaseIndices: true });
     const geometryLocal = GeometryAtlasPool.from({ rebaseIndices: false });
 
     expect(rebased).not.toBe(geometryLocal);
   });
 
-  it('reuses one allocation across pools of the same convention', () => {
+  it('hands every caller of one convention the same pool, so a geometry keeps one allocation', () => {
     const pool = GeometryAtlasPool.from({ rebaseIndices: false });
     const geometry = makeTriangle();
 
-    // Two renderers on one backend reach the same pool, so the geometry's single
-    // `_geometryAtlasAllocation` stays valid instead of being re-cut and orphaning
-    // its old slot.
     const first = pool.allocate(geometry);
     const second = GeometryAtlasPool.from({ rebaseIndices: false }).allocate(geometry);
 
@@ -90,8 +76,6 @@ describe('GeometryAtlasPool.from', () => {
   });
 
   it("registers for pixi's opt-in global teardown", () => {
-    // `renderer.destroy(true)` / `{ releaseGlobalResources: true }` calls clear()
-    // on everything registered. Ordinary teardown leaves the pool packed.
     expect(GlobalResourceRegistry.isRegistered(GeometryAtlasPool.from({ rebaseIndices: false }))).toBe(true);
     expect(GlobalResourceRegistry.isRegistered(GeometryAtlasPool.from({ rebaseIndices: true }))).toBe(true);
   });

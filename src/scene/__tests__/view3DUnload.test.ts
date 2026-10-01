@@ -1,6 +1,6 @@
-import { getApp } from '@test-utils';
+import { expectCleanRender, getApp } from '@test-utils';
 import { CanvasSource, Texture } from 'pixi.js';
-import type { Application, BindGroup, Renderer, WebGPURenderer } from 'pixi.js';
+import type { Application, BindGroup, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { MAX_BATCH_TEXTURES } from '~/core/batcher/batchConstants';
@@ -38,21 +38,29 @@ function gpuCopyCount(...resources: (GpuResident | null | undefined)[]): number 
 }
 
 /**
- * Everything a view's mesh stores and bone pit keep on the GPU. Both hold a buffer (bound
- * directly on WebGPU) and a lazily-created data texture (how WebGL reads them), so a
- * backend-agnostic assertion has to count them together.
+ * Everything a view's mesh stores and bone pit keep on the GPU. Each has a storage buffer
+ * (what WebGPU binds) and a data texture (how WebGL reads it), both created on first read, so
+ * a backend-agnostic assertion has to count whichever exist.
  */
 function storeResidency(view3d: View3D, batches: Mesh3DBatch[]): number {
   const stores = [view3d._bonePit, ...batches.map((batch) => batch.storeBuffer)];
+
   return gpuCopyCount(
-    ...stores.map((store) => store.buffer as unknown as GpuResident),
-    ...stores.map((store) => (store as unknown as { _textureSource?: GpuResident })._textureSource),
+    ...stores.flatMap((store) => {
+      const { _buffer, _textureSource } = store as unknown as {
+        _buffer?: GpuResident | null;
+        _textureSource?: GpuResident | null;
+      };
+
+      return [_buffer, _textureSource];
+    }),
   );
 }
 
 /**
  * The GPU copies one cull result holds: its survivor records and its indirect draw args. Both are
- * `Buffer3D`s, exempt from pixi's GC, so nothing but an explicit unload ever frees them.
+ * `Buffer3D`s, exempt from pixi's GC, so nothing but an explicit unload ever frees them. Only WebGPU
+ * culls into a result; on WebGL there is none, which counts as 0.
  */
 function resultResidency(result: CullResult | undefined): number {
   if (!result) return 0;
@@ -136,8 +144,9 @@ interface ShadowPassProbe {
 }
 
 /**
- * Push the mesh store past its 100-slot capacity and the bone pit past its 256-bone one, so
- * both have a buffer retired by growth for the unload to free.
+ * Pushes the mesh store past its 100-slot capacity and the bone pit past its 256-bone one, so
+ * growth retires something for the unload to free. Each backend only made the view it binds:
+ * WebGPU retires buffers, and WebGL the store's texture.
  */
 function growStores(view3d: View3D): void {
   const geometry = new CubeGeometry({ width: 0.2, height: 0.2, depth: 0.2 });
@@ -148,7 +157,6 @@ function growStores(view3d: View3D): void {
     view3d.root.addChild(mesh);
   }
 
-  // Past the pit's 256-matrix starting capacity in one mesh.
   view3d.root.addChild(skinnedMesh(300));
 }
 
@@ -232,19 +240,6 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-/** Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL). */
-async function renderCatchingValidationErrors(app: Application<Renderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? (app.renderer as WebGPURenderer).gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  device.pushErrorScope('validation');
-  app.render();
-  return device.popErrorScope();
-}
-
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`view unload (${preference})`, () => {
     async function withApp(id: string, run: (app: Application<Renderer>) => Promise<void> | void): Promise<void> {
@@ -260,9 +255,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
     }
 
     /**
-     * pixi's hash ran the payload: the bind group's slots are gone, then the uniform buffer it
-     * bound. Only WebGPU realises that buffer (the WebGL group syncs through `uniform*` calls and
-     * never owns one), so on WebGL there is no buffer to free.
+     * Asserts that pixi's GC hash destroyed this renderer's global data: the bind group's slots are
+     * gone, then the uniform buffer it bound. Only WebGPU realises that buffer (the WebGL group
+     * syncs through `uniform*` calls and never owns one), so on WebGL there is no buffer to free.
      */
     function expectDestroyed(data: View3DGlobalData): void {
       expect(data.globalBindGroup.resources).toBeNull();
@@ -287,8 +282,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       await withApp('view-unload-revive', async (app) => {
         const { view3d, sun } = buildScene(app);
 
-        // Frame 1 of a shadow membership rebuild is documented-wrong, so settle the
-        // shadows before the baseline is taken.
         sun.refreshShadows();
         app.render();
         const before = pixels(app, view3d);
@@ -296,13 +289,12 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         view3d.unload();
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
       });
     });
 
-    it('drops the captures its builds took and lets go of their textures', async () => {
+    it('drops the captures its builds took and empties the bind groups that held their textures', async () => {
       await withApp('view-unload-captures', (app) => {
         const { view3d, texture, dynamicGeometry, batched } = buildScene(app);
         app.render();
@@ -318,8 +310,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         view3d.unload();
 
-        // Nothing of the builds remains: no capture listens, and no pooled bind group still
-        // holds a source that pixi could later be told was destroyed while bound.
         for (const list of [opaque, shadow, batchedOpaque]) {
           expect(captures(list).size).toBe(0);
           expect(boundSources(list).size).toBe(0);
@@ -330,7 +320,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('drops the recorded draw programs, the shadow map, and the global bind groups', async () => {
+    it('drops the draw programs, shadow map, global data and cull result buffers', async () => {
       await withApp('view-unload-structural', (app) => {
         const { view3d } = buildScene(app);
         const uid = app.renderer.uid;
@@ -340,9 +330,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(pass._renderTarget).not.toBeNull();
         expect(opaque.commandList.count).toBeGreaterThan(0);
         const data = globalData(view3d, uid);
-        // WebGPU culls the batch into a cull result that owns the bundle and the two buffers it was
-        // recorded against; WebGL mints no result at all. Both buffers are resident here, so the
-        // zero after the unload means something.
         const forward = view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass;
         const result = forward.cullResults.get(view3d._sceneBatch);
         expect(result !== undefined).toBe(preference === 'webgpu');
@@ -352,45 +339,44 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         expect(pass._renderTarget).toBeNull();
         expect(opaque.commandList.count).toBe(0);
-        // A cleared list with an unchanged renderable count would otherwise replay as-is.
         expect(opaque.isDrawStale(opaque.view.count)).toBe(true);
         expect(result?.bundle ?? null).toBeNull();
         expect(result?.isBundleStale(opaque, getCameraData(view3d.camera).bindGroup) ?? true).toBe(true);
         expect(resultResidency(result)).toBe(0);
-        // The `unload` event ran this renderer's global data and cleared its slot.
         expectDestroyed(data);
         expect(view3d._gpuData[uid] ?? null).toBe(null);
 
-        // The next render mints a new payload over live resources rather than reviving this one.
         app.render();
         const reminted = globalData(view3d, uid);
-        expect(reminted).not.toBe(data);
+        expect(reminted, 'the next render mints new global data instead of reviving the old').not.toBe(data);
         expect(reminted.globalBindGroup.resources).not.toBeNull();
         expect(reminted.globalUniformGroup.buffer?.destroyed ?? false).toBe(false);
 
-        // The unload freed the result's GPU memory without ending the result: the pass kept it and
-        // this frame re-synced and re-filled the same two buffers.
         const revived = forward.cullResults.get(view3d._sceneBatch);
-        expect(revived).toBe(result);
+        expect(revived, 'the pass keeps its cull result and refills the same buffers').toBe(result);
         expect(resultResidency(revived)).toBe(result ? 2 : 0);
       });
     });
 
-    it('frees the buffers growth retired', async () => {
+    it('frees the buffers and textures growth retired', async () => {
       await withApp('view-unload-retired', (app) => {
         const { view3d } = buildScene(app);
 
         const bonePit = view3d._bonePit as unknown as { _retiredBuffers: unknown[] };
-        const store = view3d._sceneBatch.storeBuffer as unknown as { _retiredBuffers: unknown[] };
-        // Force one growth on each so there is something retired to free.
+        const store = view3d._sceneBatch.storeBuffer as unknown as {
+          _retiredBuffers: unknown[];
+          _retiredTextures: unknown[];
+        };
         growStores(view3d);
         app.render();
-        expect(bonePit._retiredBuffers.length + store._retiredBuffers.length).toBeGreaterThan(0);
+        const retired = bonePit._retiredBuffers.length + store._retiredBuffers.length + store._retiredTextures.length;
+        expect(retired).toBeGreaterThan(0);
 
         view3d.unload();
 
         expect(bonePit._retiredBuffers.length).toBe(0);
         expect(store._retiredBuffers.length).toBe(0);
+        expect(store._retiredTextures.length).toBe(0);
       });
     });
 
@@ -405,8 +391,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.unload();
         expect(() => view3d.unload()).not.toThrow();
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
       });
     });
@@ -415,9 +400,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       await withApp('view-unload-manual-shadow', (app) => {
         const { view3d, sun } = buildScene(app);
 
-        // Manual mode is where the refresh request earns its keep: nothing in the scene
-        // changes, so the cadence alone would let this light skip the frame that has to
-        // redraw its layers into the map the unload threw away.
         sun.shadow.update = 'manual';
         sun.refreshShadows();
         app.render();
@@ -427,7 +409,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.unload();
         app.render();
 
-        expect(differingPixels(before, pixels(app, view3d))).toBe(0);
+        expect(
+          differingPixels(before, pixels(app, view3d)),
+          'the unload requests the shadow refresh a manual cadence would skip',
+        ).toBe(0);
       });
     });
 
@@ -443,18 +428,15 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.render();
 
         textured.position.y += 1.5;
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
         expect(differingPixels(before, pixels(app, view3d))).toBeGreaterThan(0);
       });
     });
 
-    it('emits one `unload` event and is re-enrolled by the next render', async () => {
+    it('emits one `unload` event, which frees the global data and its GC listener', async () => {
       await withApp('view-unload-event', (app) => {
         const { view3d } = buildScene(app);
         const uid = app.renderer.uid;
-        // Enrolled in the renderer's GC: this renderer's global data in the payload slot and
-        // pixi's one `unload` listener.
         const data = globalData(view3d, uid);
         expect(view3d.listenerCount('unload')).toBe(1);
 
@@ -464,9 +446,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.unload();
         view3d.off('unload', countUnloads);
 
-        // One event: pixi's hash answers it by running this renderer's payload, which frees the
-        // global data without re-entering the View's teardown, and clears the slot along with
-        // its once-listener.
         expect(unloadEvents).toBe(1);
         expectDestroyed(data);
         expect(view3d._gpuData[uid] ?? null).toBe(null);
@@ -474,7 +453,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         app.render();
         expect(globalData(view3d, uid)).not.toBe(data);
-        expect(view3d.listenerCount('unload')).toBe(1);
+        expect(view3d.listenerCount('unload'), 'the next render re-enrols the view').toBe(1);
       });
     });
 

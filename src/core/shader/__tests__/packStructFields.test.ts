@@ -5,7 +5,7 @@ import { createStructLayout } from '~/core/shader/codegen/structLayout';
 import type { StructDefinition } from '~/core/shader/ShaderBit';
 
 describe('packStructFields', () => {
-  it('should order by alignment tier — mat4 → vec4 → vec3 → vec2 → scalars — pulling a scalar into the vec3 tail', () => {
+  it('should order by alignment tier, mat4 → vec4 → vec3 → vec2 → scalars, pull the first scalar into the vec3 tail and keep every type', () => {
     const def = {
       a: 'f32',
       b: 'vec2<f32>',
@@ -17,9 +17,7 @@ describe('packStructFields', () => {
 
     const packed = packStructFields(def);
 
-    // `a` (first declared scalar) fills `c`'s tail hole; `f` trails after vec2s.
     expect(Object.keys(packed)).toEqual(['e', 'd', 'c', 'a', 'b', 'f']);
-    // Types ride along untouched.
     expect(packed).toEqual(def);
   });
 
@@ -65,11 +63,7 @@ describe('packStructFields', () => {
     expect(Object.keys(packed)).toEqual(['color', 'a', 'pad']);
   });
 
-  it('should pack the #83 water material fields hole-free regardless of declaration order', () => {
-    // The walrus-cave water bit's fields in natural reading order — the
-    // declaration order that originally inflated the merged Material struct
-    // past the material stride (#83): each vec3 aligns to 16 bytes, leaving
-    // holes the trailing scalars no longer fill.
+  it('should pair each vec3 of a water material with a scalar: 44 bytes of data, 52 in declaration order, 44 packed', () => {
     const naive = {
       time: 'f32',
       waveStrength: 'f32',
@@ -82,8 +76,6 @@ describe('packStructFields', () => {
 
     const packed = packStructFields(naive);
 
-    // Each vec3 takes a scalar into its tail — the same vec3/f32 pairing the
-    // water bit hand-packs today — then the remaining scalars trail.
     expect(Object.keys(packed)).toEqual([
       'shallowColor',
       'time',
@@ -94,14 +86,11 @@ describe('packStructFields', () => {
       'foamDistance',
     ]);
 
-    // 2 × vec3 + 5 × f32 = 44 bytes of data: naive order pads to 52 bytes,
-    // packed order is hole-free → exactly 44.
     expect(createStructLayout(naive).size).toBe(52);
     expect(createStructLayout(packed).size).toBe(44);
   });
 
-  it('should collapse alignment holes from scalars declared before vec4s', () => {
-    // Worst-case interleaving: every f32 before a vec4 wastes 12 bytes.
+  it('should collapse the 12-byte hole each scalar declared before a vec4 leaves', () => {
     const naive = {
       a: 'f32',
       col1: 'vec4<f32>',
@@ -127,7 +116,6 @@ describe('packStructFields', () => {
 
     const packed = packStructFields(def);
 
-    // One scalar → fills the first vec3's tail; v2 still pads to 16 for v3.
     expect(Object.keys(packed)).toEqual(['v1', 's', 'v2', 'v3']);
     expect(createStructLayout(packed).size).toBe(44);
   });

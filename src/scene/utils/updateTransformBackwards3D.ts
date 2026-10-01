@@ -4,11 +4,11 @@ import type { Container3D } from '../Container3D';
 /** Scratch Matrix4 used as the ping-pong destination during ancestor walks */
 const _scratch = new Matrix4();
 /**
- * Reused per-call ancestor stack — module-scoped so the function allocates nothing
+ * Reused per-call ancestor stack, module-scoped so the function allocates nothing
  *
- * Grows naturally as a V8 packed array; never shrinks. Stale slots past the
- * current depth are nulled on each call (see cleanup at the bottom of the
- * fill loop) so they don't pin previously-collected subtrees against GC.
+ * Grows as a V8 packed array and never shrinks. Each call nulls the slots past its own
+ * depth, up to the first empty one, so they don't keep removed subtrees from being
+ * collected; a repeat at the same depth finds the next slot empty and does no work.
  */
 const _ancestors: (Container3D | null)[] = [];
 
@@ -19,20 +19,22 @@ const _ancestors: (Container3D | null)[] = [];
  * `target`'s current world transform. Walks up the parent chain refreshing
  * each ancestor's `localTransform` only if `_localTransformDirty` is set.
  *
- * Mirrors Pixi's `updateTransformBackwards` for 2D containers — used for
- * on-demand world transforms that don't go through the cascade (e.g. lookAt).
- * Does NOT mutate any container's stored `worldTransform`.
+ * Mirrors pixi's `updateTransformBackwards` for 2D containers, for world
+ * transforms needed outside the transform pass, such as `lookAt`. It doesn't
+ * write any container's stored `worldTransform`.
  *
- * NOT re-entrant: must not be called from inside itself (uses module-scoped
- * scratch state).
+ * It starts from the topmost ancestor, whose local transform is its world
+ * transform, and multiplies down. Each level writes into whichever of `out` and
+ * `_scratch` didn't hold the last result, which saves a copy per level; the
+ * result is copied into `out` only when it ends up in `_scratch`.
+ *
+ * Not re-entrant: it uses module-scoped scratch state.
  * @param target - container whose parent-chain world transform is wanted
  * @param out - matrix the result is written into
  * @returns `out`, holding the parent's world transform (identity for roots).
  * @internal
  */
 export function updateTransformBackwards3D(target: Container3D, out: Matrix4): Matrix4 {
-  // Walk up collecting ancestors. Iterative so V8 can inline freely and
-  // we avoid one stack frame per level.
   let depth = 0;
   let cur = target.parent;
   while (cur) {
@@ -40,20 +42,12 @@ export function updateTransformBackwards3D(target: Container3D, out: Matrix4): M
     cur = cur.parent;
   }
 
-  // Clear any stale tail entries from a previous deeper call so they don't
-  // pin removed subtrees against GC. We stop at the first null/undefined
-  // slot — that's either the previously-cleared boundary or the unallocated
-  // tail. On equal/shallower repeats, this loop does no work.
   for (let i = depth; _ancestors[i]; i++) {
     _ancestors[i] = null;
   }
 
-  if (depth === 0) return out.identity(); // No parent: parent world transform is identity.
+  if (depth === 0) return out.identity();
 
-  // Seed `out` with the root ancestor's local transform. Root has no parent,
-  // so its local IS its world — naturally fast-paths the depth-1 case
-  // (loop below skips, no matrix multiplies, just one copy).
-  // Refreshes the local matrix only if dirty (consistent with the cascade).
   const root = _ancestors[depth - 1]!;
   if (root._localTransformDirty) {
     root.updateLocalTransform();
@@ -61,9 +55,6 @@ export function updateTransformBackwards3D(target: Container3D, out: Matrix4): M
   }
   out.copyFrom(root.localTransform);
 
-  // Walk down ping-ponging between `out` and `_scratch` so we avoid the
-  // per-level `.copy()` that a `multiplyMatrices` + `copy` pair would need.
-  // `multiplyAffine` skips bottom-row math (16 mul + 12 add saved per level).
   let src = out;
   let dst = _scratch;
   for (let i = depth - 2; i >= 0; i--) {
@@ -85,8 +76,6 @@ export function updateTransformBackwards3D(target: Container3D, out: Matrix4): M
     dst = tmp;
   }
 
-  // If we ended up with the result in `_scratch`, copy it back into `out`.
-  // Only fires when (depth - 1) iterations performed an odd number of swaps.
   if (src !== out) out.copyFrom(src);
 
   return out;

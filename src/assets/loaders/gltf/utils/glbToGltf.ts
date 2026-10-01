@@ -2,12 +2,17 @@ import type { GltfFormat } from '../GltfFormat';
 
 const GLB_CHUNK_TYPE_JSON = 0x4e4f534a;
 const GLB_CHUNK_TYPE_BIN = 0x004e4942;
-const GLB_MAGIC = 0x46546c67; // 'glTF' in ASCII
+/** `glTF` in ASCII, read as a little-endian uint32 */
+const GLB_MAGIC = 0x46546c67;
+/** The GLB header: magic, version and total length, a uint32 each */
+const GLB_HEADER_BYTES = 12;
 
 /**
- * Parses a binary GLB buffer into JSON and binary buffers
- * @param arrayBuffer - The raw GLB buffer
- * @returns An object containing the parsed glTF JSON and the binary buffers
+ * Splits a GLB file into its glTF JSON and its binary chunk
+ *
+ * `buffers` holds the binary chunk, which the JSON addresses as buffer 0, or nothing when the file
+ * has none.
+ * @param arrayBuffer - The raw GLB file
  * @internal
  */
 export function glbToGltf(arrayBuffer: ArrayBuffer): {
@@ -16,7 +21,6 @@ export function glbToGltf(arrayBuffer: ArrayBuffer): {
 } {
   const dataView = new DataView(arrayBuffer);
 
-  // Header
   const magic = dataView.getUint32(0, true);
   const version = dataView.getUint32(4, true);
   const length = dataView.getUint32(8, true);
@@ -32,8 +36,7 @@ export function glbToGltf(arrayBuffer: ArrayBuffer): {
   let json: GltfFormat | undefined;
   const buffers: ArrayBuffer[] = [];
 
-  // Chunks
-  let offset = 12;
+  let offset = GLB_HEADER_BYTES;
 
   while (offset < length) {
     const chunkLength = dataView.getUint32(offset, true);
@@ -46,7 +49,6 @@ export function glbToGltf(arrayBuffer: ArrayBuffer): {
 
       json = JSON.parse(jsonText);
     } else if (chunkType === GLB_CHUNK_TYPE_BIN) {
-      // The binary chunk is the first buffer
       const buffer = arrayBuffer.slice(offset, offset + chunkLength);
 
       buffers.push(buffer);

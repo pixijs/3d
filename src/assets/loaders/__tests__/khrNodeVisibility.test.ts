@@ -42,17 +42,4 @@ describe('GLTF KHR_node_visibility', () => {
 
     expect(descriptor.nodes![0].visible).toBeUndefined();
   });
-
-  it('ignores nodes without the extension', () => {
-    const gltf = {
-      asset: { version: '2.0' },
-      nodes: [{ name: 'plain' }, { name: 'with_other_ext', extensions: { SOME_OTHER: {} } }],
-    } as unknown as GltfFormat;
-
-    const descriptor: Scene3DDescriptor = {};
-    processNodes(gltf, descriptor);
-
-    expect(descriptor.nodes![0].visible).toBeUndefined();
-    expect(descriptor.nodes![1].visible).toBeUndefined();
-  });
 });

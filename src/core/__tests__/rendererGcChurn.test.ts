@@ -1,10 +1,10 @@
-import { getApp } from '@test-utils';
+import { expectCleanRender, getApp } from '@test-utils';
 import { CanvasSource, Sprite, Texture, TexturePool, Ticker } from 'pixi.js';
-import type { Application, Renderer, TextureSource, WebGPURenderer } from 'pixi.js';
+import type { Application, Renderer, TextureSource } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
-import { DEPTH_EMPTY } from '~/core/textures/DefaultTextures';
+import { DEPTH_EMPTY, UINT_EMPTY } from '~/core/textures/DefaultTextures';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
@@ -15,16 +15,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/*
- * Churn probe: builds a fresh shadowed scene, runs it through every release path the engine has
- * (pixi's GC collecting the View, `unload()`, emptying it, `destroy()`), and does that many times.
- * Two samples of every resource count the engine owns are taken, one after a warm-up and one at
- * the end, and nothing may have moved between them. The table it prints is the point as much as
- * the assertions: it puts numbers on what one create/render/collect/destroy cycle leaves behind.
- * Three rows used to be tolerated as known pixi leaks (both render-target hashes and the WebGPU
- * bind-group cache); pixi #12190-#12194 fixed them upstream, so every metric is asserted flat.
- */
-
 const SIZE = 96;
 /** Cycles before the first sample, so lazily created singletons (BRDF LUT, shaders, pipelines) are in. */
 const WARMUP = 5;
@@ -33,7 +23,7 @@ const CYCLES = 40;
 /** Every Nth cycle swaps the shadow tier mid-cycle so the map re-creation path churns too. */
 const FLIP_PERIOD = 5;
 
-/** A collectable texture — pixi only auto-collects sources that opt in. */
+/** A collectable texture; pixi only auto-collects sources that opt in */
 function makeCollectableTexture(color: string): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 4;
@@ -56,12 +46,12 @@ function morphedTriangle(): Geometry3D {
   });
 }
 
-/** Anything carrying pixi's GC idle clock — a texture source, a buffer, or a View3D. */
+/** Anything carrying pixi's GC idle clock: a texture source, a buffer, or a View3D */
 interface GcClocked {
   _gcLastUsed: number;
 }
 
-/** How many renderers hold a GPU copy of this resource — 0 once it has been collected. */
+/** How many renderers hold a GPU copy of this resource; 0 once it has been collected */
 function gpuCopies(resource: TextureSource): number {
   const gpuData = (resource as unknown as { _gpuData: Record<number, unknown> })._gpuData;
   let n = 0;
@@ -73,16 +63,17 @@ function gpuCopies(resource: TextureSource): number {
 
 /**
  * Sweep after backdating `stale`'s clocks, so only those age out and everything the last frame
- * touched survives. No real time passes: pixi's own threshold is 60s.
+ * touched survives
+ *
+ * Pixi's own 60 s threshold stays: nothing this test creates is ever a minute idle, so the sweep
+ * doesn't depend on how long the run has taken. Pixi's WebGPU bind-group cache is swept on the
+ * same clock, so every cached native bind group is backdated too. The sweep then drops the ones
+ * whose resources died this cycle instead of leaving them orphaned, and anything still drawn is
+ * recreated on its next bind.
  */
 function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
-  // pixi's own 60 s threshold stays: nothing this test creates is ever a minute idle, so only the
-  // backdated resources qualify and the sweep does not depend on how long the run has taken.
   for (const resource of stale) resource._gcLastUsed = performance.now() - 100_000;
 
-  // pixi's WebGPU bind-group cache is swept on the same clock. Backdating every cached native bind
-  // group lets the sweep drop the ones whose resources died this cycle instead of leaving them
-  // orphaned; anything still drawn is simply recreated on its next bind.
   const bindGroupHash = (renderer as unknown as { bindGroup?: { _hash: Record<string, GcClocked | null> } }).bindGroup
     ?._hash;
   if (bindGroupHash) {
@@ -92,25 +83,6 @@ function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
     }
   }
   renderer.gc.run();
-}
-
-/**
- * Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL).
- * The first `onSubmittedWorkDone` drains earlier frames so their errors can't land in this scope,
- * the second makes sure this frame's work is done before the pop.
- */
-async function renderCatchingValidationErrors(app: Application<Renderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? (app.renderer as WebGPURenderer).gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  await device.queue.onSubmittedWorkDone();
-  device.pushErrorScope('validation');
-  app.render();
-  await device.queue.onSubmittedWorkDone();
-  return device.popErrorScope();
 }
 
 /**
@@ -196,18 +168,15 @@ function buildCycleScene(app: Application<Renderer>): CycleScene {
 }
 
 /**
- * One churn cycle: settle the scene, then run it through all three release paths in turn —
- * collected by pixi's GC while off the stage and revived, unloaded by hand and revived, emptied
- * and destroyed. Every revival renders inside a validation scope, since a bind group, bundle or
- * VAO left pointing at freed memory shows up there and nowhere else.
+ * One churn cycle, which renders a fresh scene and then runs it through all three release paths
+ * in turn: collected by pixi's GC while off the stage and revived, unloaded by hand and revived,
+ * emptied and destroyed. Every revival renders inside a validation scope, since a bind group,
+ * bundle or VAO left pointing at freed memory shows up there and nowhere else.
  */
 async function runCycle(app: Application<Renderer>, cycle: number): Promise<void> {
   const renderer = app.renderer;
   const { view3d, sun, texture, dynamicGeometry, meshes, batched } = buildCycleScene(app);
 
-  // Frame 1 of a shadow membership rebuild is documented-wrong, so refresh once and settle.
-  app.render();
-  sun.refreshShadows();
   app.render();
   app.render();
   if (cycle % FLIP_PERIOD === FLIP_PERIOD - 1) {
@@ -216,28 +185,24 @@ async function runCycle(app: Application<Renderer>, cycle: number): Promise<void
     app.render();
   }
 
-  // Off the stage nothing rescues the View, so the sweep takes it with the texture and the dynamic
-  // geometry's buffers: pixi's hash runs the View's payload for this renderer and clears the slot.
-  // Putting it back rebuilds all of it under a fresh payload.
   app.stage.removeChild(view3d);
   app.render();
   app.render();
   collectStale(renderer, view3d, texture.source, ...dynamicGeometry.buffers);
-  expect(view3d._gpuData[renderer.uid] ?? null).toBe(null);
+  expect(
+    view3d._gpuData[renderer.uid] ?? null,
+    "off the stage nothing rescues the View, so pixi's hash ran its payload and cleared the slot",
+  ).toBe(null);
   expect(gpuCopies(texture.source)).toBe(0);
   app.stage.addChild(view3d);
-  let error = await renderCatchingValidationErrors(app);
-  expect(error?.message ?? null).toBe(null);
-  expect(gpuCopies(texture.source)).toBeGreaterThan(0);
+  await expectCleanRender(app);
+  expect(gpuCopies(texture.source), 'putting the View back re-uploaded the collected texture').toBeGreaterThan(0);
 
   view3d.unload();
-  error = await renderCatchingValidationErrors(app);
-  expect(error?.message ?? null).toBe(null);
+  await expectCleanRender(app);
 
-  // Emptied: every pass view drops to zero renderables before anything is destroyed.
   view3d.root.removeChild(...meshes, batched, sun);
-  error = await renderCatchingValidationErrors(app);
-  expect(error?.message ?? null).toBe(null);
+  await expectCleanRender(app);
 
   for (const mesh of meshes)
     mesh.destroy({ children: true, geometry: true, material: true, texture: true, textureSource: true });
@@ -251,6 +216,7 @@ interface StoreProbe {
   _freeCount: number;
   _count: number;
   _retiredBuffers: unknown[];
+  _retiredTextures: unknown[];
   bufferVersion: number;
 }
 
@@ -307,7 +273,7 @@ interface Sample {
   info: Record<string, number>;
 }
 
-/** Entries that hold something — pixi's hashes null a slot rather than delete it. */
+/** Entries that hold something; pixi's hashes null a slot rather than delete it */
 function liveEntries(record: Record<string, unknown>): number {
   let n = 0;
   for (const key in record) {
@@ -322,15 +288,21 @@ function sumOver<T>(items: Iterable<T>, read: (item: T) => number): number {
   return total;
 }
 
+/**
+ * Every resource count the engine owns, taken once after the warm-up and once at the end
+ *
+ * The resident View keeps one payload per renderer for its whole life. A payload minted afresh
+ * mid-run (each mints its own uniform group, so the group's uid stands for the payload), a slot
+ * left behind, or a second enrolment listener moves its `resident.*` metrics. Pixi buckets pooled
+ * textures by size, flags, format and scale mode, so a leak there shows as a climbing
+ * `transient.textures`.
+ */
 function sample(app: Application<Renderer>, resident: View3D): Sample {
   const renderer = app.renderer as unknown as RendererProbe;
   const pipe = renderer.renderPipes.view3d;
   const flat: Record<string, number> = {};
   const info: Record<string, number> = {};
 
-  // A View drawn every frame keeps one payload per renderer for its whole life: a payload minted
-  // afresh mid-run (each mints its own uniform group, so the group's uid stands for the payload's
-  // identity), a slot left behind, or a second enrolment listener would move these.
   flat['resident.gpuDataKeys'] = Object.keys(resident._gpuData).length;
   flat['resident.payload'] = resident._gpuData[app.renderer.uid].globalUniformGroup.uid;
   flat['resident.unloadListeners'] = resident.listenerCount('unload');
@@ -355,6 +327,7 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
     flat[`store.${name}.live`] = store._count - store._freeCount;
     flat[`store.${name}.highWater`] = store._count;
     flat[`store.${name}.retired`] = store._retiredBuffers.length;
+    flat[`store.${name}.retiredTextures`] = store._retiredTextures.length;
     info[`store.${name}.bufferVersion`] = store.bufferVersion;
   }
 
@@ -375,7 +348,6 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   info['atlas.deadVertices'] = sumOver(atlases, (atlas) => atlas._deadVertexCount);
   info['atlas.bufferVersion'] = sumOver(atlases, (atlas) => atlas._bufferVersion);
 
-  // Pixi buckets by size, flags, format and scale mode; a leak shows as a climbing texture count.
   const buckets = (TexturePool as unknown as { _buckets: Map<number, unknown[]> })._buckets;
   flat['transient.buckets'] = buckets.size;
   flat['transient.textures'] = sumOver(buckets.values(), (bucket) => bucket.length);
@@ -385,6 +357,7 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   const shared = [
     ['EMPTY', Texture.EMPTY.source],
     ['DEPTH_EMPTY', DEPTH_EMPTY.source],
+    ['UINT_EMPTY', UINT_EMPTY.source],
   ] as const;
   for (const [name, source] of shared) {
     for (const event of ['change', 'unload', 'destroy'] as const) {
@@ -410,6 +383,12 @@ function heapBytes(): number {
   return (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? NaN;
 }
 
+/**
+ * Every metric's warm and end value and its slope per cycle, printed with the verdict
+ *
+ * The table matters as much as the assertion: it puts numbers on what one create, render,
+ * collect and destroy cycle leaves behind.
+ */
 function formatTable(warm: Sample, end: Sample): string {
   const rows: string[][] = [];
   for (const kind of ['flat', 'info'] as const) {
@@ -440,8 +419,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       try {
-        // A plain 2D sprite behind the View keeps the renderer drawing while the View is out
-        // of the tree, as it would be in a real app.
+        /** A plain 2D sprite behind the View, which keeps the renderer drawing while the View is out of the tree */
         const sprite = new Sprite(makeCollectableTexture('#224466'));
         sprite.width = sprite.height = SIZE;
         app.stage.addChild(sprite);

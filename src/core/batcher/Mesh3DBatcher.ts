@@ -19,25 +19,28 @@ interface BatcherRenderOptions {
   /** Global bind group assigned to every emitted command's `globalBindGroup` */
   globalBindGroup: BindGroup;
   /**
-   * Interleaved instance buffer data. The batcher writes packed texture slots
-   * to the odd halves (`instanceData[i*2 + 1]`); pre-sized by populateIds.
+   * Interleaved instance records, `[storeIndex, packedTextureSlots]` per instance
+   *
+   * `populateIds` has already written the store indices and sized the array for every renderable.
+   * The batcher writes the packed texture slots into the odd entries, `instanceData[i * 2 + 1]`.
    */
   instanceData: Uint32Array;
-  /** Destination command list — the batcher writes the per-command state here */
+  /** Receives the draw commands */
   commandList: DrawCommandList;
-  /** Destination indirect-draw args — the batcher writes the numeric draw-call lanes here (grown as needed) */
+  /** Receives each command's numeric draw args, grown as needed */
   drawData: DrawArgs;
-  /** Which pass to read shader/state/batchKey from: `_passCache[passBit]` */
+  /** The pass whose `_passCache` entry supplies each renderable's shader, state, topology and batch key */
   passBit: number;
-  /** When true, skip texture slot packing and the batch texture bind group (batchBindGroup) */
+  /** Skips texture slot packing and the batch texture bind group, for a pass that samples no material textures */
   skipTextureBatching?: boolean;
 }
 
 /**
- * Null-object for meshes without a geometry atlas allocation
- * Avoids branching in the hot loop — the batcher can unconditionally
- * read `.indexCount`, `.firstIndex`, `.baseVertex` (all `undefined`,
- * which the draw command interprets as "use full geometry").
+ * Stands in for the atlas allocation of a geometry that has none, so the hot loop reads
+ * `indexCount`, `firstIndex` and `baseVertex` without a branch
+ *
+ * All three are `undefined`. A `u32` draw arg can't carry `undefined` the way pixi's own draw call
+ * does, so `render` resolves them to the geometry's own index count and to zero offsets.
  */
 const noAlloc = {
   atlas: null,
@@ -47,21 +50,28 @@ const noAlloc = {
 };
 
 /**
- * Monotonically increasing tick used to track which texture sources have
- * already been assigned a slot in the current batch. Incremented by 2 for
- * each new batch so that the speculative probe (`tick + 1`) stays an
- * integer, keeping all `_batchTick` values as V8 Smis.
+ * Texture batch counter, stamped on a texture source as `_batchTick` once the source has a slot in
+ * the current bind group
+ *
+ * Each new bind group steps it by 2, so the fit probe in {@link Mesh3DBatcher#render} can stamp the
+ * integer between, `tick + 1`, without matching any bind group's tick.
+ *
+ * Module state shared by every renderer, so only `renderer.destroy({ releaseGlobalResources: true })`
+ * resets it, through `GlobalResourceRegistry`.
  */
 let batchTick = 0;
 
-// Extend TextureSource with batch tracking fields (PixiJS does the same thing)
+/**
+ * A texture source with the fields the batcher stamps on it
+ *
+ * `_batchTick` is pixi's own `TextureSource` field, which pixi's 2D batcher also writes with its own
+ * counter. `_batchSlot` is the source's slot in the bind group stamped `_batchTick`.
+ */
 interface BatchedTextureSource extends TextureSource {
   _batchTick: number;
   _batchSlot: number;
 }
 
-// The reserved-slot mapping (uid <= 2 → fixed slots 13-15) relies on these
-// built-in textures being created first, so fail fast if the uids ever shift.
 if (Texture.EMPTY.source.uid !== 0) {
   throw new Error('Texture.EMPTY.source.uid is not 0');
 }
@@ -73,60 +83,40 @@ if (NORMAL_MAP.source.uid !== 2) {
 }
 
 /**
- * Batches 3D meshes for WebGPU instanced rendering
+ * Turns a pass's sorted renderables into instanced WebGPU draw commands
  *
- * Owned as a single instance by `MaterialSystemGpu`; emits into a
- * `DrawCommandList`.
+ * `MaterialSystemGpu` owns the one instance; `Mesh3DBatcherGl` is the WebGL counterpart.
  *
- * ## How it works
+ * The pass sorts its renderables by `_sortKey` first, which puts meshes that share a pipeline and a
+ * geometry next to each other (`updateMesh3DKeys` lays the key out). The batcher walks that order and
+ * starts a new draw command whenever `batchKey` changes, so each run of equal keys becomes one
+ * instanced draw.
  *
- * The render passes (opaque / transparent) pre-sort renderables by `_sortKey`,
- * which puts meshes sharing a pipeline and geometry next to each other (see
- * `updateMesh3DKeys` for its fields). This batcher walks the sorted list and
- * groups consecutive items that share the same `_batchKey` (pipeline+geometry)
- * into instanced draw commands, packing texture sources into a fixed-size slot
- * array (up to `MAX_BATCH_TEXTURES`).
+ * Draw commands and texture bind groups break independently. A new draw command keeps filling the
+ * current bind group. The group is finalised only when the next material's textures don't fit, or
+ * the walk ends, and every command since the last group then gets it. Consecutive draws whose
+ * textures fit in `MAX_BATCH_TEXTURES` slots share one bind group.
  *
- * Draw command boundaries and texture bind group boundaries are **decoupled**:
- * a geometry/pipeline change emits a new draw command but keeps accumulating
- * textures into the current bind group. The bind group is only finalised when
- * the texture slots actually overflow (or the list ends), then back-assigned
- * to every pending draw command. This means consecutive draws that fit within
- * the same texture budget share a single bind group, reducing setBindGroup
- * calls during replay.
+ * Each distinct texture source in a bind group gets a slot. A material's slots pack into one `u32`,
+ * 4 bits per texture in `_textures` order, so a material can have at most eight textures. The
+ * batcher writes that `u32` into the mesh's instance record, and the shader unpacks it to pick the
+ * slot each texture samples. A mesh with the same material as the one before it reuses its packed
+ * value without looking at the textures.
  *
- * ## Texture slot packing
- *
- * Each material exposes a flat `_textures: Texture[]` array. The batcher
- * iterates this array generically (no material-specific code) and assigns
- * each unique `TextureSource` to a batch slot (0–13). The slot indices are
- * packed into a single `u32` (4 bits per texture, up to 8 textures per
- * material) and written to the texture-slot half of the interleaved instance
- * buffer (`instanceData[i*2 + 1]`). The shader unpacks them at runtime via
- * bit-shift to sample the correct batch texture.
- *
- * ## prevMaterial optimisation
- *
- * Because the list is sorted, consecutive items often share the same material.
- * When `material === prevMaterial` we reuse the previously packed slot u32
- * without touching the texture arrays at all — the fastest path.
- *
- * ## Reserved texture UIDs
- *
- * `Texture.EMPTY` (uid 0), `Texture.WHITE` (uid 1), and `NORMAL_MAP` (uid 2)
- * are mapped to fixed slots 13–15, bypassing the dynamic slot allocator.
- * This means default/placeholder textures never consume a batch slot.
+ * `Texture.EMPTY` (uid 0), `Texture.WHITE` (uid 1) and `NORMAL_MAP` (uid 2) pack as slots 13 to 15
+ * and never take a slot. The module throws on load if those uids ever change.
  * @internal
  */
 export class Mesh3DBatcher {
-  /** Per-slot texture sources for the current batch — written into the BindGroup */
+  /** The texture source in each slot of the current bind group */
   private readonly _sources = Array.from<BatchedTextureSource>({ length: MAX_BATCH_TEXTURES });
 
   /**
-   * Walk the sorted renderable list and emit instanced draw commands
+   * Walks the sorted renderables and emits instanced draw commands
    *
-   * See the class docs for the batching strategy: decoupled draw / bind-group
-   * boundaries, texture slot packing, and the prevMaterial fast path.
+   * Before a mesh's textures join the current bind group, a probe counts the sources not in it yet,
+   * stamping each with `tick + 1` so a source the material lists twice counts once. If they fit,
+   * `_commitTextures` gives them slots; if not, the group is finalised and a new one starts.
    * @param options - Sources and destinations for the walk.
    */
   public render(options: BatcherRenderOptions): void {
@@ -139,9 +129,6 @@ export class Mesh3DBatcher {
     const indices = renderables.indices;
     const items = renderables.items;
 
-    // Texture-slot halves live at odd offsets (`[i*2 + 1]`); the id halves are
-    // pre-written by populateIds and the buffer is pre-sized for `len` instances,
-    // so there is no resize here.
     const dst = instanceData;
 
     const sources = this._sources;
@@ -157,20 +144,16 @@ export class Mesh3DBatcher {
     let currentState = cache.state;
     let currentTopology = cache.topology;
 
-    // BATCH_TICK: increment by 2 so the speculative probe (tick + 1) stays
-    // an integer, keeping all _batchTick values as V8 Smis.
     let tick = (batchTick += 2);
     let slotCount = 0;
     let prevMaterial: BaseMaterial3D | null = null;
     let prevPackedSlots = 0;
 
-    // --- Process first mesh (always starts a batch) ---
     prevPackedSlots = this._packTextures(r.material, sources, tick);
     dst[1] = prevPackedSlots;
     slotCount = this._lastSlotCount;
     prevMaterial = r.material;
 
-    // --- Main render loop ---
     for (let i = 1; i < len; i++) {
       r = items[indices[i]];
       cache = r._passCache[passBit];
@@ -186,7 +169,6 @@ export class Mesh3DBatcher {
           continue;
         }
 
-        // Speculate: can we fit this item's textures into the remaining slots?
         const textures = m._textures;
         const probeTick = tick + 1;
         let needed = 0;
@@ -207,10 +189,6 @@ export class Mesh3DBatcher {
           continue;
         }
       }
-
-      // --- DRAW FLUSH ---
-      // Emit a draw command for the previous instance range.
-      // batchBindGroup is deferred — assigned when the texture batch finalises.
 
       const cmd = commandList.next();
       cmd.geometry = currentGeometry;
@@ -237,8 +215,6 @@ export class Mesh3DBatcher {
       currentState = cache.state;
       currentTopology = cache.topology;
 
-      // When the batch key changed, try to keep the current texture bind
-      // group alive so multiple draw commands share it.
       if (needsFlush) {
         const m = r.material;
 
@@ -268,9 +244,6 @@ export class Mesh3DBatcher {
         }
       }
 
-      // --- TEXTURE FLUSH ---
-      // Slots are full. Finalise the bind group and back-assign it to every
-      // draw command emitted since the last texture flush.
       if (!skipTextureBatching) {
         const bg = commandList.nextBatchBindGroup(sources, slotCount);
         const cmds = commandList.commands;
@@ -290,7 +263,6 @@ export class Mesh3DBatcher {
       prevMaterial = r.material;
     }
 
-    // --- Final flush ---
     {
       const cmd = commandList.next();
       cmd.geometry = currentGeometry;
@@ -321,18 +293,19 @@ export class Mesh3DBatcher {
     commandList.endBuild();
   }
 
-  // Scratch field — avoids returning a tuple from _packTextures / _commitTextures.
-  // Only read immediately after the call, never across a yield point.
+  /**
+   * Slots the current bind group holds after the last `_packTextures` or `_commitTextures`
+   *
+   * `_commitTextures` continues from it. A field rather than a second return value, so neither
+   * per-mesh call allocates.
+   */
   private _lastSlotCount = 0;
 
   /**
-   * Assign batch slots to all of a material's textures
+   * Gives a material's textures slots in a new bind group, counting from slot 0, and returns them
+   * packed 4 bits per texture, texture 0 in the lowest bits
    *
-   * Returns the packed u32 where each texture's slot occupies 4 bits
-   * (bits 0-3 = texture 0, bits 4-7 = texture 1, etc.).
-   *
-   * Resets the internal slot counter — call this when starting a **new batch**.
-   * For adding textures to an existing batch, use `_commitTextures` instead.
+   * `_commitTextures` adds to the current bind group instead.
    * @param material - The material whose textures get slots
    * @param sources - Receives each newly slotted source at its slot index
    * @param tick - Current batch tick; a source already stamped with it keeps its slot
@@ -367,14 +340,11 @@ export class Mesh3DBatcher {
   }
 
   /**
-   * Assign batch slots to textures, **continuing** from the current slot count
+   * Gives textures slots in the current bind group, continuing from `_lastSlotCount`, and returns
+   * them packed like `_packTextures`
    *
-   * Returns the packed u32. Called mid-batch after the speculative fit check
-   * (`slotCount + needed <= MAX_BATCH_TEXTURES`) confirms the textures fit.
-   *
-   * The speculative probe (`probeTick = tick + 1`) marks sources as "maybe
-   * assigned" without committing. This method finalises the assignment by
-   * stamping the real `tick` on each source.
+   * `render` calls it once the probe has shown the new sources fit. The probe stamped them
+   * `tick + 1`; this stamps `tick`.
    * @param textures - Textures to slot into the current batch
    * @param sources - Receives each newly slotted source at its slot index
    * @param tick - Current batch tick, stamped on each newly slotted source
@@ -408,11 +378,6 @@ export class Mesh3DBatcher {
   }
 }
 
-/**
- * `batchTick` is module state shared across renderers, so it can only be reset
- * globally — `renderer.destroy({ releaseGlobalResources: true })` returns it to
- * its initial value.
- */
 GlobalResourceRegistry.register({
   clear() {
     batchTick = 0;

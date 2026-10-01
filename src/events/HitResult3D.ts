@@ -7,18 +7,17 @@ import { Vector3 } from '../math/vector/Vector3';
 import type { Container3D } from '../scene/Container3D';
 
 /**
- * Structural contract for a user-supplied hit volume — the 3D counterpart of 2D's `IHitArea`
+ * A hit shape of your own for {@link Container3D#hitVolume}, like `IHitArea` in 2D
  *
- * Any object with these members can be assigned to {@link Container3D#hitVolume}: a physics-engine
- * collider adapter, an analytic SDF, a capsule — no engine base class required. The engine's own
- * shapes (`Box` / `Sphere` / `Geometry3D`) keep their dedicated fast paths and do not implement this
- * interface.
+ * Any object with these members works, with no base class: an adapter around a physics collider,
+ * an analytic capsule, a signed distance field. The engine's own `Box`, `Sphere` and `Geometry3D`
+ * have faster built-in tests and don't implement it.
  *
- * All queries are in the **node's local space**; the picker transforms the world ray / point by the
- * node's inverse world transform before calling in, so the volume itself never deals with transforms.
+ * Everything is in the node's local space. The picker moves the ray or point into that space
+ * first, so the volume never deals with transforms.
  * @example
  * ```ts
- * // A flat analytic disc in the node's local XZ plane.
+ * // A flat disc in the node's local XZ plane.
  * class DiscVolume implements IHitVolume3D {
  *   constructor(public radius: number) {}
  *
@@ -49,37 +48,59 @@ import type { Container3D } from '../scene/Container3D';
  */
 export interface IHitVolume3D {
   /**
-   * Local-space conservative bounding sphere radius², centred on the node's origin
+   * Squared radius of a sphere around the node's local origin that encloses the volume
    *
-   * Read on every pick for the broadphase, so a value that tracks a mutating shape is picked up
-   * immediately. `Infinity` opts the volume out of broadphase rejection entirely — correct for
-   * unbounded shapes, at the cost of running {@link IHitVolume3D#raycast | raycast} on every pick.
+   * The picker reads it on every pick and skips the volume when the ray misses that sphere, so a
+   * value that follows a changing shape takes effect at once. `Infinity` never skips, which suits an
+   * unbounded shape, at the cost of calling {@link IHitVolume3D#raycast | raycast} on every pick.
+   * @example
+   * ```ts
+   * public readonly boundingRadiusSq = Infinity; // an endless ground plane has no bounds
+   * ```
    */
   readonly boundingRadiusSq: number;
 
   /**
-   * Nearest intersection of `localRay` with this volume, in the node's local space
+   * Finds where `localRay` first hits the volume
    *
-   * `localRay.direction` is unit length (the picker renormalises after the inverse-world transform),
-   * so `t` is the Euclidean distance to the hit *in local units*. Under node scale those units differ
-   * per node — `t` values are never compared across volumes; the picker converts `out.point` to world
-   * space and sorts on true world distance, so no cross-volume consistency is required.
+   * `localRay.direction` is unit length, so `t` is the distance to the hit in the node's local
+   * units. Those differ between nodes of different scale, which is fine: the picker compares hits
+   * by their world-space distance, worked out from `out.point`.
    *
-   * On a hit, fill `out` exactly as the engine volumes do: `out.point` = the local hit point
-   * (`localRay.at(t, out.point)`), `out.distance` = `t`, and — unless the volume has real per-triangle
-   * surface data — `out.normal` and `out.uv` zeroed with `out.triangleIndex = -1`. On a miss, return
-   * `-1` and leave `out` untouched.
+   * On a hit, fill `out` as the engine shapes do: `out.point` with `localRay.at(t, out.point)`,
+   * `out.distance` with `t`, and, unless the volume has triangles, `out.normal` and `out.uv` with
+   * zeros and `out.triangleIndex` with `-1`. On a miss, return `-1`; the picker ignores `out`.
+   * @example
+   * ```ts
+   * public raycast(localRay: Ray, out: HitResult3D): number {
+   *   const t = localRay.intersectSphereT(bounds);
+   *   if (t === -1) return -1;
+   *
+   *   localRay.at(t, out.point);
+   *   out.distance = t;
+   *   out.normal.set(0, 0, 0);
+   *   out.uv.set(0, 0);
+   *   out.triangleIndex = -1;
+   *   return t;
+   * }
+   * ```
    * @param {Ray} localRay - The pick ray in the node's local space, unit-length direction.
-   * @param {HitResult3D} out - Scratch buffer to fill on a hit; leave untouched on a miss.
+   * @param {HitResult3D} out - Scratch buffer to fill on a hit.
    * @returns The parametric `t` of the closest hit (`>= 0`), or `-1` for a miss.
    */
   raycast(localRay: Ray, out: HitResult3D): number;
 
   /**
-   * Optional point-containment test, in the node's local space
+   * Whether a point in the node's local space is inside the volume
    *
-   * Required only for the volume to clip descendants when set as an ancestor's explicit
-   * {@link Container3D#hitVolume | hitVolume}; without it the volume picks normally but never clips.
+   * Only needed for the volume to clip the node's descendants, as every `hitVolume` you set does.
+   * Without it, the volume still picks but never clips.
+   * @example
+   * ```ts
+   * public containsPoint(localPoint: Vector3): boolean {
+   *   return localPoint.x ** 2 + localPoint.z ** 2 <= radius ** 2 && Math.abs(localPoint.y) <= halfHeight;
+   * }
+   * ```
    * @param {Vector3} localPoint - The point to test, in the node's local space.
    * @returns Whether the point lies inside the volume.
    */
@@ -87,47 +108,50 @@ export interface IHitVolume3D {
 }
 
 /**
- * Hit shape accepted by {@link Container3D#hitVolume}, the 3D counterpart of 2D `hitArea`
+ * What {@link Container3D#hitVolume} accepts, like `hitArea` in 2D
  *
- * A string asks the node to derive a volume from itself, resolved once when the property is set:
+ * A string derives the shape from the node, once, when you set it:
  *
- * - `'box'` — the node's AABB.
- * - `'geometry'` — per-triangle against the node's own geometry.
+ * - `'box'`: the node's bounding box.
+ * - `'geometry'`: every triangle of the node's own geometry. Exact, and hits carry a normal and UV,
+ *   but every triangle is tested once the ray reaches the bounding box.
  *
- * An instance supplies a volume the node cannot infer, expressed in the node's local space:
+ * An instance gives a shape the node can't work out, in the node's local space:
  *
- * - {@link Box} — an axis-aligned box.
- * - {@link Sphere} — the analytic shape from `math/shapes`, not {@link SphereGeometry} (which also works, but tests
- *   every triangle).
- * - {@link Geometry3D} — a per-triangle proxy mesh; any subclass qualifies, {@link CapsuleGeometry} and
- *   {@link CylinderGeometry} included.
- * - {@link IHitVolume3D} — any object implementing the structural interface, for shapes the engine
- *   doesn't ship: physics-collider adapters, SDFs, analytic capsules.
+ * - {@link Box}: an axis-aligned box.
+ * - {@link Sphere}: the analytic sphere from `math/shapes`. A {@link SphereGeometry} works too, but
+ *   tests every triangle.
+ * - {@link Geometry3D}: a mesh tested per triangle, typically a simpler stand-in for a detailed
+ *   model. Any subclass works, {@link CapsuleGeometry} and {@link CylinderGeometry} included.
+ * - {@link IHitVolume3D}: a shape of your own, such as a physics collider.
  *
- * `null` means no explicit shape: an interactive {@link Mesh3D} falls back to its live geometry AABB, and a plain
- * {@link Container3D} is bubble-only.
+ * `null` means no shape of your own: an interactive {@link Mesh3D} uses its geometry's bounding
+ * box, and a plain {@link Container3D} only hears events from its children.
  * @example
  * ```ts
  * mesh.interactive = true;
  *
- * mesh.hitVolume = 'box';                          // AABB derived from the node
- * mesh.hitVolume = 'geometry';                     // per-triangle, hits carry normal / uv
- * mesh.hitVolume = new Sphere(new Vector3(), 0.5); // analytic, cheapest exact volume for round meshes
- * mesh.hitVolume = new CapsuleGeometry();          // low-poly proxy collider
+ * mesh.hitVolume = 'box';                          // bounding box derived from the node
+ * mesh.hitVolume = 'geometry';                     // per triangle, hits carry normal and uv
+ * mesh.hitVolume = new Sphere(new Vector3(), 0.5); // the cheapest exact shape for round meshes
+ * mesh.hitVolume = new CapsuleGeometry();          // a low-poly stand-in
  * ```
  * @remarks
- * - The shape only takes part in picking while the node is registered (`eventMode` static / dynamic, or
- *   `'passive'` / `'auto'` under an interactive ancestor — and in every case no barrier above: no
- *   ancestor with `eventMode: 'none'` or `interactiveChildren: false`), mirroring 2D `hitArea`.
- * - Only the per-triangle volumes (`'geometry'` and `Geometry3D` instances) populate a hit's `normal` / `uv`;
- *   `Box`, `Sphere` and {@link IHitVolume3D} hits leave them zeroed.
- * - `'box'` and `'geometry'` on a `Mesh3D` are live: they track in-place geometry mutations and follow a
- *   geometry swap. On a plain `Container3D`, `'box'` is a snapshot of the subtree's bounds taken at set time;
- *   unlike `getLocalBounds()`, it includes hidden descendants.
- * - Per-triangle testing needs `'triangle-list'` topology; line, strip and point geometry never hits — use
- *   `'box'` or a triangle-list proxy for those.
- * - `'geometry'` warns and resolves to no shape on a plain `Container3D`, which has no geometry.
- * - A `Geometry3D` proxy needs `bounds3D` populated — the broadphase rejects against it.
+ * - The shape only counts while the node can be picked: `eventMode` `'static'` or `'dynamic'`, or
+ *   `'passive'` or `'auto'` under an interactive ancestor, and no ancestor with `eventMode: 'none'`
+ *   or `interactiveChildren: false`. 2D `hitArea` works the same way.
+ * - Only per-triangle shapes (`'geometry'` and `Geometry3D`) give a hit a `normal`, `uv` and
+ *   `triangleIndex`. `Box` and `Sphere` hits have zeros and `-1`; an {@link IHitVolume3D} fills in
+ *   what it chooses.
+ * - On a `Mesh3D`, `'box'` and `'geometry'` follow edits to the geometry and a swap to a new one.
+ *   On a plain `Container3D`, `'box'` measures the subtree once, when set, and unlike
+ *   `getLocalBounds()` it includes hidden descendants.
+ * - Per-triangle tests need `'triangle-list'` topology and float32 positions. Line, strip and
+ *   point geometry, and quantised positions (KHR_mesh_quantization), never hit; use `'box'` or a
+ *   stand-in geometry for those.
+ * - `'geometry'` on a plain `Container3D` warns and is ignored, since it has no geometry.
+ * - A `Geometry3D` given as the shape needs its `bounds3D` filled in: the ray is tested against
+ *   it before the triangles.
  * @see {@link View3D#raycast} For querying a hit directly rather than through events
  * @category events
  * @standard
@@ -135,38 +159,78 @@ export interface IHitVolume3D {
 export type HitVolume3DInput = 'box' | 'geometry' | Box | Sphere | Geometry3D | IHitVolume3D | null;
 
 /**
- * Resolved hit volume stored on a `Container3D` after setter normalisation
- *
- * One of the engine's own shape types, or a user-supplied {@link IHitVolume3D}; strings and `null`
- * are gone by this point.
+ * The shape a node is picked against, once `resolveHitVolume` has turned strings into shapes
  * @internal
- * @see {@link HitVolume3DInput} The unresolved form users assign
+ * @see {@link HitVolume3DInput} The form users assign
  */
 export type HitVolume3D = Box | Sphere | Geometry3D | IHitVolume3D;
 
 /**
- * Scratch buffer written into during a ray vs. hit volume test
+ * The buffer a hit test writes into, which an {@link IHitVolume3D} fills in on a hit
  *
- * Allocated once per `View3D` and reused across picks, so the hot path is allocation-free.
- *
- * `point` and `normal` are in the *node's local space* while the intersect call fills them; the pick loop converts
- * them to world space before surfacing them on a {@link RaycastHit3D} or an event's 3D fields.
+ * Everything in it is in the node's local space. The picker turns the closest hit into the
+ * world-space {@link RaycastHit3D} that events and {@link View3D#raycast} report. Each View reuses
+ * one buffer for every test, so a hit has to write every field.
+ * @example
+ * ```ts
+ * public raycast(localRay: Ray, out: HitResult3D): number {
+ *   const t = localRay.intersectBoxT(bounds);
+ *   if (t !== -1) {
+ *     localRay.at(t, out.point);
+ *     out.distance = t;
+ *     out.normal.set(0, 0, 0);
+ *     out.uv.set(0, 0);
+ *     out.triangleIndex = -1;
+ *   }
+ *   return t;
+ * }
+ * ```
  * @category events
  * @standard
  */
 export interface HitResult3D {
-  /** Hit point, local space until the pick loop converts it */
+  /**
+   * Hit point, in the node's local space
+   * @example
+   * ```ts
+   * localRay.at(t, out.point);
+   * ```
+   */
   point: Vector3;
-  /** Flat geometric normal of the hit triangle, written only for `Geometry3D` hits */
+  /**
+   * The hit triangle's flat normal, in local space; zero for a shape without triangles
+   *
+   * The picker keeps it only when {@link HitResult3D#triangleIndex | triangleIndex} isn't `-1`.
+   * @example
+   * ```ts
+   * out.normal.set(0, 0, 0);
+   * ```
+   */
   normal: Vector3;
-  /** Interpolated UV at the hit, written only for `Geometry3D` hits when the geometry has UVs */
+  /**
+   * Texture coordinate at the hit; zero for a shape without triangles
+   * @example
+   * ```ts
+   * out.uv.set(0, 0);
+   * ```
+   */
   uv: Vector2;
-  /** Parametric `t` along the ray, in the ray's space (world units for rays from {@link View3D#screenToRay}) */
+  /**
+   * `t`, the distance along the ray to the hit, in the ray's units
+   * @example
+   * ```ts
+   * out.distance = t;
+   * ```
+   */
   distance: number;
   /**
-   * Index of the triangle hit, `-1` for `Box` / `Sphere` volumes
+   * Index of the triangle hit, or `-1` for a shape without triangles
    *
-   * Doubles as the surface-data flag: `!== -1` is exactly the case where `normal` / `uv` describe a real triangle.
+   * The picker reads `-1` as "no surface data" and reports a zero normal.
+   * @example
+   * ```ts
+   * out.triangleIndex = -1;
+   * ```
    */
   triangleIndex: number;
 }
@@ -187,8 +251,8 @@ export function createHitResult3D(): HitResult3D {
 }
 
 /**
- * A ray-cast hit, in world space — what {@link View3D#raycast} returns, and what every 3D pointer
- * event carries as {@link Event3DFields#hit3D | hit3D}
+ * A hit in world space: what {@link View3D#raycast} returns, and what every 3D pointer event
+ * carries as {@link Event3DFields#hit3D | hit3D}
  * @example
  * ```ts
  * const hit = view3d.raycast(event.global);
@@ -200,29 +264,41 @@ export function createHitResult3D(): HitResult3D {
  * });
  * ```
  * @remarks
- * - `raycast` returns a fresh object. An event's `hit3D` is pooled and rewritten per dispatch, the
- *   same contract as pixi's `event.global`: copy out anything you keep.
+ * - `raycast` returns a new object on every call. An event's `hit3D` is reused for later events,
+ *   as pixi's `event.global` is, so copy out anything you keep.
  * @see {@link Container3D#hitVolume} For choosing the shape each node is picked against
  * @category events
  * @standard
  */
 export interface RaycastHit3D {
   /**
-   * The event target the hit resolves to — the struck node, or its nearest
-   * interactive ancestor when the struck node is non-interactive (`'auto'` /
-   * `'passive'`; the surface fields still describe the struck node)
+   * The node the hit is reported to
+   *
+   * That is the node the ray struck, or its nearest interactive ancestor when the struck node
+   * isn't interactive (`'auto'` or `'passive'`). The other fields still describe the struck node.
+   * @example
+   * ```ts
+   * const hit = view3d.raycast(e.global);
+   * if (hit) select(hit.target);
+   * ```
    */
   target: Container3D;
-  /** World-space hit point */
+  /**
+   * Hit point, in world space
+   * @example
+   * ```ts
+   * if (hit) marker.position.copyFrom(hit.point);
+   * ```
+   */
   point: Vector3;
   /**
    * Hit point in the struck node's local space
    *
-   * The struck node is usually `target`; for a hit on a non-interactive (`'auto'` / `'passive'`)
-   * node it is that node, while `target` names its nearest interactive ancestor. The 3D counterpart
-   * of 2D's `FederatedMouseEvent.getLocalPosition` for the struck node; for any other node, transform
-   * `point` with {@link Container3D#toLocal}. There is no variant taking a node, because a 3D pointer
-   * is a ray rather than a position and resolves to a point only where it hits.
+   * The struck node is usually `target`; for a hit on a non-interactive (`'auto'` or `'passive'`)
+   * node it is that node, while `target` is its nearest interactive ancestor. This is the 3D
+   * counterpart of 2D's `FederatedMouseEvent.getLocalPosition` for the struck node; for any other
+   * node, transform `point` with {@link Container3D#toLocal}. There is no version that takes a
+   * node, because a 3D pointer is a ray and only becomes a point where it hits something.
    * @example
    * ```ts
    * // Which half of the dial was grabbed, in the dial's own frame?
@@ -233,16 +309,41 @@ export interface RaycastHit3D {
    */
   localPoint: Vector3;
   /**
-   * Ray distance to the hit in world units — measured from the camera for
-   * perspective projections and from the near-plane unproject for
-   * orthographic ones
+   * Distance from the camera to the hit along the ray, in world units
+   *
+   * For an orthographic camera it is measured from the camera plane.
+   * @example
+   * ```ts
+   * if (hit && hit.distance < reach) pickUp(hit.target);
+   * ```
    */
   distance: number;
-  /** World-space flat geometric normal of the hit triangle, zero when the volume is a `Box` / `Sphere` */
+  /**
+   * The hit triangle's flat normal, in world space; zero when `triangleIndex` is `-1`
+   * @example
+   * ```ts
+   * if (hit && hit.normal.y > 0.7) placeTower(hit.point); // flat enough to build on
+   * ```
+   */
   normal: Vector3;
-  /** UV at the hit when the volume is a `Geometry3D` with UVs, `(0, 0)` otherwise */
+  /**
+   * Texture coordinate at the hit, for a per-triangle shape
+   *
+   * A geometry without float32 UVs gives the hit's barycentric coordinates in its triangle
+   * instead. `Box` and `Sphere` hits give zero.
+   * @example
+   * ```ts
+   * if (hit) paintAt(hit.uv);
+   * ```
+   */
   uv: Vector2;
-  /** Triangle index for `Geometry3D` hits; `-1` for `Box` / `Sphere` hits */
+  /**
+   * Index of the triangle hit, or `-1` for a shape without triangles
+   * @example
+   * ```ts
+   * if (hit && hit.triangleIndex !== -1) highlightFace(hit.target, hit.triangleIndex);
+   * ```
+   */
   triangleIndex: number;
 }
 

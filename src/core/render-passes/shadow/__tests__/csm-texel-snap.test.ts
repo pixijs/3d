@@ -59,7 +59,6 @@ describe('shadow window texel snapping', () => {
   });
 
   it('holds the window still while the box drifts under a texel', () => {
-    // 400-unit box: one texel is a little under 0.43 world units at 1024.
     const base = fit(1000, 400);
     const texelWorld = (2 * base.halfX) / MAP_SIZE;
 
@@ -80,11 +79,7 @@ describe('shadow window texel snapping', () => {
     expect(Math.round(steps)).toBe(4);
   });
 
-  it('never displaces the window by more than one texel, at any size', () => {
-    // Sizes spanning a tight near cascade through to an outer one, each centred far from the
-    // origin — a cascade follows the camera, so its centre is wherever the camera is. Quantising
-    // the projection's normalised translation by a world texel size failed here by hundreds of
-    // texels, and worse the larger the window.
+  it('never displaces the window by more than one texel, at any size from a near cascade to an outer one, far from the origin', () => {
     for (const [centre, size] of [
       [40, 20],
       [200, 100],
@@ -102,10 +97,9 @@ describe('shadow window texel snapping', () => {
   });
 
   it('leaves the window size untouched', () => {
-    // Padded by 5% of the box's full width on each side, so an 800-unit box gives 440.
     const w = fit(137.7, 800);
 
-    expect(w.halfX).toBeCloseTo(440, 3);
+    expect(w.halfX, "padded by 5% of the box's width on each side, so an 800-unit box gives 440").toBeCloseTo(440, 3);
     expect(w.halfY).toBeCloseTo(440, 3);
   });
 });

@@ -1,19 +1,22 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * How a particle quad is oriented before its corners are expanded
+ * How each particle's quad faces the camera
  *
- * - `'spherical'` — faces the camera on every axis (the classic billboard)
- * - `'cylindrical'` — spins around world Y only, so the quad stays upright.
- *   Right for smoke columns, fire, grass cards and anything that shouldn't tilt
- *   when the camera looks down
- * - `'horizontal'` — no camera facing at all: the quad lies flat in the world
- *   XZ (ground) plane. Right for impact rings, blob shadows and scorch marks
+ * - `'spherical'`: faces the camera fully, the classic billboard
+ * - `'cylindrical'`: turns about world Y only, so the quad stays upright. Right for smoke
+ *   columns, fire, grass cards and anything that shouldn't tilt when the camera looks down
+ * - `'horizontal'`: doesn't face the camera at all; the quad lies flat on the world's XZ
+ *   (ground) plane. Right for impact rings, blob shadows and scorch marks
  *
- * Distinct from `BillboardMode`, which turns a whole `Mesh3D` to face the camera
- * about its own origin. A particle system billboards each of its thousands of
- * quads about that quad's own centre, so it needs its own basis — and its third
- * mode is a real orientation rather than "off".
+ * Not the same as `BillboardMode`, which turns a whole `Mesh3D` about its origin. A particle
+ * system turns each quad about its own centre, and its third mode is an orientation rather than
+ * "off".
+ * @example
+ * ```ts
+ * const fire = new ParticleSystem3D({ billboard: 'cylindrical' });
+ * const ripples = new ParticleSystem3D({ billboard: 'horizontal' });
+ * ```
  * @category scene
  * @standard
  */
@@ -25,14 +28,18 @@ export type ParticleBillboardMode = 'spherical' | 'cylindrical' | 'horizontal';
  *
  * The snippet declares locals only; the caller decides what to do with them.
  *
- * The two backends differ by a handful of tokens — the view matrix is
+ * The two backends differ by a handful of tokens: the view matrix is
  * `camera.uViewMatrix` in WGSL and a bare `uViewMatrix` in GLSL, and vector
- * constructors are spelled differently — so one generator emits both rather
+ * constructors are spelled differently. So one generator emits both rather
  * than letting the maths drift between two copies.
  *
  * The view matrix is orthonormal, so its transpose is its inverse: column-major
  * `m[col][row]` reads row 0 as world-space camera right and row 1 as camera up.
  * Both languages agree on `m[col][row]`.
+ *
+ * `'cylindrical'` flattens camera right onto the ground plane, which keeps the quad upright. A
+ * rolled camera looking straight down flattens it to zero, so the length is floored before the
+ * divide.
  * @param mode - Orientation the basis builds
  * @param gpu - `true` for WGSL, `false` for GLSL
  * @returns The basis snippet in the requested shading language
@@ -51,9 +58,6 @@ function billboardBasis(mode: ParticleBillboardMode, gpu: boolean): string {
   }
 
   if (mode === 'cylindrical') {
-    // Camera right flattened onto the ground plane keeps the quad upright.
-    // The max() covers the degenerate case of a rolled camera looking straight
-    // down, where the flattened vector collapses to zero.
     const flat = gpu ? `${vec3}(camRight.x, 0.0, camRight.z)` : 'vec3(camRight.x, 0.0, camRight.z)';
     const flatLen = gpu ? 'length(vec2<f32>(camRight.x, camRight.z))' : 'length(camRight.xz)';
 
@@ -80,7 +84,7 @@ function billboardBasisWgsl(mode: ParticleBillboardMode): string {
 }
 
 /**
- * GLSL counterpart of {@link billboardBasisWgsl} — same locals, same maths
+ * GLSL counterpart of {@link billboardBasisWgsl}: same locals, same maths
  * @param mode - Orientation the basis builds
  * @internal
  */
@@ -89,28 +93,26 @@ function billboardBasisGlsl(mode: ParticleBillboardMode): string {
 }
 
 /**
- * Selects a {@link getParticleBit} variant
- *
- * Every flag drops code when off.
+ * Picks a {@link getParticleBit} variant; every flag that is off leaves its code out
  * @category scene
  * @advanced
  */
 export interface ParticleBitOptions {
-  /** How the quad is oriented before its corners expand */
+  /** How each quad faces the camera */
   billboard: ParticleBillboardMode;
   /**
    * Whether the geometry carries the per-particle `aParticleUVFrame` window
    *
    * Off for single-frame systems, whose UVs go through the material's own
-   * `uvTransform` instead — 8 fewer bytes on every streamed vertex.
+   * `uvTransform` instead, saving 8 bytes on every vertex.
    */
   frames: boolean;
   /**
-   * Whether particle centres are emitter-local (`true`) or already world-space
+   * Whether particle positions are relative to the mesh (`true`) or already in world space
    * (`false`)
    *
-   * Local centres go through the mesh's `modelMatrix`, so the whole system
-   * moves, rotates and scales with its parent for free.
+   * Local positions go through the mesh's `modelMatrix`, so the whole system moves, rotates and
+   * scales with its parent at no extra cost.
    */
   localSpace: boolean;
 }
@@ -123,20 +125,22 @@ const cache: Record<string, ShaderBit> = Object.create(null);
  *
  * ## Geometry contract
  *
- * - `aPosition` (`float32x3`, decoded by `positionBit`) — the particle centre,
- *   replicated across the quad's four corners.
- * - `aUV` (`unorm8x2`, decoded by `uvsBit`) — the corner id, `(0,0)`…`(1,1)`.
- *   Read here as a `[-0.5, 0.5]` corner offset and, in the same pass, left in
- *   place as the sprite's texture coordinate.
+ * - `aPosition` (`float32x3`, decoded by `positionBit`): the particle centre,
+ *   repeated in the quad's four corners.
+ * - `aUV` (`unorm8x2`, decoded by `uvsBit`): the corner id, `(0,0)` to `(1,1)`.
+ *   Read here as a `[-0.5, 0.5]` corner offset, with `v = 0` on the top edge so
+ *   the sprite reads the way its image does. The id itself stays as the sprite's
+ *   texture coordinate, remapped into the particle's flipbook window in the
+ *   `frames` variant.
  *
- * `ParticleContainer3D` derives its vertex buffer from the attributes its bits
- * declare, so the three below existing in the buffer at all is a consequence of
- * this declaration, not a second list kept in step with it.
+ * The bit declares the three attributes below, and `ParticleContainer3D` builds
+ * its vertex buffer from what its bits declare, so there is no second list to
+ * keep in step.
  *
- * - `aParticleSizeRot` (`float32x2`) — world-space diameter and rotation in
- *   radians, about the view axis.
- * - `aParticleColor` (`unorm8x4`) — linear RGB tint plus opacity.
- * - `aParticleUVFrame` (`unorm16x4`, `frames` variant only) — the flipbook
+ * - `aParticleSizeRot` (`float32x2`): world-space diameter, and rotation in
+ *   radians about the view axis.
+ * - `aParticleColor` (`unorm8x4`): linear RGB tint plus opacity.
+ * - `aParticleUVFrame` (`unorm16x4`, `frames` variant only): the flipbook
  *   window `(u0, v0, uScale, vScale)` this particle samples.
  *
  * ## Locals other bits may write
@@ -154,9 +158,12 @@ const cache: Record<string, ShaderBit> = Object.create(null);
  *
  * The quad is built in the `afterTransform` slot, which reassigns
  * `worldPosition` and `clipPosition` after the template's standard transform.
- * That's what lets world-space particles ignore `modelMatrix` entirely without
- * anyone faking an identity transform — the mesh's store row keeps its real
- * position, which the WebGPU transparent sort reads.
+ * World-space particles take their centre from `position`, skipping
+ * `modelMatrix`; local ones take `worldPosition`, which the template already
+ * moved through it. So world-space particles ignore `modelMatrix` without
+ * faking an identity transform, and the mesh's store row keeps its real
+ * position, which the WebGPU transparent sort reads. The corner offset is
+ * world-space either way, so it is added once the centre is in world space.
  * @param options - Which variant to build; every combination is cached
  * @returns The bit for that variant, the same object on every call
  * @category scene
@@ -169,9 +176,6 @@ export function getParticleBit(options: ParticleBitOptions): ShaderBit {
   const existing = cache[key];
   if (existing) return existing;
 
-  // World-space centres skip modelMatrix; local ones ride the one the template
-  // already applied. The billboard offset is world-space either way, so it is
-  // added after the centre lands in world space.
   const centreGpu = localSpace ? 'worldPosition.xyz' : 'position.xyz';
   const centreGl = centreGpu;
 
@@ -191,14 +195,8 @@ export function getParticleBit(options: ParticleBitOptions): ShaderBit {
     gpu: {
       vertex: {
         beforeTransform: /*wgsl*/ `
-  // uv arrives as the corner id. Keep the signed corner for the quad expansion,
-  // with v = 0 on the top edge so the sprite reads the way its image does; the
-  // id itself doubles as the sprite's texture coordinate, remapped into this
-  // particle's flipbook window when the system has more than one frame.
   let particleCorner = vec2<f32>(uv.x - 0.5, 0.5 - uv.y);
 ${frames ? '  uv = input.aParticleUVFrame.xy + uv * input.aParticleUVFrame.zw;\n' : ''}
-  // The values the expansion reads. Declared here as vars so a bit composed
-  // after this one can scale or replace them before the quad is built.
   var particleSize = input.aParticleSizeRot.x;
   var particleRotation = input.aParticleSizeRot.y;
   var particleColor = input.aParticleColor;
@@ -234,8 +232,6 @@ ${frames ? '  uv = input.aParticleUVFrame.xy + uv * input.aParticleUVFrame.zw;\n
         beforeTransform: /*glsl*/ `
   vec2 particleCorner = vec2(uv.x - 0.5, 0.5 - uv.y);
 ${frames ? '  uv = aParticleUVFrame.xy + uv * aParticleUVFrame.zw;\n' : ''}
-  // The values the expansion reads. A bit composed after this one can scale
-  // or replace them before the quad is built.
   float particleSize = aParticleSizeRot.x;
   float particleRotation = aParticleSizeRot.y;
   vec4 particleColor = aParticleColor;

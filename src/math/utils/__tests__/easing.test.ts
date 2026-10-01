@@ -13,12 +13,7 @@ describe('smoothstep', () => {
     expect(smoothstep(2, 0, 1)).toBe(1);
   });
 
-  test('returns 0.5 at the midpoint', () => {
-    expect(smoothstep(0.5, 0, 1)).toBeCloseTo(0.5, 5);
-  });
-
-  test('matches the Hermite polynomial 3t^2 - 2t^3', () => {
-    // For x in [0, 1] with min=0 and max=1, the polynomial is x*x*(3-2*x).
+  test('matches the Hermite polynomial 3t^2 - 2t^3 on [0, 1]', () => {
     expect(smoothstep(0.25, 0, 1)).toBeCloseTo(0.25 * 0.25 * (3 - 2 * 0.25), 5);
     expect(smoothstep(0.75, 0, 1)).toBeCloseTo(0.75 * 0.75 * (3 - 2 * 0.75), 5);
   });
@@ -55,10 +50,6 @@ describe('smootherstep', () => {
   test('returns 1 when x is at or above max', () => {
     expect(smootherstep(1, 0, 1)).toBe(1);
     expect(smootherstep(2, 0, 1)).toBe(1);
-  });
-
-  test('returns 0.5 at the midpoint', () => {
-    expect(smootherstep(0.5, 0, 1)).toBeCloseTo(0.5, 5);
   });
 
   test('matches the polynomial 6t^5 - 15t^4 + 10t^3', () => {

@@ -6,10 +6,11 @@ import type { SortedMesh3DView } from '../batcher/SortedMesh3DView';
 import { getCameraData } from '../CameraData';
 import { resolveCullProducer } from '../cull';
 import type { RenderSession } from '../render-passes/RenderSession';
+import { getGlobalGlData } from './shader/globalBitGl';
 import type { View3DPipeGl } from './View3DPipeGl';
 
 /**
- * Per-batch sort hook — receives the sorted view, its owning batch, and the drawing eye
+ * Per-batch sort hook, given the sorted view, its owning batch, and the drawing eye
  * @internal
  */
 type SortBatchFnGl = (renderables: SortedMesh3DView<Mesh3DData>, batch: Mesh3DBatch, cameraPosition: Vector3) => void;
@@ -21,7 +22,7 @@ type SortBatchFnGl = (renderables: SortedMesh3DView<Mesh3DData>, batch: Mesh3DBa
 interface RenderForwardBatchesGlOptions {
   /** The WebGL backend pipe driving this render */
   pipe: View3DPipeGl;
-  /** This pass's bit — indexes `batch.drawLists` */
+  /** This pass's bit, which indexes `batch.drawLists` */
   bit: number;
   /**
    * Camera to cull and draw from, or `null` for the view's own camera
@@ -41,7 +42,7 @@ interface RenderForwardBatchesGlOptions {
   /** Optional per-batch sort. Defaults to key-based `renderables.sort()` */
   sortBatch?: SortBatchFnGl;
   /**
-   * When true, the batcher skips texture-atlas packing and the batch texture bind group
+   * When true, the batcher skips texture slot packing and the batch texture bind group
    *
    * Suitable for depth-only or solid-colour passes.
    */
@@ -49,16 +50,22 @@ interface RenderForwardBatchesGlOptions {
 }
 
 /**
- * Shared body for forward-style WebGL passes (opaque / transparent / future custom
- * outline-style passes)
+ * Shared body for forward-style WebGL passes (opaque, transparent, and any pass that draws the
+ * view's meshes through `View3DPipe.renderForward`)
  *
- * Walks `view3d._meshBatches`, sorts via `sortBatch`, builds the instance index +
- * DrawCommandList via `batcher.build`, and replays it. The cache predicate (per-batch/pass
- * dirty version + count change) is the convention for the standard forward-pass shape;
- * transparent uses `alwaysRebuild` because it re-sorts by camera distance every frame.
+ * Walks `view3d._meshBatches`. A batch whose draw list is stale (its dirty version or instance
+ * count moved), or every batch when `alwaysRebuild` is set, is sorted and rebuilt by
+ * `batcher.build`; the transparent pass rebuilds every frame because it re-sorts by camera
+ * distance. A rebuild also resolves the batch's cull producer from the batch's `cull` mode and its
+ * instance count, and `'gpu'` falls back to `'cpu'` on WebGL. Then each batch is drawn.
  *
  * A cached command list survives a moving mesh untouched: the index it holds points at the
  * store row, and the store row is rewritten wherever the transform changes.
+ *
+ * The render graph has bound the target and applied the camera's frame before this runs, so
+ * `session.activeViewport` is the camera's rect. Each batch owns its mesh store and each pass its
+ * index texture, so both are bound per batch, at global slots 10 and 11. Reading `.texture.source`
+ * every time also picks up a texture that store growth replaced.
  *
  * Passes that need a different shape (shadow, background, copy-opaque)
  * implement `render()` themselves and don't call this helper.
@@ -69,12 +76,11 @@ export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): 
   const { pipe, bit, session, alwaysRebuild, sortBatch, skipTextureBatching } = options;
   const { view3d } = session;
   const batcher = pipe.renderer.material3d.batcher;
-  const glData = view3d._gpuData[pipe.renderer.uid];
+  const glData = getGlobalGlData(view3d, pipe.renderer);
   const camera = options.camera ?? view3d.camera;
   const cameraData = getCameraData(camera);
   const cullFrustum = camera.cullFrustum;
 
-  // The graph binds the target and applies the camera's frame before a forward pass draws.
   cameraData.setViewport(session.activeViewport);
 
   for (const batch of view3d._meshBatches) {
@@ -88,9 +94,7 @@ export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): 
 
     if (needsRebuild) {
       list.claimDrawBuilt(renderables.count);
-      // Resolve the cull producer for this batch — rebuild-gated (it only changes with instance
-      // count, which itself forces a rebuild). `'gpu'` degrades to `'cpu'` on WebGL.
-      list._cullProducer = resolveCullProducer(view3d.cull, false, renderables.count);
+      list._cullProducer = resolveCullProducer(batch.cull, false, renderables.count);
       if (sortBatch) sortBatch(renderables, batch, cameraData.position);
       else renderables.sort();
 
@@ -106,13 +110,9 @@ export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): 
     glData.globalUniformGroup.uniforms.uBatchWorldMatrix = batch.renderData.worldTransform;
     glData.globalUniformGroup.update();
 
-    // Each batch owns its mesh store and each pass its index list, so both are
-    // re-bound per batch. Re-reading `.texture.source` also picks up a source
-    // swapped out by store growth.
     session.globalBindGroup.setResource(batch.storeBuffer.texture.source, 10);
     if (list.glData.indexTexture) session.globalBindGroup.setResource(list.glData.indexTexture.texture.source, 11);
 
-    // draw() culls only when this batch's producer resolved to 'cpu'; otherwise the frustum is unused.
     batcher.draw(pipe.renderer, list, batch, cullFrustum, cameraData);
   }
 }

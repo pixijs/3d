@@ -1,27 +1,35 @@
 import { createLightingBit } from '../../../core/shader/createLightingBit';
 
 /**
- * Physically-based direct lighting using the Cook-Torrance BRDF
+ * Cook-Torrance direct lighting for the PBR material, plus the ambient lights' diffuse
  *
- * Built via {@link createLightingBit} — only the BRDF math lives here;
- * the light-loop boilerplate (dispatch / attenuation / shadows) is shared.
+ * Built with {@link createLightingBit}, which owns the light loop, attenuation and shadows; this bit
+ * supplies only the BRDF. Without it the material shows its `albedo` unlit.
  *
- * Without this bit: material is "unlit" (shows albedo directly).
- * With this bit: full PBR direct lighting + ambient.
+ * Per light:
  *
- * Expects these contract variables to be set before the lighting slot:
- *   - `normal`      vec3  – world-space normal
- *   - `viewDir`     vec3  – view direction (normalized)
- *   - `albedo`      vec3  – base color (linear space)
- *   - `metallic`    f32
- *   - `roughness`   f32
- *   - `fresnelF0`   vec3
- *   - `f90`         f32   – default 1.0; `specularBit` overrides for KHR_materials_specular
+ * - Distribution: GGX, with `a2 * INV_PI` hoisted out of the loop. The denominator has no guard:
+ *   `pbrMaterialBit` floors roughness at 0.045, so it never drops below `a2`, which is above zero.
+ *   An added epsilon would swamp `a2²` on smooth surfaces and flatten the highlight instead of
+ *   sharpening it.
+ * - Visibility: height-correlated Smith GGX with each square root replaced by its linear fit in the
+ *   cosine (Hammon 2017). That drops the square roots at the cost of up to about 30% error against
+ *   the exact form, worst where light and view both graze. The `max` only covers
+ *   `N·L = N·V = 0`, where the lobe is zero anyway.
+ * - Fresnel: Schlick's `(1 - x)⁵` in the spherical-Gaussian form `exp2((-5.55473x - 6.98316)x)`
+ *   (Karis 2013, "Real Shading in Unreal Engine 4"): one `exp2` instead of a `pow`, never more than
+ *   about 0.004 off. `iblBit`, `transmissionBit`, `clearcoatBit`, `iridescenceBit` and
+ *   `phongLightingBit` use the same form.
  *
- * Writes:
- *   - `ambient`     vec3  – ambient contribution
- *   - `directLight` vec3  – accumulated direct lighting
- *   - `finalColor`  vec3  – `(ambient * occlusion) + directLight + emissive`
+ * Ambient lights add `albedo * (1 - metallic) / PI`: diffuse only, with the same `1 / PI` as the
+ * direct diffuse, so an ambient light reads at the same scale as a directional one.
+ *
+ * Reads `normal`, `viewDir`, `albedo`, `metallic`, `roughness`, `fresnelF0`, `f90`, `occlusion`,
+ * `emissive`, `ambient` and `directLight` as `pbrMaterialBit` and the feature bits left them. Adds
+ * to `ambient`, fills `directLight`, and writes `finalColor` as
+ * `ambient * occlusion + directLight + emissive`. The sheen and anisotropy lobes reuse its loop-wide
+ * `nDotV` and `INV_PI` and its per-light `halfVector` and `nDotH`; anisotropy also replaces its
+ * `specular`.
  * @internal
  */
 export const pbrLightingBit = createLightingBit({
@@ -38,66 +46,44 @@ const float INV_PI = 0.31830988618;
 
   preLighting: {
     gpu: /*wgsl*/ `
-  // PBR Lighting (ambient + direct)
-  // Reset default (template sets directLight = albedo for unlit fallback)
   directLight = vec3<f32>(0.0);
 
-  // Ambient lighting — diffuse only, so metals are excluded. The INV_PI
-  // Lambertian normalization matches the direct-light diffuse (albedoOverPI),
-  // so an AmbientLight reads at the same energy scale as a directional light.
   ambient += global.uGlobalLightParams.xyz * albedo * (1.0 - metallic) * INV_PI;
 
-  // Cache PBR variables outside loop (hoisted math)
   let nDotV = max(dot(normal, viewDir), 0.0);
   let a = roughness * roughness;
   let a2 = a * a;
   let a2_inv_pi = a2 * INV_PI;
-  let k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-  let oneMinusK = 1.0 - k;
-  let vis_V = 1.0 / (nDotV * oneMinusK + k);
+  let oneMinusA = 1.0 - a;
+  let visV = nDotV * oneMinusA + a;
   let albedoOverPI = albedo * INV_PI;
 `,
     gl: /*glsl*/ `
-  // PBR Lighting (ambient + direct)
   directLight = vec3(0.0);
 
-  // Ambient lighting — diffuse only, so metals are excluded. The INV_PI
-  // Lambertian normalization matches the direct-light diffuse (albedoOverPI),
-  // so an AmbientLight reads at the same energy scale as a directional light.
   ambient += uGlobalLightParams.xyz * albedo * (1.0 - metallic) * INV_PI;
 
   float nDotV = max(dot(normal, viewDir), 0.0);
   float a = roughness * roughness;
   float a2 = a * a;
   float a2_inv_pi = a2 * INV_PI;
-  float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-  float oneMinusK = 1.0 - k;
-  float vis_V = 1.0 / (nDotV * oneMinusK + k);
+  float oneMinusA = 1.0 - a;
+  float visV = nDotV * oneMinusA + a;
   vec3 albedoOverPI = albedo * INV_PI;
 `,
   },
 
   perLight: {
     gpu: /*wgsl*/ `
-    // Cook-Torrance BRDF
     let halfVector = normalize(viewDir + lightDir);
     let hDotV = max(dot(halfVector, viewDir), 0.0);
 
-    // 1. Distribution (GGX) — uses precomputed a2 * INV_PI
     let nDotH = max(dot(normal, halfVector), 0.0);
     let dDenom = (nDotH * nDotH * (a2 - 1.0) + 1.0);
-    // 1e-5 (not 1e-7) because mobile fragment math at mediump (FP16) flushes
-    // values below ~6e-5 to zero, which would NaN the GGX denominator.
-    let distribution = a2_inv_pi / (dDenom * dDenom + 1e-5);
+    let distribution = a2_inv_pi / (dDenom * dDenom);
 
-    // 2. Visibility (Schlick-GGX Smith)
-    let vis_L = 1.0 / (nDotL * oneMinusK + k);
-    let vis = 0.25 * vis_V * vis_L;
+    let vis = 0.5 / max(nDotL * visV + nDotV * (nDotL * oneMinusA + a), 1e-6);
 
-    // 3. Fresnel (Spherical Gaussian approximation of Schlick pow5).
-    // Replaces 3 dependent multiplies with 1 MAD + 1 MUL + 1 hardware exp2;
-    // max error vs. the literal pow5 is ~0.0003 across [0, 1]. Unreal Engine
-    // has shipped this since 2013 — see Karis, "Real Shading in UE4" §3.2.
     let fc5 = exp2((-5.55473 * hDotV - 6.98316) * hDotV);
     let fresnel = fresnelF0 + (vec3<f32>(f90) - fresnelF0) * fc5;
 
@@ -108,20 +94,15 @@ const float INV_PI = 0.31830988618;
     directLight += (diffuseWeight * albedoOverPI + specular) * radiance * nDotL * shadow;
 `,
     gl: /*glsl*/ `
-    // Cook-Torrance BRDF
     vec3 halfVector = normalize(viewDir + lightDir);
     float hDotV = max(dot(halfVector, viewDir), 0.0);
 
     float nDotH = max(dot(normal, halfVector), 0.0);
     float dDenom = (nDotH * nDotH * (a2 - 1.0) + 1.0);
-    // 1e-5 (not 1e-7) because mobile fragment math at mediump (FP16) flushes
-    // values below ~6e-5 to zero, which would NaN the GGX denominator.
-    float distribution = a2_inv_pi / (dDenom * dDenom + 1e-5);
+    float distribution = a2_inv_pi / (dDenom * dDenom);
 
-    float vis_L = 1.0 / (nDotL * oneMinusK + k);
-    float vis = 0.25 * vis_V * vis_L;
+    float vis = 0.5 / max(nDotL * visV + nDotV * (nDotL * oneMinusA + a), 1e-6);
 
-    // Spherical Gaussian approximation of Schlick pow5 — see WGSL counterpart.
     float fc5 = exp2((-5.55473 * hDotV - 6.98316) * hDotV);
     vec3 fresnel = fresnelF0 + (vec3(f90) - fresnelF0) * fc5;
 

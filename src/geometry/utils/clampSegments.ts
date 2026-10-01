@@ -4,7 +4,6 @@
  * Returns `min` for non-finite inputs (NaN, Infinity).
  * @param value - The requested segment count.
  * @param min - The lower bound applied after flooring.
- * @returns The floored, clamped segment count.
  * @internal
  */
 export function clampSegments(value: number, min: number): number {

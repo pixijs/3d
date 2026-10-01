@@ -1,10 +1,7 @@
 import { WGSL_ALIGN_SIZE_DATA } from 'pixi.js';
 
 /**
- * Per-field layout element describing where a struct field sits in memory
- *
- * Mirrors PixiJS's UboElement pattern — the layout pass computes these once, then both the WGSL
- * emitter and the sync function generator consume them.
+ * Where one struct field sits in memory
  * @internal
  */
 interface StructElement {
@@ -16,25 +13,24 @@ interface StructElement {
   offset: number;
   /** Byte size of this field */
   size: number;
-  /** Number of 32-bit components (1 for f32, 3 for vec3, etc.) */
+  /** Its size in 32-bit words: 1 for `f32`, 3 for `vec3<f32>`, 4 for `mat2x2<f32>` */
   components: number;
 }
 
 /**
- * Complete struct layout result
+ * A struct's field offsets and size
  * @internal
  */
 interface StructLayout {
-  /** Per-field layout elements, in declaration order */
+  /** One element per field, in declaration order */
   elements: StructElement[];
-  /** Total struct size in bytes */
+  /** The byte offset where the last field ends, not rounded up to the struct's alignment as WGSL does */
   size: number;
 }
 
 /**
- * Formats a layout as one `field: offset/size` line per element, for overflow diagnostics
- *
- * Shows the author exactly what to trim or pack.
+ * Formats a layout as one line per field, with its type, offset and size, for the error a struct
+ * too big for the material store throws
  * @param layout - The layout to format
  * @returns One line per element
  * @internal
@@ -44,12 +40,12 @@ export function formatStructLayout(layout: StructLayout): string {
 }
 
 /**
- * Computes the memory layout for a struct given its field definitions
+ * Lays out a struct's fields in declaration order, aligning each by pixi's `WGSL_ALIGN_SIZE_DATA`
  *
- * Walks the fields in declaration order, applying Pixi's WGSL alignment rules to compute each
- * field's byte offset.
- * @param fields - Struct field definitions in declaration order
- *                 (e.g. `{ baseColor: 'vec4<f32>', roughness: 'f32' }`)
+ * The material data class writes a material's values at these offsets, and `layoutMaterialTexels`
+ * reads the shader's fields from them, so both sides agree. A field whose type pixi has no entry
+ * for is left out.
+ * @param fields - Field types in declaration order, such as `{ baseColor: 'vec4<f32>', roughness: 'f32' }`
  * @returns The per-field elements and total struct size
  * @internal
  */

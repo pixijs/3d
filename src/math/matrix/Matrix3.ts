@@ -4,43 +4,58 @@ import type { TypedFixedArray } from '../utils/misc';
 import type { Matrix4 } from './Matrix4';
 
 /**
- * The `Matrix3` object represents a 3x3 column-major matrix used for 2D affine transforms,
- * normal-matrix derivation and KHR_texture_transform UV math
+ * A 3x3 matrix, for 2D affine transforms such as UV transforms, and for the normal matrix of a 3D
+ * transform
  *
- * The 9 elements are stored in column-major order matching the WebGL/WebGPU uniform layout.
+ * {@link Matrix3#elements} holds the nine values column by column, the order shaders use, and a
+ * `Matrix3` can be the value of a `mat3x3<f32>` uniform as it is. The 2D methods
+ * ({@link Matrix3#translate}, {@link Matrix3#rotate}, {@link Matrix3#scale}) each apply after the
+ * transform built so far, like pixi's `Matrix`.
  *
- * Math operations follow the unified mutating-default pattern: `a.multiply(b)` mutates `a`;
- * `a.multiply(b, out)` writes the result into `out` without mutating `a`.
+ * Methods that change the matrix do so in place, or write into an `out` matrix when you pass one
+ * and leave this matrix as it is.
  * @example
  * ```ts
- * // 2D affine transform
- * const t = new Matrix3().translate(10, 5).rotate(Math.PI / 4).scale(2, 2);
+ * const tile = new Matrix3().scale(4, 4).translate(0.5, 0);
+ * const uv = new Vector2(0.25, 0.75).applyMatrix3(tile);
  *
- * // Normal matrix derived from a world matrix
- * const normalMatrix = new Matrix3().getNormalMatrix(worldMatrix);
- *
- * // Pixi-style aliases
- * t.append(t);          // same as multiply
- * t.prepend(t);         // same as premultiply
+ * const normalMatrix = new Matrix3().getNormalMatrix(mesh.worldTransform);
+ * const uniforms = new UniformGroup({ uNormalMatrix: { value: normalMatrix, type: 'mat3x3<f32>' } });
  * ```
  * @see {@link Matrix4} For the 4x4 counterpart
  * @category maths
  * @standard
  */
 export class Matrix3 {
-  /** Column-major Float32 storage of the 9 matrix elements, suitable for direct GPU upload */
+  /**
+   * The nine values, column by column: a 2D translation sits at indices 6 and 7
+   * @example
+   * ```ts
+   * const scrollU = uvTransform.elements[6];
+   * ```
+   */
   public elements: TypedFixedArray<9>;
 
   /**
-   * Lazily-allocated Float32Array populated by {@link Matrix3#toArray}
+   * The array {@link Matrix3#toArray} writes into when given no `out`; `null` until its first call
+   * @example
+   * ```ts
+   * uvTransform.toArray(true);
+   * const rowMajor = uvTransform.array!;
+   * ```
    * @default null
+   * @advanced
    */
   public array: Float32Array | null = null;
 
   /**
-   * A static `Matrix3` reset to identity on every access
+   * A shared `Matrix3`, reset to identity on every access, for a one-off calculation
    *
    * > [!IMPORTANT] This matrix is shared and temporary. Do not store references to it.
+   * @example
+   * ```ts
+   * const turned = new Vector2(1, 0).applyMatrix3(Matrix3.shared.rotate(angle));
+   * ```
    */
   static get shared(): Matrix3 {
     return _sharedMatrix.identity();
@@ -51,6 +66,10 @@ export class Matrix3 {
    *
    * > [!IMPORTANT] This is a shared instance; do not mutate it. Use {@link Matrix3.shared} when you
    * > need a writable temporary.
+   * @example
+   * ```ts
+   * const untransformed = uvTransform.equals(Matrix3.IDENTITY);
+   * ```
    */
   static get IDENTITY(): Readonly<Matrix3> {
     return _identityMatrix.identity();
@@ -58,7 +77,7 @@ export class Matrix3 {
 
   /**
    * Creates a new `Matrix3`, defaulting to the identity matrix
-   * @param elements - Optional column-major 9-element backing array
+   * @param elements - Optional column-major 9-element backing array; kept, not copied
    */
   constructor(elements?: TypedFixedArray<9>) {
     this.elements = elements || (new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]) as TypedFixedArray<9>);
@@ -66,6 +85,16 @@ export class Matrix3 {
 
   /**
    * Sets the 9 elements from row-major arguments (`nRC` = row R, column C)
+   *
+   * The arguments read like the matrix written out on paper; they are stored column by column.
+   * @example
+   * ```ts
+   * const skew = new Matrix3().set(
+   *   1, 0.3, 0,
+   *   0, 1, 0,
+   *   0, 0, 1,
+   * );
+   * ```
    * @param n11 - Row 1, column 1
    * @param n12 - Row 1, column 2
    * @param n13 - Row 1, column 3
@@ -105,6 +134,10 @@ export class Matrix3 {
 
   /**
    * Resets this matrix to the identity matrix
+   * @example
+   * ```ts
+   * uvTransform.identity().translate(scroll, 0);
+   * ```
    * @returns This matrix
    */
   public identity(): this {
@@ -113,6 +146,10 @@ export class Matrix3 {
 
   /**
    * Checks whether this matrix equals the identity matrix exactly
+   * @example
+   * ```ts
+   * if (!uvTransform.isIdentity()) uniforms.uniforms.uUvTransform = uvTransform;
+   * ```
    * @returns True when every element matches the identity matrix
    */
   public isIdentity(): boolean {
@@ -133,6 +170,10 @@ export class Matrix3 {
 
   /**
    * Copies the elements of `m` into this matrix
+   * @example
+   * ```ts
+   * previousUvTransform.copyFrom(uvTransform);
+   * ```
    * @param m - Matrix to copy from
    * @returns This matrix
    */
@@ -155,6 +196,10 @@ export class Matrix3 {
 
   /**
    * Copies this matrix's elements into `target`
+   * @example
+   * ```ts
+   * uvTransform.copyTo(previousUvTransform);
+   * ```
    * @param target - Matrix to copy into
    * @returns The given target matrix
    */
@@ -177,6 +222,10 @@ export class Matrix3 {
 
   /**
    * Checks whether all 9 elements of this matrix match `m` exactly (no epsilon tolerance)
+   * @example
+   * ```ts
+   * if (!uvTransform.equals(previousUvTransform)) material.update();
+   * ```
    * @param m - Matrix to compare against
    * @returns True when every element matches
    */
@@ -199,6 +248,10 @@ export class Matrix3 {
 
   /**
    * Creates a new `Matrix3` with the same elements
+   * @example
+   * ```ts
+   * const mirrored = uvTransform.clone().scale(-1, 1);
+   * ```
    * @returns The new matrix
    */
   public clone(): Matrix3 {
@@ -208,6 +261,7 @@ export class Matrix3 {
   /**
    * Formats this matrix as a readable row-by-row string
    * @returns The string representation
+   * @advanced
    */
   public toString(): string {
     const e = this.elements;
@@ -217,6 +271,10 @@ export class Matrix3 {
 
   /**
    * Reads the 9 elements from `array` (column-major) starting at `offset`
+   * @example
+   * ```ts
+   * const frameTransform = new Matrix3().fromArray(packedTransforms, frame * 9);
+   * ```
    * @param array - Source array of column-major elements
    * @param offset - Index of the first element to read
    * @returns This matrix
@@ -240,8 +298,13 @@ export class Matrix3 {
   /**
    * Writes this matrix's elements into a Float32Array
    *
-   * The result lives in the lazily-allocated {@link Matrix3#array} field on first call when no
-   * `out` is supplied.
+   * Without `out`, writes into and returns {@link Matrix3#array}, allocated on the first call.
+   * @example
+   * ```ts
+   * const rowMajor = new Float32Array(9);
+   *
+   * uvTransform.toArray(true, rowMajor);
+   * ```
    * @param transpose - When `true`, writes row-major; default writes column-major (matching {@link Matrix3#elements})
    * @param out - Optional destination array
    * @returns The populated array
@@ -277,7 +340,13 @@ export class Matrix3 {
   }
 
   /**
-   * Multiplies this matrix by `m`: `this = this * m`
+   * Multiplies this matrix by `m`: `this = this * m`, so `m` applies to a point first
+   * @example
+   * ```ts
+   * const atlasUv = new Matrix3();
+   *
+   * frameTransform.multiply(tileTransform, atlasUv);
+   * ```
    * @param m - Matrix to multiply by
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -289,7 +358,11 @@ export class Matrix3 {
   }
 
   /**
-   * Pre-multiplies this matrix by `m`: `this = m * this`
+   * Pre-multiplies this matrix by `m`: `this = m * this`, so `m` applies to a point last
+   * @example
+   * ```ts
+   * uvTransform.premultiply(frameTransform);
+   * ```
    * @param m - Matrix to pre-multiply by
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -301,7 +374,11 @@ export class Matrix3 {
   }
 
   /**
-   * Sets this matrix to `a * b`
+   * Sets this matrix to `a * b`, so `b` applies to a point first
+   * @example
+   * ```ts
+   * atlasUv.multiplyMatrices(frameTransform, tileTransform);
+   * ```
    * @param a - Left operand
    * @param b - Right operand
    * @param out - Optional target; defaults to writing into this matrix
@@ -318,6 +395,7 @@ export class Matrix3 {
    * @param s - Scalar to multiply by
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
+   * @advanced
    */
   public multiplyScalar(s: number, out: Matrix3 = this): this {
     const te = out.elements;
@@ -337,9 +415,11 @@ export class Matrix3 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix3#multiply}
-   *
-   * Combines two matrices: `this = this * m`.
+   * Pixi-style alias for {@link Matrix3#multiply}: `this = this * m`
+   * @example
+   * ```ts
+   * frameTransform.append(tileTransform, atlasUv);
+   * ```
    * @param m - Matrix to append
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -349,9 +429,11 @@ export class Matrix3 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix3#premultiply}
-   *
-   * Combines two matrices: `this = m * this`.
+   * Pixi-style alias for {@link Matrix3#premultiply}: `this = m * this`
+   * @example
+   * ```ts
+   * uvTransform.prepend(frameTransform);
+   * ```
    * @param m - Matrix to prepend
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -361,9 +443,11 @@ export class Matrix3 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix3#multiplyMatrices}
-   *
-   * Sets this matrix to `a * b`.
+   * Pixi-style alias for {@link Matrix3#multiplyMatrices}: this matrix becomes `a * b`
+   * @example
+   * ```ts
+   * atlasUv.appendFrom(frameTransform, tileTransform);
+   * ```
    * @param a - Left operand
    * @param b - Right operand
    * @param out - Optional target; defaults to writing into this matrix
@@ -375,6 +459,12 @@ export class Matrix3 {
 
   /**
    * Computes the determinant of this matrix
+   *
+   * Negative when the transform mirrors, and 0 when it flattens a dimension and can't be inverted.
+   * @example
+   * ```ts
+   * const mirrored = uvTransform.determinant() < 0;
+   * ```
    * @returns The determinant
    */
   public determinant(): number {
@@ -395,6 +485,12 @@ export class Matrix3 {
 
   /**
    * Transposes this matrix
+   * @example
+   * ```ts
+   * const rowMajor = new Matrix3();
+   *
+   * normalMatrix.transpose(rowMajor);
+   * ```
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
    */
@@ -429,7 +525,11 @@ export class Matrix3 {
    * Sets this matrix to the inverse of `m`
    *
    * When `m` is non-invertible (determinant is 0) the matrix is reset to identity. By default this
-   * also emits a console warning; pass `throwOnDegenerate = true` to throw instead.
+   * also logs a warning; pass `throwOnDegenerate = true` to throw instead.
+   * @example
+   * ```ts
+   * const screenToUv = new Matrix3().getInverse(uvToScreen);
+   * ```
    * @param m - Matrix to invert
    * @param throwOnDegenerate - When `true`, throws on a non-invertible matrix instead of warning
    * @param out - Optional target; defaults to writing into this matrix
@@ -486,7 +586,14 @@ export class Matrix3 {
   }
 
   /**
-   * Translates this matrix by `(tx, ty)` (2D affine)
+   * Moves this 2D transform by `(tx, ty)`, applied after the transform built so far, like pixi's
+   * `Matrix.translate`
+   * @example
+   * ```ts
+   * app.ticker.add((ticker) => {
+   *   uvTransform.identity().translate((ticker.lastTime * 0.0001) % 1, 0);
+   * });
+   * ```
    * @param tx - Translation along x
    * @param ty - Translation along y
    * @param out - Optional target; defaults to writing into this matrix
@@ -507,7 +614,12 @@ export class Matrix3 {
   }
 
   /**
-   * Scales this matrix by `(sx, sy)` (2D affine)
+   * Scales this 2D transform by `(sx, sy)` about the origin, applied after the transform built so
+   * far, like pixi's `Matrix.scale`
+   * @example
+   * ```ts
+   * const tiled = new Matrix3().scale(4, 4);
+   * ```
    * @param sx - Scale along x
    * @param sy - Scale along y
    * @param out - Optional target; defaults to writing into this matrix
@@ -532,6 +644,10 @@ export class Matrix3 {
    *
    * The rotation applies after the existing transform, and a positive angle turns +x toward +y,
    * the same as pixi's `Matrix.rotate`.
+   * @example
+   * ```ts
+   * const spin = new Matrix3().translate(-0.5, -0.5).rotate(angle).translate(0.5, 0.5);
+   * ```
    * @param theta - Rotation angle in radians
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -562,9 +678,17 @@ export class Matrix3 {
   }
 
   /**
-   * Sets this matrix to a UV transform combining translation, scale, rotation around `(cx, cy)`
+   * Sets this matrix to a UV transform: rotate by `rotation` and scale by `(sx, sy)`, both about
+   * `(cx, cy)`, then offset by `(tx, ty)`
    *
-   * Matches the glTF KHR_texture_transform layout.
+   * A positive `rotation` turns +u toward -v. The rotation applies before the scale, which is the
+   * opposite of glTF's `KHR_texture_transform`, so the two disagree when the scale is non-uniform
+   * and the rotation isn't zero. A material's UVs take a pixi `Matrix` in
+   * {@link BaseMaterial3D#uvTransform} instead.
+   * @example
+   * ```ts
+   * const uvTransform = new Matrix3().setUvTransform(0, 0, 2, 2, Math.PI / 4, 0.5, 0.5);
+   * ```
    * @param tx - Translation along u
    * @param ty - Translation along v
    * @param sx - Scale along u
@@ -600,7 +724,13 @@ export class Matrix3 {
   }
 
   /**
-   * Sets this matrix to the upper-left 3x3 block of the given {@link Matrix4}
+   * Sets this matrix to the upper-left 3x3 block of the given {@link Matrix4}: its rotation and
+   * scale, without the translation
+   * @example
+   * ```ts
+   * const linear = new Matrix3().setFromMatrix4(mesh.worldTransform);
+   * const worldOffset = localOffset.clone().applyMatrix3(linear);
+   * ```
    * @param m - Matrix to read from
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
@@ -614,10 +744,17 @@ export class Matrix3 {
   }
 
   /**
-   * Sets this matrix to the normal matrix of `matrix4` — the inverse-transpose of its upper-left
+   * Sets this matrix to the normal matrix of `matrix4`: the inverse transpose of its upper-left
    * 3x3 block
    *
-   * Used to transform direction vectors (normals) when a model has non-uniform scale.
+   * Normals transformed by it stay at right angles to the surface when the model has non-uniform
+   * scale; renormalize them after. A matrix with zero scale on an axis can't be inverted, so the
+   * result is identity and a warning is logged.
+   * @example
+   * ```ts
+   * const normalMatrix = new Matrix3().getNormalMatrix(mesh.worldTransform);
+   * const worldNormal = hitNormal.clone().applyMatrix3(normalMatrix).normalize();
+   * ```
    * @param matrix4 - World matrix to derive the normal matrix from
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to

@@ -1,18 +1,13 @@
 import type { TypedArray } from 'pixi.js';
 
 /**
- * Widens a three-component vertex-color array to four components, filling alpha opaque
+ * Widens three-component vertex colours to RGBA with an opaque alpha
  *
- * glTF allows `COLOR_n` as `VEC3` or `VEC4`; `Geometry3D` takes colors as RGBA
- * so shaders get one stable `vec4` contract. The generic VEC3 widening in
- * `Geometry3DUtils` leaves the fourth lane at zero, which for a color means
- * fully transparent — hence this separate pass, which fills alpha with the
- * component type's "1.0": `255` / `65535` for normalized integers, `1` for floats.
- *
- * Returns `data` untouched when it is already four-component.
- * @param data - Source color data
- * @param components - Components per vertex in `data` (3 or 4)
- * @returns A four-component array, or `data` when it already was one
+ * glTF allows `COLOR_n` as VEC3 or VEC4, but `Geometry3D` reads colours four components per
+ * vertex, so VEC3 data has to be widened first. Alpha is the component type's 1: `255` for
+ * `Uint8Array`, `65535` for `Uint16Array`, `1` for `Float32Array`.
+ * @param data - Source colour data
+ * @param components - Components per vertex in `data`; anything but 3 returns `data` unchanged
  * @internal
  */
 export function widenColorToRgba(data: TypedArray, components: number): TypedArray {

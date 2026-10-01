@@ -23,11 +23,8 @@ interface ShadowPassProbe {
   renderTarget: { depthStencilTexture: unknown };
 }
 
-// The GL global bind group is seeded once; after that only the slots a frame binds move. The shadow slot
-// is bound by the shadow pass alone, so its seed is what every frame without a shadow render samples —
-// and a comparison sampler can only read a comparison-mode depth texture.
-describe('GL global bind group shadow slot', () => {
-  it('reads the comparison placeholder until a shadow frame binds the live map', async () => {
+describe('GL global bind group shadow slot, which only the shadow pass binds, so its seed is what shadowless frames sample', () => {
+  it('reads the comparison placeholder, the only kind a comparison sampler accepts, until a shadow frame binds the live map', async () => {
     const app = await getApp<WebGLRenderer>({
       id: 'shadow-map-slot-gl',
       appOptions: { preference: 'webgl', width: SIZE, height: SIZE },
@@ -51,9 +48,8 @@ describe('GL global bind group shadow slot', () => {
       ground.rotation.set(-Math.PI / 2, 0, 0);
       view3d.root.addChild(ground);
 
-      // No light claims a shadow slot, so the pass never runs and the placeholder stays.
       app.render();
-      expect(group.getResource(shadowMap)).toBe(DEPTH_EMPTY.source);
+      expect(group.getResource(shadowMap), 'no light claims a slot, so the pass never runs').toBe(DEPTH_EMPTY.source);
       expect(group.getResource(BONE_PIT_SLOT)).toBe(view3d._bonePit.texture.source);
 
       const caster = new Mesh3D({

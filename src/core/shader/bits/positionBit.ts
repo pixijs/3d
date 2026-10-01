@@ -3,17 +3,12 @@ import type { VertexFormat } from 'pixi.js';
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Divisor applied in the vertex shader to recover integer-space positions from
- * hardware-normalized (snorm/unorm) values
+ * What the vertex shader multiplies a position by to get back the integer a quantized format holds
  *
- * KHR_mesh_quantization stores positions as Int8/Uint8/Int16/Uint16 and the
- * exporter bakes `node.scale = S/D`. Hardware normalization maps the integer
- * range to `[-1, 1]` / `[0, 1]`; multiplying by the divisor in-shader restores
- * the original integer value `Q`, after which `node.scale * Q = V` (final world
- * value) -- identical to the uncompressed mesh.
- *
- * Float formats use `1.0` so the multiply folds out and the float and
- * quantized paths share a single bit factory.
+ * `Geometry3D` uploads integer positions in normalized formats, which the hardware maps to
+ * [-1, 1] or [0, 1]. The divisor undoes that, so the shader sees the stored integer and the node's
+ * transform scales it to the real position, as `KHR_mesh_quantization` lays out for unnormalized
+ * positions. Float formats map to `1.0`, which the bit leaves out.
  */
 const FORMAT_TO_DIVISOR: Partial<Record<VertexFormat, string>> = {
   float32x3: '1.0',
@@ -27,18 +22,13 @@ const FORMAT_TO_DIVISOR: Partial<Record<VertexFormat, string>> = {
 const cache: Partial<Record<VertexFormat, ShaderBit>> = Object.create(null);
 
 /**
- * Returns the position bit variant for a source `aPosition` `VertexFormat`
+ * Returns the bit that reads `aPosition` in `format` into the vertex template's `position` local
  *
- * The bit reads `aPosition`, applies the KHR_mesh_quantization dequantization
- * divisor (a no-op for float formats), and writes the result into the
- * shared `position: vec4<f32>` local that downstream bits (skinning,
- * world transform) consume.
+ * Every format but `float32x3` has four components, and the bit takes their `xyz`. It multiplies a
+ * quantized position by its divisor, written in as a literal, so each variant costs one constant
+ * multiply, or none for floats. `w` is 1.
  *
- * Runs before the skinning bit so skinned and static meshes share the
- * same dequantization path.
- *
- * The divisor is inlined as a literal so each variant compiles to a
- * single constant multiply (or zero ops for float formats).
+ * The renderer adds it ahead of the morph and skinning bits, so they deform the decoded position.
  * @param format - The geometry's `aPosition` vertex format
  * @returns The cached position bit for that format
  * @internal
@@ -52,7 +42,6 @@ export function getPositionBit(format: VertexFormat): ShaderBit {
     throw new Error(`[positionBit] Unsupported aPosition format: ${format}`);
   }
 
-  // float32x3 reads aPosition as vec3 directly; everything else is vec4 → take .xyz.
   const isVec3 = format === 'float32x3';
   const xyzGl = isVec3 ? 'aPosition' : 'aPosition.xyz';
   const xyzGpu = isVec3 ? 'input.aPosition' : 'input.aPosition.xyz';

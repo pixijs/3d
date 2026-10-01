@@ -7,18 +7,16 @@ import type { BaseMaterial3D } from '../materials/BaseMaterial3D';
 import type { Scene3DDescriptor, Scene3DEntry } from './Scene3DDescriptor';
 
 /**
- * The shared, immutable result of loading a 3D model file (glTF or GLB)
+ * The geometries, materials, textures and animations loaded from a glTF or GLB file
  *
- * A source holds the geometries, materials, textures and animations decoded from the file, plus
- * an internal descriptor of the scene hierarchy.
+ * A source is a template. Spawn scene-graph instances from it with `new Model3D(source)` and add
+ * those to a view; the source itself never goes into a `View3D`. Every model spawned from one
+ * source shares its geometries, materials and textures, so a change to a source material shows on
+ * all of them.
  *
- * A source is a *template*; spawn live scene-graph instances from it with `new Model3D(source)`.
- * The source itself is never added to a `View3D`. Many instances share the same source, so
- * geometries, materials and textures stay deduplicated across the scene.
- *
- * Resources are exposed in two parallel forms: by integer index (`textures`, `materials`,
- * `geometries`) and by source-file name (`texture`, `material`, `geometry`). The indexed form is
- * exhaustive; the name-keyed form contains only entries that had names in the source file.
+ * Resources come two ways: by their index in the file (`textures`, `materials`, `geometries`),
+ * which lists all of them, and by the name the file gave them (`texture`, `material`, `geometry`),
+ * which lists only the named ones.
  * @example
  * ```ts
  * import { Assets } from 'pixi.js';
@@ -26,58 +24,108 @@ import type { Scene3DDescriptor, Scene3DEntry } from './Scene3DDescriptor';
  *
  * const source = await Assets.load<Scene3DSource>('robot.glb');
  *
- * // Spawn two independent instances sharing the same geometry, material and textures
+ * // Two models sharing the same geometry, materials and textures
  * const robotA = new Model3D(source);
  * const robotB = new Model3D(source);
  *
  * view3d.root.addChild(robotA, robotB);
  *
- * // Lookup a named resource
- * const helmet = source.material['Helmet'];
+ * // Repaints both robots
+ * source.material['Helmet'].baseColor = 0xff0000;
  * ```
  * @see {@link Model3D} For the live scene-graph instance type
  * @category assets
  * @standard
  */
 export class Scene3DSource {
-  /** Every texture, indexed by its source-file index */
+  /**
+   * Every texture, by its index in the file
+   *
+   * Textures in the file that use the same image share one `Texture`, so an entry can repeat.
+   * @example
+   * ```ts
+   * for (const texture of source.textures) texture.source.style.maxAnisotropy = 8;
+   * ```
+   */
   public readonly textures: Texture[] = [];
 
-  /** Every material, indexed by its source-file index */
+  /**
+   * Every material, by its index in the file
+   *
+   * Unlit materials load as {@link FlatMaterial}, the rest as {@link Material3D}. When a mesh
+   * primitive names no material, the glTF default material is added after the file's own.
+   * @example
+   * ```ts
+   * const pbrMaterials = source.materials.filter((material) => material instanceof Material3D);
+   * ```
+   */
   public readonly materials: BaseMaterial3D[] = [];
 
   /**
-   * Primitive geometries indexed by their source-file mesh index
-   *
-   * Each mesh may have multiple primitives, so the outer index resolves to an array.
+   * Every mesh's geometries, by its index in the file: one per primitive of the mesh
+   * @example
+   * ```ts
+   * const [body, glass] = source.geometries[0];
+   * ```
    */
   public readonly geometries: Geometry3D[][] = [];
 
-  /** Textures keyed by their source-file name; a subset of {@link Scene3DSource#textures} */
+  /**
+   * The textures the file names, keyed by name
+   * @example
+   * ```ts
+   * const logo = new Sprite(source.texture['Logo']);
+   * ```
+   */
   public readonly texture: Record<string, Texture> = {};
 
-  /** Materials keyed by their source-file name; a subset of {@link Scene3DSource#materials} */
+  /**
+   * The materials the file names, keyed by name
+   * @example
+   * ```ts
+   * source.material['Paint'].baseColor = 0x3366ff;
+   * ```
+   */
   public readonly material: Record<string, BaseMaterial3D> = {};
 
   /**
-   * Single-primitive geometries keyed by their source-file mesh name
+   * The geometry of each mesh the file names, keyed by mesh name
    *
-   * Multi-primitive meshes are only addressable through {@link Scene3DSource#geometries}.
+   * A mesh with several primitives maps to its first; {@link Scene3DSource#geometries} has them all.
+   * @example
+   * ```ts
+   * const rock = new Mesh3D({ geometry: source.geometry['Rock'], material: new Material3D() });
+   * ```
    */
   public readonly geometry: Record<string, Geometry3D> = {};
 
-  /** Animation clips keyed by their source-file name */
+  /**
+   * Animation clips keyed by name; an unnamed clip is keyed `anim_<index>`
+   * @example
+   * ```ts
+   * const walkSeconds = source.animations['Walk'].duration;
+   * ```
+   */
   public readonly animations: Record<string, Animation> = {};
 
   /**
-   * Scenes keyed by name
+   * The scenes the file names, keyed by name
    *
-   * When `Model3DOptions.scene` is omitted, the source's default scene
-   * (`Scene3DDescriptor.defaultScene`, from the file's own default-scene index) is instantiated.
+   * Pass a name as {@link Model3DOptions#scene} to spawn that scene instead of the default one.
+   * @example
+   * ```ts
+   * const showroom = new Model3D({ source, scene: 'Showroom' });
+   * ```
    */
   public readonly scene: Record<string, Scene3DEntry> = {};
 
-  /** Whether {@link Scene3DSource.destroy} has run */
+  /**
+   * Whether {@link Scene3DSource#destroy} has run
+   * @example
+   * ```ts
+   * if (!source.destroyed) view3d.root.addChild(new Model3D(source));
+   * ```
+   */
   public destroyed = false;
 
   /**
@@ -93,10 +141,8 @@ export class Scene3DSource {
   public readonly _imageUrls: string[] = [];
 
   /**
-   * Creates a new `Scene3DSource`
-   *
-   * Loaders construct the source first, then populate the resource maps; user code should never
-   * call this directly.
+   * Loaders construct the source and then fill its resource lists; load files with `Assets.load`
+   * instead of calling this
    * @param descriptor - The parsed hierarchy descriptor
    */
   constructor(descriptor: Scene3DDescriptor) {
@@ -144,8 +190,6 @@ export class Scene3DSource {
 
     for (const material of this.materials) material?.destroy();
 
-    // Several glTF textures can point at one image, so the same Texture may appear more than once.
-    // The shared defaults are process-global singletons every material falls back to, so they stay.
     for (const texture of this.textures) {
       if (texture && !texture.destroyed && !SHARED_DEFAULT_TEXTURES.has(texture)) texture.destroy(true);
     }

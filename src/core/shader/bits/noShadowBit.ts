@@ -1,10 +1,10 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Stub `calculateShadow` that always returns full light
+ * A `calculateShadow` that always returns 1, fully lit
  *
- * Composed in place of a shadow-sampling bit when shadows are disabled, so
- * lighting bits can call `calculateShadow` unconditionally.
+ * The renderer gives a lit material this in place of the shadow-sampling bit when the mesh doesn't
+ * receive shadows or no light has cast any, so the light loop calls `calculateShadow` either way.
  * @internal
  */
 export const noShadowBit: ShaderBit = {

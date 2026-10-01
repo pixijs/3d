@@ -40,7 +40,7 @@ export interface GraphDebugOverlayOptions {
    */
   parent?: HTMLElement;
   /**
-   * Safety limit for one recording
+   * Most frames one recording keeps before it stops itself
    * @default GraphDebugRecording.defaultOptions.maxFrames
    */
   maxRecordedFrames?: number;
@@ -163,12 +163,20 @@ const CSS = `
 `;
 
 /**
- * Opt-in render debugger overlay
+ * HTML panel for recording a view's frames and reviewing how each one was drawn
  *
- * Recording captures complete per-frame snapshots for later review; outside a recording,
- * {@link GraphDebugOverlay#refresh} does no capture work. The only thing installed in a renderer is a
- * `postrender` listener while a renderer is followed; debug data is pulled from retained graph and batch
- * state only while the developer has explicitly started recording.
+ * Press Record, use the app, then Stop. The review steps through the recorded frames in two tabs:
+ * Workload lists each scene pass's batches and draws, and why draws were rebuilt or WebGPU
+ * bundles re-recorded; Render Graph lists the graph's passes, their dependencies and the
+ * lifetime of each resource. Copy Frame and Copy Recording put the data on the clipboard as
+ * JSON.
+ *
+ * Nothing is captured outside a recording. Until one starts, the overlay adds nothing to the
+ * renderer but the `postrender` listener that runs {@link GraphDebugOverlay#refresh | refresh()}.
+ * @example
+ * ```ts
+ * const overlay = new GraphDebugOverlay({ view: view3d, renderer: app.renderer });
+ * ```
  * @category extras:debug
  * @advanced
  */
@@ -208,10 +216,14 @@ export class GraphDebugOverlay {
   private _renderer: Renderer | null = null;
   private _hooked = false;
   private _destroyed = false;
-  /** Runner listener: pixi calls the method named after the runner on every object added to it */
+  /**
+   * Runner listener: pixi calls the method named after the runner on every object added to it
+   *
+   * Renders to a texture go through the same runner, so only a render to the screen counts as a
+   * drawn frame.
+   */
   private readonly _postrenderListener = {
     postrender: (options: RenderOptions): void => {
-      // Render-to-texture passes go through the same runner; only a render to the screen is a drawn frame.
       if (options.target !== this._renderer!.view.renderTarget) return;
       this.refresh();
     },
@@ -282,7 +294,20 @@ export class GraphDebugOverlay {
     this._syncHook();
   }
 
-  /** Captures one frame while recording; outside a recording this only keeps the idle shell current */
+  /**
+   * Captures the frame just rendered while a recording runs; outside one it only refreshes the
+   * idle panel, which enables Record once the view has a render graph
+   *
+   * Runs after every screen render while {@link GraphDebugOverlay#autoUpdate | autoUpdate} is on
+   * and a {@link GraphDebugOverlay#renderer | renderer} is set. Otherwise call it yourself after each
+   * render.
+   * @example
+   * ```ts
+   * const overlay = new GraphDebugOverlay({ view: view3d });
+   *
+   * app.ticker.add(() => overlay.refresh(), undefined, UPDATE_PRIORITY.UTILITY);
+   * ```
+   */
   public refresh(): void {
     if (!this._recording.active) {
       if (!this._snapshot) this._renderIdle(Boolean(this._getView()?._graph));
@@ -668,8 +693,6 @@ export class GraphDebugOverlay {
         links.appendChild(element('span', 'p3d-debug__graph-link', 'no dependencies'));
       } else {
         for (let d = 0; d < pass.dependsOn.length; d++) {
-          // Dependencies are declaration indices — two passes can share a name (same
-          // membership, different camera), so only the index picks out the right one.
           const dependency = graph.passes[pass.dependsOn[d]];
           const state = dependency?.active ? 'active' : 'skipped';
           links.appendChild(

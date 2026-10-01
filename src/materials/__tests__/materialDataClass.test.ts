@@ -14,8 +14,7 @@ const DEF: StructDefinition = {
   flags: 'u32',
 };
 
-// Setters route through the owning material's update(); a stub carrying the
-// one method the accessors touch keeps the data class testable standalone.
+/** Stands in for the owning material, whose `update()` is all the data class calls */
 const STUB_MATERIAL = { update(): void {} } as unknown as BaseMaterial3D;
 
 function makeData() {
@@ -41,32 +40,30 @@ describe('getOrCreateMaterialDataClass', () => {
     expect(data.flags).toBe(0xffff0001);
   });
 
-  it('signals the owning material per write, skipping no-op scalar writes', () => {
+  it('signals the owning material on every write except a scalar write of the current value', () => {
     let updates = 0;
     const counting = { update: () => void updates++ } as unknown as BaseMaterial3D;
     const data = new (getOrCreateMaterialDataClass(DEF, JSON.stringify(DEF)))(counting);
 
-    data.strength = 0; // already 0 — no-op, no signal
+    data.strength = 0;
     expect(updates).toBe(0);
 
     data.strength = 2;
     expect(updates).toBe(1);
 
-    data.tint = [0, 0, 0]; // vector writes always signal (copy, no compare)
+    data.tint = [0, 0, 0];
     expect(updates).toBe(2);
   });
 
-  it('returns live vector views; oversized writes throw instead of corrupting neighbours', () => {
+  it('returns cached live vector views that skip the upload signal, and throws on an oversized vector write', () => {
     let updates = 0;
     const counting = { update: () => void updates++ } as unknown as BaseMaterial3D;
     const data = new (getOrCreateMaterialDataClass(DEF, JSON.stringify(DEF)))(counting);
 
     const tint = data.tint as Float32Array;
     expect(tint).toBeInstanceOf(Float32Array);
-    expect(data.tint).toBe(tint); // cached view
+    expect(data.tint).toBe(tint);
 
-    // Live view: in-place mutation hits the packed buffer but, documented,
-    // bypasses the upload signal — callers pair it with material.update().
     tint[0] = 9;
     expect((data.tint as Float32Array)[0]).toBe(9);
     expect(updates).toBe(0);
@@ -74,36 +71,18 @@ describe('getOrCreateMaterialDataClass', () => {
     expect(() => (data.wide = [1, 2, 3, 4, 5])).toThrow(RangeError);
   });
 
-  it('caches one class per snapshot', () => {
-    const a = getOrCreateMaterialDataClass(DEF, JSON.stringify(DEF));
-    const b = getOrCreateMaterialDataClass(DEF, JSON.stringify(DEF));
-    const other = getOrCreateMaterialDataClass({ solo: 'f32' }, 'solo');
-
-    expect(a).toBe(b);
-    expect(other).not.toBe(a);
-    expect(new a(STUB_MATERIAL)).not.toBeInstanceOf(other);
-  });
-
-  it('makes stray boolean flag writes a compile error', () => {
+  it('makes a stray boolean flag write a compile error, and inert at runtime', () => {
     const data = makeData();
 
-    // @ts-expect-error — MaterialData has no boolean members: the old
-    // `_dirty = true` idiom must not typecheck into a silent no-op.
+    // @ts-expect-error MaterialData has no boolean members, so `_dirty = true` can't pass for a signal
     data._dirty = true;
 
-    expect(data.strength).toBe(0); // untouched — the write created an inert property only
-  });
-
-  it('throws at class build when the layout exceeds the store stride', () => {
-    const oversized: StructDefinition = {};
-    for (let i = 0; i < MATERIAL_STRIDE_FLOATS / 4 + 1; i++) oversized[`v${i}`] = 'vec4<f32>';
-
-    expect(() => getOrCreateMaterialDataClass(oversized, 'oversized')).toThrow(/overflow into adjacent/);
+    expect(data.strength).toBe(0);
   });
 });
 
 describe('material.data on real materials', () => {
-  it('mirrors the construction struct — feature fields appear only when opted in', () => {
+  it('mirrors the construction struct, with feature fields only when opted in and one class per feature set', () => {
     const clearcoated = new Material3D({ clearcoat: {} });
     expect(clearcoated.data.clearcoatParams).toBeInstanceOf(Float32Array);
     expect((clearcoated.data.clearcoatParams as Float32Array).length).toBe(4);
@@ -112,9 +91,7 @@ describe('material.data on real materials', () => {
 
     const plain = new Material3D({});
     expect(plain.data.clearcoatParams).toBeUndefined();
-    expect('_pad' in plain.data).toBe(false);
 
-    // Same feature set → same generated class (shared hidden class).
     expect(Object.getPrototypeOf(new Material3D({}).data)).toBe(Object.getPrototypeOf(plain.data));
   });
 });

@@ -4,6 +4,11 @@ import { clampSegments } from './utils/clampSegments';
 
 /**
  * Options for {@link TorusGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<TorusGeometryOptions> = { radius: 2, tube: 0.25 };
+ * const ring = new TorusGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
@@ -11,28 +16,43 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
   /**
    * The major radius, measured from the center of the torus to the center of the tube
    * @default 1
+   * @example
+   * ```ts
+   * const hoop = new TorusGeometry({ radius: 3, tube: 0.1 });
+   * ```
    */
   radius: number;
   /**
-   * The minor radius (half-thickness of the tube cross-section)
+   * The radius of the tube
    *
-   * Should be less than `radius`; larger values cause the tube to self-intersect through the
-   * ring center.
+   * Keep it below `radius`; a larger tube passes through itself at the center.
    * @default 0.4
+   * @example
+   * ```ts
+   * const donut = new TorusGeometry({ radius: 1, tube: 0.6 });
+   * ```
    */
   tube: number;
   /**
    * The number of segments around the tube cross-section
    *
-   * Clamped to a minimum of 3.
+   * Floored, and clamped to a minimum of 3.
    * @default 12
+   * @example
+   * ```ts
+   * const smooth = new TorusGeometry({ radialSegments: 32, tubularSegments: 96 });
+   * ```
    */
   radialSegments: number;
   /**
    * The number of segments around the torus ring
    *
-   * Clamped to a minimum of 3.
+   * Floored, and clamped to a minimum of 3.
    * @default 48
+   * @example
+   * ```ts
+   * const hexRing = new TorusGeometry({ tubularSegments: 6 });
+   * ```
    */
   tubularSegments: number;
   /**
@@ -41,14 +61,22 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
    * Defaults to `2π` for a closed torus; pass a smaller value (for example `Math.PI` for a half
    * torus) to leave the ring open.
    * @default Math.PI * 2
+   * @example
+   * ```ts
+   * const arch = new TorusGeometry({ arc: Math.PI });
+   * ```
    */
   arc: number;
   /**
-   * Start angle in radians for the cross-section sweep
+   * Start angle in radians for the cross-section sweep, measured from the outer edge of the ring
    *
-   * Combined with `thetaLength` to leave the tube cross-section open (e.g. for a D-section /
-   * dished half-tube).
+   * Combined with `thetaLength` to leave the tube cross-section open, for example for a gutter-like
+   * half tube.
    * @default 0
+   * @example
+   * ```ts
+   * const gutter = new TorusGeometry({ thetaStart: Math.PI, thetaLength: Math.PI });
+   * ```
    */
   thetaStart: number;
   /**
@@ -56,6 +84,10 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
    *
    * Defaults to `2π` for a closed tube.
    * @default Math.PI * 2
+   * @example
+   * ```ts
+   * const outerHalf = new TorusGeometry({ thetaStart: -Math.PI / 2, thetaLength: Math.PI });
+   * ```
    */
   thetaLength: number;
 }
@@ -69,7 +101,7 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
  * partial ring; `thetaStart`/`thetaLength` open the cross-section.
  *
  * UVs map `u` around the ring (0 at the start of the arc, 1 at the end) and `v` around the tube
- * cross-section (0 to 1 for a full revolution).
+ * cross-section (0 at `thetaStart`, 1 at the end of `thetaLength`).
  * @example
  * ```ts
  * const torus = new TorusGeometry({
@@ -87,7 +119,13 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
  * @standard
  */
 export class TorusGeometry extends Geometry3D {
-  /** Default options for {@link TorusGeometry} */
+  /**
+   * Default options for {@link TorusGeometry}
+   * @example
+   * ```ts
+   * TorusGeometry.defaultOptions.tube = 0.2;
+   * ```
+   */
   public static defaultOptions: TorusGeometryOptions = {
     ...Geometry3D.defaultOptions,
     radius: 1,
@@ -169,9 +207,6 @@ export class TorusGeometry extends Geometry3D {
         const c = rowSize * (j - 1) + i;
         const d = rowSize * j + i;
 
-        // Winding reversed (a,d,b / b,d,c) so triangles face outward after the
-        // y/z swap that re-orients the ring from the XY plane (+Z axis) to the
-        // XZ plane (+Y axis); a coordinate swap inverts handedness.
         indices[idxIdx++] = a;
         indices[idxIdx++] = d;
         indices[idxIdx++] = b;

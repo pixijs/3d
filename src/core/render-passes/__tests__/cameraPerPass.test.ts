@@ -158,18 +158,16 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(opaquePasses).toHaveLength(2);
         expect(opaquePasses[0].camera).toBeNull();
         expect(opaquePasses[1].camera).toBe(camera);
-        // One bit, one draw list; the survivors each frustum keeps are the pass's own.
-        expect(opaquePasses[0].bit).toBe(opaquePasses[1].bit);
-        expect(opaquePasses[0].cullResults).not.toBe(opaquePasses[1].cullResults);
+        expect(opaquePasses[0].bit, 'one bit, so one draw list').toBe(opaquePasses[1].bit);
+        expect(opaquePasses[0].cullResults, 'what each frustum keeps is its own').not.toBe(opaquePasses[1].cullResults);
 
-        // The dirty-hook lookups belong to the pass drawing from the view's own camera.
         expect(view3d.passByBit[RenderPassBit.OPAQUE]).toBe(opaquePasses[0]);
       } finally {
         app.destroy();
       }
     });
 
-    it('leaves the lookups with the view camera even when a camera pass is declared first', async () => {
+    it('leaves the lookups with the view camera even when a camera pass is declared first, as a beforeOpaque feed is', async () => {
       const app = await getApp<Renderer>({
         id: `camera-per-pass-before-opaque-${preference}`,
         appOptions: { preference, width: 128, height: 128 },
@@ -177,9 +175,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
       try {
         const { view3d, camera } = buildView();
-        // 'beforeOpaque' puts this pass in the graph ahead of the main opaque pass — a feed
-        // drawing into its own texture before the scene does. Ownership is by kind, not order:
-        // the pass drawing from the view's own camera keys and compiles the shared draw list.
         view3d.passes = [new ExtraOpaquePass(camera, false, 'beforeOpaque')];
         app.stage.addChild(view3d);
         app.render();
@@ -304,9 +299,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    // Direct to the screen the camera's frame is already in target space; through a scene
-    // transient it has to be shifted into the transient's own space, which only bites with the
-    // view off the screen origin.
     for (const composite of [false, true] as const) {
       const through = composite ? 'through a scene transient' : 'straight to the screen';
 
@@ -321,10 +313,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           const { view3d, camera } = buildView({ composite });
           if (composite) view3d.position.set(OFFSET_X, OFFSET_Y);
 
-          // A minimap: straight down onto a floor the view camera lies in and so never sees.
-          // `near` / `far` bracket it so the midpoint sits above the floor — a Camera3D
-          // projection is built in the GL convention on both backends, and WebGPU clips
-          // anything nearer than `(near + far) / 2`.
           camera.mode = 'orthographic';
           camera.orthographicSize = 6;
           camera.near = 1;
@@ -333,8 +321,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           camera.rotation.set(-Math.PI / 2, 0, 0);
           camera.rotationDirty = true;
 
-          // Unlit on purpose: this view has no lights and no environment, so a lit material
-          // would come out black on a black background and the readback would see nothing.
+          /**
+           * A floor for the inset to look straight down on, which the view camera lies in and never
+           * sees; unlit, since a lit material in this view with no lights would read black on black
+           */
           const ground = new Mesh3D({
             geometry: new PlaneGeometry({ width: 40, height: 40 }),
             material: new FlatMaterial({ baseColor: 0x3366ff }),
@@ -347,8 +337,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           view3d.passes = [inset];
           app.stage.addChild(view3d);
 
-          // Render the frame without the inset and again with it: outside the camera's rect not
-          // a pixel may differ, inside it the inset must have drawn.
           inset.enabled = false;
           app.render();
           const plain = app.renderer.extract.pixels({ target: app.stage, frame: app.screen });
@@ -356,9 +344,8 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           app.render();
           const withInset = app.renderer.extract.pixels({ target: app.stage, frame: app.screen });
 
-          // The rect comes from the camera itself — `frame` is where the executor put it, in
-          // screen pixels — padded 2px for the logical→physical rounding the viewport does.
           const scale = plain.width / app.screen.width;
+          /** Where the graph put the camera, in screen pixels; padded 2px below for the viewport's rounding */
           const frame = getCameraData(camera).frame;
           const left = Math.floor(frame.x * scale) - 2;
           const right = Math.ceil((frame.x + frame.width) * scale) + 2;
@@ -381,16 +368,17 @@ for (const preference of ['webgpu', 'webgl'] as const) {
             }
           }
 
-          expect(outsideDiffering).toBe(0);
-          // The floor fills the rect over an empty background: nearly all of it moves.
-          expect(insideDiffering).toBeGreaterThan(((right - left) * (bottom - top)) / 2);
+          expect(outsideDiffering, "not a pixel outside the camera's rect may change").toBe(0);
+          expect(insideDiffering, 'the floor fills the rect over an empty background').toBeGreaterThan(
+            ((right - left) * (bottom - top)) / 2,
+          );
         } finally {
           app.destroy();
         }
       });
     }
 
-    it("puts an inset camera's frame where the view puts it on screen", async () => {
+    it("puts an inset camera's frame where the view puts it on screen, with the view off the screen origin", async () => {
       const app = await getApp<Renderer>({
         id: `camera-per-pass-frame-${preference}`,
         appOptions: { preference, width: 256, height: 256 },
@@ -398,7 +386,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
       try {
         const { view3d, camera } = buildView();
-        // Off the screen origin, so the view's world transform is part of the answer.
         view3d.position.set(OFFSET_X, OFFSET_Y);
         view3d.passes = [new InsetPass(camera)];
         app.stage.addChild(view3d);
@@ -420,7 +407,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 }
 
 describe('camera per pass (webgpu records)', () => {
-  it('gives each camera on one name its own cull result for the batch', async () => {
+  it('gives each camera on one name its own cull result for the batch, which WebGL has none of', async () => {
     const app = await getApp<Renderer>({
       id: 'camera-per-pass-results',
       appOptions: { preference: 'webgpu', width: 128, height: 128 },
@@ -435,8 +422,6 @@ describe('camera per pass (webgpu records)', () => {
       const [main, inset] = view3d._graph.passes.filter((p) => p.name === 'opaque') as ForwardRenderPass[];
       const batch = view3d._sceneBatch;
 
-      // The survivors, indirect counts and bundle are per pass; WebGL keeps none of it (it
-      // compacts each list in place inside the draw), which is why this is WebGPU-only.
       expect(main.cullResults.get(batch)).toBeDefined();
       expect(inset.cullResults.get(batch)).toBeDefined();
       expect(main.cullResults.get(batch)).not.toBe(inset.cullResults.get(batch));
@@ -455,11 +440,6 @@ describe('prepareCamera', () => {
   });
 });
 
-/**
- * The screen-space sibling of `updateCameraProjectionForTarget` (covered in
- * `cameraRenderTexture.test.ts`): a camera drawing into the view's own target places its image
- * by its normalised `viewport`, clipped to the screen.
- */
 describe('updateCameraProjectionForView', () => {
   const SCREEN = new Rectangle(0, 0, 256, 256);
   const NO_OFFSET = { x: 0, y: 0 };
@@ -479,7 +459,7 @@ describe('updateCameraProjectionForView', () => {
     const frame = updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)!;
 
     expect([frame.x, frame.y, frame.width, frame.height]).toEqual([64, 32, 64, 32]);
-    // f = 1 / tan(fov / 2); the x scale is f / aspect and the y scale is f.
+    /** `1 / tan(fov / 2)` at 60°: the projection's y scale, and its x scale times the aspect */
     const f = 1 / Math.tan(Math.PI / 6);
     const e = camera.projection.elements;
     expect(e[0]).toBeCloseTo(f / 2, 5);
@@ -487,19 +467,17 @@ describe('updateCameraProjectionForView', () => {
   });
 
   it('clips the frame to the screen and zooms the projection into what is left', () => {
-    // A 256-wide view, so a viewport starting at 0.75 asks for 192..320 of a 256-wide screen.
     const view3d = new View3D({ width: 256, height: 256 });
     const camera = insetIn(view3d, { x: 0.75, width: 0.5, height: 1 });
 
     const frame = updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)!;
 
-    expect([frame.x, frame.width]).toEqual([192, 64]);
-    // The aspect is still the unclipped rect's; the visible half of it is zoomed into, and the
-    // offset carries how far the visible centre sits from the intended one.
+    expect([frame.x, frame.width], 'asked for 192..320 of a 256-wide screen').toEqual([192, 64]);
+    /** `1 / tan(fov / 2)` at 60° */
     const f = 1 / Math.tan(Math.PI / 6);
     const e = camera.projection.elements;
-    expect(e[0]).toBeCloseTo((f / 0.5) * 2, 5);
-    expect(e[8]).toBeCloseTo(-1, 5);
+    expect(e[0], "the unclipped rect's aspect, zoomed into the visible half").toBeCloseTo((f / 0.5) * 2, 5);
+    expect(e[8], 'how far the visible centre sits from the intended one').toBeCloseTo(-1, 5);
   });
 
   it("offsets by the renderer's own origin, so a view inside a filter still lands right", () => {
@@ -511,9 +489,8 @@ describe('updateCameraProjectionForView', () => {
     expect([frame.x, frame.y]).toEqual([64 - 20, 64 - 12]);
   });
 
-  it('reports no frame when the camera lands entirely off screen', () => {
+  it('reports no frame when the camera lands entirely past the edge of the screen', () => {
     const view3d = new View3D({ width: 256, height: 256 });
-    // 2.2 of a 256-wide view puts the whole inset past the 256-wide screen's right edge.
     const camera = insetIn(view3d, { x: 2.2, width: 0.4, height: 0.4 });
 
     expect(updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)).toBeUndefined();
@@ -521,10 +498,12 @@ describe('updateCameraProjectionForView', () => {
 
   it('keeps an inset on screen while any of it still overlaps', () => {
     const view3d = new View3D({ width: 256, height: 256 });
-    // 230.4..332.8 of a 256-wide screen: straddling the edge still counts as on screen.
     const camera = insetIn(view3d, { x: 0.9, width: 0.4, height: 0.4 });
 
-    expect(updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)).toBeDefined();
+    expect(
+      updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET),
+      '230.4..332.8 of a 256-wide screen straddles its edge',
+    ).toBeDefined();
 
     camera.viewport.x = 2.2;
     expect(updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)).toBeUndefined();

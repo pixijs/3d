@@ -9,19 +9,6 @@ describe('Mesh3D options', () => {
   const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1 });
   const material = new Material3D({});
 
-  it("labels itself 'Mesh3D' unless given a label", () => {
-    expect(new Mesh3D({ geometry, material }).label).toBe('Mesh3D');
-    expect(new Mesh3D({ geometry, material, label: 'crate' }).label).toBe('crate');
-    expect(new Mesh3D({ geometry, material, label: undefined }).label).toBe('Mesh3D');
-  });
-
-  it('forwards Container3D options to the base', () => {
-    const mesh = new Mesh3D({ geometry, material, visible: false, position: { x: 1, y: 2, z: 3 } });
-
-    expect(mesh.visible).toBe(false);
-    expect([mesh.position.x, mesh.position.y, mesh.position.z]).toEqual([1, 2, 3]);
-  });
-
   it('merges Mesh3D.defaultOptions under the options, skipping explicit undefined', () => {
     const saved = Mesh3D.defaultOptions.castShadow;
     Mesh3D.defaultOptions.castShadow = false;

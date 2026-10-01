@@ -37,14 +37,14 @@ export interface CopyDepthPassOptions {
  * Effects that read the depth of what lies beneath them, such as a water shoreline or refraction
  * that fades with depth, draw over the opaque scene and so sample a copy of its depth. The pass
  * reads its camera's depth target, or the scene depth when it has no camera, and writes
- * {@link CopyDepthPass#opaqueDepthHandle}. It declares no attachments, so the graph binds no target
- * for it.
+ * {@link CopyDepthPass#opaqueDepthHandle}. It declares no attachments, so the graph binds no
+ * target for it, and it copies its camera's target whatever is bound.
  *
- * It copies whichever target is bound when it runs: add it straight after the draws it copies,
- * with no pass on another target in between. The default graph runs one for the view's camera
- * after the opaque draw and the `'afterOpaque'` passes, just before {@link CopyOpaquePass}. The
- * graph drops it on frames where no running pass samples the copy. {@link BlendedRefractionPass}
- * samples it; {@link TransmissionRenderPass} doesn't, so a scene with only glass skips it.
+ * Add it after the draws it copies and before the passes that sample the copy; passes on other
+ * targets can run in between. The default graph runs one for the view's camera after the opaque
+ * draw and the `'afterOpaque'` passes, just before {@link CopyOpaquePass}. The graph drops it on
+ * frames where no running pass samples the copy. {@link BlendedRefractionPass} samples it;
+ * {@link TransmissionRenderPass} doesn't, so a scene with only glass skips it.
  * @category rendering
  * @advanced
  */
@@ -76,10 +76,15 @@ export class CopyDepthPass extends RenderPass {
   }
 
   /**
-   * Copies the bound depth target into {@link CopyDepthPass#opaqueDepthHandle}
+   * Copies its camera's depth target into {@link CopyDepthPass#opaqueDepthHandle}
    * @param session - The current frame's render session
    */
   public override render(session: RenderSession): void {
-    this.pipe.copyDepth(this.opaqueDepthHandle, session);
+    const graph = session.view3d._graph;
+    this.pipe.copyDepth(
+      graph._drawTarget(this.camera, session),
+      graph._texture(this.opaqueDepthHandle, session),
+      session,
+    );
   }
 }

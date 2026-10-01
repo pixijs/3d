@@ -2,13 +2,10 @@ import { collectOverrideDefs, emitOverridesGlsl } from '../../shader/collectOver
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
 /**
- * GLSL compiler plugin that bakes `descriptor.overrides` into the header as
- * `#define KEY VALUE` directives, mirroring the WGSL `wgslOverridesPlugin`
+ * GLSL compiler plugin that bakes the bits' overrides into the header as `#define KEY VALUE` lines
  *
- * Required overrides with no value supplied throw at compile time. Values are
- * read from `context.glslOptions.overrides`, which the host
- * (`compileGlslSource`) populates from the descriptor via the rest-spread
- * destructure.
+ * Values come from `glslOptions.overrides`, falling back to each override's default; a required
+ * override with no value throws. The WGSL twin is `wgslOverridesPlugin`.
  * @internal
  */
 export const glslOverridesPlugin: ShaderCompilerPlugin = {

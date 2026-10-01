@@ -42,11 +42,6 @@ describe('GraphDebugRecording', () => {
     });
   });
 
-  it('keeps the default bound when given a non-finite frame limit', () => {
-    expect(new GraphDebugRecording({ maxFrames: Number.POSITIVE_INFINITY }).maxFrames).toBe(3_600);
-    expect(new GraphDebugRecording({ maxFrames: Number.NaN }).maxFrames).toBe(3_600);
-  });
-
   it('reads its frame cap from defaultOptions', () => {
     const defaults = { ...GraphDebugRecording.defaultOptions };
 

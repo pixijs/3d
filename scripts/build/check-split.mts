@@ -1,4 +1,3 @@
-// oxlint-disable no-console
 // Bundles three tiny consumers of the built package with rolldown and asserts
 // that the WebGL and WebGPU backends stay out of the code a page loads upfront
 // unless it imports `@pixi/3d/webgl` / `@pixi/3d/webgpu` itself. Run after

@@ -1,19 +1,3 @@
-// Main-thread façade for the Draco decode worker.
-//
-// Lifecycle: the worker (and its WASM module) is lazy — nothing is created
-// until the first `loadDracoOnWorker()` call. A non-Draco glTF therefore pays
-// zero runtime cost for this module beyond evaluating these few function
-// declarations.
-//
-// Concurrency: we currently use ONE shared worker. Multiple in-flight decodes
-// all post-message into its single MessageChannel and execute serially on the
-// worker thread. Callers (e.g. `processMeshes`) already Promise.all across
-// every primitive, so a future worker pool would be a drop-in win — see
-// https://github.com/pixijs/pixi-3d/issues/45.
-//
-// Request/response correlation: each decode is tagged with a monotonically
-// increasing `id`. The worker echoes the id back on completion; we use it to
-// look up the right resolver/rejecter and clean both maps up.
 import { dracoDecoderUrls } from '../setDracoDecoderPath';
 
 /**
@@ -21,9 +5,9 @@ import { dracoDecoderUrls } from '../setDracoDecoderPath';
  * @internal
  */
 export interface DracoAttributeRequest {
-  /** Draco attribute uniqueId — the value held in `KHR_draco_mesh_compression.attributes[semantic]` */
+  /** The attribute's id in the Draco data, from `KHR_draco_mesh_compression.attributes` */
   dracoId: number;
-  /** The glTF accessor `componentType` enum (5120–5126); tells the worker how to interpret raw bytes */
+  /** The glTF accessor's `componentType`, which the decoded values are converted to */
   componentType: number;
 }
 
@@ -32,12 +16,13 @@ export interface DracoAttributeRequest {
  * @internal
  */
 interface DracoDecodeResult {
-  /** 16-bit when the mesh has ≤65,535 vertices, otherwise 32-bit */
+  /** 16-bit when the mesh has at most 65,535 vertices, otherwise 32-bit */
   indices: Uint16Array | Uint32Array;
   /** Decoded attribute buffers keyed by glTF semantic (e.g. 'POSITION', 'NORMAL') */
   attributes: Record<string, ArrayBufferView>;
 }
 
+/** The worker's reply to one decode request, carrying the request's `id` */
 interface DecodeMessage {
   id: number;
   success: boolean;
@@ -46,37 +31,45 @@ interface DecodeMessage {
   error?: string;
 }
 
+/**
+ * The Draco worker, which `getDracoWorker` starts on the first decode, so a file without Draco
+ * never pays for it
+ *
+ * It's a classic worker, not a module one, because it loads the decoder with `importScripts`, which
+ * module workers lack. The library build inlines it as a blob URL (`scripts/build/inline-worker.mts`).
+ *
+ * The worker's first message is `{ type: 'init', jsUrl, wasmUrl }`. Each decode then posts
+ * `{ type: 'decode', id, bufferViewBytes, attributeIds }`, and `draco.worker.ts` answers with a
+ * {@link DecodeMessage} carrying the same `id`. A reply whose `id` is no longer pending is ignored.
+ */
 let dracoWorker: Worker | undefined;
 let nextId = 0;
-// Two maps instead of one keep response-handler logic free of conditional
-// destructuring — at the cost of one extra `delete` per response.
 const resolvers: Record<number, (value: DracoDecodeResult) => void> = {};
 const rejecters: Record<number, (reason: Error) => void> = {};
 
+/**
+ * Rejects every pending decode and drops the worker
+ *
+ * Runs when the worker itself fails, which breaks its message channel. The next decode then starts a
+ * fresh worker instead of posting to the broken one and waiting forever.
+ * @param reason - Why the worker failed, for the rejection message
+ */
 function rejectAllInFlight(reason: string): void {
   for (const id in rejecters) {
     rejecters[id](new Error(`Draco worker: ${reason}`));
     delete resolvers[id];
     delete rejecters[id];
   }
-  // Worker's message channel is likely dead — terminate and drop the reference
-  // so the next loadDracoOnWorker() call lazily spins up a fresh worker
-  // instead of postMessaging into a broken one (which would hang silently).
   dracoWorker?.terminate();
   dracoWorker = undefined;
 }
 
 function getDracoWorker(): Worker {
   if (!dracoWorker) {
-    // Classic worker (no `type: 'module'`) so the worker can use `importScripts` to
-    // load Google's Draco decoder glue — module workers don't support importScripts.
-    // The library build inlines this file as a blob URL; see scripts/build/inline-worker.mts.
     dracoWorker = new Worker(new URL('./draco.worker.ts', import.meta.url));
 
     dracoWorker.onmessage = (event: MessageEvent<DecodeMessage>) => {
       const { id, success, indices, attributes, error } = event.data;
-      // Guard against unknown/stale ids — silently ignoring is safer than
-      // crashing the message loop and stranding every in-flight promise.
       if (success && indices && attributes) {
         resolvers[id]?.({ indices, attributes });
       } else {
@@ -86,8 +79,6 @@ function getDracoWorker(): Worker {
       delete rejecters[id];
     };
 
-    // Worker-level failures (uncaught errors, serialization failures) break the
-    // message channel — reject every in-flight promise so callers don't hang.
     dracoWorker.onerror = (event) => rejectAllInFlight(event.message || 'uncaught error');
     dracoWorker.onmessageerror = () => rejectAllInFlight('message deserialization failed');
 
@@ -104,9 +95,9 @@ function getDracoWorker(): Worker {
 /**
  * Sends a single Draco-compressed primitive to the worker for decoding
  *
- * IMPORTANT: `bufferViewBytes` is **transferred** (not copied) to the worker.
- * After this call the caller's reference to that ArrayBuffer is detached and
- * unusable. Callers that need to keep the bytes around must pass a slice/copy.
+ * `bufferViewBytes` is transferred to the worker, not copied, so it is detached once this returns;
+ * pass a copy to keep the bytes. All decodes share one worker and run one after another
+ * (https://github.com/pixijs/pixi-3d/issues/45 tracks a pool).
  * @param bufferViewBytes - Compressed bytes of the primitive's Draco bufferView; detached after the call
  * @param attributeIds - Attributes to decode, keyed by glTF semantic, with their Draco ids and component types
  * @internal

@@ -5,31 +5,33 @@ import { FullscreenPass } from '../../../post-processing/effects/FullscreenPass'
 import { PostEffect } from '../../../post-processing/effects/PostEffect';
 import type { EffectFragment, EffectIO, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
 
-// -- Depth-driven bokeh -------------------------------------------------------
-// Derives a blur amount from each pixel's distance to the focal plane, then
-// gathers a golden-angle disk of taps whose radius scales with it. Each tap
-// samples a mip just coarse enough that the sparse disk never gaps, so the
-// blur stays creamy instead of showing blocky mip texels. All four channels
-// are averaged, so premultiplied coverage blurs correctly on inset views.
-//
-// The gather is occlusion-weighted (scatter-as-gather): a tap contributes
-// only if its own blur disk could reach the shaded pixel. Taps at or behind
-// the centre depth always can — they're the surface being blurred — while
-// nearer taps count in proportion to their own blur radius, so a sharp
-// in-focus object never smears into the blurred background around its
-// silhouette. Weights renormalize, filling the background from background
-// taps; blurry foregrounds keep full weight and still bleed over what's
-// behind them.
-// uFocus = (focalDepth, focalNear, focalFar, maxBlurPx); uTilt = (debug, _, _, _).
-
+/**
+ * The tilt-shift pass: a depth-driven bokeh blur
+ *
+ * Each pixel's distance from the focal plane sets its blur radius, and the pass gathers 16 taps
+ * over a disk of that radius. The taps lie on a golden-angle spiral (2.3999632 radians apart),
+ * which spreads them evenly. Each tap reads a mip level just coarse enough that the sparse disk
+ * never leaves gaps, so the blur stays smooth instead of showing blocky texels. All four channels
+ * are averaged, so premultiplied coverage blurs correctly on inset views.
+ *
+ * The gather is weighted by occlusion: a tap counts only if its own blur disk could reach the
+ * shaded pixel. Taps at or behind the centre depth always can, since they are the surface being
+ * blurred. Nearer taps count in proportion to their own blur radius, so a sharp object in focus
+ * never smears into the blurred background around its silhouette, while a blurred foreground
+ * keeps full weight and still bleeds over what is behind it. The weights are normalised, and the
+ * centre sample seeds the sum with weight 1 so it never reaches zero, as it would for a sky pixel
+ * ringed by sharp taps.
+ *
+ * `debugView` paints the depth field instead; {@link TiltShiftEffect#debug} has the colour key.
+ *
+ * Reads `uFocus` = (focalDepth, focalNear, focalFar, maxBlur) and `uTilt` = (debug, unused,
+ * unused, unused).
+ */
 const TILT_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 const TS_TAPS: i32 = 16;
-const TS_GOLDEN: f32 = 2.3999632; // golden angle (rad) — even spiral disk distribution
+const TS_GOLDEN: f32 = 2.3999632;
 
-// Debug view: paint the depth field instead of blurring. Green = within the
-// sharp band, warm = foreground blur, cool = background blur, ramp brightness
-// = blur amount; the white isoline is the focal plane itself.
 fn debugView(uv: vec2<f32>) -> vec4<f32> {
   let base = sampleColor(uv).rgb;
   let lz = linearDepth(sampleDepth(uv));
@@ -53,8 +55,6 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
   let radiusPx = blur * fx.uFocus.w;
   if (radiusPx < 0.5) { return sampleColor(uv); }
   let lod = max(0.0, log2(radiusPx / sqrt(f32(TS_TAPS))));
-  // Seed with the centre sample so the weight sum can never collapse (a sky
-  // pixel ringed entirely by sharp taps would otherwise divide by zero).
   var sum = sampleColorLod(uv, lod);
   var wsum = 1.0;
   for (var i = 0; i < TS_TAPS; i = i + 1) {
@@ -73,11 +73,8 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
 `,
   gl: /* glsl */ `
 const int TS_TAPS = 16;
-const float TS_GOLDEN = 2.3999632; // golden angle (rad) — even spiral disk distribution
+const float TS_GOLDEN = 2.3999632;
 
-// Debug view: paint the depth field instead of blurring. Green = within the
-// sharp band, warm = foreground blur, cool = background blur, ramp brightness
-// = blur amount; the white isoline is the focal plane itself.
 vec4 debugView(vec2 uv) {
   vec3 base = sampleColor(uv).rgb;
   float lz = linearDepth(sampleDepth(uv));
@@ -100,8 +97,6 @@ vec4 effect(vec2 uv) {
   float radiusPx = blur * uFocus.w;
   if (radiusPx < 0.5) { return sampleColor(uv); }
   float lod = max(0.0, log2(radiusPx / sqrt(float(TS_TAPS))));
-  // Seed with the centre sample so the weight sum can never collapse (a sky
-  // pixel ringed entirely by sharp taps would otherwise divide by zero).
   vec4 sum = sampleColorLod(uv, lod);
   float wsum = 1.0;
   for (int i = 0; i < TS_TAPS; i++) {
@@ -122,47 +117,74 @@ vec4 effect(vec2 uv) {
 
 /**
  * Constructor options for {@link TiltShiftEffect}
+ * @example
+ * ```ts
+ * const options: TiltShiftEffectOptions = { focalDepth: 20, focalNear: 2, maxBlur: 16 };
+ * view3d.passes = [new TiltShiftEffect(options)];
+ * ```
  * @category extras:post-processing
  * @standard
  */
 export interface TiltShiftEffectOptions extends PostEffectOptions {
   /**
-   * View-space distance of the focal plane — it rides and rotates with the camera
+   * Distance from the camera to the plane in focus, in view units
+   *
+   * The plane faces the camera, so it moves and turns with it.
    * @default 35
+   * @example
+   * ```ts
+   * new TiltShiftEffect({ focalDepth: 20 });
+   * ```
    */
   focalDepth?: number;
   /**
-   * Half-width of the fully-sharp band, in view units
+   * How far either side of the focal plane stays fully sharp, in view units
    * @default 3
+   * @example
+   * ```ts
+   * new TiltShiftEffect({ focalNear: 1 });
+   * ```
    */
   focalNear?: number;
   /**
-   * Distance from the focal plane at which the blur is maxed, in view units
+   * Distance from the focal plane at which the blur is strongest, in view units
    * @default 14
+   * @example
+   * ```ts
+   * new TiltShiftEffect({ focalFar: 6 });
+   * ```
    */
   focalFar?: number;
   /**
-   * Bokeh disk radius at full blur, in pixels — effectively the blur strength
+   * Blur radius at full strength, in device pixels
    * @default 12
+   * @example
+   * ```ts
+   * new TiltShiftEffect({ maxBlur: 20 });
+   * ```
    */
   maxBlur?: number;
   /**
-   * Paint the depth/blur field instead of blurring — see {@link TiltShiftEffect#debug}
+   * Paint the focus settings instead of blurring; {@link TiltShiftEffect#debug} has the colour key
    * @default false
+   * @example
+   * ```ts
+   * new TiltShiftEffect({ debug: true });
+   * ```
    */
   debug?: boolean;
 }
 
 /**
- * Tilt-shift / miniature depth-of-field
+ * Tilt-shift: a miniature look from a narrow depth of field
  *
- * A narrow focal band stays sharp and everything in front of or behind it blurs hard, which
- * the brain reads as extreme close-up macro — so a normal scene looks like a tiny model
- * (helped by a high three-quarter camera).
+ * A thin band of depth stays sharp and everything in front of and behind it blurs, the way a
+ * macro lens sees a close-up, so a full-size scene reads as a tiny model. A high, angled camera
+ * sells it best.
  *
- * A single bokeh-gather pass: `inputMips` has the compiler deliver the chain input
- * mip-chained, so the gather LOD-samples it directly against the scene depth — no copy.
- * Every property is a live uniform write.
+ * One pass, which reads its input with mipmaps ({@link PostEffect#inputMips}): the input costs a
+ * mipmap generation each frame and a third more memory. Every property is a plain uniform write,
+ * so it can change every frame.
  * @example
  * ```ts
  * view.passes = [new TiltShiftEffect({ focalDepth: 35, maxBlur: 12 })];
@@ -189,7 +211,10 @@ export class TiltShiftEffect extends PostEffect {
     debug: false,
   };
 
-  /** Always samples coarse LODs, so the chain input is allocated mip-chained */
+  /**
+   * Always `true`: the blur reads coarse mip levels of its input
+   * @advanced
+   */
   public override readonly inputMips = true;
 
   private readonly _uniforms = new UniformGroup({
@@ -213,9 +238,15 @@ export class TiltShiftEffect extends PostEffect {
   }
 
   /**
-   * Add the single bokeh-gather pass, reading the mip-chained input and the scene depth
+   * Add the blur pass for this slot, reading the mip-chained input and the scene depth
    * @param graph - Render graph being built.
    * @param io - Input/output handles for this slot in the chain.
+   * @example
+   * ```ts
+   * const focused = graph.createColor({ label: 'focused' });
+   * tiltShift.build(graph, { ...io, output: focused });
+   * ```
+   * @advanced
    */
   public override build(graph: RenderGraph, io: EffectIO): void {
     graph.addPass(
@@ -230,68 +261,95 @@ export class TiltShiftEffect extends PostEffect {
     );
   }
 
-  // --- Live params: plain lane writes, visible next frame ---
-
-  /** View-space distance of the focal plane */
+  /**
+   * Distance from the camera to the plane in focus, in view units
+   * @example
+   * ```ts
+   * tiltShift.focalDepth = 20 + Math.sin(time) * 5;
+   * ```
+   */
   public get focalDepth(): number {
     return this._uniforms.uniforms.uFocus[0];
   }
   /**
-   * Sets the focal-plane distance
+   * Sets the distance to the plane in focus
    * @param value - Distance from the camera to the focal plane, in view units.
    */
   public set focalDepth(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 0, value);
   }
 
-  /** Half-width of the fully-sharp band, in view units */
+  /**
+   * How far either side of the focal plane stays fully sharp, in view units
+   * @example
+   * ```ts
+   * tiltShift.focalNear = 1;
+   * ```
+   */
   public get focalNear(): number {
     return this._uniforms.uniforms.uFocus[1];
   }
   /**
-   * Sets the half-width of the fully-sharp band
-   * @param value - Half-width in view units, measured from the focal plane.
+   * Sets how far either side of the focal plane stays fully sharp
+   * @param value - Distance from the focal plane, in view units.
    */
   public set focalNear(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 1, value);
   }
 
-  /** Distance from the focal plane at which the blur is maxed, in view units */
+  /**
+   * Distance from the focal plane at which the blur is strongest, in view units
+   * @example
+   * ```ts
+   * tiltShift.focalFar = 6;
+   * ```
+   */
   public get focalFar(): number {
     return this._uniforms.uniforms.uFocus[2];
   }
   /**
-   * Sets the distance at which the blur reaches maximum
+   * Sets the distance from the focal plane at which the blur is strongest
    * @param value - Distance from the focal plane, in view units.
    */
   public set focalFar(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 2, value);
   }
 
-  /** Bokeh disk radius at full blur, in pixels — effectively the blur strength */
+  /**
+   * Blur radius at full strength, in device pixels
+   * @example
+   * ```ts
+   * tiltShift.maxBlur = 20;
+   * ```
+   */
   public get maxBlur(): number {
     return this._uniforms.uniforms.uFocus[3];
   }
   /**
-   * Sets the bokeh disk radius at full blur
-   * @param value - Radius in pixels.
+   * Sets the blur radius at full strength
+   * @param value - Radius in device pixels.
    */
   public set maxBlur(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 3, value);
   }
 
   /**
-   * Paint the depth/blur field instead of blurring, so the focal settings are legible
+   * Paint the focus settings instead of blurring, to tune them by eye
    *
-   * White is the focal plane, green the sharp band, warm the foreground blur and cool the
-   * background blur.
+   * Over a dimmed grey copy of the frame, a white line marks the focal plane and green the sharp
+   * band. Blurred areas shift toward orange in front of the plane and blue behind it, more so the
+   * stronger the blur.
+   * @example
+   * ```ts
+   * tiltShift.debug = true;
+   * ```
    */
   public get debug(): boolean {
     return this._uniforms.uniforms.uTilt[0] > 0.5;
   }
   /**
-   * Toggles the debug visualisation of the depth/blur field
-   * @param value - Whether to paint the depth/blur field instead of blurring.
+   * Toggles the focus visualisation
+   * @param value - Whether to paint the focus settings instead of blurring.
    */
   public set debug(value: boolean) {
     this.writeLane(this._uniforms, 'uTilt', 0, value ? 1 : 0);

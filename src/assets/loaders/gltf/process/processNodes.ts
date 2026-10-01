@@ -3,6 +3,9 @@ import type { GltfFormat } from '../GltfFormat';
 
 /**
  * Converts glTF nodes into descriptor nodes, decomposing matrix transforms to TRS
+ *
+ * A primitive with no material points at the slot after the file's own materials, where
+ * `processMaterials` puts the glTF default material.
  * @param gltfRaw - Parsed glTF JSON
  * @param descriptor - Receives the nodes
  * @internal
@@ -47,9 +50,10 @@ export function processNodes(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor)
 
       const mesh = gltfRaw.meshes?.[nodeRaw.mesh];
       if (mesh) {
-        node.materials = mesh.primitives.map((p) => p.material ?? 0);
+        const defaultMaterial = gltfRaw.materials?.length ?? 0;
 
-        // Default morph-target weights: a node's `weights` override the mesh's.
+        node.materials = mesh.primitives.map((p) => p.material ?? defaultMaterial);
+
         const weights = nodeRaw.weights ?? mesh.weights;
         if (weights) node.weights = weights;
       }
@@ -60,7 +64,6 @@ export function processNodes(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor)
         node.light = nodeRaw.extensions.KHR_lights_punctual.light;
       }
 
-      // KHR_node_visibility — only record when explicitly false; absent = visible.
       if (nodeRaw.extensions.KHR_node_visibility?.visible === false) {
         node.visible = false;
       }
@@ -74,6 +77,15 @@ export function processNodes(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor)
   });
 }
 
+/**
+ * Splits a column-major 4x4 matrix into translation, rotation quaternion and scale
+ *
+ * A mirrored matrix, one with a negative determinant, gets its flip as a negative X scale.
+ * @param matrix - Column-major 4x4 matrix
+ * @param position - Receives the translation
+ * @param quaternion - Receives the rotation as `[x, y, z, w]`
+ * @param scale - Receives the scale
+ */
 function decomposeMatrix(
   matrix: Float32Array | number[],
   position: Float32Array,
@@ -86,7 +98,6 @@ function decomposeMatrix(
   const sy = Math.sqrt(te[4] * te[4] + te[5] * te[5] + te[6] * te[6]);
   const sz = Math.sqrt(te[8] * te[8] + te[9] * te[9] + te[10] * te[10]);
 
-  // A negative determinant means one axis is mirrored — fold the flip into sx
   const det =
     te[0] * (te[5] * te[10] - te[9] * te[6]) -
     te[4] * (te[1] * te[10] - te[9] * te[2]) +
@@ -98,7 +109,6 @@ function decomposeMatrix(
   position[1] = te[13];
   position[2] = te[14];
 
-  // Remove scale from the rotation basis before extracting the quaternion
   const invSX = 1 / sx;
   const invSY = 1 / sy;
   const invSZ = 1 / sz;

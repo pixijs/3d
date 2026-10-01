@@ -1,5 +1,3 @@
-// Load pixi's 2D events mixin (addEventListener etc.) — normally installed lazily at
-// Application.init, which these tests never run.
 import 'pixi.js/browser';
 import type { Container } from 'pixi.js';
 import { describe, expect, expectTypeOf, test } from 'vitest';
@@ -9,17 +7,12 @@ import type { Pointer3DEvent } from '~/events/Pointer3DEvent';
 import type { Container3D } from '~/scene/Container3D';
 import { View3D } from '~/scene/View3D';
 
-// Compile-time contract: the `declare module 'pixi.js'` augmentation in Pointer3DEvent.ts puts the
-// 3D fields on every federated mouse / wheel event, so View-level (2D) listeners read them without
-// narrowing — matching the runtime prototype install. `npm run test:types` is the real gate; the
-// runtime assertions below are smoke.
-describe('View3D listener typing — 3D fields without narrowing', () => {
+describe('View3D listener typing, checked by tsc: 2D listeners read the 3D fields without narrowing', () => {
   const SIZE = { width: 10, height: 10 };
 
   test('on() infers the 3D fields on pointer and wheel events', () => {
     const view3d = new View3D(SIZE);
-    // The View's own EventBoundary3D pre-registers pointer listeners, so counts are relative.
-    const baseline = view3d.listenerCount('pointermove');
+    const boundaryListeners = view3d.listenerCount('pointermove');
 
     view3d.on('pointermove', (e) => {
       expectTypeOf(e.target3D).toEqualTypeOf<Container3D | null>();
@@ -30,7 +23,7 @@ describe('View3D listener typing — 3D fields without narrowing', () => {
       expectTypeOf(e.hit3D).toEqualTypeOf<RaycastHit3D | null>();
     });
 
-    expect(view3d.listenerCount('pointermove')).toBe(baseline + 1);
+    expect(view3d.listenerCount('pointermove')).toBe(boundaryListeners + 1);
   });
 
   test('on-handler properties and addEventListener are typed with the fields too', () => {
@@ -48,13 +41,13 @@ describe('View3D listener typing — 3D fields without narrowing', () => {
 
   test('off() accepts a Pointer3DEvent-typed handler', () => {
     const view3d = new View3D(SIZE);
-    const baseline = view3d.listenerCount('pointermove');
+    const boundaryListeners = view3d.listenerCount('pointermove');
     const handler = (e: Pointer3DEvent): void => void e.target3D;
 
     view3d.on('pointermove', handler);
     view3d.off('pointermove', handler);
 
-    expect(view3d.listenerCount('pointermove')).toBe(baseline);
+    expect(view3d.listenerCount('pointermove')).toBe(boundaryListeners);
   });
 
   test('controls: 3D chain and 2D container surface are unchanged', () => {

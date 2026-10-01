@@ -10,12 +10,14 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Normal-mapping is a compile-time shader variant: the `normalMapping`/`tangentNormalMapping` bit is only
-// compiled in when the normal slot holds a real map (not the flat NORMAL_MAP default). This proves that
-// toggling the normal map AT RUNTIME recompiles to the right variant — i.e. the recompile is driven by the
-// texture-swap dirty path, not by any normal-specific bookkeeping in the slot setter.
+/**
+ * Whether the renderer has compiled a `normalMapping` or `tangentNormalMapping` shader variant
+ *
+ * The material system, not the material, adds that bit, and only while the `normal` slot holds a
+ * texture other than the flat `NORMAL_MAP` default. Any material with a `normal` slot gets the
+ * same gating, and a runtime swap recompiles through the ordinary texture-swap invalidation.
+ */
 const hasNormalVariant = (app: Application<WebGLRenderer | WebGPURenderer>): boolean => {
-  // Structural cast only to reach the material system's private shader cache.
   const materialSystem = app.renderer.material3d;
   return [...materialSystem['_shaderCache'].keys()].some((k) => /normalMapping/i.test(k));
 };
@@ -43,21 +45,16 @@ describe('normal-map shader variant recompiles on a runtime texture swap', () =>
       view3d.camera.position.set(0, 0, 5);
 
       app.render();
-      expect(hasNormalVariant(app)).toBe(false); // flat NORMAL_MAP default → no normal-mapping variant
+      expect(hasNormalVariant(app)).toBe(false);
 
-      // Runtime toggle: assign a real map (any texture !== NORMAL_MAP flips the variant on).
       cube.material.textures.normal = Texture.WHITE;
       app.render();
-      expect(hasNormalVariant(app)).toBe(true); // recompiled to the normal-mapping variant on the swap
+      expect(hasNormalVariant(app)).toBe(true);
     } finally {
       app.destroy();
     }
   });
 
-  // The variant decision lives in the pipe, not the material, so every
-  // BaseMaterial3D that reserves a normal slot inherits it. Proves an unmapped
-  // PhongMaterial pays nothing for normal mapping: no sample, no TBN, no
-  // screen-space derivatives are compiled in at all.
   it('gives PhongMaterial the same gating — no normal-mapping code until a real map is assigned', async () => {
     const app = await getApp<WebGLRenderer | WebGPURenderer>({
       id: 'normal-variant-phong',

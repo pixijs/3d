@@ -31,13 +31,15 @@ const NUM_COMPONENTS = {
 } as const;
 
 /**
- * Reads an accessor's data as a packed typed array of the accessor's component type
+ * Reads an accessor's data as a tightly packed typed array of the accessor's component type
+ *
+ * Tightly packed data comes back as a view of the source buffer, without a copy. Interleaved data
+ * is copied out element by element, and a sparse accessor is decoded to a dense array.
  * @param gltfRaw - Parsed glTF JSON
  * @param buffers - The glTF binary buffers, indexed by `bufferView.buffer`
  * @param accessorIndex - Index of the accessor to read
- * @param copy - Guarantee an owned array the caller can outlive the source buffer with.
- *   Only the tightly-packed fast path returns a view; the sparse and interleaved paths
- *   already allocate, so `copy` costs nothing there.
+ * @param copy - Return an array of its own, which outlives the source buffer. Only a view gets
+ *   copied; the other paths already allocate.
  * @internal
  */
 export function getBuffer(
@@ -48,9 +50,6 @@ export function getBuffer(
 ): ArrayBufferView {
   const accessor = gltfRaw.accessors![accessorIndex];
 
-  // Sparse accessors (common for morph targets — only a few vertices deviate)
-  // displace a base over a subset of indices. Decode to a dense array so the
-  // rest of the pipeline (which expects packed data) never sees the sparsity.
   if (accessor.sparse) {
     return readSparseAccessor(gltfRaw, buffers, accessorIndex);
   }
@@ -63,26 +62,21 @@ export function getBuffer(
   const numComponents = NUM_COMPONENTS[accessor.type as keyof typeof NUM_COMPONENTS];
 
   const baseOffsetBytes = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
-  const bytesPerComponent = BYTES_PER[componentType]; // bytes per component
-  const elementSizeBytes = numComponents * bytesPerComponent; // bytes per element (the accessor's item)
+  const bytesPerComponent = BYTES_PER[componentType];
+  const elementSizeBytes = numComponents * bytesPerComponent;
   const strideBytes = bufferView.byteStride ?? elementSizeBytes;
   const count = accessor.count;
 
-  // Fast path: tightly packed. Return a zero-copy view over the source buffer,
-  // or an owned copy of it when the caller must outlive that buffer (`copy`).
   if (strideBytes === elementSizeBytes) {
     const view = new TypeClass(arrayBuffer, baseOffsetBytes, count * numComponents);
     return copy ? view.slice() : view;
   }
 
-  // Interleaved path: de-interleave into a packed array using a typed view for speed.
-  const srcTyped = new TypeClass(arrayBuffer); // view over entire buffer
-  const srcBase = baseOffsetBytes / bytesPerComponent; // convert byte offset to element index
-  const strideElements = strideBytes / bytesPerComponent; // convert stride to element count
+  const srcTyped = new TypeClass(arrayBuffer);
+  const srcBase = baseOffsetBytes / bytesPerComponent;
+  const strideElements = strideBytes / bytesPerComponent;
   const out = new TypeClass(count * numComponents);
 
-  // Copy each logical element (i) and its components (c)
-  // src index for component c of element i: srcBase + i*strideElems + c
   let dst = 0;
   for (let i = 0; i < count; i++) {
     const srcRow = srcBase + i * strideElements;
@@ -95,11 +89,11 @@ export function getBuffer(
 }
 
 /**
- * Decodes a sparse accessor to a dense packed array
+ * Decodes a sparse accessor to a dense packed array: a copy of the base, with the listed elements
+ * replaced
  *
- * The result is a base (the accessor's bufferView, or all zeros when it has none) with
- * `sparse.count` entries displaced at `sparse.indices`. glTF morph targets commonly ship this
- * way — only the vertices that move carry deltas, over a zero base.
+ * Morph targets often ship this way, carrying offsets only for the vertices that move. Those are
+ * VEC3, so three components get their own unrolled copy loop.
  * @param gltfRaw - Parsed glTF JSON
  * @param buffers - Binary buffers indexed by glTF buffer index
  * @param accessorIndex - Index of the sparse accessor to decode
@@ -112,7 +106,6 @@ function readSparseAccessor(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accesso
   const numComponents = NUM_COMPONENTS[accessor.type as keyof typeof NUM_COMPONENTS];
   const total = accessor.count * numComponents;
 
-  // Base: a mutable copy of the (tightly packed) bufferView, or zeros when absent.
   const out = new TypeClass(total);
   if (accessor.bufferView !== undefined) {
     const bufferView = gltfRaw.bufferViews![accessor.bufferView];
@@ -120,7 +113,6 @@ function readSparseAccessor(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accesso
     out.set(new TypeClass(buffers[bufferView.buffer], baseOffset, total));
   }
 
-  // Displace: for each entry, out[index] = value.
   const indicesView = gltfRaw.bufferViews![sparse.indices.bufferView];
   const IndexClass = TypedMap[sparse.indices.componentType as Component];
   const indices = new IndexClass(
@@ -135,10 +127,6 @@ function readSparseAccessor(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accesso
     sparse.count * numComponents,
   );
 
-  // Scatter each entry's components into the dense output. The inner
-  // component copy is the decode's hot cost (the zero-fill is lazy and cheap),
-  // so VEC3 — position/normal morph deltas, the overwhelming case — is unrolled;
-  // V8 can't unroll a variable trip count, and this measures ~30% faster.
   if (numComponents === 3) {
     for (let i = 0; i < sparse.count; i++) {
       const d = indices[i] * 3;

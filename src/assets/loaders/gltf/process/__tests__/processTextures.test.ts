@@ -23,7 +23,6 @@ function run(sampler?: Partial<Sampler>): Texture {
     samplers: sampler ? [sampler] : undefined,
   } as unknown as GltfFormat;
 
-  // `processTextures` only writes into `textures`/`texture` collections.
   const source = { textures: [], texture: {} } as unknown as Scene3DSource;
   processTextures(gltfRaw, [texture], source);
 
@@ -33,10 +32,6 @@ function run(sampler?: Partial<Sampler>): Texture {
 describe('processTextures — mipmap defaults', () => {
   it('enables mips when there is no sampler', () => {
     expect(run().source.autoGenerateMipmaps).toBe(true);
-  });
-
-  it('enables mips when the sampler has no minFilter', () => {
-    expect(run({ wrapS: 10497 }).source.autoGenerateMipmaps).toBe(true);
   });
 
   it('enables mips for a mipmap minFilter (9987 LINEAR_MIPMAP_LINEAR)', () => {

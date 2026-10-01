@@ -38,11 +38,12 @@ function attribute(
   return { key, index, offset: 0, components, source, spread, packed, store };
 }
 
-// A small layout with one attribute of each shape a spawn handles: a spread
-// scalar, the velocity point, the tint, the clock, a packed constant and a
-// two-component custom. Twelve floats a vertex, four slots.
 const STRIDE = 12;
 const CAPACITY = 4;
+/**
+ * One attribute of each shape a spawn handles: a spread scalar, the velocity point, the tint, the
+ * clock, a packed constant and a two-component custom
+ */
 const ATTRIBUTES: SpawnAttribute[] = [
   attribute('life', 3, 1, FROM_SPREAD, AS_F32, 0),
   attribute('velocity', 4, 3, FROM_VELOCITY, AS_F32),
@@ -53,11 +54,16 @@ const ATTRIBUTES: SpawnAttribute[] = [
 ];
 const SHAPE = { floatStride: STRIDE, world: false, randomFrames: false };
 
+/**
+ * A context whose rng always returns 0.5 and whose shape always samples (1, 2, 3) heading +Y
+ *
+ * Its spread table draws life between 2 and 4 and fixes speed and alpha at 1, so neither of those
+ * takes a random draw.
+ */
 function makeContext(capacity = CAPACITY): SpawnContext {
   const words = new ArrayBuffer(CAPACITY * 4 * STRIDE * 4);
   const spreads = new Float32Array(16);
 
-  // life 2..4, speed fixed at 1 (no draw), alpha fixed at 1.
   spreads.set([2, 4, 1, 1], 0);
   spreads.set([1, 1], 8);
 
@@ -103,8 +109,6 @@ function column(view: Float32Array | Uint32Array, slot: number, at: number): num
   return [0, 1, 2, 3].map((v) => view[(slot * 4 + v) * STRIDE + at]);
 }
 
-// The generated function and its polyfill are one contract, so they take the
-// same tests.
 describe.each([
   ['generateSpawn', generateSpawn],
   ['generateSpawnPolyfill', generateSpawnPolyfill],
@@ -119,14 +123,11 @@ describe.each([
     expect(column(ctx.f32, 0, 0)).toEqual([1, 1, 1, 1]);
     expect(column(ctx.f32, 0, 1)).toEqual([2, 2, 2, 2]);
     expect(column(ctx.f32, 0, 2)).toEqual([3, 3, 3, 3]);
-    // life 2..4 at r = 0.5
-    expect(column(ctx.f32, 0, 3)).toEqual([3, 3, 3, 3]);
-    // velocity = dir × speed 1
-    expect(column(ctx.f32, 0, 4)).toEqual([0, 0, 0, 0]);
+    expect(column(ctx.f32, 0, 3), 'life drawn halfway between 2 and 4').toEqual([3, 3, 3, 3]);
+    expect(column(ctx.f32, 0, 4), 'velocity is the +Y direction times speed 1').toEqual([0, 0, 0, 0]);
     expect(column(ctx.f32, 0, 5)).toEqual([1, 1, 1, 1]);
     expect(column(ctx.f32, 0, 6)).toEqual([0, 0, 0, 0]);
-    // tint: the plan's rgb with alpha 1
-    expect(column(ctx.u32, 0, 7)).toEqual(Array(4).fill(0xff112233));
+    expect(column(ctx.u32, 0, 7), "the tint is the plan's rgb with alpha 1").toEqual(Array(4).fill(0xff112233));
     expect(column(ctx.f32, 0, 8)).toEqual([7.5, 7.5, 7.5, 7.5]);
     expect(column(ctx.u32, 0, 9)).toEqual(Array(4).fill(0x80ff0000));
     expect(column(ctx.f32, 0, 10)).toEqual([0, 0, 0, 0]);
@@ -149,20 +150,17 @@ describe.each([
 
     expect(spawn(ctx, plan, 0, 2, 1)).toBe(3);
 
-    // the origin is added to the shape's sample, with no transform
-    expect(column(ctx.f32, 2, 0)).toEqual([11, 11, 11, 11]);
+    expect(column(ctx.f32, 2, 0), "the origin adds to the shape's sample, with no transform").toEqual([11, 11, 11, 11]);
     expect(column(ctx.f32, 2, 1)).toEqual([22, 22, 22, 22]);
     expect(column(ctx.f32, 2, 2)).toEqual([33, 33, 33, 33]);
     expect(column(ctx.f32, 2, 3)).toEqual([9, 9, 9, 9]);
     expect(column(ctx.f32, 2, 4)).toEqual([2, 2, 2, 2]);
     expect(column(ctx.f32, 2, 5)).toEqual([3, 3, 3, 3]);
     expect(column(ctx.f32, 2, 6)).toEqual([4, 4, 4, 4]);
-    // alpha 0.5 → 128
-    expect(column(ctx.u32, 2, 7)).toEqual(Array(4).fill(0x80112233));
+    expect(column(ctx.u32, 2, 7), 'alpha 0.5 packs to 0x80').toEqual(Array(4).fill(0x80112233));
     expect(column(ctx.f32, 2, 10)).toEqual([0.25, 0.25, 0.25, 0.25]);
     expect(column(ctx.f32, 2, 11)).toEqual([0.75, 0.75, 0.75, 0.75]);
-    // untouched slots stay clear
-    expect(column(ctx.f32, 0, 3)).toEqual([0, 0, 0, 0]);
+    expect(column(ctx.f32, 0, 3), 'a slot outside the run stays clear').toEqual([0, 0, 0, 0]);
   });
 
   it('wraps the cursor at the context capacity', () => {
@@ -185,21 +183,28 @@ describe('generateSpawnBurst', () => {
     const absent = ATTRIBUTES.map(() => ABSENT);
     const first = generateSpawnBurst(signature, ATTRIBUTES, absent, ABSENT, SHAPE);
 
-    // a copy of the same list with different objects still hits
     const copy = ATTRIBUTES.map((a) => ({ ...a }));
 
-    expect(generateSpawnBurst(spawnSignature(copy, { ...SHAPE }), copy, [...absent], ABSENT, SHAPE)).toBe(first);
+    expect(
+      generateSpawnBurst(spawnSignature(copy, { ...SHAPE }), copy, [...absent], ABSENT, SHAPE),
+      'a copy of the same list, made of other objects',
+    ).toBe(first);
 
-    // another pattern, another space, or the polyfill are other functions
-    expect(generateSpawnBurst(signature, ATTRIBUTES, [CONSTANT, ...absent.slice(1)], ABSENT, SHAPE)).not.toBe(first);
-    expect(generateSpawnBurst(signature, ATTRIBUTES, absent, PAIR, SHAPE)).not.toBe(first);
+    expect(
+      generateSpawnBurst(signature, ATTRIBUTES, [CONSTANT, ...absent.slice(1)], ABSENT, SHAPE),
+      'another override pattern',
+    ).not.toBe(first);
+    expect(generateSpawnBurst(signature, ATTRIBUTES, absent, PAIR, SHAPE), 'another position kind').not.toBe(first);
 
     const world = { ...SHAPE, world: true };
 
-    expect(generateSpawnBurst(spawnSignature(ATTRIBUTES, world), ATTRIBUTES, absent, ABSENT, world)).not.toBe(first);
+    expect(
+      generateSpawnBurst(spawnSignature(ATTRIBUTES, world), ATTRIBUTES, absent, ABSENT, world),
+      'another space',
+    ).not.toBe(first);
 
     setSpawnCodegen(false);
-    expect(generateSpawnBurst(signature, ATTRIBUTES, absent, ABSENT, SHAPE)).not.toBe(first);
+    expect(generateSpawnBurst(signature, ATTRIBUTES, absent, ABSENT, SHAPE), 'the polyfill').not.toBe(first);
   });
 
   it('keys the signature on what shapes the code, not on the objects', () => {
@@ -210,11 +215,6 @@ describe('generateSpawnBurst', () => {
     expect(spawnSignature(ATTRIBUTES, { ...SHAPE, randomFrames: true })).not.toBe(spawnSignature(ATTRIBUTES, SHAPE));
   });
 });
-
-// ---------------------------------------------------------------------------
-// Parity: the generated function and the polyfill must write the same bytes
-// for the same seed, whatever the layout and whatever the overrides.
-// ---------------------------------------------------------------------------
 
 const customBit = {
   name: 'spawn-parity-custom',
@@ -340,12 +340,18 @@ describe('generated spawn parity with the polyfill', () => {
         ],
       });
       s.spawn(6, { position: (_rng, index) => ({ x: index, y: 0, z: 0 }), aSeed: 7 });
-      // a pattern seen before must hit the cached function and still agree
       s.spawn(3, { velocity: { x: 1, y: 0, z: 0 } });
     });
   });
 
-  it('matches across two systems that share one function', () => {
+  it('matches when a later burst reuses a pattern with new values', () => {
+    expectParity({ life: 2 }, (s) => {
+      s.spawn(4, { velocity: { x: 1, y: 0, z: 0 }, size: [0.1, 0.2] });
+      s.spawn(4, { velocity: { x: 0, y: 0, z: 2 }, size: [0.5, 0.9] });
+    });
+  });
+
+  it("keeps each system's capacity and end colour when two systems share one generated function", () => {
     setSpawnCodegen(true);
 
     const make = (capacity: number, colorEnd: number) =>
@@ -353,18 +359,14 @@ describe('generated spawn parity with the polyfill', () => {
     const a = make(8, 0xff0000);
     const b = make(5, 0x00ff00);
 
-    // same attributes, so the same generated function; the capacity and the
-    // packed end colour are each system's own
     a.spawn(7);
     b.spawn(7);
 
     const slotWords = 4 * a.data.floatStride;
-    // offsets are bytes; the words are four apart
-    const colorEndAt = a.data.offsets.aColorEnd / 4;
+    const colorEndWord = a.data.offsets.aColorEnd / 4;
 
-    expect(a.data.u32[colorEndAt]).not.toBe(b.data.u32[colorEndAt]);
-    // b wrapped at five: its seventh spawn landed in slot one
-    expect(b.data.f32[1 * slotWords + 3]).not.toBe(0);
+    expect(a.data.u32[colorEndWord]).not.toBe(b.data.u32[colorEndWord]);
+    expect(b.data.f32[1 * slotWords + 3], 'b wraps at five, so its seventh spawn lands in slot one').not.toBe(0);
     expect(a.data.f32[6 * slotWords + 3]).not.toBe(0);
 
     a.destroy();

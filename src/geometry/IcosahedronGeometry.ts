@@ -3,6 +3,11 @@ import type { Geometry3DOptions } from './Geometry3D';
 
 /**
  * Options for {@link IcosahedronGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<IcosahedronGeometryOptions> = { radius: 2, detail: 3 };
+ * const planet = new IcosahedronGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
@@ -10,27 +15,33 @@ export interface IcosahedronGeometryOptions extends Geometry3DOptions {
   /**
    * The radius of the circumscribed sphere
    * @default 1
+   * @example
+   * ```ts
+   * const gem = new IcosahedronGeometry({ radius: 0.25 });
+   * ```
    */
   radius: number;
   /**
    * The subdivision level
    *
-   * `0` keeps the bare 20-face icosahedron; each step quadruples the face count so the result
-   * rapidly approaches a geodesic sphere. Clamped to an integer in `[0, MAX_DETAIL]`
-   * (`MAX_DETAIL = 7` yields 163842 vertices).
+   * `0` keeps the bare 20-face icosahedron; each step quadruples the face count, so the result
+   * quickly approaches a sphere. The geometry has `10 * 4^detail + 2` vertices. Floored and
+   * clamped to the range 0 to 7, where 7 gives 163842 vertices; a value that isn't finite counts
+   * as 0.
    * @default 0
+   * @example
+   * ```ts
+   * const smooth = new IcosahedronGeometry({ detail: 3 });
+   * ```
    */
   detail: number;
 }
 
 /**
- * Maximum allowed `detail` for {@link IcosahedronGeometry}
+ * Highest `detail` an {@link IcosahedronGeometry} accepts
  *
- * The cap exists for two reasons. First, vertex count grows as `O(4^detail)`; at `detail = 7` the
- * subdivision produces 163842 vertices, already the upper end of useful tessellation. Second, it
- * keeps the midpoint-cache key collision-free: the key is `min(i1, i2) * 0x100000 + max(i1, i2)`,
- * which is unique only while vertex indices stay below `0x100000` (about 1M). 163842 is well
- * under that bound, so any `detail <= 7` is safe.
+ * Seven already gives 163842 vertices. The cap also keeps the midpoint cache key,
+ * `min(i1, i2) * 0x100000 + max(i1, i2)`, unique, which needs every vertex index below `0x100000`.
  */
 const MAX_DETAIL = 7;
 
@@ -43,6 +54,9 @@ const MAX_DETAIL = 7;
  *
  * Vertices are projected onto the unit sphere and then scaled by `radius`, so normals match
  * positions. UVs are equirectangular: `u = 0.5 + atan2(nz, nx) / (2π)`, `v = 0.5 - asin(ny) / π`.
+ * The vertices along the seam where `u` wraps from 1 back to 0 are shared, so the triangles that
+ * cross it squeeze the whole texture into one strip. Use {@link SphereGeometry} for a textured
+ * sphere.
  * @example
  * ```ts
  * const icosahedron = new IcosahedronGeometry({ radius: 1, detail: 0 });
@@ -55,7 +69,13 @@ const MAX_DETAIL = 7;
  * @standard
  */
 export class IcosahedronGeometry extends Geometry3D {
-  /** Default options for {@link IcosahedronGeometry} */
+  /**
+   * Default options for {@link IcosahedronGeometry}
+   * @example
+   * ```ts
+   * IcosahedronGeometry.defaultOptions.detail = 2;
+   * ```
+   */
   public static defaultOptions: IcosahedronGeometryOptions = {
     ...Geometry3D.defaultOptions,
     radius: 1,
@@ -121,7 +141,6 @@ export class IcosahedronGeometry extends Geometry3D {
       2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1,
     ];
 
-    // V_d = 10 * 4^detail + 2.
     const vertCount = 10 * 4 ** detail + 2;
     const positions = new Float32Array(vertCount * 3);
     const normals = new Float32Array(vertCount * 3);

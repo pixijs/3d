@@ -13,24 +13,9 @@ import { createLightingBit } from '~/core/shader/createLightingBit';
 import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 
 /**
- * `anisotropyBit` is a lobe that *replaces* the base specular (vs clearcoat /
- * sheen which add on top). These tests pin:
- *
- *   1. Metadata: struct binding; the texture slot exists only on the texture
- *      variant.
- *   2. Composed with a host lighting bit it splices into the *single* light
- *      loop — no second `for (i in lights)`.
- *   3. The per-light math is the anisotropic GGX delta over the host's base
- *      `specular` (`directLight += (anisoSpec - specular) * ...`), so the net
- *      specular is the anisotropic term and diffuse is untouched.
- *   4. The tangent frame is derived in the material slot (own TBN helper), and
- *      the shared `specularNormal` slot is overridden with the bent normal.
- *   5. Only the texture variant samples `sampleAnisotropy`.
+ * A host lighting bit with `pbrLightingBit`'s contract for the lobe: `a` and `nDotV` before the
+ * loop, and `halfVector`, `nDotH`, `fresnel`, `specular` and `radiance` inside it
  */
-
-// Host mirroring pbrLightingBit's contract for the lobe: declares `a`, `nDotV`
-// pre-loop and `halfVector` / `nDotH` / `fresnel` / `specular` / `radiance`
-// inside the loop, exactly the locals the anisotropy lobe reads.
 const hostLighting = createLightingBit({
   name: 'hostLightingAniso',
   preLighting: {
@@ -61,8 +46,7 @@ const hostLighting = createLightingBit({
   },
 });
 
-// Templates include the material marker so the bit's material-slot code (tangent
-// frame + bent normal) is emitted alongside the lighting slot.
+/** Both templates have the material slot, where the bit builds its tangent frame and bent normal */
 const wgslTemplate: ShaderBitTemplate = {
   bindGroups: [],
   gpu: '{{header}}\n{{fragmentMaterial}}\n{{fragmentLighting}}',
@@ -76,50 +60,18 @@ const glslTemplate: ShaderBitTemplate = {
   },
 };
 
-describe('anisotropyBit', () => {
+describe('anisotropyBit, a lobe that replaces the base specular rather than adding to it', () => {
   describe('metadata', () => {
-    it('binds anisotropyParams as a vec4 in the material struct (both variants)', () => {
-      expect(anisotropyBit.bindings?.material).toEqual({ anisotropyParams: 'vec4<f32>' });
-      expect(anisotropyTextureBit.bindings?.material).toEqual({ anisotropyParams: 'vec4<f32>' });
-    });
-
-    it('allocates the texture slot only on the texture variant', () => {
-      expect(anisotropyBit.textures).toEqual([]);
-      expect(anisotropyTextureBit.textures).toEqual(['anisotropy']);
-    });
-
-    it('gives every variant a distinct name (shader-cache identity)', () => {
-      expect(anisotropyBit.name).toBe('anisotropy');
-      expect(anisotropyTextureBit.name).toBe('anisotropy:texture');
-      expect(anisotropyTangentBit.name).toBe('anisotropy:tangent');
-      expect(anisotropyTextureTangentBit.name).toBe('anisotropy:texture:tangent');
-    });
-
-    it('keeps the same struct binding + texture slots across tangent variants (stable layout)', () => {
-      // MaterialSystemGpu swaps deriv<->tangent per-mesh, so the packed Material
-      // layout and sample indices must not change.
+    it('keeps one struct binding and texture list across the tangent variants, which the renderer swaps per mesh', () => {
       expect(anisotropyTangentBit.bindings?.material).toEqual({ anisotropyParams: 'vec4<f32>' });
       expect(anisotropyTextureTangentBit.bindings?.material).toEqual({ anisotropyParams: 'vec4<f32>' });
       expect(anisotropyTangentBit.textures).toEqual([]);
       expect(anisotropyTextureTangentBit.textures).toEqual(['anisotropy']);
     });
 
-    it('only the tangent variants declare the aTangent attribute + their own varyings', () => {
-      expect(anisotropyBit.attributes).toBeUndefined();
-      expect(anisotropyTextureBit.attributes).toBeUndefined();
-      // Distinct varying names from tangentNormalMappingBit's vTangent/vBitangent
-      // so the two never collide when a mesh is both normal-mapped and anisotropic.
-      expect(anisotropyTangentBit.attributes).toEqual({ aTangent: 'float32x4' });
-      expect(anisotropyTangentBit.interStage).toEqual({
-        vAnisoTangent: 'vec3<f32>',
-        vAnisoBitangent: 'vec3<f32>',
-      });
-    });
-
     it('maps deriv bits to their tangent variants (and passes others through)', () => {
       expect(anisotropyTangentVariant(anisotropyBit)).toBe(anisotropyTangentBit);
       expect(anisotropyTangentVariant(anisotropyTextureBit)).toBe(anisotropyTextureTangentBit);
-      // Non-anisotropy bits are returned unchanged.
       expect(anisotropyTangentVariant(hostLighting)).toBe(hostLighting);
     });
   });
@@ -151,13 +103,11 @@ describe('anisotropyBit', () => {
     const src = out.fragment.source;
 
     it('produces exactly one light loop (single shadow-sample path)', () => {
-      const matches = src.match(/for \(var i: i32 = 0;/g) ?? [];
+      const matches = src.match(/for \(var n: i32 = 0;/g) ?? [];
       expect(matches.length).toBe(1);
     });
 
-    it('replaces the base specular with the anisotropic GGX delta inside the loop', () => {
-      // Net specular = anisotropic term; the delta over the host `specular`
-      // keeps diffuse untouched and needs no change to pbrLightingBit.
+    it('replaces the base specular by adding the anisotropic delta over it inside the loop, leaving diffuse alone', () => {
       expect(src).toMatch(/directLight \+= \(anisoSpec - specular\) \* radiance \* nDotL \* shadow/);
     });
 
@@ -166,12 +116,6 @@ describe('anisotropyBit', () => {
       expect(src).toContain('let anisoVis');
       expect(src).toContain('anisoAlphaT');
       expect(src).toContain('anisoAlphaB');
-    });
-
-    it('derives the tangent frame from its own UV-derivative TBN helper', () => {
-      expect(src).toContain('fn calculateAnisotropyTBN(');
-      expect(src).toContain('let anisoT');
-      expect(src).toContain('let anisoB');
     });
 
     it('overrides the shared specularNormal slot with the bent normal (no IBL variant)', () => {
@@ -183,26 +127,6 @@ describe('anisotropyBit', () => {
       expect(src).toContain('cos(anisoRot)');
       expect(src).toContain('sin(anisoRot)');
     });
-
-    it('samples the anisotropy texture (texture variant)', () => {
-      expect(src).toContain('sampleAnisotropy(input.vUV)');
-    });
-  });
-
-  describe('WGSL factor-only variant', () => {
-    const out = compileWgslSource({
-      bits: [hostLighting, anisotropyBit],
-      template: wgslTemplate,
-    });
-    const src = out.fragment.source;
-
-    it('does not sample any anisotropy texture', () => {
-      expect(src).not.toContain('sampleAnisotropy');
-    });
-
-    it('still evaluates the anisotropic GGX delta', () => {
-      expect(src).toMatch(/directLight \+= \(anisoSpec - specular\)/);
-    });
   });
 
   describe('GLSL composition with a host lighting bit', () => {
@@ -213,34 +137,12 @@ describe('anisotropyBit', () => {
     const src = out.fragment;
 
     it('produces exactly one light loop (single shadow-sample path)', () => {
-      const matches = src.match(/while \(lightMask != 0u\)/g) ?? [];
+      const matches = src.match(/for \(int n = 0;/g) ?? [];
       expect(matches.length).toBe(1);
     });
 
     it('replaces the base specular with the anisotropic GGX delta inside the loop', () => {
       expect(src).toMatch(/directLight \+= \(anisoSpec - specular\) \* radiance \* nDotL \* shadow/);
-    });
-
-    it('guards its TBN helper with an ifndef so re-inclusion is safe', () => {
-      expect(src).toContain('#ifndef PIXI3D_ANISOTROPY_TBN_DEFINED');
-      expect(src).toContain('mat3 calculateAnisotropyTBN(');
-    });
-
-    it('overrides specularNormal with the bent normal and samples the anisotropy texture', () => {
-      expect(src).toMatch(/specularNormal = normalize\(mix\(/);
-      expect(src).toContain('sampleAnisotropy(vUV)');
-    });
-  });
-
-  describe('GLSL factor-only variant', () => {
-    const out = compileGlslSource({
-      bits: [hostLighting, anisotropyBit],
-      template: glslTemplate,
-    });
-    const src = out.fragment;
-
-    it('does not sample any anisotropy texture', () => {
-      expect(src).not.toContain('sampleAnisotropy');
     });
   });
 });

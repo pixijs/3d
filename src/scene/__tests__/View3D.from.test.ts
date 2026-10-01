@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { Animation } from '~/animation/Animation';
 import { Scene3DSource } from '~/assets/Scene3DSource';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { Material3D } from '~/materials/pbr/Material3D';
@@ -11,8 +10,8 @@ import type { Mesh3D } from '~/scene/Mesh3D';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
-/** Unit triangle in the xy plane: local bounds span 0..1 on x and y */
-const TRIANGLE_CORNERS = [
+/** The four corners of the triangle mesh's bounds, which span 0 to 1 on x and y in the xy plane */
+const TRIANGLE_BOUNDS_CORNERS = [
   { x: 0, y: 0, z: 0 },
   { x: 1, y: 0, z: 0 },
   { x: 0, y: 1, z: 0 },
@@ -71,23 +70,13 @@ describe('View3D.from', () => {
     expect((view.root.children[0] as Mesh3D).receiveShadow).toBe(false);
   });
 
-  it('forwards autoPlay to the model player', () => {
-    const source = createSource();
-    source.animations.idle = new Animation({ label: 'idle', duration: 1 });
-
-    const view = View3D.from(source, { autoPlay: true, autoUpdate: false });
-
-    expect(view.root.player?.playing).toBe(true);
-    view.root.player?.stop();
-  });
-
   it('picks the named scene', () => {
     const view = View3D.from(createSource(), { scene: 'B' });
 
     expect(view.meshes.items).toHaveLength(0);
   });
 
-  it('frames the default camera so the model fills the viewport', () => {
+  it('frames the default camera on the model, with its bounds centre mid-screen and every corner in view', () => {
     const view = View3D.from(createSource(), { width: 100, height: 100 });
     const camera = view.camera;
 
@@ -96,13 +85,12 @@ describe('View3D.from', () => {
     expect(camera.position.z).toBeGreaterThan(0);
     expect(camera.near).toBeLessThan(camera.position.z);
 
-    // Bounds centre lands mid-screen; every corner stays inside the view.
     const centre = view.worldToScreen({ x: 0.5, y: 0.5, z: 0 })!;
 
     expect(centre.x).toBeCloseTo(50);
     expect(centre.y).toBeCloseTo(50);
 
-    for (const corner of TRIANGLE_CORNERS) {
+    for (const corner of TRIANGLE_BOUNDS_CORNERS) {
       const p = view.worldToScreen(corner)!;
 
       expect(p.x).toBeGreaterThanOrEqual(0);
@@ -161,11 +149,10 @@ describe('View3D.from', () => {
 });
 
 describe('View3D root typing', () => {
-  it('keeps the root type a constructed View was given', () => {
+  it('keeps the root type a constructed View was given, so Model3D members compile on view.root', () => {
     const source = createSource();
     const view = new View3D({ root: new Model3D({ source }) });
 
-    // `source` and `player` only compile because `root` is a Model3D here, not a Container3D.
     expect(view.root.source).toBe(source);
     expect(view.root.player).toBeUndefined();
   });

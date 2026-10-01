@@ -25,19 +25,17 @@ function createBindGroupData(groupIndex: number): BindGroupData {
 
 function warnBindingConflict(name: string, newType: string, existingType: string): void {
   warn(
-    `[compileBindingsWgsl] Binding "${name}" redefined with different type: ` +
+    `[collectBindings] Binding "${name}" redefined with different type: ` +
       `"${existingType}" → "${newType}". Keeping original.`,
   );
 }
 
 function warnInvalidStorageType(bitName: string, bindingName: string, type: string): void {
   warn(
-    `[compileBindingsWgsl] Bit "${bitName}" binding "${bindingName}" has invalid storage type: "${type}". ` +
+    `[collectBindings] Bit "${bitName}" binding "${bindingName}" has invalid storage type: "${type}". ` +
       `Expected format: storage<StructName>`,
   );
 }
-
-const WGSL_BUILTIN_TYPES = new Set(['u32', 'i32', 'f32', 'f16', 'bool']);
 
 /**
  * Capitalizes the first letter of a string (for PascalCase struct names)
@@ -139,20 +137,6 @@ export function collectBindings(bits: ShaderBit[], template: ShaderBitTemplate):
     }
   }
 
-  for (const groupName in bindGroups) {
-    for (const sName in bindGroups[groupName].storages) {
-      const storageStructName = bindGroups[groupName].storages[sName];
-      if (!(storageStructName in structs) && !WGSL_BUILTIN_TYPES.has(storageStructName)) {
-        // A storage binding may reference a struct with no declared fields —
-        // e.g. a material whose bits contribute no `material` bindings. Define
-        // it empty so the WGSL type resolves; the storage padding plugin gives
-        // `Material` a valid body. Any other unpadded empty struct still fails
-        // loudly at WGSL compile, where an empty struct is illegal.
-        structs[storageStructName] = {};
-      }
-    }
-  }
-
   return { structs, bindGroups, template };
 }
 
@@ -178,8 +162,9 @@ interface BindingMapEntry {
 type WgslBindingMap = Record<string, { groupIndex: number; entries: BindingMapEntry[] }>;
 
 /**
- * Derives the binding layout from collected data: per group — uniform block
- * first, then resources, then storages, indices assigned sequentially
+ * Derives the per-group binding layout from collected data
+ *
+ * Per group: uniform block first, then resources, then storages, indices assigned sequentially.
  *
  * `emitBindingsWgsl` emits FROM this map, so the layout the parity
  * tests inspect and the layout the GPU sees are one and the same; the GL
@@ -218,8 +203,7 @@ export function buildWgslBindingMap(collected: CollectedBindings): WgslBindingMa
  * bindings straight from `buildWgslBindingMap` so source and map cannot
  * diverge
  *
- * Struct fields are emitted as-is — any padding fields (e.g. `_pad`) should
- * already have been added by a `preCompile` plugin.
+ * Struct fields are emitted as-is, in the order the struct table holds them.
  * @param collected - Binding data from `collectBindings`
  * @returns WGSL struct and binding declaration source
  * @internal

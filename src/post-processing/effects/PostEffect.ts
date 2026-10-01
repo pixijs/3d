@@ -43,8 +43,8 @@ export interface EffectFragment {
 }
 
 /**
- * Per-slot facts handed to {@link PostEffect#build} — the shared {@link PassContext} plus the
- * chain's input and output for this position
+ * What {@link PostEffect#build} receives: the shared {@link PassContext} plus this effect's input
+ * and output in the chain
  *
  * These are the only values the chain compiler decides per position; everything else (scene
  * depth, shared copies, new transients) comes off the graph itself. Handles are build-time
@@ -65,6 +65,12 @@ export interface EffectIO extends PassContext {
 
 /**
  * Constructor options shared by every {@link PostEffect}
+ * @example
+ * ```ts
+ * interface MyVignetteEffectOptions extends PostEffectOptions {
+ *   strength?: number;
+ * }
+ * ```
  * @category filters
  * @standard
  */
@@ -80,15 +86,12 @@ export type PostEffectOptions = Pass3DOptions;
  *
  * ## Authoring
  *
- * The single-shader case is declarative — provide `fragment`
- * (+ optional `uniforms`) and expose plain property
- * accessors that write into the group: a property write is a uniform update,
- * visible next frame, no version counters.
+ * A single-shader effect is declarative: provide `fragment` (and optionally `uniforms`), and
+ * expose plain property accessors that write into the uniform group. A property write is a
+ * uniform update, visible next frame.
  *
- * Multi-pass effects override {@link PostEffect#build} and talk to the render
- * graph directly — the same `graph.addPass` / `graph.createColor` surface
- * every engine pass uses, no wrapper. The mental model is a pixi filter with
- * the render graph in hand:
+ * A multi-pass effect overrides {@link PostEffect#build} and adds its passes to the render graph
+ * itself, through the same `graph.addPass` / `graph.createColor` every engine pass uses:
  *
  * ```ts
  * public override build(graph: RenderGraph, io: EffectIO): void {
@@ -108,25 +111,43 @@ export type PostEffectOptions = Pass3DOptions;
  * }
  * ```
  *
- * Two contracts to honour: the effect's final image goes to `io.output`
- * (presenter election depends on the compiler owning that handle), and
- * handles resolve to textures only inside `render(session)` — never at build
- * time.
+ * Two contracts to honour: the effect's final image goes to `io.output` (presenter election
+ * depends on the compiler owning that handle), and handles resolve to textures only inside
+ * `render(session)`, never at build time.
  *
- * ## Lifecycle
+ * Toggling, reordering and retiring an effect work as for any pass; {@link View3D#passes} has
+ * the rules.
+ * @example
+ * ```ts
+ * class MyGreyscaleEffect extends PostEffect {
+ *   protected readonly fragment: EffectFragment = {
+ *     gpu: `
+ * fn effect(uv: vec2<f32>) -> vec4<f32> {
+ *   let color = sampleColor(uv);
+ *   let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+ *   return vec4<f32>(vec3<f32>(luma), color.a);
+ * }
+ * `,
+ *     gl: `
+ * vec4 effect(vec2 uv) {
+ *   vec4 color = sampleColor(uv);
+ *   float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+ *   return vec4(vec3(luma), color.a);
+ * }
+ * `,
+ *   };
+ * }
  *
- *  - `enabled` toggles rebuild the view's graph on the next render and re-key every mesh
- *    (pooled transients and cached shaders are reused). A settings toggle, not a per-frame
- *    lever: animate the effect's properties instead.
- *  - Reassigning `view.passes = [...]` is the structural lever: the
- *    array is a transaction — in-place mutation is not tracked.
- *  - Effects are never destroyed by reassignment; call
- *    {@link PostEffect#destroy} when an effect is retired for good.
+ * view.passes = [new MyGreyscaleEffect()];
+ * ```
  * @category filters
  * @standard
  */
 export abstract class PostEffect extends Pass3D {
-  /** Post effects always run in the post chain */
+  /**
+   * Post effects always run in the post chain
+   * @advanced
+   */
   public readonly stage = 'post';
 
   /**

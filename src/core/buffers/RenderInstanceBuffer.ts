@@ -5,16 +5,12 @@ import type { SortedMesh3DView } from '../batcher/SortedMesh3DView';
 import { Buffer3D } from './Buffer3D';
 
 /**
- * Per-(batch, pass) buffer holding one interleaved `RenderableInstance` record
- * per draw-order slot: `[storeIndex, packedTextureSlots]` (2× u32)
+ * One `RenderableInstance` record per instance in draw order, `[storeIndex, packedTextureSlots]`,
+ * for one batch and pass (WebGPU)
  *
- * Consumed by the shader as `array<RenderableInstance>`, indexed by
- * `instance_index`.
- *
- * The id halves (`data[i*2]`) are written by `populateIds`; the texture-slot
- * halves (`data[i*2 + 1]`) are written by the batcher. Fusing the two into one
- * buffer keeps them from desyncing under GPU compaction and frees a
- * storage-buffer binding.
+ * `populateIds` writes the store indices, `data[i * 2]`, and the batcher the packed texture slots,
+ * `data[i * 2 + 1]`. Keeping both in one buffer means the compaction can't separate them, and it
+ * takes one storage-buffer binding instead of two.
  * @internal
  */
 export class RenderInstanceBuffer {
@@ -22,7 +18,7 @@ export class RenderInstanceBuffer {
   public readonly bufferResource: BufferResource;
 
   private readonly _buffer: Buffer3D;
-  /** Interleaved u32 pairs: `[id0, tex0, id1, tex1, ...]` */
+  /** The records as `u32` pairs, `[id0, tex0, id1, tex1, ...]` */
   public data: Uint32Array;
 
   constructor(label: string, initialInstances = 128) {
@@ -38,16 +34,16 @@ export class RenderInstanceBuffer {
     this.bufferResource = new BufferResource({ buffer: this._buffer });
   }
 
-  /** The underlying pixi `Buffer` — bound raw (not via `bufferResource`) by the compaction compute */
+  /** The underlying buffer, which the cull compute binds directly rather than through `bufferResource` */
   public get buffer(): Buffer3D {
     return this._buffer;
   }
 
   /**
-   * Ensures the buffer can hold at least `count` instances (2 u32 each), growing by 1.5x if needed
+   * Makes room for at least `count` instances, growing to 1.5 times that when it must
    *
-   * Contents are not preserved — every slot is rewritten (ids via
-   * `populateIds`, texture slots via the batcher) before the next `upload`.
+   * Growth doesn't keep the contents: `populateIds` and the batcher rewrite every record before
+   * the next `upload`.
    * @param count - Number of instances to make room for.
    * @returns The current backing array.
    */
@@ -60,10 +56,9 @@ export class RenderInstanceBuffer {
   }
 
   /**
-   * Writes the id half of each slot (`data[i*2] = _storeIndex`) from the sorted pass view
+   * Writes each instance's store index, in the view's sorted order
    *
-   * Does NOT upload — the batcher writes the texture-slot halves next, then a
-   * single `upload` pushes both.
+   * Doesn't upload: the batcher writes the texture slots next, and one `upload` sends both.
    * @param view - The sorted pass view to source store indices from.
    */
   public populateIds(view: SortedMesh3DView<Mesh3DData>): void {
@@ -78,35 +73,31 @@ export class RenderInstanceBuffer {
   }
 
   /**
-   * Uploads `count` instances (both halves) to the GPU
+   * Uploads the first `count` records
    * @param count - Number of instances to upload.
    */
   public upload(count: number): void {
-    this._buffer.update(count * 2 * 4); // 2 u32 * 4 bytes each
+    this._buffer.update(count * 2 * 4);
   }
 
   /**
-   * Frees the GPU copy of the instance records while keeping the CPU array
+   * Frees the GPU copy of the records and keeps the CPU array
    *
-   * pixi re-creates the buffer from `data` on the next fetch; the next rebuild
-   * rewrites every slot anyway. Idempotent.
+   * pixi re-creates the buffer from `data` the next time it's bound, and the next rebuild rewrites
+   * every record anyway. Idempotent.
    */
   public unload(): void {
     this._buffer?.unload();
   }
 
   /**
-   * Releases the exclusively-owned GPU buffer and drops the backing array
+   * Releases the GPU buffer and drops the CPU array
    *
-   * `ensureSize` resizes the existing `Buffer` in place (no orphans), so the
-   * single buffer here is all that needs freeing. Idempotent — a second call
-   * is a no-op.
+   * `ensureSize` resizes the one buffer in place, so there's nothing else to free. Idempotent.
    */
   public destroy(): void {
     if (!this._buffer) return;
 
-    // Free the BufferResource first (destroyBuffer:false) so its bound bind
-    // groups react to its change before the Buffer it references is destroyed.
     this.bufferResource.destroy(false);
     this._buffer.destroy();
 

@@ -6,25 +6,21 @@ import type { RaycastHit3D } from './HitResult3D';
 import { createRaycastHit3D } from './HitResult3D';
 
 /**
- * The 3D fields {@link View3D} installs on the federated events it re-dispatches
+ * The 3D fields a {@link View3D} adds to the pointer and wheel events it passes into its scene
  *
- * The event is augmented in place rather than wrapped, so a 2D listener higher up the chain — on the
- * View3D or a 2D ancestor — sees the same object and can branch on {@link Event3DFields#target3D} to
- * recover the picked 3D node without an `instanceof` check.
+ * The View adds them to pixi's event object rather than wrapping it, so a 2D listener higher up,
+ * on the View or a 2D ancestor, gets the same object and can read
+ * {@link Event3DFields#target3D | target3D} to find the 3D node that was picked.
  * @remarks
- * - **Copy out anything you keep.** `hit3D` and the vectors inside it are owned by the event object
- *   and reused across dispatches, the same contract as pixi's `global` / `screen`.
- * - During a 3D chain dispatch `composedPath()` returns the frozen 3D propagation chain
- *   `[root3D, …, target]` the dispatch walks. The array is pooled — valid only during the dispatch,
- *   copy to retain.
- * - Reads are only meaningful while the event is on a dispatch that ran through a View3D. The fields
- *   are token-guarded accessors on the federated event prototypes: every write stamps the event's
- *   current `nativeEvent`, and a read whose stamp doesn't match — the pooled event object was recycled
- *   for an unrelated dispatch, or no dispatch ever crossed a View3D — answers as a miss (all three
- *   fields `null`) rather than leaking a previous hit or reading `undefined`.
- * - On the View itself, only plain listeners (`view3d.on('pointertap', …)`) run after the 3D dispatch
- *   has written the fields. Pixi notifies the View's `on*` handler and its `*capture` listeners
- *   first, so `view3d.onpointertap` and `view3d.on('pointertapcapture', …)` read a miss.
+ * - **Copy out anything you keep.** `hit3D` and its vectors belong to the event object, which
+ *   pixi reuses for later events, as it does `global` and `screen`.
+ * - While a 3D node's listeners run, `composedPath()` returns the 3D chain being dispatched,
+ *   `[root3D, …, target]`. The array is reused too: copy it to keep it.
+ * - Outside a dispatch that went through a View3D, all three fields read `null`, including on a
+ *   reused event object that carried a hit earlier.
+ * - On the View itself, only plain listeners (`view3d.on('pointertap', …)`) see the fields. Pixi
+ *   calls the View's `on*` handler and its `*capture` listeners before the 3D dispatch runs, so
+ *   `view3d.onpointertap` and `view3d.on('pointertapcapture', …)` read `null`.
  * @example
  * ```ts
  * mesh.on('pointertap', (e) => {
@@ -38,18 +34,17 @@ import { createRaycastHit3D } from './HitResult3D';
  */
 export interface Event3DFields {
   /**
-   * The ray-cast at this event's pointer position — what {@link View3D#raycast} returns for
-   * `event.global` — or `null` when the ray struck nothing or the event carries no ray
+   * What the pointer is over: the hit {@link View3D#raycast} would return for `event.global`, or
+   * `null` when the ray hits nothing
    *
-   * Independent of which node the dispatch is about: `target3D` says who is being told, `hit3D`
-   * says what is under the pointer. A `pointerupoutside` on the pressed node still reports the node
-   * the pointer released over (a drop target), and a `pointerout` reports the node the pointer moved
-   * onto. It is `null` on the events pixi delivers without hit-testing this View: the View-exit
-   * `pointerout`, and releases resolved outside the View (an `*upoutside` arriving from another 2D
-   * element or from off-canvas).
+   * It doesn't depend on which node the event is about: `target3D` says who is being told,
+   * `hit3D` says what is under the pointer. So a `pointerupoutside` on the pressed node reports
+   * the node the pointer was released over, such as a drop target, and a `pointerout` reports the
+   * node the pointer moved onto. It is `null` on events pixi delivers without hit-testing this
+   * View: the `pointerout` when the pointer leaves the View, and a release outside the View.
    *
-   * On a hit against a non-interactive (`'auto'` / `'passive'`) node, `hit3D.target` is the nearest
-   * interactive ancestor while the surface fields describe the struck node.
+   * On a hit against a non-interactive (`'auto'` or `'passive'`) node, `hit3D.target` is its
+   * nearest interactive ancestor, while the surface fields describe the node that was struck.
    * @example
    * ```ts
    * ground.on('pointertap', (e) => {
@@ -65,17 +60,17 @@ export interface Event3DFields {
    */
   readonly hit3D: RaycastHit3D | null;
   /**
-   * The 3D node this dispatch is about, or `null` when the event belongs to the View itself
+   * The 3D node this event is about, or `null` when it belongs to the View itself
    *
-   * `null` covers the viewport miss — a click on empty space. Inside the 3D chain the field matches
-   * `event.target`; for View-level (2D) listeners `event.target` has been restored to the View3D
-   * while `target3D` still names the node.
+   * `null` includes a click on empty space. A 3D node's listeners see the same node as
+   * `event.target`. The View's own listeners see the View as `event.target`, while `target3D`
+   * still names the node.
    * @remarks
-   * - On `*upoutside` events it names the press target; `hit3D` still says what the release landed
-   *   on, if anything.
-   * - During the non-bubbling `pointerenter` / `pointerleave` walks it names the node being notified.
-   * - On a hit against a non-interactive (`'auto'` / `'passive'`) node it names that node's nearest
-   *   interactive ancestor, the same node as `hit3D.target`.
+   * - On `*upoutside` events it names the pressed node; `hit3D` says what the release landed on,
+   *   if anything.
+   * - During `pointerenter` and `pointerleave`, which don't bubble, it names the node being told.
+   * - On a hit against a non-interactive (`'auto'` or `'passive'`) node, it names that node's
+   *   nearest interactive ancestor, the same node as `hit3D.target`.
    * @example
    * ```ts
    * // One View-level listener instead of a listener per mesh
@@ -87,19 +82,19 @@ export interface Event3DFields {
    */
   readonly target3D: Container3D | null;
   /**
-   * The 3D node whose listeners are currently being notified, or `null` outside a 3D chain dispatch
+   * The 3D node whose listeners are running, or `null` outside the 3D dispatch
    *
-   * The 3D counterpart of `currentTarget`: while {@link Event3DFields#target3D} stays fixed on the
-   * dispatch target, this varies per hop as the dispatch walks capture / at-target / bubble — an
-   * ancestor's listener reads the ancestor here. During the non-bubbling `pointerenter` /
-   * `pointerleave` walks, the `pointerupoutside` reconciliation walk and the `globalpointermove`
-   * fan-out it names the node being notified. For View-level (2D) listeners the 3D chain has already
-   * unwound, so it reads `null` while `target3D` still names the picked node.
+   * The 3D counterpart of `currentTarget`: `target3D` stays on the event's target, while this
+   * moves from node to node through the capture, target and bubble phases, so an ancestor's
+   * listener reads the ancestor here. During `pointerenter`, `pointerleave`, the
+   * `pointerupoutside` walk and `globalpointermove`, it names the node being told. The View's own
+   * listeners run after the 3D dispatch has finished, so for them it reads `null` while
+   * `target3D` still names the picked node.
    * @example
    * ```ts
-   * // One listener on the group tells which hop it fired on
+   * // One listener on the group tells which node it fired on
    * group.on('pointerdown', (e) => {
-   *   console.log(e.currentTarget3D === group); // true — vs. e.target3D, the picked descendant
+   *   console.log(e.currentTarget3D === group); // true; e.target3D is the picked descendant
    * });
    * ```
    */
@@ -107,68 +102,102 @@ export interface Event3DFields {
 }
 
 /**
- * Callback shape of the pointer on-handler properties ({@link IFederatedContainer3D#onclick | onclick}, …)
+ * The type of a pointer handler property on a 3D node, such as
+ * {@link IFederatedContainer3D#onclick | onclick}
+ * @example
+ * ```ts
+ * const grow: Pointer3DEventHandler = (e) => e.target3D?.scale.set(1.1);
+ *
+ * button.onpointerenter = grow;
+ * ```
  * @category events
  * @standard
  */
 export type Pointer3DEventHandler = (event: Pointer3DEvent) => void;
 
 /**
- * Callback shape of {@link IFederatedContainer3D#onwheel | Container3D.onwheel}
+ * The type of {@link IFederatedContainer3D#onwheel | Container3D.onwheel}
+ * @example
+ * ```ts
+ * const push: Wheel3DEventHandler = (e) => {
+ *   panel.position.z += e.deltaY * 0.01;
+ * };
+ *
+ * panel.onwheel = push;
+ * ```
  * @category events
  * @standard
  */
 export type Wheel3DEventHandler = (event: Wheel3DEvent) => void;
 
 /**
- * A `FederatedPointerEvent` carrying the {@link Event3DFields | 3D hit fields}
+ * A pixi.js `FederatedPointerEvent` with the {@link Event3DFields | 3D fields}
  *
- * Dispatched by {@link View3D}'s interaction layer against the picked {@link Container3D}, and against
- * the View3D itself on a viewport miss.
- * @see {@link Event3DFields} For the 3D fields and their lifetime contract.
+ * The type of every pointer event a 3D node's listeners receive. The View's own listeners get the
+ * same event object, whether the pointer is over a node or over empty space.
+ * @example
+ * ```ts
+ * function onGrab(e: Pointer3DEvent): void {
+ *   if (e.hit3D) grabPoint.copyFrom(e.hit3D.point);
+ * }
+ *
+ * handle.on('pointerdown', onGrab);
+ * ```
+ * @see {@link Event3DFields} For the 3D fields and how long they stay valid.
  * @category events
  * @standard
  */
 export interface Pointer3DEvent extends FederatedPointerEvent, Event3DFields {}
 
 /**
- * A `FederatedWheelEvent` carrying the {@link Event3DFields | 3D hit fields}
- * @see {@link Event3DFields} For the 3D fields and their lifetime contract.
+ * A pixi.js `FederatedWheelEvent` with the {@link Event3DFields | 3D fields}
+ * @example
+ * ```ts
+ * function onZoom(e: Wheel3DEvent): void {
+ *   if (e.hit3D) zoomToward(e.hit3D.point, e.deltaY);
+ * }
+ *
+ * view3d.on('wheel', onZoom);
+ * ```
+ * @see {@link Event3DFields} For the 3D fields and how long they stay valid.
  * @category events
  * @standard
  */
 export interface Wheel3DEvent extends FederatedWheelEvent, Event3DFields {}
 
 /**
- * Guard token marking 3D event fields that have never been written (or were reset). A unique
- * object so no `nativeEvent` — not even `undefined` on a synthetic test event — compares equal to it.
+ * Token for 3D fields that were never written
+ *
+ * A fresh object, so no `nativeEvent` equals it, not even the `undefined` of a synthetic event.
  * @internal
  */
 export const TOKEN_NONE: unknown = {};
 
 /**
- * Backing store for the 3D fields carried by a pooled federated event. `token` is the
- * `nativeEvent` the fields were last written for: pixi pools and reuses event objects, so a field-set
- * outlives its dispatch. Reads go through `PICK3D_ACCESSORS`, which compares the token against the
- * event's current `nativeEvent` and answers as a miss once the event has moved on to an unrelated
- * dispatch.
+ * Where an event's 3D fields are stored
+ *
+ * Pixi reuses event objects, so the stored fields outlive their dispatch. `token` is the
+ * `nativeEvent` they were written for, and the `PICK3D_ACCESSORS` getters answer `null` once the
+ * event's `nativeEvent` no longer matches.
  * @internal
  */
 interface Pick3DStorage {
   token: unknown;
-  /** The pooled hit surfaced as `hit3D` while `hasHit`; rewritten in place per dispatch */
+  /** Reported as `hit3D` while `hasHit`; rewritten in place for each dispatch */
   hit: RaycastHit3D;
-  /** Whether `hit` describes the current dispatch — `false` on a miss, so `hit3D` reads `null` */
+  /** Whether `hit` belongs to the current dispatch; `false` on a miss, so `hit3D` reads `null` */
   hasHit: boolean;
   target: Container3D | null;
   currentTarget: Container3D | null;
 }
 
 /**
- * Returns the event's 3D-field backing storage, creating it — plus own accessor properties,
- * for event objects whose prototype chain lacks the federated-event install below — the first time the
- * event is seen. The write helpers call this on every dispatch; the prototype accessors call it lazily,
- * so even an event that never crossed a View3D answers a coherent miss on first read.
+ * Returns the event's 3D field storage, creating it the first time the event is seen
+ *
+ * The write helpers call it on every dispatch, and the getters call it too, so an event that
+ * never went through a View3D still reads a consistent `null`. The first call also defines the
+ * getters on the event itself, which only matters for an event whose prototype lacks them, such as
+ * one made by a second copy of pixi.js.
  * @param event - the federated event to read or create 3D storage on.
  * @returns The event's 3D-field storage.
  * @internal
@@ -190,16 +219,16 @@ export function ensurePick3D(event: FederatedMouseEvent): Pick3DStorage {
 }
 
 /**
- * The 3D-field accessor set
+ * The getters behind {@link Event3DFields}
  *
- * See {@link Event3DFields} for what each field means. Every getter validates the storage token: a
- * mismatch means the event is on a dispatch that never crossed a View3D — the pooled object was
- * recycled, or no 3D dispatch ever touched it — so the fields answer as a miss (all `null`) instead
- * of leaking a previous hit.
+ * Each one checks the storage token against the event's `nativeEvent`. A mismatch means the event
+ * object is on a dispatch that never went through a View3D, so the field reads `null` instead of
+ * a previous hit.
  *
- * Every descriptor is `configurable`, so a second evaluation of this module — two copies of the
- * package against one `pixi.js`, or a dev-server re-import — redefines the prototype accessors
- * instead of throwing.
+ * They are installed on `FederatedMouseEvent.prototype`, which pointer and wheel events both
+ * extend, so the fields read `null` rather than `undefined` on events no View3D has touched. Every
+ * descriptor is `configurable`, so evaluating this module twice (two copies of the package against
+ * one pixi.js, or a dev-server reload) redefines them instead of throwing.
  */
 const PICK3D_ACCESSORS: PropertyDescriptorMap = {
   hit3D: {
@@ -225,19 +254,15 @@ const PICK3D_ACCESSORS: PropertyDescriptorMap = {
   },
 };
 
-// Installed on the shared mouse-event prototype — pointer and wheel events both extend it — so the 3D
-// fields answer the documented miss even on events that never crossed a View3D, where `e.target3D`
-// would otherwise read `undefined`. Events that do cross a View additionally get own-property
-// accessors backed by their own storage via `ensurePick3D`.
 Object.defineProperties(FederatedMouseEvent.prototype, PICK3D_ACCESSORS);
 
 /**
- * Type-level mirror of the prototype install above: every federated mouse / wheel event genuinely
- * answers the {@link Event3DFields} at runtime — with miss values when no 3D pick is current — so the
- * augmentation states a runtime truth rather than a convenience lie. It's what lets View-level
- * listeners (`view3d.on('pointermove', …)`) read `target3D` and friends without narrowing.
+ * Types every pixi.js mouse, pointer and wheel event with {@link Event3DFields}
+ *
+ * True at runtime: the getters on `FederatedMouseEvent.prototype` answer on every such event,
+ * with `null` when no 3D pick is current. It lets the View's own listeners
+ * (`view3d.on('pointermove', …)`) read `target3D` without a cast.
  */
 declare module 'pixi.js' {
-  // oxlint-disable-next-line no-empty-object-type
   interface FederatedMouseEvent extends Event3DFields {}
 }

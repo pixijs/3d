@@ -2,14 +2,20 @@ import type { UniformData } from 'pixi.js';
 import { uniformParsers } from 'pixi.js';
 
 /**
- * Registers pixi-3d's uniform parsers with pixi.js — `Matrix4` / `Matrix3`
- * (16- / 9-element `elements`), `{x,y,z}` vectors, and `{r,g,b}` colors
+ * Teaches pixi.js to upload pixi-3d math objects as uniforms: a `Matrix4` or `Matrix3` (anything
+ * with a 16- or 9-float `elements`), and for a `vec3<f32>` any `{x,y,z}` or `{r,g,b}` object
  *
  * Called once at package import.
  *
- * Parser order matters: a uniform value is treated as the first parser whose
- * test it passes (including pixi's built-in parsers), so more specific tests
- * must be registered ahead of broader ones.
+ * `uniform` and `ubo` are source fragments. pixi.js pastes them into the upload function it
+ * generates for a uniform group, which is where names like `uv`, `ud`, `data` and `offset` come
+ * from. The `Matrix3` buffer write skips every fourth float because a uniform buffer pads each
+ * column of a `mat3x3<f32>` to four floats.
+ *
+ * pixi.js uses the first parser whose `test` passes, so a narrower test must be registered before
+ * a broader one. Its built-in parsers sit ahead of these and win any value both would accept. The
+ * uniform-buffer path runs `test` without comparing `type`, which is why the `vec3<f32>` tests
+ * check the type themselves.
  * @internal
  */
 export function addUniformParsers(): void {

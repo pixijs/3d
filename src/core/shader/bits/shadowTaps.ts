@@ -1,25 +1,24 @@
 import type { ShadowFilter } from '../../render-passes/shadow/shadowPassUtils';
 
 /**
- * A PCF tap offset in texel units — multiplied by `1 / mapSize` in the shader
+ * One PCF tap's offset in texels; the shader multiplies it by `1 / mapSize`
  * @internal
  */
 export type ShadowTap = readonly [number, number];
 
 /**
- * Single centre tap: `'hard'`
+ * One tap at the centre, for `'hard'`
  *
- * One fetch — but the shadow map's comparison sampler is linear, so even this
- * is a hardware 2×2 PCF: the cheapest clean edge.
+ * The shadow map's comparison sampler filters linearly, so even one fetch compares a 2×2 block: the
+ * cheapest clean edge.
  */
 const CENTER: readonly ShadowTap[] = [[0, 0]];
 
 /**
- * 2×2 grid at one-texel spacing: `'pcf'` (default)
+ * A 2×2 grid at ±1 texel, for `'pcf'`, the default
  *
- * Four linear-PCF fetches ≈ a 16-sample kernel. Spaced a full texel apart (not
- * sub-texel) so the hardware 2×2 footprints tile into a wider penumbra instead
- * of overlapping.
+ * Four filtered fetches cover a 4×4 block of texels. At this spacing their 2×2 footprints sit side
+ * by side rather than overlap, which widens the penumbra.
  */
 const GRID_2X2: readonly ShadowTap[] = [
   [-1, -1],
@@ -29,10 +28,10 @@ const GRID_2X2: readonly ShadowTap[] = [
 ];
 
 /**
- * 3×3 grid at two-texel spacing: `'pcf-high'`
+ * A 3×3 grid at two-texel spacing, for `'pcf-high'`
  *
- * Nine linear-PCF fetches for a wide, soft penumbra; two-texel spacing broadens
- * the kernel rather than re-sampling the same texels each tap covers.
+ * Nine filtered fetches cover a 6×6 block for a wide, soft penumbra. The two-texel spacing keeps
+ * each tap's footprint off its neighbours'.
  */
 const GRID_3X3: readonly ShadowTap[] = [
   [-2, -2],
@@ -47,15 +46,10 @@ const GRID_3X3: readonly ShadowTap[] = [
 ];
 
 /**
- * Per-tier PCF tap offsets in texel units — the single source of truth for
- * shadow kernels
+ * The PCF tap offsets for each `shadowFilter`, in texels
  *
- * Identical across WebGL and WebGPU so a given `shadowFilter` renders the same
- * on both backends. Each tap is a hardware 2×2 bilinear PCF fetch (the shadow
- * sampler is a linear comparison sampler), so offsets are spaced a texel or
- * more apart to widen the kernel. Consumed by the per-backend bit factories
- * (`createShadowBitGpu`/`createShadowBitGl`), which wrap these offsets in each
- * backend's own sampling intrinsic.
+ * `createShadowBitGpu` and `createShadowBitGl` both build their sampling from it, so a filter looks
+ * the same on both backends.
  * @internal
  */
 export const SHADOW_TAPS: Record<ShadowFilter, readonly ShadowTap[]> = {

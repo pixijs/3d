@@ -7,15 +7,9 @@ import type { RenderGraphOptions } from '~/core/render-graph/RenderGraph';
 import type { ResourceDescriptor, ResourceHandle } from '~/core/render-graph/ResourceHandle';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
 
-/**
- * `createColor` / `createDepth` options expand into the per-frame descriptor the pool consumes,
- * by pixi's rule: texels = logical size × resolution. The logical size defaults to the view's
- * viewport and the resolution to the target's own, so `{}` is the physical viewport.
- */
-
 const noTexture = (): BindableTexture => undefined as unknown as BindableTexture;
 
-// A DPR-2 target: 400x300 physical viewport on an 800x600 framebuffer.
+/** A DPR-2 target: a 400x300 physical viewport on an 800x600 framebuffer */
 const SESSION = {
   viewport: { x: 0, y: 0, width: 400, height: 300 },
   defaultTarget: {
@@ -33,12 +27,10 @@ function describeOf(graph: RenderGraph, handle: ResourceHandle): ResourceDescrip
   return entry.describe(SESSION);
 }
 
-describe('TransientTextureOptions shorthand', () => {
-  it("'inherit' is the physical viewport, in the target's format", () => {
+describe('TransientTextureOptions expand to a pool request, texels = logical size × resolution', () => {
+  it("'inherit' is the physical viewport, in the target's format, as a content size the pool fits a texture to", () => {
     const g = makeGraph();
     const d = describeOf(g, g.createColor({ label: 'scratch' }));
-    // The descriptor is the content size only. Which texture it lands in is the pool's call,
-    // made against the screen sizes registered with it.
     expect(d).toEqual({
       width: 400,
       height: 300,
@@ -76,9 +68,8 @@ describe('TransientTextureOptions shorthand', () => {
     const g = makeGraph();
     const fixed = describeOf(g, g.createColor({ width: 256, height: 256, resolution: 1 }));
     expect([fixed.width, fixed.height]).toEqual([256, 256]);
-    // inherit on a DPR-2 target doubles a logical size into texels, as a pixi render texture would
     const inherited = describeOf(g, g.createColor({ width: 100, height: 50 }));
-    expect([inherited.width, inherited.height]).toEqual([200, 100]);
+    expect([inherited.width, inherited.height], 'the inherited DPR 2 doubles it').toEqual([200, 100]);
   });
 
   it('the scene targets accept the shorthand too', () => {
@@ -92,7 +83,7 @@ describe('TransientTextureOptions shorthand', () => {
 });
 
 describe('RenderGraph.sceneViewport', () => {
-  // The view sits off the target's origin, which is what tells the two modes apart.
+  /** `SESSION` with the view off the target's origin, which tells the two modes apart */
   const session = { ...SESSION, viewport: { x: 60, y: 40, width: 400, height: 300 } } as unknown as RenderSession;
 
   it("is the view's place on its target when the scene draws straight to it", () => {
@@ -108,7 +99,9 @@ describe('RenderGraph.sceneViewport', () => {
     });
     const rect = g.sceneViewport(session, new Rectangle());
 
-    // 400x300 physical on a DPR-2 target is 200x150 logical, and one texel per logical pixel.
-    expect([rect.x, rect.y, rect.width, rect.height]).toEqual([0, 0, 200, 150]);
+    expect(
+      [rect.x, rect.y, rect.width, rect.height],
+      '400x300 physical on a DPR-2 target is 200x150 logical, at one texel per logical pixel',
+    ).toEqual([0, 0, 200, 150]);
   });
 });

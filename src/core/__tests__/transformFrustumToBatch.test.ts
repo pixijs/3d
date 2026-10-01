@@ -3,15 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { transformFrustumToBatch } from '~/core/cull';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 
-// A stride-20 store row with matrix `m` in the first 16 lanes (column-major) — what the cull reads
-// as store row 0 (the batch world matrix `B`).
+/**
+ * A stride-20 store row with `m` in its first 16 lanes, column-major: what the cull reads as the
+ * batch world matrix `B`
+ */
 const storeRow = (m: Matrix4) => {
   const f32 = new Float32Array(20);
   f32.set(m.elements.subarray(0, 16));
   return f32;
 };
 
-// Apply an affine (column-major) matrix to a point.
+/** Applies an affine, column-major matrix to a point */
 const apply = (m: Matrix4, x: number, y: number, z: number) => {
   const e = m.elements;
   return {
@@ -22,16 +24,8 @@ const apply = (m: Matrix4, x: number, y: number, z: number) => {
 };
 
 describe('transformFrustumToBatch', () => {
-  it('returns the planes unchanged (same reference) for an identity batch matrix', () => {
-    const planes = new Float32Array(24);
-    for (let i = 0; i < 24; i += 4) planes[i] = 1; // unit +x normals
-    expect(transformFrustumToBatch(planes, storeRow(new Matrix4()))).toBe(planes);
-  });
-
   it('preserves signed distances: a batch-local point matches its world image under a rigid B', () => {
-    // Rigid B: 90° rotation about Z + translation (10, 5, -3), column-major. Rotation + translation
-    // preserve distances, so a batch-local point tested against the transformed planes must give the
-    // same signed distance as its world image (B·p) tested against the original world planes.
+    /** A 90° turn about Z, then a move by (10, 5, -3): rigid, so it preserves distances */
     const B = new Matrix4();
     B.elements.set([0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 10, 5, -3, 1]);
 
@@ -45,7 +39,7 @@ describe('transformFrustumToBatch', () => {
     ];
     const planes = new Float32Array(world.flat());
     const out = transformFrustumToBatch(planes, storeRow(B));
-    expect(out).not.toBe(planes); // non-identity → transformed copy
+    expect(out, 'a non-identity B returns the transformed scratch').not.toBe(planes);
 
     for (let p = 0; p < 6; p++) {
       const [nx, ny, nz, w] = world[p];

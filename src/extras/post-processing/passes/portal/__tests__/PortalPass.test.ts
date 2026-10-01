@@ -11,20 +11,20 @@ import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
 /**
- * A portal's passes run only while its entry can be seen: from the front, inside the view frustum,
- * and visible. Off those, nothing is drawn from its camera and nothing is copied into its texture.
+ * A view with an entry and an exit 40 apart along x, both facing `+Z`, a block in the far room for the
+ * portal camera to draw, and the view camera in front of the entry looking at it
  */
-
 function buildPortal(): { view3d: View3D; portal: PortalPass; entry: Mesh3D } {
   const view3d = new View3D({ width: 128, height: 128 });
   const surface = new Material3D({ baseColor: 0x8899aa });
 
-  // Something for the portal camera to draw on the far side.
-  const block = new Mesh3D({ geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }), material: surface });
-  block.position.set(40, 0.5, -6);
-  view3d.root.addChild(block);
+  const farRoomBlock = new Mesh3D({
+    geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
+    material: surface,
+  });
+  farRoomBlock.position.set(40, 0.5, -6);
+  view3d.root.addChild(farRoomBlock);
 
-  // Both quads face +Z: the entry is looked at from +Z, the exit's +Z side is the far room.
   const entry = new Mesh3D({ geometry: new PlaneGeometry({ width: 3, height: 4 }), material: surface });
   entry.position.set(0, 2, -8);
   view3d.root.addChild(entry);
@@ -37,7 +37,6 @@ function buildPortal(): { view3d: View3D; portal: PortalPass; entry: Mesh3D } {
   const portal = new PortalPass({ entry, exit, texture: feed });
   view3d.passes = [portal];
 
-  // In front of the entry, looking at it.
   view3d.camera.position.set(0, 1.7, -2);
   view3d.camera.lookAt({ x: 0, y: 2, z: -8 });
 
@@ -46,7 +45,7 @@ function buildPortal(): { view3d: View3D; portal: PortalPass; entry: Mesh3D } {
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`PortalPass visibility (${preference})`, () => {
-    it('draws and copies only while the entry is in view from the front', async () => {
+    it('draws and copies only while the entry is visible, in the frustum and seen from the front', async () => {
       const app = await getApp<Renderer>({
         id: `portal-pass-visibility-${preference}`,
         appOptions: { preference, width: 128, height: 128 },
@@ -65,9 +64,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           if (desc.camera === portal.camera) portalDraws++;
           renderForward(desc, session);
         });
-        vi.spyOn(pipe, 'copyColor').mockImplementation((handle, session) => {
+        vi.spyOn(pipe, 'copyColor').mockImplementation((source, dest, session) => {
           copies++;
-          copyColor(handle, session);
+          copyColor(source, dest, session);
         });
 
         const frame = (): [number, number] => {
@@ -77,26 +76,22 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           return [portalDraws, copies];
         };
 
-        // Facing the entry: the far side is drawn and copied into the texture.
-        expect(frame()).toEqual([1, 1]);
+        expect(frame(), 'facing the entry').toEqual([1, 1]);
 
-        // Behind the entry: nothing shows through a doorway from its back.
         view3d.camera.position.set(0, 1.7, -14);
         view3d.camera.lookAt({ x: 0, y: 2, z: -8 });
-        expect(frame()).toEqual([0, 0]);
+        expect(frame(), 'behind the entry').toEqual([0, 0]);
 
-        // In front again but looking away: the entry is outside the frustum.
         view3d.camera.position.set(0, 1.7, -2);
         view3d.camera.lookAt({ x: 0, y: 2, z: 20 });
-        expect(frame()).toEqual([0, 0]);
+        expect(frame(), 'in front, looking away').toEqual([0, 0]);
 
-        // Looking at it but the entry is hidden.
         view3d.camera.lookAt({ x: 0, y: 2, z: -8 });
         entry.visible = false;
-        expect(frame()).toEqual([0, 0]);
+        expect(frame(), 'facing the hidden entry').toEqual([0, 0]);
 
         entry.visible = true;
-        expect(frame()).toEqual([1, 1]);
+        expect(frame(), 'facing the entry again').toEqual([1, 1]);
       } finally {
         app.destroy();
       }

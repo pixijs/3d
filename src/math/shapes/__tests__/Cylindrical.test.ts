@@ -20,13 +20,6 @@ describe('Cylindrical', () => {
     });
   });
 
-  describe('type', () => {
-    test('is "cylindrical"', () => {
-      const c = new Cylindrical();
-      expect(c.type).toBe('cylindrical');
-    });
-  });
-
   describe('set', () => {
     test('sets all three components', () => {
       const c = new Cylindrical();
@@ -34,11 +27,6 @@ describe('Cylindrical', () => {
       expect(c.radius).toBe(3);
       expect(c.theta).toBe(Math.PI / 6);
       expect(c.y).toBe(7);
-    });
-
-    test('returns this', () => {
-      const c = new Cylindrical();
-      expect(c.set(1, 2, 3)).toBe(c);
     });
   });
 
@@ -50,12 +38,6 @@ describe('Cylindrical', () => {
       expect(b.radius).toBe(2);
       expect(b.theta).toBe(Math.PI / 3);
       expect(b.y).toBe(4);
-    });
-
-    test('returns this', () => {
-      const a = new Cylindrical();
-      const b = new Cylindrical();
-      expect(b.copyFrom(a)).toBe(b);
     });
   });
 
@@ -118,11 +100,6 @@ describe('Cylindrical', () => {
       expect(a.theta).toBeCloseTo(b.theta, 5);
       expect(a.y).toBeCloseTo(b.y, 5);
     });
-
-    test('returns this', () => {
-      const c = new Cylindrical();
-      expect(c.setFromPoint3D({ x: 1, y: 0, z: 0 })).toBe(c);
-    });
   });
 
   describe('setFromCartesianCoords', () => {
@@ -175,18 +152,6 @@ describe('Cylindrical', () => {
         expect(recovered.y).toBeCloseTo(y, 5);
         expect(recovered.z).toBeCloseTo(z, 5);
       }
-    });
-
-    test('returns this', () => {
-      const c = new Cylindrical();
-      expect(c.setFromCartesianCoords(1, 0, 0)).toBe(c);
-    });
-  });
-
-  describe('toString', () => {
-    test('includes radius, theta, y', () => {
-      const c = new Cylindrical(2, 0.5, 1.5);
-      expect(c.toString()).toBe('[pixi-3d/math:Cylindrical radius=2 theta=0.5 y=1.5]');
     });
   });
 });

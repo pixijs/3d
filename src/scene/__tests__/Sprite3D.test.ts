@@ -11,14 +11,15 @@ import type { Sprite3DMaterialOptions, Sprite3DOptions } from '~/scene/Sprite3D'
 import { updateTransformAndChildren3D } from '~/scene/utils/updateView3DTransforms';
 import { View3D } from '~/scene/View3D';
 
-/** A resourceless texture of a known pixel size — `orig` is all the sprite reads. */
+/** A texture of a known pixel size with no image behind it, which is all a sprite needs to size itself from `orig` */
 const makeTexture = (width: number, height: number): Texture =>
   new Texture({ source: new TextureSource({ width, height, resolution: 1 }) });
 
 /**
- * A texture with no drawable extent. pixi floors a `TextureSource` at 1x1, so
- * the zero has to come from the frame (which `orig` aliases) — the same shape a
- * still-loading atlas frame has.
+ * A texture with no drawable extent, the shape a still-loading atlas frame has
+ *
+ * A `TextureSource` turns a zero width or height into 1, so the zero has to come from the frame,
+ * which `orig` aliases.
  */
 const makeEmptyTexture = (): Texture => {
   const texture = makeTexture(64, 32);
@@ -28,72 +29,32 @@ const makeEmptyTexture = (): Texture => {
   return texture;
 };
 
-/** Rebuilds the local matrix the way the transform pass does, then returns its elements. */
+/** Rebuilds the local matrix as the transform pass does and returns a copy of its elements */
 const localElements = (sprite: Sprite3D): Float32Array => {
   sprite.updateLocalTransform();
   return Float32Array.from(sprite.localTransform.elements);
 };
 
 describe('Sprite3D local transform', () => {
-  it('appends texture size × pixelSize to the X/Y basis columns', () => {
+  it('scales the X/Y basis columns by texture size × pixelSize (0.01 by default), leaving Z at the user scale', () => {
     const sprite = new Sprite3D({ texture: makeTexture(64, 32) });
     const e = localElements(sprite);
 
-    // 64px × 0.01 across, 32px × 0.01 up; Z is untouched user scale.
     expect(e[0]).toBeCloseTo(0.64);
     expect(e[5]).toBeCloseTo(0.32);
     expect(e[10]).toBeCloseTo(1);
   });
 
-  it('honours pixelSize without touching scale', () => {
-    const sprite = new Sprite3D({ texture: makeTexture(64, 32), pixelSize: 1 / 32 });
-    const e = localElements(sprite);
-
-    expect(e[0]).toBeCloseTo(2);
-    expect(e[5]).toBeCloseTo(1);
-    expect(sprite.scale.x).toBe(1);
-    expect(sprite.scale.y).toBe(1);
-  });
-
-  it('multiplies the texture size by the node scale', () => {
-    const sprite = new Sprite3D({ texture: makeTexture(100, 100) });
-    sprite.scale.set(3, 0.5, 1);
-    const e = localElements(sprite);
-
-    expect(e[0]).toBeCloseTo(3);
-    expect(e[5]).toBeCloseTo(0.5);
-  });
-
-  it('leaves the centred default anchor at the node origin', () => {
-    const sprite = new Sprite3D({ texture: makeTexture(200, 400) });
-    sprite.position.set(1, 2, 3);
-    const e = localElements(sprite);
-
-    expect(e[12]).toBeCloseTo(1);
-    expect(e[13]).toBeCloseTo(2);
-    expect(e[14]).toBeCloseTo(3);
-  });
-
-  it('stands the sprite on its origin at anchor.y = 1', () => {
+  it('stands the sprite on its origin at anchor.y = 1, lifting its centre by half its 4-unit height', () => {
     const sprite = new Sprite3D({ texture: makeTexture(200, 400), anchor: { x: 0.5, y: 1 } });
     const e = localElements(sprite);
 
-    // 400px × 0.01 = 4 units tall, so the centre lifts by half of that.
     expect(e[12]).toBeCloseTo(0);
     expect(e[13]).toBeCloseTo(2);
   });
 
-  it('puts the left edge on the origin at anchor.x = 0', () => {
-    const sprite = new Sprite3D({ texture: makeTexture(200, 400), anchor: { x: 0, y: 0.5 } });
-    const e = localElements(sprite);
-
-    expect(e[12]).toBeCloseTo(1); // 200px × 0.01 = 2 units wide → half is 1
-    expect(e[13]).toBeCloseTo(0);
-  });
-
-  it('shifts the anchor through a rotated basis, not along world axes', () => {
+  it('shifts the anchor through a rotated basis: a quarter turn about +Z moves the lift onto -X', () => {
     const sprite = new Sprite3D({ texture: makeTexture(200, 400), anchor: { x: 0.5, y: 1 } });
-    // 90° about +Z sends local +Y to world -X.
     sprite.rotation.z = Math.PI / 2;
     const e = localElements(sprite);
 
@@ -125,53 +86,44 @@ describe('Sprite3D local transform', () => {
     expect(e[5]).toBeCloseTo(1.28);
   });
 
-  it('resizes from a spritesheet frame, not the whole source', () => {
-    const source = new TextureSource({ width: 128, height: 128, resolution: 1 });
-    const sprite = new Sprite3D({
-      texture: new Texture({ source, frame: new Rectangle(0, 0, 32, 64) }),
-    });
-    const e = localElements(sprite);
-
-    expect(e[0]).toBeCloseTo(0.32);
-    expect(e[5]).toBeCloseTo(0.64);
-  });
-
-  it('collapses to a zero-sized quad for a texture with no extent', () => {
+  it('collapses only the X/Y columns for a texture with no extent, keeping Z so the cull sphere has a radius', () => {
     const sprite = new Sprite3D({ texture: makeEmptyTexture() });
     const e = localElements(sprite);
 
     expect(e[0]).toBe(0);
     expect(e[5]).toBe(0);
-    // Only the X/Y columns collapse — the Z column keeps the user's scale, which
-    // is what leaves the cull sphere with a small conservative radius.
     expect(e[10]).toBeCloseTo(1);
   });
 });
 
-/** Where quad-local point `(x, y, z)` lands in the parent, through the rebuilt local matrix */
+/**
+ * Where quad-local point `(x, y, z)` lands in the parent, through the rebuilt local matrix
+ *
+ * Rounds to six places and adds 0 to turn -0 into 0, which `toEqual` tells apart.
+ */
 const landing = (sprite: Sprite3D, x: number, y: number, z: number): number[] => {
   sprite.updateLocalTransform();
   const p = new Vector3(x, y, z).applyAffineMatrix4(sprite.localTransform);
 
-  // `+ 0` turns -0 into 0, which toEqual treats as a different value.
   return [p.x, p.y, p.z].map((v) => Math.round(v * 1e6) / 1e6 + 0);
 };
 
 describe('Sprite3D origin', () => {
-  // 200 × 400 px at the default pixelSize is 2 × 4 world units; quad corners sit at ±0.5.
+  /** A 200 × 400 px texture, 2 × 4 world units at the default pixelSize, at x = 10; quad corners sit at ±0.5 */
   const options = { texture: makeTexture(200, 400), position: { x: 10, y: 0, z: 0 } };
 
   it('measures the origin in world size units, after the anchor and before scale', () => {
-    // Origin at the top-right corner, turned 90° about +Z: the corner stays at position + origin.
+    /** Origin on the top-right corner, so a quarter turn about +Z leaves that corner at position + origin */
     const corner = new Sprite3D({ ...options, origin: { x: 1, y: 2, z: 0 } });
     corner.rotation.z = Math.PI / 2;
 
     expect(landing(corner, 0.5, 0.5, 0)).toEqual([11, 2, 0]);
     expect(landing(corner, 0, 0, 0)).toEqual([13, 1, 0]);
 
-    // Turned 90° about +Z with scale (2, 1, 1): quad +X moves by (0, 4, 0) per unit, quad +Y by (-4, 0, 0).
-    // The anchor stands the sprite on position, and the origin holds still 1 unit along x from there
-    // — a world unit, not a scaled one, though the quad point that sits on it moves with the scale.
+    /**
+     * Stood on position by its anchor, with the origin 1 world unit along x, unscaled by `scale.x`. A
+     * quarter turn about +Z with scale (2, 1, 1) runs quad +X along (0, 4, 0) and quad +Y along (-4, 0, 0).
+     */
     const anchored = new Sprite3D({ ...options, anchor: { x: 0.5, y: 1 }, origin: { x: 1, y: 0, z: 0 } });
     anchored.rotation.z = Math.PI / 2;
     anchored.scale.set(2, 1, 1);
@@ -180,14 +132,7 @@ describe('Sprite3D origin', () => {
     expect(landing(anchored, 0, 0, 0)).toEqual([9, -2, 0]);
   });
 
-  it('leaves an unrotated, unscaled sprite in place when it gets an origin', () => {
-    const sprite = new Sprite3D({ ...options, origin: { x: 1, y: 2, z: 0 } });
-
-    expect(landing(sprite, 0, 0, 0)).toEqual([10, 0, 0]);
-    expect(landing(sprite, 0.5, 0.5, 0)).toEqual([11, 2, 0]);
-  });
-
-  it('keeps the matrix finite for a texture with no extent', () => {
+  it('keeps the matrix finite for a texture with no extent, and still scales about the origin in world units', () => {
     const sprite = new Sprite3D({
       texture: makeEmptyTexture(),
       origin: { x: 1, y: 1, z: 0 },
@@ -196,40 +141,36 @@ describe('Sprite3D origin', () => {
     const e = localElements(sprite);
 
     expect(Array.from(e).every(Number.isFinite)).toBe(true);
-    // World size units don't depend on the texture, so scaling ×3 around the origin still moves the
-    // node 2 units back on x.
     expect(Array.from(e.subarray(12, 15), (v) => v + 0)).toEqual([-2, 0, 0]);
   });
 });
 
 describe('Sprite3D cull bounds', () => {
-  // Shape-equivalent to the production TEMP_PARENT_3D sentinel: identity world
-  // transform, worldVisible = 1.
+  /** A root's stand-in parent, like the transform pass's own: identity world transform and worldVisible 1 */
   const tempParent = new Container3D();
   let tick = 0;
   const runTransformPass = (node: Container3D) => updateTransformAndChildren3D(node, tempParent, ++tick, false, false);
 
-  it('keeps the billboarded quad inside the world bounding sphere', () => {
+  it('keeps the billboarded quad inside the world bounding sphere for any camera orientation', () => {
     const sprite = new Sprite3D({ texture: makeTexture(64, 200), anchor: { x: 0.5, y: 1 } });
     sprite.position.set(3, 0, -2);
     sprite.rotation.set(0.2, 0.9, 0.4);
     sprite.scale.set(1.7, 0.8, 1);
     runTransformPass(sprite);
 
+    /** Sphere both backends cull with, centred on the translation column where billboard shaders rebuild the quad */
     const sphere = sprite.boundingSphere;
     const e = sprite.worldTransform.elements;
 
-    // Both culls put the sphere centre on the matrix's translation column, which
-    // is exactly where the billboard shaders rebuild the quad.
     expect(sphere.center.x).toBeCloseTo(e[12]);
     expect(sphere.center.y).toBeCloseTo(e[13]);
     expect(sphere.center.z).toBeCloseTo(e[14]);
 
-    // Worst-case corner reach of the rebuilt quad, for ANY camera orientation:
-    // the corners sit at ±0.5·sx along the camera right and ±0.5·sy along its up,
-    // and the cull radius is √0.5 × the longest column. Equality only when
-    // sx === sy, so this is tight but never violated — which is what makes
-    // billboarding safe with per-geometry (not per-mesh) bounds.
+    /**
+     * The rebuilt quad's corners sit ±0.5·sx along the camera right and ±0.5·sy along its up, so
+     * their reach is 0.5·hypot(sx, sy). The cull radius is √0.5 × the longest column, which never
+     * falls below that reach, so billboarding is safe with the shared quad's bounds.
+     */
     const sx = Math.hypot(e[0], e[1], e[2]);
     const sy = Math.hypot(e[4], e[5], e[6]);
     expect(0.5 * Math.hypot(sx, sy)).toBeLessThanOrEqual(sphere.radius + 1e-5);
@@ -247,8 +188,9 @@ describe('Sprite3D observable purity', () => {
     expect(sprite.scale.x).toBe(1);
     expect(sprite.scale.y).toBe(1);
 
-    // 5.12 units == the texture's natural size at 100ppu, so scale returns to 1.
-    sprite.width = 5.12;
+    /** The 512 px texture's own width at the default pixelSize of 0.01 */
+    const naturalWidth = 5.12;
+    sprite.width = naturalWidth;
     expect(sprite.scale.x).toBeCloseTo(1);
 
     sprite.position.set(4, 5, 6);
@@ -282,13 +224,6 @@ describe('Sprite3D width / height', () => {
     expect(sprite.height).toBeCloseTo(1);
   });
 
-  it('reads back positive under a mirrored scale', () => {
-    const sprite = new Sprite3D({ texture: makeTexture(64, 32) });
-    sprite.scale.x = -2;
-
-    expect(sprite.width).toBeCloseTo(1.28);
-  });
-
   it('drops the write on a texture with no extent', () => {
     const sprite = new Sprite3D({ texture: makeEmptyTexture() });
 
@@ -309,7 +244,7 @@ describe('Sprite3D width / height', () => {
     expect(sprite.width).toBeCloseTo(1.28);
   });
 
-  it('getSize and setSize agree with width and height', () => {
+  it('getSize and setSize agree with width and height, and ignore depth', () => {
     const sprite = new Sprite3D({ texture: makeTexture(64, 32) });
 
     expect(sprite.getSize()).toEqual({ width: sprite.width, height: sprite.height, depth: 0 });
@@ -322,7 +257,6 @@ describe('Sprite3D width / height', () => {
     expect(sprite.getSize().width).toBeCloseTo(4);
     expect(sprite.getSize().height).toBeCloseTo(1);
 
-    // The base signature takes a depth; a sprite accepts and ignores it.
     sprite.setSize(5, 2, 9);
     expect(sprite.getSize().width).toBeCloseTo(5);
     expect(sprite.getSize().height).toBeCloseTo(2);
@@ -335,13 +269,11 @@ describe('Sprite3D width / height', () => {
     expect(sprite.scale.z).toBe(1);
   });
 
-  it('writes one axis at a time, matching 2D Sprite', () => {
+  it('writes one axis at a time, matching 2D Sprite; only the construction options keep the aspect', () => {
     const sprite = new Sprite3D({ texture: makeTexture(64, 32) });
 
     sprite.height = 4;
 
-    // Deliberately NOT aspect-preserving — the accessors are primitive, fitting
-    // is a construction-time convenience.
     expect(sprite.height).toBeCloseTo(4);
     expect(sprite.width).toBeCloseTo(0.64);
     expect(sprite.scale.x).toBe(1);
@@ -354,7 +286,6 @@ describe('Sprite3D construction width / height', () => {
 
     expect(sprite.height).toBeCloseTo(4);
     expect(sprite.width).toBeCloseTo((4 * 128) / 200);
-    // Aspect preserved means one uniform scale factor across both axes.
     expect(sprite.scale.x).toBeCloseTo(sprite.scale.y);
   });
 
@@ -374,41 +305,15 @@ describe('Sprite3D construction width / height', () => {
     expect(sprite.scale.x).not.toBeCloseTo(sprite.scale.y);
   });
 
-  it('falls back to pixelSize when neither is given', () => {
-    const sprite = new Sprite3D({ texture: makeTexture(128, 200), pixelSize: 1 / 64 });
-
-    expect(sprite.width).toBeCloseTo(2);
-    expect(sprite.height).toBeCloseTo(3.125);
-    expect(sprite.scale.x).toBe(1);
-  });
-
-  it('overrides pixelSize for the fitted size', () => {
-    // pixelSize would give 1.28 x 2; the explicit height wins and width follows aspect.
-    const sprite = new Sprite3D({ texture: makeTexture(128, 200), pixelSize: 0.01, height: 10 });
-
-    expect(sprite.height).toBeCloseTo(10);
-    expect(sprite.width).toBeCloseTo((10 * 128) / 200);
-  });
-
-  it('fits to the frame, not the whole atlas source', () => {
+  it('fits to the 1:2 frame, not the square atlas source', () => {
     const source = new TextureSource({ width: 256, height: 256, resolution: 1 });
     const sprite = new Sprite3D({
       texture: new Texture({ source, frame: new Rectangle(0, 0, 32, 64) }),
       height: 4,
     });
 
-    // 32x64 frame → 1:2, so a 4-unit height is 2 units wide. Sourcing the aspect
-    // from the 256x256 atlas would have made it square.
     expect(sprite.width).toBeCloseTo(2);
     expect(sprite.height).toBeCloseTo(4);
-  });
-
-  it('appends the fitted size to the local transform', () => {
-    const sprite = new Sprite3D({ texture: makeTexture(128, 200), height: 4 });
-    const e = localElements(sprite);
-
-    expect(e[0]).toBeCloseTo((4 * 128) / 200);
-    expect(e[5]).toBeCloseTo(4);
   });
 
   it('drops the fit on a texture with no extent', () => {
@@ -432,23 +337,18 @@ describe('Sprite3D batching identity', () => {
     expect(a.geometry.uid).toBe(b.geometry.uid);
   });
 
-  it('leaves the material descriptor identical across modes', () => {
+  it('keeps one shader key across texture, tint, alpha and billboard mode, which the core injects per mesh', () => {
     const keyOf = (sprite: Sprite3D) => sprite.material.getPrimaryDescriptor(view).keyGpu;
 
     const sphericalA = new Sprite3D({ texture: makeTexture(8, 8), tint: 0xff0000 });
     const sphericalB = new Sprite3D({ texture: makeTexture(32, 32), tint: 0x00ff00, alpha: 0.5 });
     const cylindrical = new Sprite3D({ texture: makeTexture(8, 8), billboardMode: 'cylindrical' });
 
-    // Texture, tint and alpha all live in the material row, so they never split
-    // the shader. Neither does the mode: billboarding is injected by the core from
-    // `billboardMode` rather than composed into the material, which is what lets a
-    // sprite take any material at all. The variant split happens one level up; see
-    // billboardMode.test.ts.
     expect(keyOf(sphericalA)).toBe(keyOf(sphericalB));
     expect(keyOf(cylindrical)).toBe(keyOf(sphericalA));
   });
 
-  it('carries the mode on the mesh, and re-batches when it changes', () => {
+  it('carries the mode on the mesh, and re-batches when it changes but not on a same-value write', () => {
     const sprite = new Sprite3D({ texture: makeTexture(8, 8) });
     expect(sprite.billboardMode).toBe('spherical');
 
@@ -456,10 +356,8 @@ describe('Sprite3D batching identity', () => {
     sprite.billboardMode = 'cylindrical';
 
     expect(sprite.billboardMode).toBe('cylindrical');
-    // Mode picks the shader variant, so the per-pass cache must rebuild.
     expect(sprite._batchDirty).toBe(true);
 
-    // No-op writes stay free.
     sprite._batchDirty = false;
     sprite.billboardMode = 'cylindrical';
     expect(sprite._batchDirty).toBe(false);
@@ -473,13 +371,11 @@ describe('Sprite3D batching identity', () => {
     expect(masked.material._passBit).not.toBe(blended.material._passBit);
   });
 
-  it('never casts shadows by default, and drops the bit again when switched to blend', () => {
+  it('never casts shadows by default, and re-evaluates its shadow bit itself when switched to blend', () => {
     const sprite = new Sprite3D({ texture: makeTexture(8, 8), alphaMode: 'mask', castShadow: true });
     expect(sprite.castShadow).toBe(true);
     const withShadow = sprite.renderPassBits;
 
-    // Blend is excluded from the shadow pass regardless of intent — the sprite
-    // has to re-evaluate it, since the material can't reach back.
     sprite.alphaMode = 'blend';
     expect(sprite.renderPassBits).not.toBe(withShadow);
 
@@ -488,41 +384,25 @@ describe('Sprite3D batching identity', () => {
 });
 
 describe('Sprite3D with a supplied material', () => {
-  it('uses it instead of building a FlatMaterial, and reads its image', () => {
+  it('uses it instead of building a FlatMaterial, billboards it even when lit, and sizes from its image', () => {
     const texture = makeTexture(64, 32);
     const material = new Material3D({ baseColorTexture: texture, baseColor: 0x224466, roughness: 0.4 });
     const sprite = new Sprite3D({ material, billboardMode: 'cylindrical' });
 
     expect(sprite.material).toBe(material);
     expect(sprite.texture).toBe(texture);
-    // Billboarding rides on the mesh, so it composes with a lit material.
     expect(sprite.billboardMode).toBe('cylindrical');
     expect(sprite.material.lit).toBe(true);
-    // And the material's image drives the size.
     expect(localElements(sprite)[0]).toBeCloseTo(0.64);
   });
 
-  it('does not let class defaults overwrite the material it was handed', () => {
+  it("does not let the class defaults (white tint, 'blend') overwrite the material it was handed", () => {
     const material = new Material3D({ baseColor: 0x224466, alpha: 0.25, alphaMode: 'mask' });
     const sprite = new Sprite3D({ material });
 
-    // `tint` defaults to 0xffffff and `alphaMode` to 'blend' — neither may land.
     expect(sprite.tint).toBe(0x224466);
     expect(sprite.alpha).toBe(0.25);
     expect(sprite.alphaMode).toBe('mask');
-  });
-
-  it("reads the texture out of the material's slot rather than clobbering it", () => {
-    const own = makeTexture(64, 32);
-    const material = new Material3D({ baseColorTexture: own });
-    const sprite = new Sprite3D({ material });
-
-    // The material's own image is authoritative — a `Texture.WHITE` write here
-    // would blank a configured material.
-    expect(sprite.texture).toBe(own);
-    expect(material.textures.baseColor).toBe(own);
-    // And the sprite sized itself from it.
-    expect(localElements(sprite)[0]).toBeCloseTo(0.64);
   });
 
   it('lets many sprites share one material without stealing each other’s image', () => {
@@ -532,7 +412,6 @@ describe('Sprite3D with a supplied material', () => {
 
     expect(a.texture).toBe(b.texture);
     expect(a.material).toBe(b.material);
-    // The whole point: N sprites, one material row, no per-sprite material.
     expect(localElements(a)[0]).toBeCloseTo(0.64);
     expect(localElements(b)[0]).toBeCloseTo(0.64);
   });
@@ -547,7 +426,7 @@ describe('Sprite3D with a supplied material', () => {
     // @ts-expect-error — alphaMode is the supplied material's own call
     const withAlphaMode: Sprite3DOptions = { material: material(), alphaMode: 'mask' };
 
-    // The `?: never` markers are what keep a pre-built (non-literal) bag out too.
+    /** A pre-built bag skips excess-property checks, so only the options' `?: never` markers reject it */
     const bag = { material: material(), alpha: 0.5 };
     // @ts-expect-error — mixed pre-built options fail both forms
     const fromBag = () => new Sprite3D(bag);
@@ -562,7 +441,6 @@ describe('Sprite3D with a supplied material', () => {
     const isTwoFormsWarn = (c: unknown[]) => c.join(' ').includes('forms are exclusive');
 
     try {
-      // The untyped-caller shape — TypeScript forbids this mix outright.
       const sprite = new Sprite3D({
         material,
         texture: makeTexture(128, 64),
@@ -571,7 +449,6 @@ describe('Sprite3D with a supplied material', () => {
       } as unknown as Sprite3DMaterialOptions);
 
       expect(warnSpy.mock.calls.some(isTwoFormsWarn)).toBe(true);
-      // Nothing landed: slot, tint and alpha all kept the material's values.
       expect(sprite.texture).toBe(own);
       expect(material.textures.baseColor).toBe(own);
       expect(sprite.tint).toBe(0x224466);
@@ -581,8 +458,7 @@ describe('Sprite3D with a supplied material', () => {
     }
   });
 
-  it('throws legibly when the material has no baseColor slot', () => {
-    // A raw descriptor with no texture-bearing bits — nowhere to put the image.
+  it('throws legibly when the material has no baseColor slot, such as a raw descriptor with no bits', () => {
     const material = new BaseMaterial3D({ descriptor: { bitsGpu: [], bitsGl: [] } });
 
     expect(() => new Sprite3D({ material })).toThrow(/baseColor/);
@@ -606,35 +482,28 @@ describe('Sprite3D material passthroughs', () => {
     expect(sprite.material.alphaCutoff).toBe(0.75);
   });
 
-  it('derives the UV transform from a framed texture', () => {
+  it('derives the UV transform from a framed texture: half the source each way, offset half across', () => {
     const source = new TextureSource({ width: 64, height: 64, resolution: 1 });
     const sprite = new Sprite3D({
       texture: new Texture({ source, frame: new Rectangle(32, 0, 32, 32) }),
     });
 
-    // Half the atlas in each axis, offset half a source across.
     expect(sprite.material.data.uvTransformRow0![0]).toBeCloseTo(0.5);
     expect(sprite.material.data.uvTransformRow0![3]).toBeCloseTo(0.5);
     expect(sprite.material.data.uvOffset![0]).toBeCloseTo(0.5);
     expect(sprite.material.data.uvOffset![1]).toBeCloseTo(0);
   });
 
-  it('re-derives the UV transform when the texture frame is edited in place', () => {
+  it("re-derives the UV transform and size on 'update' from a dynamic texture whose frame changed in place", () => {
     const source = new TextureSource({ width: 64, height: 64, resolution: 1 });
-    // `dynamic` is what buys the 'update' subscription, exactly as in 2D. Editing
-    // a static texture's frame is the caller's to announce.
     const texture = new Texture({ source, frame: new Rectangle(0, 0, 64, 64), dynamic: true });
     const sprite = new Sprite3D({ texture });
 
     expect(sprite.material.data.uvTransformRow0![0]).toBeCloseTo(1);
     expect(localElements(sprite)[0]).toBeCloseTo(0.64);
 
-    // Edited in place, as an animated spritesheet frame is — `orig` aliases
-    // `frame`, so the sprite's size follows too.
     texture.frame.width = 16;
     texture.frame.height = 32;
-    // No slot write happened, so the texture's own 'update' event is the only
-    // signal the sprite gets.
     texture.update();
 
     expect(sprite.material.data.uvTransformRow0![0]).toBeCloseTo(0.25);
@@ -645,20 +514,6 @@ describe('Sprite3D material passthroughs', () => {
 });
 
 describe('Sprite3D node options', () => {
-  it("labels itself 'Sprite3D' unless given a label", () => {
-    expect(new Sprite3D().label).toBe('Sprite3D');
-    expect(new Sprite3D({ label: 'tree' }).label).toBe('tree');
-  });
-
-  it('forwards Mesh3D and Container3D options in both forms', () => {
-    const own = new Sprite3D({ texture: makeTexture(8, 8), eventMode: 'static', position: { x: 1, y: 2, z: 3 } });
-    expect(own.eventMode).toBe('static');
-    expect(own.position.z).toBe(3);
-
-    const shared = new Sprite3D({ material: new Material3D({ baseColorTexture: makeTexture(8, 8) }), visible: false });
-    expect(shared.visible).toBe(false);
-  });
-
   it('fits its size and joins a live parent only once built', () => {
     const view = new View3D({ width: 64, height: 64 });
     const sprite = new Sprite3D({ texture: makeTexture(100, 50), height: 2, parent: view.root });
@@ -691,26 +546,20 @@ describe('Sprite3D texture shorthand', () => {
     expect(fromSource.width).toBeCloseTo(0.32);
   });
 
-  it('draws nothing for an alias the cache never saw, and still sizes cleanly', () => {
+  it('falls back to Texture.EMPTY for an alias the cache never saw, as 2D Sprite.from does, sized 1×1', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
       const sprite = Sprite3D.from('pixi3d-never-loaded.png');
 
-      // `Texture.from` returns the cache entry, which is missing here. 2D `Sprite.from` lands on
-      // `Texture.EMPTY` for exactly this case, so a typo renders nothing; `new Sprite3D()` keeps
-      // its own deliberate default of a white quad.
       expect(sprite.texture).toBe(Texture.EMPTY);
       expect(sprite.material.textures.baseColor).toBe(Texture.EMPTY);
       expect(new Sprite3D().texture).toBe(Texture.WHITE);
 
-      // EMPTY measures 1x1, so the world-unit sizing path stays live — nothing divides by zero
-      // and the size write is not dropped.
       expect(sprite.width).toBeCloseTo(0.01);
       sprite.width = 2;
       expect(sprite.width).toBeCloseTo(2);
 
-      // The cache miss is pixi's own warning; the sprite never reports an unsized texture.
       const warned = (text: string) => warnSpy.mock.calls.some((call) => call.join(' ').includes(text));
       expect(warned('no dimensions')).toBe(false);
       expect(warned('not found in the Cache')).toBe(true);

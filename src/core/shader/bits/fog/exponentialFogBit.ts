@@ -1,17 +1,13 @@
 import type { ShaderBit } from '../../ShaderBit';
 
 /**
- * Exponential distance fog
+ * Exponential distance fog, `factor = 1 - exp(-density * depth)`
  *
- *     factor = 1 - exp(-density * depth)
+ * `depth` is the fragment's view-space depth and `density` is `uFogParams.z`. The fog nears its
+ * colour without reaching it, and starts thickening right at the camera, sooner than
+ * `exp2FogBit`'s.
  *
- * Density-driven falloff that approaches the fog colour asymptotically.
- * Compared with `exp2Fog`, the curve has a heavier near-camera
- * contribution, so scenes look fogged from the start of the view. Good
- * for soft haze.
- *
- * Runs in linear radiance, before any tone-mapping bit — `uFogColor` arrives
- * already decoded and scaled by exposure.
+ * It runs after exposure and before tone mapping, as `linearFogBit` describes.
  * @internal
  */
 export const exponentialFogBit: ShaderBit = {
@@ -29,7 +25,6 @@ export const exponentialFogBit: ShaderBit = {
     },
     fragment: {
       end: /*wgsl*/ `
-  // uFogParams = (near, far, density); exponential reads density.
   let fogFactor = 1.0 - exp(-global.uFogParams.z * input.vFogDepth);
   finalColor = mix(finalColor, global.uFogColor, fogFactor);
 `,

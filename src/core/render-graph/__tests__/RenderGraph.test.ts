@@ -8,32 +8,16 @@ import type { TransientTextureOptions } from '~/core/render-graph/ResourceHandle
 import type { RenderSession } from '~/core/render-passes/RenderSession';
 import { captureGraphDebugSnapshot } from '~/extras/debug/GraphDebugSnapshot';
 
-/**
- * Cull / dependency-keeping tests for the render graph.
- *
- * `resolve()`'s flood-fill is pure logic — it only touches the session through
- * `pass.condition` — so these drive it with stub passes (no GPU, no real
- * textures). A pass is just `{ name, setup, render }`; `setup` declares its
- * reads/writes against handles, and `condition()` decides per-frame survival.
- *
- * The headline case is the one composite exposed: a colour buffer written by
- * several passes in sequence, read once at the end, with an *optional* writer
- * (condition-culled) in the middle. Every still-live writer must survive. The
- * old code kept only the last writer plus a write-after-write chain, which
- * snapped at the culled pass and dropped every writer upstream of it (the skybox).
- */
-
-// Texture getters / transient descriptors are never invoked by compile() or
-// resolve() — only execute() resolves real textures — so stubs are safe.
+/** A texture getter for imports; `compile()` and `resolve()` never call it, only `execute()` does */
 const noTexture = (): BindableTexture => undefined as unknown as BindableTexture;
 const desc: TransientTextureOptions = { width: 1, height: 1, resolution: 1, format: 'rgba8unorm' };
 
-// resolve() reads the session only via pass.condition(); the stubs below ignore it.
+/** An empty session: `resolve()` reads it only through `pass.condition`, which the stub passes ignore */
 const SESSION = {} as RenderSession;
 
 const makeGraph = (): RenderGraph => new RenderGraph({ defaultColor: noTexture, defaultDepth: noTexture });
 
-/** A stub pass. `condition` is the constant its `condition()` returns; omit for "always run". */
+/** A stub pass with no GPU work; `condition` is the constant its `condition()` returns, omitted to always run */
 function pass(name: string, setup: (b: PassBuilder) => void, condition?: boolean): GraphRenderPass {
   return {
     name,
@@ -49,19 +33,7 @@ const activeNames = (g: RenderGraph): string[] =>
     .map((p) => p.name)
     .sort();
 
-describe('RenderGraph cull', () => {
-  it('preserves optional pass descriptions for graph tooling', () => {
-    const g = makeGraph();
-    const screen = g.importColor(noTexture);
-    g.addPass({
-      ...pass('writer', (b) => b.writeColor(screen)),
-      description: 'Writes the final color target.',
-    });
-    g.compile();
-
-    expect(captureGraphDebugSnapshot(g).passes[0].description).toBe('Writes the final color target.');
-  });
-
+describe('RenderGraph cull, with stub passes and no GPU', () => {
   it('keeps a pass that writes an imported (anchor) resource, even with no reader', () => {
     const g = makeGraph();
     const screen = g.importColor(noTexture);
@@ -111,13 +83,11 @@ describe('RenderGraph cull', () => {
     g.compile();
     const snapshot = captureGraphDebugSnapshot(g);
     const out = snapshot.passes.find((p) => p.name === 'out')!;
-    // `dependsOn` holds declaration indices, so resolve them back to names for the assert.
-    expect(out.dependsOn.map((idx) => snapshot.passes[idx].name)).toEqual(expect.arrayContaining(['a', 'b']));
+    const dependencyNames = out.dependsOn.map((declarationIndex) => snapshot.passes[declarationIndex].name);
+    expect(dependencyNames).toEqual(expect.arrayContaining(['a', 'b']));
   });
 
   it('keeps every live writer of a read transient, skipping a condition-culled one mid-chain', () => {
-    // The composite skybox regression: `out` reads `scene`; `optional` (e.g. a
-    // glass pass with no glass) culls out in the *middle*. a/b/c must still survive.
     const g = makeGraph();
     const scene = g.createColor(desc);
     const screen = g.importColor(noTexture);

@@ -4,9 +4,9 @@ import type { Geometry3D } from '../../geometry/Geometry3D';
 import type { Mesh3D } from '../../scene/Mesh3D';
 import type { Morph } from '../../scene/Morph';
 import { Buffer3D } from './Buffer3D';
-import { alignToDataTextureRows, dataTextureSize } from './dataTextureLayout';
+import { alignToDataTextureRows, dataTextureSize, uploadFloatRange } from './dataTextureLayout';
 
-/** Floats per stored delta — `xyz` + an unused `w` so the delta arena stays 16-byte friendly */
+/** Floats per stored delta: `xyz` and an unused `w`, so each delta fills one texel */
 const FLOATS_PER_DELTA = 4;
 
 /**
@@ -21,101 +21,74 @@ interface MorphStoreBufferOptions {
 }
 
 /**
- * Renderer-shared morph storage backing the single `uMorphStorage` binding for every view
+ * The renderer's morph storage, one array shared by every view, in two regions
  *
- * One buffer, two regions:
+ * - The delta arena, from 0 up to the weights base, holds each geometry's morph deltas, packed
+ *   once by `uploadDeltas`, which records the block's start as `geometry._morphDeltaBase`. Blocks
+ *   are bump-allocated. A destroyed geometry's block goes on a free list for its exact size and
+ *   the next pack of that size reuses it, so streaming the same asset in and out can't grow the
+ *   arena.
+ * - The weight region, from the weights base on, holds one fixed slot per morphed mesh, rounded up
+ *   to a power of two and recycled per size when a mesh leaves the scene. A slot is written only
+ *   when its mesh's weights change.
  *
- *   `[0, weightsBase)`   — delta arena: static per-geometry deltas, packed once
- *                          by `uploadDeltas`, which mints
- *                          `geometry._morphDeltaBase`. Bump-allocated; a destroyed
- *                          geometry's block returns to a size-keyed free list
- *                          (`freeDeltas`) and is reused by the next same-extent
- *                          pack, so same-asset streaming churn can't grow the
- *                          arena.
- *   `[weightsBase, ...)`  — weight slots: one fixed run per morphed mesh, bucketed
- *                          to power-of-two sizes and recycled through per-bucket
- *                          free lists when a mesh leaves the scene. Written only
- *                          when a mesh's weights change.
+ * The weights base is the arena's capacity, not its used size, so a new geometry that fits moves
+ * nothing. Only an arena doubling moves the weight region. Slots are stored relative to the base,
+ * so `sync` recomputes each mesh's absolute offset and re-emits its store row only when it moved.
  *
- * The weights base (`_deltaCapacity`) is the arena's *capacity*, not its used size, so new
- * geometries that fit the reservation shift nothing. Only an arena doubling moves the
- * weight region — slots are stored relative to the weights base, so the scene
- * update re-derives each mesh's absolute offset (`_morphWeightIndex`) per frame
- * and re-emits its store row on exactly those frames.
- *
- * Deltas and weights share one buffer because the global bind group has a
- * single storage slot left; sharing across views works because both regions are
- * view-independent (deltas are canonical, weights are per-mesh state). Views
- * detect reallocation through `bufferVersion` via
+ * Deltas and weights share one buffer so morphing takes one storage-buffer binding in the global
+ * group. Every view can share it because neither region depends on the view: deltas belong to the
+ * geometry and weights to the mesh. Views notice a reallocation through `bufferVersion`, in
  * `detectSharedCacheInvalidation`.
  *
- * Two transports over the same backing array: WebGPU binds `bufferResource` as
- * `uMorphStorage`; WebGL (no storage buffers) binds the lazily-created
- * `texture` — an rgba32float data-texture view whose texel `i` is floats
- * `[i*4, i*4+4)`, the same pattern the bone pit and material store already use
- * there.
+ * WebGPU binds `bufferResource` as `uMorphStorage`. WebGL has no storage buffers, so it binds
+ * `texture`, an `rgba32float` data texture whose texel `i` holds floats `i * 4` to `i * 4 + 3`, as
+ * the bone pit does. Each view is made on first read.
  *
- * Geometries and morphs are user-owned and outlive the store (which dies with
- * its renderer), so the store keeps no membership list: each carries the store
- * that packed or slotted it (`_morphStore` / `_store`), and `uploadDeltas` /
- * `sync` re-check that identity on sight. Nothing from another store is
- * adopted: a weight slot is freed there and re-minted here; a delta block is
- * freed there too, but since the raw targets went at pack the geometry warns
- * once and renders unmorphed. Calls through a back-reference to a destroyed
- * store are no-ops. One live renderer at a time — two live renderers drawing
- * the same morphed mesh would re-slot it every frame.
+ * Geometries and morphs belong to the user and outlive the store, which dies with its renderer, so
+ * the store keeps no list of them. Each carries the store that packed or slotted it, `_morphStore`
+ * or `_store`, and `uploadDeltas` and `sync` check it. Nothing from another store is adopted. A
+ * morph's weight slot is freed there and the morph gets a new one here. A geometry's delta block is
+ * freed there too, but its raw targets were released at the first pack, so it warns once and draws
+ * unmorphed. Calls to a destroyed store do nothing. Only one renderer may draw a morphed mesh at a
+ * time: two live renderers would swap its slot every frame.
  * @internal
  */
 export class MorphStoreBuffer {
   /** Backing CPU array: delta arena followed by the weight-slot region */
   public data: Float32Array;
 
-  /**
-   * GPU buffer (storage)
-   *
-   * A {@link Buffer3D}, so replayed render bundles bind it without touching
-   * pixi's GC usage tracking.
-   */
-  public buffer: Buffer3D;
-
-  /** Bindable resource for shaders */
-  public bufferResource: BufferResource;
+  private _buffer: Buffer3D | null = null;
+  private _bufferResource: BufferResource | null = null;
 
   /**
-   * Incremented whenever the backing buffer is reallocated
+   * Bumped whenever the array is reallocated
    *
-   * Compared per view by `detectSharedCacheInvalidation` to re-record cached
-   * bundles.
+   * Each view compares it in `detectSharedCacheInvalidation` and re-records its cached bundles.
    */
   public bufferVersion = 0;
 
   /** Used floats in the delta arena */
   private _deltaCursor = 0;
   /** Delta-arena reservation, in floats; weight slots start here */
-  private _deltaCapacity: number;
+  private _deltaCapacity = 0;
   /** Bump cursor for fresh weight slots, relative to the weights base */
   private _weightCursor = 0;
   /** Recycled weight slots (relative offsets), keyed by bucket size */
   private readonly _freeSlots = new Map<number, number[]>();
 
   /**
-   * Recycled delta blocks (base float offsets), keyed by exact float extent
+   * Recycled delta blocks' start offsets, keyed by exact size in floats
    *
-   * Exact-size buckets work because a block's size is
-   * `vertexCount × targetCount × stride`, which recurs whenever the same asset
-   * streams back in — the churn pattern this reclaims.
+   * Exact sizes work because a block's size is `vertexCount × targetCount × stride`, which recurs
+   * whenever the same asset streams back in, the churn this reclaims.
    */
   private readonly _freeDeltaBlocks = new Map<number, number[]>();
 
   private _minDirty = Infinity;
   private _maxDirty = -Infinity;
 
-  /**
-   * Old buffers orphaned by reallocation growth. Render bundles recorded
-   * earlier still reference each one, and a `Buffer3D` is exempt from pixi's
-   * GC, so we retain each until `destroy` frees them. Growth
-   * is rare (capacity doubling) so this stays tiny.
-   */
+  /** Buffers `_reallocate` replaced; it says why they're kept, and `destroy` frees them */
   private readonly _retiredBuffers: Buffer3D[] = [];
 
   private _texture: Texture | null = null;
@@ -126,42 +99,59 @@ export class MorphStoreBuffer {
     const weightCapacity = alignWeightCapacity(this._deltaCapacity, options.weightCapacity ?? 1024);
 
     this.data = new Float32Array(this._deltaCapacity + weightCapacity);
-    this.buffer = this._createBuffer();
-    this.bufferResource = new BufferResource({ buffer: this.buffer });
   }
 
   /**
-   * The WebGL transport: an rgba32float data-texture view over the same backing array
+   * The WebGPU view: a storage buffer over the array, created on first read
    *
-   * Read with `texelFetch` by the GL morph bits. Lazily created; refreshed by
-   * `update` and resized on reallocation.
+   * A {@link Buffer3D}, so pixi's GC never frees it under a recorded bundle that binds it.
+   */
+  public get buffer(): Buffer3D {
+    return (this._buffer ??= new Buffer3D({
+      data: this.data,
+      usage: BufferUsage.STORAGE | BufferUsage.COPY_DST | BufferUsage.COPY_SRC,
+      label: 'MorphStoreBuffer',
+      shrinkToFit: false,
+    }));
+  }
+
+  /** Bindable resource over {@link MorphStoreBuffer#buffer} */
+  public get bufferResource(): BufferResource {
+    return (this._bufferResource ??= new BufferResource({ buffer: this.buffer }));
+  }
+
+  /**
+   * The WebGL view: an `rgba32float` data texture over the same array, created on first read
+   *
+   * The GL morph bits read it with `texelFetch`. `update` uploads its changed texels, and a
+   * reallocation resizes it.
    */
   public get texture(): Texture {
     return this._texture || this._initTexture();
   }
 
   /**
-   * Packs a geometry's deltas into the arena (once) and records its base float
-   * offset in `geometry._morphDeltaBase`
+   * Packs a geometry's deltas into the arena and records the block's start in
+   * `geometry._morphDeltaBase`
    *
-   * No-op once packed here or when it has no deltas. Releases the raw source
-   * arrays afterwards, so a geometry packed by another store can only hand its
-   * block back there: it warns once and stays unpacked here.
+   * Does nothing once packed here, or for a geometry without deltas. It releases the raw targets
+   * afterwards, so a geometry packed by another store, usually a destroyed renderer's, can't pack
+   * again: its block goes back to that store, and it warns once and draws unmorphed here.
    *
-   * Layout: target `i`'s deltas for local vertex `vid` sit at
-   * `base + (vid * targetCount + i) * stride`, where the stride is one texel
-   * (position `xyz` + pad) or — when {@link Geometry3D#hasMorphNormals} — two
-   * texels (position texel, then normal texel). The stride is baked into the
-   * matching shader variant, so no per-instance data carries it.
+   * Target `i`'s deltas for vertex `vid` sit at `base + (vid * targetCount + i) * stride`. The
+   * stride is one texel, position `xyz` and a pad, or two texels, position then normal, when
+   * {@link Geometry3D#hasMorphNormals} is set. The matching shader variant has the stride built in,
+   * so no per-instance data carries it. The vertex count comes from the first target's length,
+   * since glTF requires every morph target accessor to have the original primitive's vertex count.
+   *
+   * While packing, it records each target's longest position delta. Their sum is how far any
+   * vertex can move for weights in [0, 1], which becomes `geometry._morphBoundsExpansion`.
    * @param geometry - The geometry whose morph deltas to pack.
    */
   public uploadDeltas(geometry: Geometry3D): void {
     const old = geometry._morphStore;
     if (old === this) return;
 
-    // Packed by another store (a destroyed renderer's, typically): the block
-    // goes back there, and the geometry reads as unpacked from now on — the
-    // geometry-row copier writes the unmorphed texel for it.
     if (old) {
       old.freeDeltas(geometry);
       warn(`MorphStoreBuffer: geometry #${geometry.uid} was packed by another renderer and draws unmorphed here`);
@@ -174,12 +164,9 @@ export class MorphStoreBuffer {
     const withNormals = geometry.hasMorphNormals;
     const stride = withNormals ? FLOATS_PER_DELTA * 2 : FLOATS_PER_DELTA;
     const targetCount = targets.length;
-    // Derive vertex count from the deltas (3 floats per vertex); glTF guarantees
-    // this matches the base geometry's vertex count.
     const vertexCount = targets[0].positions.length / 3;
     const floats = vertexCount * targetCount * stride;
 
-    // Reuse a freed block of the same extent before bumping the arena.
     const recycled = this._freeDeltaBlocks.get(floats);
     let base: number;
     if (recycled && recycled.length > 0) {
@@ -190,9 +177,6 @@ export class MorphStoreBuffer {
       this._deltaCursor += floats;
     }
 
-    // Per-target max position-delta length, tracked while packing — Σ of these
-    // is the conservative bounds expansion (a morphing vertex can't move
-    // further for weights in [0, 1]).
     const maxDeltaSq = new Float64Array(targetCount);
 
     const data = this.data;
@@ -234,12 +218,11 @@ export class MorphStoreBuffer {
   }
 
   /**
-   * Returns a geometry's packed delta block to its extent's free list
+   * Returns a geometry's delta block to the free list for its size
    *
-   * Called from `Geometry3D.destroy` — the deltas are canonical per-geometry
-   * state shared by every mesh drawing it, so geometry lifetime is the block's
-   * lifetime (weight slots recycle separately, on scene membership). The
-   * geometry carries the store reference, so no renderer context is needed.
+   * `Geometry3D.destroy` calls it: every mesh drawing the geometry shares its deltas, so the block
+   * lives as long as the geometry. Weight slots are freed separately, when a mesh leaves the scene.
+   * Once the store is destroyed, it only resets the geometry.
    * @param geometry - The geometry whose delta block to free.
    */
   public freeDeltas(geometry: Geometry3D): void {
@@ -251,20 +234,19 @@ export class MorphStoreBuffer {
     geometry._morphDeltaFloats = 0;
     geometry._morphStore = null;
 
-    // Store already torn down with its renderer — nothing left to recycle.
-    if (!this.buffer) return;
+    if (!this.data) return;
 
     recycle(this._freeDeltaBlocks, floats, base);
   }
 
   /**
-   * Per-frame sync for a view's morphed meshes — the whole morph prepare pass
+   * Brings a view's morphed meshes up to date for the frame, then uploads
    *
-   * Two passes on purpose: all new geometries pack first, because arena growth
-   * moves the weights base and every slot must absolutize against the settled
-   * base; then each mesh gets its slot ensured, its baked offset checked, and
-   * its dials diffed in. Ends with the ranged upload (a no-op when clean, so
-   * multiple views calling per frame is safe).
+   * Two loops on purpose. Every new geometry packs first, because arena growth moves the weights
+   * base and every offset must come from the final base. Then each mesh gets a weight slot, moving
+   * it from another store if needed, and its weights are copied in. A mesh's store row holds the
+   * absolute offset, so the row is re-emitted only when the offset moved: a new slot, or arena
+   * growth. The upload does nothing when nothing changed, so every view can call this each frame.
    * @param morphedMeshes - The view's meshes that carry a morph.
    */
   public sync(morphedMeshes: Mesh3D[]): void {
@@ -276,14 +258,10 @@ export class MorphStoreBuffer {
     for (let i = 0; i < morphedMeshes.length; i++) {
       const mesh = morphedMeshes[i];
       const morph = mesh.morph!;
-      // A slot from another store (a destroyed renderer's, typically) names one
-      // of ours by number only — it goes back there, or two meshes share the run.
       if (morph._store !== this) {
         morph._store?.freeSlot(morph);
         this.allocSlot(morph);
       }
-      // Rows bake the absolute offset. It moves only on a fresh slot or an
-      // arena growth (which shifts every slot); re-emit the row exactly then.
       const absolute = weightsBase + morph._slot;
       if (morph._weightIndex !== absolute) {
         morph._weightIndex = absolute;
@@ -296,10 +274,10 @@ export class MorphStoreBuffer {
   }
 
   /**
-   * Assigns the morph a fixed weight slot (relative to the weights base)
+   * Gives the morph a weight slot, at an offset relative to the weights base
    *
-   * Recycles a freed slot of the same bucket when one exists. The slot is held
-   * until `freeSlot` — the mesh leaving the scene.
+   * Reuses a freed slot of the same power-of-two size when there is one. The morph keeps it until
+   * `freeSlot`, when the mesh leaves the scene.
    * @param morph - The morph to give a slot to.
    */
   public allocSlot(morph: Morph): void {
@@ -325,11 +303,10 @@ export class MorphStoreBuffer {
   }
 
   /**
-   * Returns the morph's weight slot to its bucket's free list
+   * Returns the morph's weight slot to the free list for its size
    *
-   * Called when the mesh leaves the scene, its view is destroyed, or another
-   * store re-slots it; the morph carries the store reference, so any owner can
-   * release without renderer context.
+   * Called when the mesh leaves the scene, when its view is destroyed, or when another store takes
+   * the morph. Once the store is destroyed, it only resets the morph.
    * @param morph - The morph whose slot to release.
    */
   public freeSlot(morph: Morph): void {
@@ -341,21 +318,19 @@ export class MorphStoreBuffer {
     morph._slotSize = 0;
     morph._store = null;
 
-    // Store already torn down with its renderer — nothing left to recycle.
-    if (!this.buffer) return;
+    if (!this.data) return;
 
     recycle(this._freeSlots, size, slot);
   }
 
   /**
-   * Syncs the morph's slot to its current weights
+   * Copies the morph's weights into its slot
    *
-   * A fused compare-and-copy that marks the range for upload only when a value
-   * actually changed. This is the whole change-detection story — the CPU array
-   * mirrors what the GPU holds, so any divergence (animation write, hand
-   * mutation, recycled-slot residue) is caught here without a dirty flag
-   * anywhere. Iteration is clamped to the allocated bucket, so a weights array
-   * swapped for a longer one can't write past its slot.
+   * Compares as it copies and marks the slot for upload only when a value changed. That is all the
+   * change tracking there is: the CPU array mirrors the GPU's, so any difference, whether from an
+   * animation, a hand edit or a reused slot's old values, shows up here with no dirty flag anywhere.
+   * The copy stops at the slot's size, so a weights array swapped for a longer one can't write past
+   * it.
    * @param morph - The morph whose weights to diff in.
    */
   public writeWeights(morph: Morph): void {
@@ -376,19 +351,16 @@ export class MorphStoreBuffer {
   }
 
   /**
-   * Uploads the dirty range to the GPU
+   * Uploads the changed span to whichever GPU views exist
    *
-   * No-op when nothing changed, so calling once per view walk is safe — the
-   * first walk of the frame flushes.
+   * Does nothing when nothing changed, so the first view to call it in a frame does the upload.
    */
   public update(): void {
     if (this._minDirty > this._maxDirty) return;
 
-    this.buffer.update((this._maxDirty - this._minDirty + 1) * 4, this._minDirty * 4);
+    this._buffer?.update((this._maxDirty - this._minDirty + 1) * 4, this._minDirty * 4);
 
-    // The WebGL data-texture view re-uploads whole (BufferImageSource has no
-    // partial update) — ~KBs at typical store sizes.
-    this._textureSource?.update();
+    if (this._textureSource) uploadFloatRange(this._textureSource, this._minDirty, this._maxDirty + 1);
 
     this._minDirty = Infinity;
     this._maxDirty = -Infinity;
@@ -403,37 +375,24 @@ export class MorphStoreBuffer {
   /**
    * Releases every owned GPU resource and drops the backing array
    *
-   * Covers the exclusively-owned GPU buffer, the lazily-created WebGL
-   * data-texture (if any), and every buffer retired by growth. Idempotent — a
-   * second call is a no-op.
+   * Covers the buffer and data texture, whichever exist, and every buffer that growth
+   * retired. Idempotent, so a second call does nothing.
    */
   public destroy(): void {
-    if (!this.buffer) return;
+    if (!this.data) return;
 
-    // Free the BufferResource first (destroyBuffer:false) so bound bind groups
-    // react to its change before the referenced Buffer is destroyed.
-    this.bufferResource.destroy(false);
-    this.buffer.destroy();
+    this._bufferResource?.destroy(false);
+    this._buffer?.destroy();
 
     this._freeRetired();
 
-    // `_texture.destroy(true)` also frees the owned BufferImageSource.
     this._texture?.destroy(true);
     this._texture = null;
     this._textureSource = null;
 
     (this.data as Float32Array | null) = null;
-    (this.buffer as Buffer3D | null) = null;
-    (this.bufferResource as BufferResource | null) = null;
-  }
-
-  private _createBuffer(): Buffer3D {
-    return new Buffer3D({
-      data: this.data,
-      usage: BufferUsage.STORAGE | BufferUsage.COPY_DST | BufferUsage.COPY_SRC,
-      label: 'MorphStoreBuffer',
-      shrinkToFit: false,
-    });
+    this._buffer = null;
+    this._bufferResource = null;
   }
 
   private _markDirty(from: number, to: number): void {
@@ -452,8 +411,8 @@ export class MorphStoreBuffer {
   }
 
   /**
-   * Doubles the weight region to fit `requiredFloats` (relative); the arena —
-   * and every slot's absolute offset — stays put.
+   * Doubles the weight region until it holds `requiredFloats`; the arena and every slot's absolute
+   * offset stay put
    * @param requiredFloats - Minimum weight-region size, in floats
    */
   private _growWeights(requiredFloats: number): void {
@@ -463,14 +422,13 @@ export class MorphStoreBuffer {
   }
 
   /**
-   * Swaps in a larger backing array/buffer, preserving the packed deltas and
-   * the whole weight region (slot offsets are relative, so recycling survives
-   * an arena move untouched)
+   * Swaps in a larger array, keeping the packed deltas and the whole weight region
    *
-   * The replaced buffer is retired — render bundles recorded earlier still
-   * reference it — and the full used extent is marked dirty for the new
-   * buffer's first upload. The data-texture view, if created, is re-pointed
-   * and resized to the new array.
+   * Slot offsets are relative, so the free lists survive the arena moving. The buffer is retired
+   * rather than resized: draws recorded earlier still bind the old one, which has to outlive their
+   * submit, and a {@link Buffer3D} is exempt from pixi's GC, so `destroy` frees it. The next
+   * `buffer` read builds a new one over the new array, which uploads whole on first use. The data
+   * texture, which only WebGL reads, is pointed at the new array, resized and uploaded whole.
    * @param newDeltaCapacity - New delta-arena size, in floats
    * @param newWeightCapacity - New weight-region size, in floats; padded up to whole data-texture rows
    */
@@ -484,9 +442,11 @@ export class MorphStoreBuffer {
     this.data = newData;
     this._deltaCapacity = newDeltaCapacity;
 
-    this._retiredBuffers.push(this.buffer);
-    this.buffer = this._createBuffer();
-    this.bufferResource = new BufferResource({ buffer: this.buffer });
+    if (this._buffer) {
+      this._retiredBuffers.push(this._buffer);
+      this._buffer = null;
+      this._bufferResource = null;
+    }
     this.bufferVersion++;
 
     if (this._textureSource) {
@@ -498,8 +458,6 @@ export class MorphStoreBuffer {
       }
       this._textureSource.update();
     }
-
-    this._markDirty(0, newDeltaCapacity + this._weightCursor - 1);
   }
 
   private _initTexture(): Texture {
@@ -536,11 +494,10 @@ function recycle(lists: Map<number, number[]>, size: number, offset: number): vo
 }
 
 /**
- * Pads the weight capacity so the store's total float count fills whole
- * data-texture rows
+ * Pads the weight region so the store's total float count fills whole data-texture rows
  *
- * The pad lands in the weight region because the arena capacity is semantic — it's
- * the weights base — and must never absorb slack.
+ * The pad goes in the weight region because the arena's capacity is the weights base, so it can't
+ * absorb slack.
  * @param deltaCapacity - Delta-arena size, in floats
  * @param weightCapacity - Requested weight-region size, in floats
  */

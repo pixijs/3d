@@ -10,10 +10,11 @@ import { Container3D } from '../Container3D';
 import type { Container3DOptions } from '../Container3D';
 
 /**
- * Discriminator for the four concrete light kinds
- *
- * Materials and the lighting system branch on this string to pick the right
- * per-pixel evaluation path.
+ * The four kinds of {@link Light}, as a light's {@link Light.type | type} reports them
+ * @example
+ * ```ts
+ * const suns = view.lights.filter((light: Light) => light.type === 'directional');
+ * ```
  * @see {@link Light.type} For the field that carries this tag.
  * @see {@link AmbientLight}, {@link DirectionalLight}, {@link PointLight}, {@link SpotLight}
  *      For the concrete subclasses.
@@ -23,106 +24,160 @@ import type { Container3DOptions } from '../Container3D';
 export type LightType = 'directional' | 'point' | 'spot' | 'ambient';
 
 /**
- * Shadow tuning shared by both placement modes (and spot lights)
+ * Shadow options every shadow-casting light takes, whichever way its shadow is placed
+ * @example
+ * ```ts
+ * const tuning: LightShadowCommonOptions = { bias: 0.002, normalBias: 0.05 };
+ * const sun = new DirectionalLight({ castShadow: true, shadow: { cascades: 3, ...tuning } });
+ * ```
  * @see {@link LightShadowOptions} For the full option set.
  * @category scene
  * @standard
  */
 export interface LightShadowCommonOptions {
   /**
-   * Depth bias to reduce shadow acne
+   * Depth offset that keeps a surface from shadowing itself; see {@link LightShadow.bias}
    * @default 0.001
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { bias: 0.002 } });
+   * ```
    */
   bias?: number;
   /**
-   * Normal-offset bias to reduce shadow acne on curved surfaces
-   *
-   * Defaults to an offset derived from the shadow-map texel size (spot
-   * lights: `0.1`).
+   * Offset along the surface normal that keeps a surface from shadowing itself; see
+   * {@link LightShadow.normalBias}
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { normalBias: 0.05 } });
+   * ```
    */
   normalBias?: number;
 }
 
 /**
- * Fixed-box shadow placement — the default for directional lights
+ * Shadow options for one shadow map over a fixed world-space box, the default placement
  *
- * The shadowed region is a world-space box: auto-fitted to the scene's
- * casters, or pinned explicitly via {@link LightShadowBoundsOptions.bounds | bounds}.
+ * The box is fitted to the scene's shadow casters, or set with
+ * {@link LightShadowBoundsOptions.bounds | bounds}. Suits a scene that fits in one view, such as
+ * a room, an arena or a board. A spot light takes these options but ignores `bounds`: its shadow
+ * covers its cone.
+ * @example
+ * ```ts
+ * const sun = new DirectionalLight({
+ *   castShadow: true,
+ *   shadow: { bounds: Box.fromCenterSize({ x: 0, y: 0, z: 0 }, 40), update: 'manual' },
+ * });
+ * ```
  * @category scene
  * @standard
  */
 export interface LightShadowBoundsOptions extends LightShadowCommonOptions {
   /**
-   * World-space region to shadow, as an axis-aligned {@link Box}
-   *
-   * Directional lights only. Omitted → the box auto-fits the scene's shadow
-   * casters (re-fitted every frame up to a few hundred casters; larger scenes
-   * fit once and freeze — see {@link Light.fitShadowBounds}), so
-   * `castShadow: true` alone gives a stable, well-sized shadow. Set it to take
-   * manual control: the box is read live, so mutating it each frame (e.g.
-   * keeping it centred on the player) is free.
+   * World-space box a directional light's shadow covers; see {@link LightShadow.bounds}
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { bounds: Box.fromCenterSize(arena.position, 30) } });
+   * ```
    */
   bounds?: Box;
-  /** The other placement mode — see {@link LightShadowCascadesOptions} */
+  /**
+   * Not available with a fixed box; cascades are the other placement, see
+   * {@link LightShadowCascadesOptions}
+   * @hidden
+   */
   cascades?: never;
   /**
-   * How often the shadow re-renders: `1` every frame, `N` every Nth
-   * frame, `'manual'` only when {@link Light.refreshShadows} is called
+   * How often the shadow redraws; see {@link LightShadow.update}
    * @default 1
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { update: 4 } });
+   * ```
    */
   update?: number | 'manual';
-  /** Cascaded mode only — see {@link LightShadowCascadesOptions.maxDistance} */
+  /**
+   * Not available with a fixed box; see {@link LightShadowCascadesOptions.maxDistance}
+   * @hidden
+   */
   maxDistance?: never;
-  /** Cascaded mode only — see {@link LightShadowCascadesOptions.lambda} */
+  /**
+   * Not available with a fixed box; see {@link LightShadowCascadesOptions.lambda}
+   * @hidden
+   */
   lambda?: never;
 }
 
 /**
- * Camera-following cascaded shadow maps (CSM) for large / roaming scenes
+ * Shadow options for cascaded shadow maps, which follow the camera, for a directional light
  *
- * Mutually exclusive with {@link LightShadowBoundsOptions.bounds | bounds}:
- * cascades follow the camera, a bounds box pins a fixed region.
+ * The camera's view is cut into slices by distance, and each slice gets its own shadow map, so
+ * nearby shadows stay sharp however large the world is. Suits open worlds and anything the
+ * camera roams across. Spot lights ignore cascades.
+ * @example
+ * ```ts
+ * const sun = new DirectionalLight({ castShadow: true, shadow: { cascades: 3, maxDistance: 80 } });
+ * ```
  * @category scene
  * @standard
  */
 export interface LightShadowCascadesOptions extends LightShadowCommonOptions {
   /**
-   * Number of splits along the view distance (1–4)
-   *
-   * Directional lights only. `1` follows the camera with a single un-split map.
+   * How many slices the camera's view is cut into; see {@link LightShadow.cascades}
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { cascades: 4 } });
+   * ```
    */
   cascades: 1 | 2 | 3 | 4;
-  /** The other placement mode — see {@link LightShadowBoundsOptions} */
+  /**
+   * Not available with cascades; a fixed box is the other placement, see
+   * {@link LightShadowBoundsOptions}
+   * @hidden
+   */
   bounds?: never;
   /**
-   * How often the shadow re-renders: `1` every frame, `N` every Nth
-   * frame, `[a, b, …]` per cascade, `'manual'` only when
-   * {@link Light.refreshShadows} is called
+   * How often each cascade redraws; see {@link LightShadow.update}
    * @default 1
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { cascades: 3, update: [1, 2, 8] } });
+   * ```
    */
   update?: number | number[] | 'manual';
   /**
-   * How far from the camera cascades reach, in world units
+   * How far from the camera the cascades reach, in world units; see {@link LightShadow.maxDistance}
    * @default 50
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { cascades: 3, maxDistance: 120 } });
+   * ```
    */
   maxDistance?: number;
   /**
-   * Split distribution — `0` uniform … `1` logarithmic
+   * How the distance is shared out between cascades; see {@link LightShadow.lambda}
    * @default 0.5
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { cascades: 3, lambda: 0.8 } });
+   * ```
    */
   lambda?: number;
 }
 
 /**
- * Shadow configuration accepted on {@link LightOptions.shadow}
+ * Shadow options a light takes, in one of two placements
  *
- * One of two mutually exclusive placement modes for directional lights: a
- * fixed box ({@link LightShadowBoundsOptions}, the default — auto-fit, or
- * explicit `bounds`) or camera-following cascades
- * ({@link LightShadowCascadesOptions}). Passing `bounds` and `cascades`
- * together is a type error; missing fields fall back to {@link Light}'s
- * `shadow` defaults. Only consulted when
- * {@link LightOptions.castShadow | castShadow} is `true`.
+ * A fixed box ({@link LightShadowBoundsOptions}) is the default: one shadow map over the scene's
+ * shadow casters, or over the `bounds` you give. Cascades ({@link LightShadowCascadesOptions})
+ * follow the camera instead. Passing `bounds` and `cascades` together is a type error. Fields
+ * left out take their defaults. Only read while {@link LightOptions.castShadow | castShadow} is
+ * `true`.
+ * @example
+ * ```ts
+ * const shadow: LightShadowOptions = openWorld ? { cascades: 3, maxDistance: 80 } : { bounds: arenaBounds };
+ * const sun = new DirectionalLight({ castShadow: true, shadow });
+ * ```
  * @see {@link Light.shadow} For the resolved shadow state on a constructed light.
  * @category scene
  * @standard
@@ -130,43 +185,106 @@ export interface LightShadowCascadesOptions extends LightShadowCommonOptions {
 export type LightShadowOptions = LightShadowBoundsOptions | LightShadowCascadesOptions;
 
 /**
- * Resolved shadow state stored on every {@link Light}
+ * A light's shadow settings, as {@link Light.shadow} holds them
  *
- * Same shape as {@link LightShadowOptions} but with required fields filled in
- * from defaults. Mutating any field is a free per-frame update — the shadow
- * render pass re-reads these values each frame.
+ * The same fields as {@link LightShadowOptions}, with the defaults filled in. The shadow pass
+ * reads them every frame, so a change shows on the next one. Nothing stops both `bounds` and
+ * `cascades` being set here; cascades then win and a warning says so.
+ * @example
+ * ```ts
+ * sun.shadow.cascades = 3;
+ * sun.shadow.maxDistance = 60;
+ * ```
  * @category scene
  * @standard
  */
 export interface LightShadow {
   /**
-   * World-space region to shadow (directional lights)
+   * World-space box a directional light's shadow covers, or `undefined` to fit the box to the
+   * scene's shadow casters
    *
-   * `undefined` → auto-fit to the scene's casters — live under the pass's
-   * caster cap, frozen above it. Ignored when {@link LightShadow.cascades}
-   * is set.
+   * The fitted box is measured again every frame while the view has 256 shadow casters or fewer,
+   * so `castShadow: true` alone gives a well-sized shadow. Past 256, measuring would cost every
+   * frame, so the box is measured once and then kept; call {@link Light.fitShadowBounds} after
+   * the scene changes. Set a box to take control: it is read every frame, so moving it, say to
+   * follow the player, costs nothing extra. Ignored when {@link LightShadow.cascades} is set.
+   * @example
+   * ```ts
+   * sun.shadow.bounds = Box.fromCenterSize(player.position, 30);
+   * ```
    */
   bounds: Box | undefined;
-  /** Cascade count (1–4) for camera-following CSM, or `undefined` for the fixed box */
+  /**
+   * How many slices the camera's view is cut into, each with its own shadow map, from 1 to 4;
+   * `undefined` for a fixed box
+   *
+   * Directional lights only. More cascades keep distant shadows sharper, at the cost of drawing
+   * the shadow casters once per cascade. `1` follows the camera with one map.
+   * @example
+   * ```ts
+   * sun.shadow.cascades = isMobile ? 2 : 4;
+   * ```
+   */
   cascades: 1 | 2 | 3 | 4 | undefined;
   /**
-   * Re-render cadence: `1` every frame, `N` every Nth, `number[]` per cascade,
-   * `'manual'` only on {@link Light.refreshShadows}
+   * How often the shadow redraws
+   *
+   * `1` redraws every frame and `N` every Nth frame. `'manual'`, or `0`, redraws only when
+   * {@link Light.refreshShadows} asks. With cascades, an array gives each cascade its own rate,
+   * and a cascade the array leaves out redraws every frame. A shadow that doesn't redraw keeps
+   * the last one it drew, which suits a scene that doesn't move.
+   * @example
+   * ```ts
+   * sun.shadow.update = [1, 2, 8];
+   * ```
    */
   update: number | number[] | 'manual';
-  /** Cascaded only: camera distance cascades cover, or `undefined` for the `50` default */
+  /**
+   * How far from the camera the cascades reach, in world units, or `undefined` for 50
+   *
+   * Cascades only. They never reach past the camera's far plane, so the
+   * {@link Camera3D.far | far} value caps this. A shorter reach gives sharper shadows.
+   * @example
+   * ```ts
+   * sun.shadow.maxDistance = 30;
+   * ```
+   */
   maxDistance: number | undefined;
-  /** Cascaded only: split distribution — `0` uniform … `1` logarithmic */
+  /**
+   * How the distance is shared out between cascades, from `0` to `1`
+   *
+   * `0` gives every cascade an equal slice. `1` gives the nearest cascades the thinnest slices,
+   * so the shadows closest to the camera get the most detail. Cascades only.
+   * @example
+   * ```ts
+   * sun.shadow.lambda = 0.8;
+   * ```
+   */
   lambda: number;
-  /** Depth bias, or `undefined` for the `0.001` default */
+  /**
+   * Depth offset that keeps a surface from shadowing itself, or `undefined` for 0.001
+   *
+   * It is a fraction of the shadow map's depth range. Raise it if lit surfaces show stripes of
+   * shadow (shadow acne); too much makes shadows start away from their casters.
+   * @example
+   * ```ts
+   * sun.shadow.bias = 0.002;
+   * ```
+   */
   bias: number | undefined;
   /**
-   * Normal-offset bias at grazing incidence, or `undefined` to derive from the shadow-map
-   * texel size
+   * Offset along the surface normal that keeps a surface from shadowing itself, in world units,
+   * or `undefined` for the default
    *
-   * Receivers are nudged along their normal before the depth compare, by this much where the
-   * light only grazes the surface and tapering to nothing where it strikes head-on. Raise it
-   * if shadowed surfaces show striping; lower it if shadows pull away from their casters.
+   * A surface the light only grazes moves this far along its normal before its shadow is
+   * looked up, and a surface facing the light barely moves. The default is three shadow-map
+   * texels for a directional light, so it follows the shadow's resolution, and 0.15 for a spot
+   * light. Raise it if shadowed surfaces show striping; lower it if shadows pull away from their
+   * casters.
+   * @example
+   * ```ts
+   * sun.shadow.normalBias = 0.05;
+   * ```
    */
   normalBias: number | undefined;
 }
@@ -174,9 +292,8 @@ export interface LightShadow {
 /**
  * Constructor options common to every {@link Light}
  *
- * Concrete subclasses extend this with their own fields (e.g.
- * {@link PointLightOptions.range}). Inherited {@link Container3DOptions}
- * (`label`, `position`, `eventMode`, …) are applied too.
+ * Each kind of light adds its own, such as {@link PointLightOptions.range}. The
+ * {@link Container3DOptions} (`label`, `position`, `eventMode`, …) apply too.
  * @example
  * ```ts
  * const sun = new DirectionalLight({ color: 0xfff4e0, intensity: 3, castShadow: true, label: 'sun' });
@@ -187,34 +304,50 @@ export interface LightShadow {
  */
 export interface LightOptions extends Container3DOptions {
   /**
-   * Light color. Any {@link ColorSource} (hex, CSS string, `Color`, `[r,g,b]`, `{r,g,b}`)
+   * Colour of the light, as any {@link ColorSource}; see {@link Light.color}
    * @default 0xffffff
+   * @example
+   * ```ts
+   * const candle = new PointLight({ color: '#ffb46b', range: 3 });
+   * ```
    */
   color?: ColorSource;
   /**
-   * Linear intensity multiplier applied to {@link LightOptions.color | color}
+   * Brightness; see {@link Light.intensity}
    * @default 1
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ intensity: 3 });
+   * ```
    */
   intensity?: number;
   /**
-   * Whether this light writes into the shadow pass
+   * Whether the light casts shadows; see {@link Light.castShadow}
    * @default false
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true });
+   * ```
    */
   castShadow?: boolean;
-  /** Shadow configuration. Only consulted when {@link LightOptions.castShadow | castShadow} is `true` */
+  /**
+   * Shadow settings, read only while `castShadow` is `true`; see {@link LightShadowOptions}
+   * @example
+   * ```ts
+   * const sun = new DirectionalLight({ castShadow: true, shadow: { cascades: 3 } });
+   * ```
+   */
   shadow?: LightShadowOptions;
 }
 
 /**
- * GPU-side state cached on every shadow-casting {@link Light}
- *
- * Populated by the shadow render pass; not part of the public API.
+ * GPU-side state cached on every shadow-casting {@link Light}, populated by the shadow render pass
  * @internal
  */
 export interface ShadowData {
-  /** Inverse light world transform — scratch reused by every shadow path */
+  /** Inverse light world transform, scratch reused by every shadow path */
   inverseLightMatrix: Matrix4;
-  /** Light projection — scratch reused as the cascade / single-map projection out-param */
+  /** Light projection, scratch reused as the cascade or single-map projection out-param */
   lightProjectionMatrix: Matrix4;
   /**
    * Per-cascade slots (one per cascade), lazily grown. Cascade 0's
@@ -230,31 +363,29 @@ export interface ShadowData {
 }
 
 /**
- * Abstract base for every light in the scene
+ * Base class for every light in the scene
  *
- * A `Light` is a {@link Container3D}, so it participates in the scene-graph
- * transform hierarchy — position it, parent it, animate it like any other
- * node. Add lights to a scene by parenting them under
- * {@link View3D.root | view.root} (or any descendant); the View tracks them
- * automatically.
+ * A light is a {@link Container3D}: position it, parent it and animate it like any other node.
+ * Add it anywhere under {@link View3D.root | view.root} and it lights the view; hide it to switch
+ * it off. Lights face local **-Z**, like a {@link Camera3D}, so `light.lookAt(target)` aims it.
  *
- * `Light` itself is not constructible — use one of the four concrete
- * subclasses. Each subclass picks a different shading model:
+ * Create one of the four kinds:
  *
- * - {@link AmbientLight}    — uniform fill applied to every fragment.
- * - {@link DirectionalLight} — parallel rays (sun-like); supports CSM shadows.
- * - {@link PointLight}      — omnidirectional point emitter with optional range falloff.
- * - {@link SpotLight}       — cone emitter with angle / penumbra / range falloff.
+ * - {@link AmbientLight}: the same light on every surface, whatever its direction.
+ * - {@link DirectionalLight}: parallel rays from one direction, like the sun. Casts shadows.
+ * - {@link PointLight}: light in every direction from a point, like a bulb.
+ * - {@link SpotLight}: a cone of light from a point, like a torch. Casts shadows.
  *
- * Lights face local **-Z** by convention (so `light.lookAt(target)` orients
- * the light's -Z toward `target` — the same convention used by {@link Camera3D}).
+ * A view draws up to 32 point, spot and directional lights and ignores the rest. Shadows share
+ * 16 shadow maps: one per spot light or uncascaded sun, and one per cascade of a cascaded sun.
+ * A shadow-casting light that doesn't fit draws without a shadow, and a warning says so.
  * @example
  * ```ts
  * import { View3D, DirectionalLight, AmbientLight } from '@pixi/3d';
  *
  * const view = new View3D({ width: 800, height: 600 });
  *
- * // Sun-like key light with cascaded shadows.
+ * // Sun with a shadow fitted to the scene.
  * const sun = new DirectionalLight({ intensity: 3, castShadow: true });
  * sun.position.set(5, 10, 5);
  * sun.lookAt({ x: 0, y: 0, z: 0 });
@@ -270,111 +401,126 @@ export interface ShadowData {
  * @standard
  */
 export abstract class Light extends Container3D {
-  /** Discriminator filled in by each concrete subclass */
+  /** Which kind of light this is; each subclass sets it */
   public abstract readonly type: LightType;
 
   /**
-   * Light color
+   * Colour of the light
    *
-   * Combines multiplicatively with {@link Light.intensity} into the
-   * per-fragment radiance contribution. Mutate freely — the lighting system
-   * re-reads this each frame.
+   * Given in display space like every colour in the engine, and multiplied by
+   * {@link Light.intensity}. Change it at any time; the view reads it every frame.
    * @default 0xffffff
+   * @example
+   * ```ts
+   * sun.color.setValue(0xff9a4d);
+   * ```
    */
   public color: Color;
 
   /**
-   * Linear intensity multiplier applied to {@link Light.color}
+   * Brightness, multiplied into {@link Light.color}
    *
-   * {@link AmbientLight} defaults to `0.5`. Higher values are
-   * physically valid; tone mapping (see {@link View3D.toneMapping}) compresses
-   * the resulting radiance into displayable range.
+   * Values above 1 are fine: the view's tone mapping (see {@link View3D.toneMapping}) brings
+   * bright light back into range. A point or spot light dims with the square of the distance, so
+   * it needs a higher intensity than a directional light to look as bright.
    * @default 1
+   * @example
+   * ```ts
+   * lamp.intensity = flicker ? 6 : 8;
+   * ```
    */
-  public intensity: number;
+  public intensity = 0;
 
   /**
-   * Whether this light writes into the shadow pass
+   * Whether this light casts shadows; only directional and spot lights can
    *
-   * Runtime changes take effect on the next frame. When a rendered light first casts a shadow, the
-   * view compiles shadow sampling into its lit material shaders. Later toggles keep that sampler in
-   * the shaders.
+   * A change takes effect on the next frame. The first time a light in a view casts, the view
+   * recompiles its lit materials to sample shadows. They keep that code after the light stops
+   * casting, so later toggles don't recompile anything.
    * @default false
+   * @example
+   * ```ts
+   * torch.castShadow = settings.shadows;
+   * ```
    * @see {@link Light.shadow} For per-light shadow tuning.
    * @see {@link View3DOptions} For `shadowQuality`, which sets the shadow-map resolution.
    */
   public castShadow = false;
 
   /**
-   * Whether this light casts a shadow: {@link Light.castShadow | castShadow} is on and its kind
+   * Whether this light casts shadows: {@link Light.castShadow | castShadow} is on and its kind
    * can cast
    *
    * Point and ambient lights never do, whatever `castShadow` says.
+   * @example
+   * ```ts
+   * const shadowCasters = view.lights.filter((light: Light) => light.canCastShadow);
+   * ```
    */
   get canCastShadow(): boolean {
     return this.castShadow;
   }
 
   /**
-   * Per-light shadow tuning
+   * This light's shadow settings; see {@link LightShadow}
    *
-   * Mutate fields directly for free per-frame updates; the shadow pass
-   * re-reads them each frame.
-   * @see {@link LightShadow} For the field list and semantics.
+   * Change a field at any time and the next frame uses it.
+   * @example
+   * ```ts
+   * sun.shadow.bias = 0.002;
+   * ```
    */
   public shadow: LightShadow;
 
   /**
-   * Lights face local -Z (so `light.lookAt(target)` orients -Z toward target)
-   * Set on every `Light` subclass; consumed by {@link Container3D.lookAt}.
+   * Lights face local -Z, unlike the +Z default `Container3D` gives meshes
    * @internal
    */
   protected override _lookAtForwardIsPositiveZ = false;
 
   /**
-   * GPU-side cached shadow state (matrices + bind group). Populated by the
-   * shadow render pass; `null` when this light isn't currently casting.
+   * GPU-side cached shadow state, populated by the shadow render pass; `null` until the light
+   * casts, and again after {@link Light._releaseShadowState}
    * @internal
    */
   public _gpuShadowData: ShadowData | null = null;
 
   /**
-   * Slot index into the `uShadowData` uniform for the current frame, or
-   * `-1` when this light isn't writing a shadow this frame.
+   * Slot index into the `uShadowData` uniform for the current frame, or `-1` when this light
+   * isn't writing a shadow this frame
    * @internal
    */
   public _shadowDataIndex: number = -1;
 
   /**
-   * Flag consumed by `ShadowRenderPass` to force a one-shot re-render of all
-   * cascades, then auto-cleared. Set via {@link Light.refreshShadows}.
+   * Whether the shadow pass should redraw every cascade of this light once, whatever its
+   * `update` rate; it clears the flag after the redraw
+   *
+   * Starts `true` so a new light draws its shadow on its first frame. Set by
+   * {@link Light.refreshShadows}.
    * @internal
    */
   public _shadowRefreshRequested = true;
 
   /**
-   * Auto-fit shadow box for a directional light with no explicit
-   * {@link LightShadow.bounds | bounds}. The shadow pass re-fits it from
-   * the scene's casters every rendered frame while the caster count is within its
-   * auto-measure cap, and freezes it at the last fit above the cap. `null` until
-   * the first gather.
+   * The fitted shadow box of a directional light with no {@link LightShadow.bounds | bounds},
+   * or `null` until the shadow pass first measures the scene
    * @internal
    */
   public _autoShadowBounds: Box | null = null;
 
   /**
-   * `true` while `_autoShadowBounds` is frozen — the scene has more casters
-   * than the pass's auto-measure cap, so per-frame re-fitting stopped.
-   * Cleared by {@link Light.fitShadowBounds} (and automatically when the count
-   * drops back under the cap).
+   * Whether `_autoShadowBounds` is being kept rather than measured each frame, because the
+   * view has more shadow casters than the shadow pass measures every frame
+   *
+   * Cleared by {@link Light.fitShadowBounds}, and when the caster count drops back under the cap.
    * @internal
    */
   public _autoShadowBoundsFrozen = false;
 
   /**
-   * Creates a new `Light`. Called by concrete subclasses — `Light` itself is
-   * abstract.
-   * @param options - construction options; see {@link LightOptions}.
+   * Called by the subclasses; `Light` itself is abstract
+   * @param options - Construction options; see {@link LightOptions}.
    */
   constructor(options: LightOptions) {
     const { color, intensity, castShadow, shadow: s, ...rest } = options;
@@ -407,11 +553,10 @@ export abstract class Light extends Container3D {
   }
 
   /**
-   * Request a shadow refresh on the next frame
+   * Redraws this light's shadow on the next frame, whatever its {@link LightShadow.update} rate
    *
-   * In `update: 'manual'` mode this is the only thing that triggers a
-   * re-render; in every-frame mode it forces a one-shot refresh (e.g. after a
-   * scene change).
+   * With `update: 'manual'` this is the only thing that redraws the shadow. With a slower rate,
+   * call it after a change that shouldn't wait for the next scheduled redraw.
    * @example
    * ```ts
    * sun.shadow.update = 'manual';
@@ -424,19 +569,17 @@ export abstract class Light extends Container3D {
   }
 
   /**
-   * Re-fit the auto-fit shadow box to the scene's casters on the next frame,
-   * then re-render
+   * Measures the scene again for the fitted shadow box on the next frame, then redraws the shadow
    *
-   * Small scenes never need this — up to a few hundred casters the box re-fits
-   * automatically every frame. Above that cap the shadow pass fits the box once
-   * and freezes it (re-measuring tens of thousands of instanced casters every
-   * frame would be a hidden per-frame cost), so call this after moving or
-   * spawning content outside the frozen box. A no-op for cascaded lights, spot
-   * lights, and lights with an explicit {@link LightShadow.bounds | bounds}.
+   * A view with 256 shadow casters or fewer never needs this: the box is measured every frame.
+   * Past 256 it is measured once and kept, so call this after moving or spawning casters outside
+   * the box. Instances of a `BatchedMesh3D` count one each. For a cascaded light, a spot light,
+   * or a light with its own {@link LightShadow.bounds | bounds}, it only redraws the shadow, like
+   * {@link Light.refreshShadows}.
    * @example
    * ```ts
-   * spawnCity(); // 50k instanced casters — the auto-fit box froze at first fit
-   * sun.fitShadowBounds(); // one re-measure so the new content is inside the box
+   * spawnCity(); // 50k instanced casters: the fitted box was measured once and kept
+   * sun.fitShadowBounds(); // measure again so the new content is inside the box
    * ```
    */
   public fitShadowBounds(): void {
@@ -445,13 +588,13 @@ export abstract class Light extends Container3D {
   }
 
   /**
-   * Drops the cached per-cascade GPU state: the shadow bind groups, which bind the owning
-   * View's bone-pit buffer, and the exempt cascade UBOs they own
+   * Drops the cached per-cascade GPU state: each cascade's camera data and, on WebGPU, its cull
+   * results, whose bundles baked the shadow pass's bind group over the owning View's bone pit
    *
    * The shadow pass builds a fresh set the next time this light casts. Runs when the light
-   * leaves a View, when the View unloads, and on destroy, so no bind group can outlive the
-   * bone pit it binds. The shared resources bound alongside (the bone-pit buffer, the empty
-   * texture) are left intact. Idempotent.
+   * leaves a View, when the View unloads, and on destroy, so no recorded bundle can outlive the
+   * bone pit it binds. The bone-pit buffer itself belongs to the View and is left intact.
+   * Idempotent.
    * @internal
    */
   public _releaseShadowState(): void {
@@ -462,12 +605,14 @@ export abstract class Light extends Container3D {
   }
 
   /**
-   * Releases this light's owned GPU shadow state and detaches it from the
-   * scene graph so the lighting system stops tracking it
+   * Removes the light from the scene and frees its shadow's GPU data
    *
-   * Idempotent — a second call is a no-op via the inherited
-   * {@link Container3D.destroyed} guard.
-   * @param options - forwarded to {@link Container3D.destroy}.
+   * Calling it again does nothing.
+   * @example
+   * ```ts
+   * torch.destroy();
+   * ```
+   * @param options - Forwarded to {@link Container3D.destroy}.
    */
   public override destroy(options?: Destroy3DOptions): void {
     if (this.destroyed) return;

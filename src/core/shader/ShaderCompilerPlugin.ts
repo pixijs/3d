@@ -6,31 +6,35 @@ import type { InterStageType, ShaderBit, StructDefinition } from './ShaderBit';
 import type { ShaderBitTemplate } from './ShaderBitTemplate';
 
 /**
- * Strongly-typed intermediate data shared across the shader compilation phases
+ * What the compiler plugins know about the shader between phases
  *
- * Built up during `collectData`, available for modification in `preCompile`,
- * and stringified in `injectCode`.
+ * Plugins fill it in `collectData`, may change it in `preCompile`, and turn it into source in
+ * `injectCode`.
  * @category rendering
  * @advanced
  */
 export interface ShaderCompilerData {
-  /** Normalized specialization-constant override definitions, keyed by name */
+  /** The bits' specialization constants, validated, keyed by name */
   overrides?: Record<string, NormalizedShaderOverrideDef>;
-  /** Bind-group resources collected from the bits */
+  /** The bits' bindings, merged per bind group */
   bindings?: CollectedBindings;
-  /** Vertex attribute name → format */
+  /** Vertex attribute formats, keyed by attribute name */
   attributes?: Record<string, VertexFormat>;
-  /** Inter-stage (varying) name → type */
+  /** Varying types, keyed by varying name */
   interStage?: Record<string, InterStageType>;
-  /** Raw header code snippets, in bit order */
+  /** The bits' header code, in bit order */
   headers?: string[];
-  /** Struct definitions keyed by struct name */
+  /** Struct definitions, keyed by struct name */
   structs?: Record<string, StructDefinition>;
-  /** Vertex-stage slot name → code snippets */
+  /** Vertex code snippets, keyed by slot name */
   vertexSlots?: Record<string, string[]>;
-  /** Fragment-stage slot name → code snippets */
+  /** Fragment code snippets, keyed by slot name */
   fragmentSlots?: Record<string, string[]>;
-  /** Bind group index → binding index → resource name */
+  /**
+   * Each binding's name, keyed by group index and then binding index
+   *
+   * WebGL shaders hand it to pixi, which otherwise builds it by reading a WebGPU program.
+   */
   groupMap?: Record<number, Record<number, string>>;
 }
 
@@ -47,64 +51,64 @@ export interface ShaderCompilerContext {
   template: ShaderBitTemplate;
 
   /**
-   * The template string currently being processed
+   * The template source being compiled
    *
-   * For WGSL, this is `template.gpu`. For GLSL, the core compiler runs twice:
-   * once with `template.gl.vertex` and once with `template.gl.fragment`.
+   * For WGSL this is `template.gpu`. GLSL compiles each stage on its own, so this is
+   * `template.gl.vertex` on one run and `template.gl.fragment` on the next, over the same `data`.
    */
   templateString: string;
 
-  /**
-   * Shared structured data populated during collectData, modified during preCompile,
-   * and read during injectCode to produce the final source strings
-   */
+  /** What the plugins have collected so far */
   data: ShaderCompilerData;
 
-  /** Which stage is currently compiling (useful for GLSL plugins that behave differently per-stage) */
+  /** The GLSL stage being compiled; unset for WGSL, which compiles both at once */
   stage?: 'vertex' | 'fragment';
 
-  /** Configuration options specific to the GLSL compilation pipeline */
+  /** Options for GLSL compilation only */
   glslOptions?: {
-    /** Bind-group names compiled as WebGL2 UBOs; groups not listed become flat uniforms */
+    /** The bind groups compiled as uniform blocks; any other group's uniforms become plain uniforms */
     uboGroups?: Set<string> | string[];
-    /** Whether to emit explicit `layout(location)` qualifiers (WebGL2 style); defaults to true */
-    useLocations?: boolean;
     /**
-     * Runtime override values. Read by `glslOverridesPlugin` to bake
-     * `#define KEY VALUE` directives into the GLSL header — the GL analogue
-     * of WebGPU pipeline specialization constants.
+     * Whether to emit `layout(location = n)` qualifiers on attributes and varyings
+     * @default true
      */
+    useLocations?: boolean;
+    /** The descriptor's override values, baked into the header as `#define`s */
     overrides?: Record<string, number>;
   };
 }
 
 /**
- * A plugin that participates in the three-phase shader compilation pipeline
+ * One step of shader compilation, run by {@link compileShader}
  *
- * 1. `collectData` builds structured data on `context.data`
- * 2. `preCompile` modifies `context.data` (e.g. padding, field reordering) or `context.templateString`
- * 3. `injectCode` reads from `context.data` and returns slot code strings
+ * Every plugin runs each phase before any plugin starts the next:
+ *
+ * 1. `collectData` reads the bits into `context.data`.
+ * 2. `preCompile` may change `context.data` or `context.templateString`, such as repacking the
+ *    `Material` struct.
+ * 3. `injectCode` returns code for template slots, keyed by slot name.
  * @category rendering
  * @advanced
  */
 export interface ShaderCompilerPlugin {
   /**
-   * Phase 1: Populate `context.data` with structured objects
-   * @param {ShaderCompilerContext} context - The compilation context to populate
+   * Reads the bits into `context.data`
+   * @param {ShaderCompilerContext} context - The compilation context to fill
    */
   collectData?(context: ShaderCompilerContext): void;
 
   /**
-   * Phase 2: Modify `context.data` or `context.templateString` before source generation
-   * @param {ShaderCompilerContext} context - The compilation context to modify
+   * Changes `context.data` or `context.templateString` once every plugin has collected
+   * @param {ShaderCompilerContext} context - The compilation context to change
    */
   preCompile?(context: ShaderCompilerContext): void;
 
   /**
-   * Phase 3: Read from `context.data` and return slot code strings
-   * for template substitution (e.g., 'header', 'vertexBody')
-   * @param {ShaderCompilerContext} context - The compilation context to read from
-   * @returns Slot name → code string to substitute into the template
+   * Returns code for template slots
+   *
+   * Code for one slot from several plugins is joined in plugin order. Blank code is skipped.
+   * @param {ShaderCompilerContext} context - The compilation context to read
+   * @returns Code keyed by slot name, such as `header` or `vertexBody`
    */
   injectCode?(context: ShaderCompilerContext): Record<string, string>;
 }

@@ -1,25 +1,28 @@
 import type { BaseDestroyOptions, TextureDestroyOptions, TypeOrBool } from 'pixi.js';
 
 /**
- * Teardown options for the `destroy()` flow across the 3D scene graph
+ * What a 3D node's `destroy()` takes down with it
  *
- * pixi.js's `DestroyOptions` shape, with `geometry` and `material` added for meshes. `texture`
- * acts on the textures of each material that gets destroyed (a {@link Sprite3D}'s own material
- * always is), so `material: true` alone keeps the (often shared) textures. `textureSource` widens
- * `texture` to the sources behind them and, as in 2D, frees nothing without it.
+ * The flags are pixi.js's `children`, `texture` and `textureSource`, plus `geometry` and
+ * `material` for meshes. Every flag defaults to `false`, because children, geometry, materials and
+ * textures are often shared: a plain `destroy()` leaves them all alive. A boolean sets every flag
+ * at once, so `true` also destroys resources that other nodes still use. A node that destroys its
+ * children passes them the same options.
  *
- * A boolean acts as if every flag were set to that value: `true` destroys everything reachable,
- * `false` only exclusively-owned resources. The same options are forwarded unchanged to children
- * during recursion.
+ * `texture` frees the textures of the materials this call destroys. A {@link Mesh3D} destroys its
+ * material only when `material` is set, so there `texture` alone frees nothing and `material`
+ * alone keeps the textures. A {@link Sprite3D} is the exception: `texture` always frees the
+ * sprite's own texture. `textureSource` extends `texture` to the sources behind the textures and,
+ * as in pixi.js, frees nothing by itself.
  *
- * Every flag defaults to `false`, so shared resources (children, geometry, materials, textures)
- * survive unless asked for. Exclusively-owned GPU resources (a {@link View3D}'s render graph, an
- * owned batch) are always released regardless of these flags.
+ * Resources a node built for itself are always destroyed, whatever the flags: a {@link View3D}'s
+ * GPU resources, a {@link BatchedMesh3D}'s batch, the material a {@link Sprite3D} made for its
+ * texture.
  * @example
  * ```ts
- * sprite.destroy({ texture: true });               // the sprite, its material and its texture
+ * sprite.destroy({ texture: true });               // the sprite, the material it built, its texture
  * mesh.destroy({ geometry: true, material: true }); // keeps the material's textures
- * model.destroy(true);                               // everything reachable
+ * model.destroy(true);                               // everything it can reach, shared or not
  * ```
  * @category scene
  * @standard
@@ -30,24 +33,29 @@ export type Destroy3DOptions = TypeOrBool<
       /**
        * Destroy each destroyed mesh's {@link Geometry3D} and its GPU buffers
        * @default false
+       * @example
+       * ```ts
+       * mesh.destroy({ geometry: true });
+       * ```
        */
       geometry?: boolean;
       /**
        * Destroy each destroyed mesh's {@link BaseMaterial3D}; its textures follow `texture` /
        * `textureSource`
        * @default false
+       * @example
+       * ```ts
+       * mesh.destroy({ material: true, texture: true });
+       * ```
        */
       material?: boolean;
     }
 >;
 
 /**
- * Resolves one flag from a {@link Destroy3DOptions} value
- *
- * A boolean stands in for every flag, otherwise the named flag is read and defaults to `false`.
- * @param options - the destroy options to resolve from
+ * Resolves one flag from a {@link Destroy3DOptions} value, whether it is a boolean, an object or missing
+ * @param options - the options a `destroy()` call received
  * @param key - which flag to read
- * @returns The resolved flag value.
  * @internal
  */
 export function resolveDestroy3DFlag(

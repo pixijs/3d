@@ -8,15 +8,6 @@ import { PointLight } from '~/scene/lights/PointLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * The light tile masks have to reach the GPU in the frame they are binned for.
- *
- * A reference image can't show this: a still scene draws the same picture from last frame's
- * masks. So a light jumps from one side of a wall to the other between two frames, and the
- * second frame is read straight off the canvas. Masks a frame late still hold the light's old
- * tiles, its bit is clear where it now stands, and its pool of light is missing.
- */
-
 const SIZE = 128;
 const EYE_Z = 10;
 const WALL_Z = -8;
@@ -29,15 +20,20 @@ const EDGE = Math.tan((FOV * Math.PI) / 360) * (EYE_Z - LIGHT_Z);
 /** Where the light stands, as a fraction of the way from the screen's centre to its edge */
 const OFFSET = 0.6;
 
-/** Brightness, 0 to 255, of the canvas pixels at `xs` along row `y` */
+/**
+ * Brightness, 0 to 255, of the canvas pixels at `xs` along row `y`
+ *
+ * Read straight off the canvas, because a reference image of a still scene can't show masks a
+ * frame late: it draws the same picture from last frame's masks.
+ */
 function canvasBrightness(canvas: HTMLCanvasElement, xs: number[], y: number): number[] {
   const data = readCanvasPixels(canvas, 0, y, canvas.width, 1);
   return xs.map((x) => Math.max(data[x * 4], data[x * 4 + 1], data[x * 4 + 2]));
 }
 
 for (const preference of ['webgl', 'webgpu'] as const) {
-  describe(`light tiles on the GPU (${preference})`, () => {
-    it('lights a moved light in the same frame it moved', async () => {
+  describe(`light tile masks reach the GPU in the frame they are binned for (${preference})`, () => {
+    it('lights a light on the far side of the wall in the frame it jumps there, not a frame late', async () => {
       const app = await getApp<Renderer>({
         id: `light-tiles-same-frame-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE, resolution: 1, backgroundColor: 0x000000 },

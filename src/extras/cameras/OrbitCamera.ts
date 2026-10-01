@@ -14,17 +14,28 @@ import type { Camera3D } from '../../scene/cameras/Camera3D';
 import type { View3D } from '../../scene/View3D';
 
 /**
- * What a mouse button does when dragged — assign one to each slot of
- * {@link OrbitCamera#mouseButtons}
+ * What a mouse button does when dragged; assign one to each slot of {@link OrbitCamera#mouseButtons}
+ * @example
+ * ```ts
+ * leftButtonSelect.onchange = () => {
+ *   orbit.mouseButtons.left = leftButtonSelect.value as OrbitMouseAction;
+ * };
+ * ```
  * @category extras:camera
  * @standard
  */
 export type OrbitMouseAction = 'rotate' | 'zoom' | 'pan' | 'none';
 
 /**
- * What a touch gesture does — assign one to each slot of {@link OrbitCamera#touches}
+ * What a touch gesture does; assign one to each slot of {@link OrbitCamera#touches}
  *
  * The two-finger combos pinch to zoom while dragging the midpoint pans or rotates.
+ * @example
+ * ```ts
+ * const twoFingers: OrbitTouchAction = mapMode ? 'zoom-pan' : 'zoom-rotate';
+ *
+ * orbit.touches.two = twoFingers;
+ * ```
  * @category extras:camera
  * @standard
  */
@@ -32,6 +43,14 @@ export type OrbitTouchAction = 'rotate' | 'pan' | 'zoom-pan' | 'zoom-rotate' | '
 
 /**
  * Mouse-button action assignments for {@link OrbitCamera}
+ *
+ * Holding ctrl, meta or shift swaps a button's `'rotate'` and `'pan'`.
+ * @example
+ * ```ts
+ * const cadButtons: OrbitMouseButtons = { left: 'none', middle: 'rotate', right: 'pan' };
+ *
+ * Object.assign(orbit.mouseButtons, cadButtons);
+ * ```
  * @category extras:camera
  * @standard
  */
@@ -39,22 +58,40 @@ export interface OrbitMouseButtons {
   /**
    * Action for the left mouse button
    * @default 'rotate'
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, mouseButtons: { left: 'pan', right: 'rotate' } });
+   * ```
    */
   left: OrbitMouseAction;
   /**
    * Action for the middle mouse button
    * @default 'zoom'
+   * @example
+   * ```ts
+   * orbit.mouseButtons.middle = 'pan';
+   * ```
    */
   middle: OrbitMouseAction;
   /**
    * Action for the right mouse button
    * @default 'pan'
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, mouseButtons: { right: 'none' }, preventContextMenu: false });
+   * ```
    */
   right: OrbitMouseAction;
 }
 
 /**
  * Touch-gesture action assignments for {@link OrbitCamera}
+ * @example
+ * ```ts
+ * const mapTouches: OrbitTouches = { one: 'pan', two: 'zoom-rotate' };
+ *
+ * Object.assign(orbit.touches, mapTouches);
+ * ```
  * @category extras:camera
  * @standard
  */
@@ -62,11 +99,19 @@ export interface OrbitTouches {
   /**
    * Action for a single-finger drag
    * @default 'rotate'
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, touches: { one: 'pan' } });
+   * ```
    */
   one: OrbitTouchAction;
   /**
    * Action for a two-finger gesture
    * @default 'zoom-pan'
+   * @example
+   * ```ts
+   * orbit.touches.two = 'zoom-rotate';
+   * ```
    */
   two: OrbitTouchAction;
 }
@@ -75,7 +120,16 @@ export interface OrbitTouches {
  * Constructor options for {@link OrbitCamera}
  *
  * Every field but `view` has a default; pass only what you need. Every option is also a
- * property on the instance and can be changed at runtime.
+ * property on the instance, and all but `view` can be changed at runtime.
+ * @example
+ * ```ts
+ * const turntable: Omit<OrbitCameraOptions, 'view'> = {
+ *   enablePan: false,
+ *   autoRotate: true,
+ *   maxPolarAngle: Math.PI / 2,
+ * };
+ * const orbit = new OrbitCamera({ view: view3d, ...turntable });
+ * ```
  * @see {@link OrbitCamera} For the constructed controller.
  * @category extras:camera
  * @standard
@@ -87,128 +141,264 @@ export interface OrbitCameraOptions {
    * The controller moves `view.camera` and listens for pointer and wheel events on the
    * View itself, so input follows the View's 2D placement, `hitArea`, and event
    * propagation like any other pixi container.
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d });
+   * ```
    */
   view: View3D;
-  /** World-space orbit target — `(0, 0, 0)` when omitted */
+  /**
+   * World-space point to orbit around; `(0, 0, 0)` when omitted
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, target: { x: 0, y: 1.2, z: 0 } });
+   * ```
+   */
   target?: PointData3D;
   /**
-   * Master enable/disable
+   * Whether the controller responds to input; {@link OrbitCamera#enabled} covers what keeps running
    * @default true
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, enabled: false });
+   *
+   * startButton.on('pointertap', () => (orbit.enabled = true));
+   * ```
    */
   enabled?: boolean;
   /**
    * Run {@link OrbitCamera#update | update()} from `Ticker.shared` every frame
    *
-   * Set `false` to drive updates yourself.
+   * Set `false` to drive updates yourself; {@link OrbitCamera#autoUpdate} says when that helps.
    * @default true
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, autoUpdate: false });
+   *
+   * app.ticker.add((ticker) => orbit.update(ticker));
+   * ```
    */
   autoUpdate?: boolean;
   /**
    * Minimum distance from `target`
    * @default 0
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, minDistance: 2 });
+   * ```
    */
   minDistance?: number;
   /**
    * Maximum distance from `target`
    * @default Infinity
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, maxDistance: 20 });
+   * ```
    */
   maxDistance?: number;
   /**
    * Minimum camera zoom (orthographic only)
    * @default 0
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, minZoom: 0.5 });
+   * ```
    */
   minZoom?: number;
   /**
    * Maximum camera zoom (orthographic only)
    * @default Infinity
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, maxZoom: 4 });
+   * ```
    */
   maxZoom?: number;
   /**
-   * Minimum polar angle in radians (0 = looking down `up`)
+   * Smallest {@link OrbitCamera#polarAngle | polar angle} the camera can reach, in radians
    * @default 0
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, minPolarAngle: Math.PI / 6 });
+   * ```
    */
   minPolarAngle?: number;
   /**
-   * Maximum polar angle in radians
+   * Largest {@link OrbitCamera#polarAngle | polar angle} the camera can reach, in radians
    * @default Math.PI
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, maxPolarAngle: Math.PI / 2 });
+   * ```
    */
   maxPolarAngle?: number;
   /**
-   * Minimum azimuth angle in radians
+   * Smallest {@link OrbitCamera#azimuthAngle | azimuth} the camera can reach, in radians;
+   * {@link OrbitCamera#minAzimuthAngle} covers how the pair of limits applies
    * @default -Infinity
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, minAzimuthAngle: -Math.PI / 4, maxAzimuthAngle: Math.PI / 4 });
+   * ```
    */
   minAzimuthAngle?: number;
   /**
-   * Maximum azimuth angle in radians
+   * Largest {@link OrbitCamera#azimuthAngle | azimuth} the camera can reach, in radians
    * @default Infinity
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, minAzimuthAngle: 0, maxAzimuthAngle: Math.PI / 2 });
+   * ```
    */
   maxAzimuthAngle?: number;
   /**
-   * Enable inertial damping
+   * Ease camera motion out after input stops; {@link OrbitCamera#enableDamping} has the details
    * @default false
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, enableDamping: true });
+   * ```
    */
   enableDamping?: boolean;
   /**
-   * Damping coefficient when `enableDamping` is on
+   * Share of the remaining motion applied each update while `enableDamping` is on
    * @default 0.05
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, enableDamping: true, dampingFactor: 0.1 });
+   * ```
    */
   dampingFactor?: number;
   /**
-   * Master zoom enable
+   * Whether the wheel, pinches and any button set to `'zoom'` zoom the camera
    * @default true
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, enableZoom: false });
+   * ```
    */
   enableZoom?: boolean;
   /**
-   * Zoom sensitivity
+   * Multiplier on zoom input from the wheel, pinches and zoom-button drags
    * @default 1
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, zoomSpeed: 0.5 });
+   * ```
    */
   zoomSpeed?: number;
   /**
-   * Master rotate enable
+   * Whether drags rotate the camera
    * @default true
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, enableRotate: false });
+   * ```
    */
   enableRotate?: boolean;
   /**
-   * Rotate sensitivity
+   * Multiplier on rotate drags
    * @default 1
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, rotateSpeed: 0.5 });
+   * ```
    */
   rotateSpeed?: number;
   /**
-   * Master pan enable
+   * Whether drags pan the camera
    * @default true
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, enablePan: false });
+   * ```
    */
   enablePan?: boolean;
   /**
-   * Pan sensitivity
+   * Multiplier on pan drags
    * @default 1
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, panSpeed: 2 });
+   * ```
    */
   panSpeed?: number;
   /**
-   * When `true`, panning translates in screen space; when `false`, panning translates
-   * orthogonal to {@link OrbitCamera#up}
+   * `true` pans in the screen's plane; `false` pans across the plane at right angles to
+   * {@link OrbitCamera#up}, so vertical drags move over the ground like a map
    * @default true
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, screenSpacePanning: false });
+   * ```
    */
   screenSpacePanning?: boolean;
   /**
-   * When `true`, the wheel zooms toward the pointer instead of the target
+   * Zoom toward the point under the pointer instead of the target; {@link OrbitCamera#zoomToCursor}
+   * has the details
    * @default false
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, zoomToCursor: true });
+   * ```
    */
   zoomToCursor?: boolean;
   /**
-   * Auto-orbit around `target` while idle
+   * Orbit around the target on its own whenever no gesture is in progress
    * @default false
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, autoRotate: true });
+   * ```
    */
   autoRotate?: boolean;
   /**
-   * Auto-rotate speed in revolutions per minute
+   * Auto-rotate speed in revolutions per minute; negative values turn the other way
    * @default 2
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, autoRotate: true, autoRotateSpeed: 0.5 });
+   * ```
    */
   autoRotateSpeed?: number;
-  /** Mouse-button action assignments, merged over the defaults */
+  /**
+   * Mouse-button action assignments, merged over the defaults
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, mouseButtons: { left: 'pan', right: 'rotate' } });
+   * ```
+   */
   mouseButtons?: Partial<OrbitMouseButtons>;
-  /** Touch-gesture action assignments, merged over the defaults */
+  /**
+   * Touch-gesture action assignments, merged over the defaults
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, touches: { one: 'pan', two: 'zoom-rotate' } });
+   * ```
+   */
   touches?: Partial<OrbitTouches>;
-  /** World-space up axis — `(0, 1, 0)` when omitted */
+  /**
+   * Keep the browser's context menu from opening over the View, so a right-button drag or a
+   * ctrl + click on macOS doesn't open it
+   *
+   * The View's `hitArea` bounds it like any other pointer event, and the menu still opens while
+   * `enabled` is `false`. On Windows the menu opens on release, so a right-button drag that ends
+   * outside the View still opens it.
+   * @default true
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, preventContextMenu: false, mouseButtons: { right: 'none' } });
+   * ```
+   */
+  preventContextMenu?: boolean;
+  /**
+   * World-space up axis the orbit turns around; `(0, 1, 0)` when omitted
+   * @example
+   * ```ts
+   * const orbit = new OrbitCamera({ view: view3d, up: { x: 0, y: 0, z: 1 } });
+   * ```
+   */
   up?: PointData3D;
 }
 
@@ -224,14 +414,17 @@ type Gesture =
 
 const _EPS = 0.000001;
 const _twoPI = 2 * Math.PI;
+/**
+ * Cosine of 70°: zoom-to-cursor without screen-space panning moves the target to where the view's
+ * centre ray meets the target's ground plane, but not when the ray is within 20° of that plane,
+ * where the hit point runs off toward the horizon
+ */
 const _TILT_LIMIT = Math.cos(70 * (Math.PI / 180));
 const _worldUp = new Vector3(0, 1, 0);
 
 const _v = new Vector3();
 const _plane = new Plane();
 const _ray = new Ray();
-
-// Cursor-zoom scratch — `update()` runs every frame the user is zooming.
 const _zoomCamPos = new Vector3();
 const _rayOrigin = new Vector3();
 const _rayDir = new Vector3();
@@ -253,7 +446,7 @@ const _rayDir = new Vector3();
  * ```ts
  * import { OrbitCamera } from '@pixi/3d/extras';
  *
- * const controls = new OrbitCamera({
+ * const orbit = new OrbitCamera({
  *   view: view3d,
  *   target: { x: 0, y: 1, z: 0 },
  *   enableDamping: true,
@@ -261,14 +454,17 @@ const _rayDir = new Vector3();
  *   maxDistance: 20,
  * });
  *
- * controls.on('change', () => console.log('camera moved'));
+ * orbit.on('change', () => console.log('camera moved'));
  *
  * // On teardown:
- * controls.destroy();
+ * orbit.destroy();
  * ```
  * @remarks
- * Pixi registers its wheel listener as passive, so wheel zoom can't stop the page from
- * scrolling — keep the canvas from overflowing its container instead.
+ * - Pixi registers its wheel listener as passive, so wheel zoom can't stop the page from
+ *   scrolling. Keep the canvas from overflowing its container instead.
+ * - The controller blocks the browser's context menu over the View so the right button can
+ *   pan. Set {@link OrbitCamera#preventContextMenu | preventContextMenu} to `false` to keep
+ *   the menu.
  * @see {@link OrbitCameraOptions} For all constructor options.
  * @see {@link FPSCamera} For a first-person walker controller.
  * @see {@link Camera3D} For the underlying camera.
@@ -276,11 +472,30 @@ const _rayDir = new Vector3();
  * @standard
  */
 export class OrbitCamera extends EventEmitter<{
-  /** A pointer or wheel gesture started */
+  /**
+   * A pointer or wheel gesture started
+   * @example
+   * ```ts
+   * orbit.on('start', () => (view3d.cursor = 'grabbing'));
+   * ```
+   */
   start: [];
-  /** A pointer or wheel gesture ended */
+  /**
+   * A pointer or wheel gesture ended
+   * @example
+   * ```ts
+   * orbit.on('end', () => (view3d.cursor = 'grab'));
+   * ```
+   */
   end: [];
-  /** The camera or target moved */
+  /**
+   * The camera or target moved
+   * @example
+   * ```ts
+   * await app.init({ autoStart: false });
+   * orbit.on('change', () => app.render());
+   * ```
+   */
   change: [];
 }> {
   /**
@@ -288,6 +503,10 @@ export class OrbitCamera extends EventEmitter<{
    *
    * `new OrbitCamera(opts)` resolves as `{ ...OrbitCamera.defaultOptions, ...opts }`.
    * Mutate to change defaults process-wide.
+   * @example
+   * ```ts
+   * OrbitCamera.defaultOptions.enableDamping = true;
+   * ```
    */
   public static defaultOptions: Partial<Omit<OrbitCameraOptions, 'view'>> = {
     enabled: true,
@@ -314,75 +533,283 @@ export class OrbitCamera extends EventEmitter<{
     autoRotateSpeed: 2,
     mouseButtons: { left: 'rotate', middle: 'zoom', right: 'pan' },
     touches: { one: 'rotate', two: 'zoom-pan' },
+    preventContextMenu: true,
   };
 
-  /** The {@link View3D} this controller listens on and whose camera it drives */
+  /**
+   * The {@link View3D} this controller listens on and whose camera it drives
+   * @example
+   * ```ts
+   * orbit.view.hitArea = new Rectangle(0, 0, 400, 300);
+   * ```
+   */
   public readonly view: View3D;
 
-  /** Master enable/disable */
+  /**
+   * Whether the controller responds to input
+   *
+   * It gates input only. {@link OrbitCamera#update | update()} keeps running, so damping and
+   * auto-rotate carry on and every update turns the camera back toward the target. Turn
+   * {@link OrbitCamera#autoUpdate | autoUpdate} off as well before aiming the camera yourself.
+   * @example
+   * ```ts
+   * function setMode(mode: 'inspect' | 'build'): void {
+   *   orbit.enabled = mode === 'inspect';
+   * }
+   * ```
+   */
   public enabled: boolean;
 
-  /** World-space orbit target; mutate freely, and the change shows on the next update */
+  /**
+   * World-space point the camera orbits; mutate freely, and the change shows on the next update
+   * @example
+   * ```ts
+   * model.on('pointertap', (event) => {
+   *   if (event.hit3D) orbit.target.copyFrom(event.hit3D.point);
+   * });
+   * ```
+   */
   public readonly target = new Vector3();
 
-  /** Minimum distance from `target` */
-  public minDistance: number;
-  /** Maximum distance from `target` */
-  public maxDistance: number;
+  /**
+   * Minimum distance from `target`
+   * @example
+   * ```ts
+   * orbit.minDistance = mesh.boundingSphere.radius * 1.5;
+   * ```
+   */
+  public minDistance = 0;
+  /**
+   * Maximum distance from `target`
+   * @example
+   * ```ts
+   * orbit.maxDistance = mesh.boundingSphere.radius * 10;
+   * ```
+   */
+  public maxDistance = 0;
 
-  /** Minimum camera zoom (orthographic only) */
-  public minZoom: number;
-  /** Maximum camera zoom (orthographic only) */
-  public maxZoom: number;
+  /**
+   * Smallest `camera.zoom` an orthographic camera can reach; a perspective camera zooms by distance
+   * instead
+   * @example
+   * ```ts
+   * view3d.camera.mode = 'orthographic';
+   * orbit.minZoom = 0.5;
+   * ```
+   */
+  public minZoom = 0;
+  /**
+   * Largest `camera.zoom` an orthographic camera can reach
+   * @example
+   * ```ts
+   * view3d.camera.mode = 'orthographic';
+   * orbit.maxZoom = 4;
+   * ```
+   */
+  public maxZoom = 0;
 
-  /** Minimum polar angle in radians */
-  public minPolarAngle: number;
-  /** Maximum polar angle in radians */
-  public maxPolarAngle: number;
+  /**
+   * Smallest {@link OrbitCamera#polarAngle | polar angle} the camera can reach, in radians
+   * @example
+   * ```ts
+   * orbit.minPolarAngle = Math.PI / 6;
+   * ```
+   */
+  public minPolarAngle = 0;
+  /**
+   * Largest {@link OrbitCamera#polarAngle | polar angle} the camera can reach, in radians
+   * @example
+   * ```ts
+   * orbit.maxPolarAngle = Math.PI / 2;
+   * ```
+   */
+  public maxPolarAngle = 0;
 
-  /** Minimum azimuth angle in radians */
-  public minAzimuthAngle: number;
-  /** Maximum azimuth angle in radians */
-  public maxAzimuthAngle: number;
+  /**
+   * Smallest {@link OrbitCamera#azimuthAngle | azimuth} the camera can reach, in radians
+   *
+   * The azimuth limits apply only while both are finite. They wrap, so a minimum greater than the
+   * maximum allows the arc that passes through ±π.
+   * @example
+   * ```ts
+   * orbit.minAzimuthAngle = -Math.PI / 4;
+   * orbit.maxAzimuthAngle = Math.PI / 4;
+   * ```
+   */
+  public minAzimuthAngle = 0;
+  /**
+   * Largest {@link OrbitCamera#azimuthAngle | azimuth} the camera can reach, in radians;
+   * {@link OrbitCamera#minAzimuthAngle} covers how the pair of limits applies
+   * @example
+   * ```ts
+   * orbit.minAzimuthAngle = (3 * Math.PI) / 4;
+   * orbit.maxAzimuthAngle = -(3 * Math.PI) / 4;
+   * ```
+   */
+  public maxAzimuthAngle = 0;
 
-  /** Enable inertial damping */
+  /**
+   * Ease camera motion out after input stops, instead of halting with the pointer
+   *
+   * The glide happens in {@link OrbitCamera#update | update()}, so it needs
+   * {@link OrbitCamera#autoUpdate | autoUpdate} on, or your own update call every frame.
+   * @example
+   * ```ts
+   * smoothCameraCheckbox.onchange = () => (orbit.enableDamping = smoothCameraCheckbox.checked);
+   * ```
+   */
   public enableDamping: boolean;
-  /** Damping coefficient when `enableDamping` is on */
-  public dampingFactor: number;
+  /**
+   * Share of the remaining motion applied each update while `enableDamping` is on; lower values
+   * glide longer
+   *
+   * It applies per update, not per second, so the glide is shorter at higher frame rates.
+   * @example
+   * ```ts
+   * orbit.enableDamping = true;
+   * orbit.dampingFactor = 0.15;
+   * ```
+   */
+  public dampingFactor = 0;
 
-  /** Master zoom enable */
+  /**
+   * Whether the wheel, pinches and any button set to `'zoom'` zoom the camera;
+   * {@link OrbitCamera#zoom | zoom()} works either way
+   * @example
+   * ```ts
+   * orbit.enableZoom = false;
+   * ```
+   */
   public enableZoom: boolean;
-  /** Zoom sensitivity */
-  public zoomSpeed: number;
+  /**
+   * Multiplier on zoom input from the wheel, pinches and zoom-button drags
+   * @example
+   * ```ts
+   * orbit.zoomSpeed = 0.5;
+   * ```
+   */
+  public zoomSpeed = 0;
 
-  /** Master rotate enable */
+  /**
+   * Whether drags rotate the camera; {@link OrbitCamera#rotate | rotate()} works either way
+   * @example
+   * ```ts
+   * orbit.enableRotate = false;
+   * orbit.mouseButtons.left = 'pan';
+   * ```
+   */
   public enableRotate: boolean;
-  /** Rotate sensitivity */
-  public rotateSpeed: number;
+  /**
+   * Multiplier on rotate drags
+   * @example
+   * ```ts
+   * orbit.rotateSpeed = settings.mouseSensitivity;
+   * ```
+   */
+  public rotateSpeed = 0;
 
-  /** Master pan enable */
+  /**
+   * Whether drags pan the camera; {@link OrbitCamera#pan | pan()} works either way
+   * @example
+   * ```ts
+   * orbit.enablePan = false;
+   * ```
+   */
   public enablePan: boolean;
-  /** Pan sensitivity */
-  public panSpeed: number;
-  /** When `true`, panning translates in screen space */
+  /**
+   * Multiplier on pan drags
+   * @example
+   * ```ts
+   * orbit.panSpeed = 2;
+   * ```
+   */
+  public panSpeed = 0;
+  /**
+   * `true` pans in the screen's plane; `false` pans across the plane at right angles to
+   * {@link OrbitCamera#up}, so vertical drags move over the ground like a map
+   * @example
+   * ```ts
+   * orbit.screenSpacePanning = false;
+   * ```
+   */
   public screenSpacePanning: boolean;
 
-  /** When `true`, the wheel zooms toward the pointer */
+  /**
+   * Zoom toward the point under the pointer, or between the fingers of a pinch, instead of toward
+   * the target
+   *
+   * The target follows the zoom, so later orbits pivot near what you zoomed to. With
+   * {@link OrbitCamera#screenSpacePanning | screenSpacePanning} on it moves along the view
+   * direction; with it off it moves to where the view's centre ray meets the plane through the
+   * target at right angles to `up`.
+   * @example
+   * ```ts
+   * orbit.zoomToCursor = true;
+   * ```
+   */
   public zoomToCursor: boolean;
 
-  /** Auto-orbit around `target` while idle */
+  /**
+   * Orbit around the target on its own whenever no gesture is in progress
+   * @example
+   * ```ts
+   * let idleTimer: ReturnType<typeof setTimeout>;
+   *
+   * orbit.on('start', () => {
+   *   clearTimeout(idleTimer);
+   *   orbit.autoRotate = false;
+   * });
+   * orbit.on('end', () => {
+   *   idleTimer = setTimeout(() => (orbit.autoRotate = true), 3000);
+   * });
+   * ```
+   */
   public autoRotate: boolean;
-  /** Auto-rotate speed in revolutions per minute */
-  public autoRotateSpeed: number;
+  /**
+   * Auto-rotate speed in revolutions per minute; negative values turn the other way
+   * @example
+   * ```ts
+   * orbit.autoRotateSpeed = -1;
+   * ```
+   */
+  public autoRotateSpeed = 0;
 
-  /** Mouse-button action assignments */
+  /**
+   * Mouse-button action assignments; change a slot to remap that button
+   *
+   * Holding ctrl, meta or shift swaps a button's `'rotate'` and `'pan'`.
+   * @example
+   * ```ts
+   * orbit.mouseButtons.left = 'pan';
+   * orbit.mouseButtons.right = 'rotate';
+   * ```
+   */
   public readonly mouseButtons: OrbitMouseButtons;
-  /** Touch-gesture action assignments */
+  /**
+   * Touch-gesture action assignments; change a slot to remap that gesture
+   * @example
+   * ```ts
+   * orbit.touches.one = 'pan';
+   * ```
+   */
   public readonly touches: OrbitTouches;
 
+  /**
+   * Whether the browser's context menu is kept from opening over the View;
+   * {@link OrbitCameraOptions#preventContextMenu} covers where it still opens
+   * @example
+   * ```ts
+   * orbit.mouseButtons.right = 'none';
+   * orbit.preventContextMenu = false;
+   * ```
+   */
+  public preventContextMenu: boolean;
+
   private readonly _up = new Vector3(0, 1, 0);
-  // Re-orients the world so `up` aligns with +Y, so the spherical math always runs in the
-  // canonical up-is-+Y frame.
+  /**
+   * Rotates {@link OrbitCamera#up} onto +Y, so the spherical math always runs in a Y-up frame;
+   * `_quatInverse` rotates back
+   */
   private readonly _quat = new Quaternion();
   private readonly _quatInverse = new Quaternion();
 
@@ -418,8 +845,9 @@ export class OrbitCamera extends EventEmitter<{
   private readonly _zoomDirection = new Vector3();
   private _performCursorZoom = false;
 
-  // Active pointer ids in press order, and each one's last View-local position.
+  /** Pressed pointer ids, in press order */
   private readonly _pointers: number[] = [];
+  /** Last View-local position of each pressed touch */
   private readonly _pointerPositions = new Map<number, Vector2>();
   private readonly _local = new Vector2();
 
@@ -459,6 +887,7 @@ export class OrbitCamera extends EventEmitter<{
     this.autoRotateSpeed = opts.autoRotateSpeed!;
     this.mouseButtons = { ...OrbitCamera.defaultOptions.mouseButtons, ...options.mouseButtons } as OrbitMouseButtons;
     this.touches = { ...OrbitCamera.defaultOptions.touches, ...options.touches } as OrbitTouches;
+    this.preventContextMenu = opts.preventContextMenu!;
 
     if (opts.target) this.target.copyFrom(opts.target);
     this.up = opts.up ?? _worldUp;
@@ -473,18 +902,38 @@ export class OrbitCamera extends EventEmitter<{
     view.on('pointerupoutside', this._onPointerUp);
     view.on('pointercancel', this._onPointerUp);
     view.on('wheel', this._onWheel);
+    view.on('contextmenu', this._onContextMenu);
 
     this.autoUpdate = opts.autoUpdate!;
 
     this.update();
   }
 
-  /** The {@link Camera3D} being driven — always `view.camera` */
+  /**
+   * The {@link Camera3D} being driven, always `view.camera`
+   *
+   * Move it yourself and the controller adopts the new position, within its limits, on its next
+   * update. It always turns the camera to face the target.
+   * @example
+   * ```ts
+   * orbit.camera.position.set(0, 2, 6);
+   * orbit.update();
+   * ```
+   */
   public get camera(): Camera3D {
     return this.view.camera;
   }
 
-  /** World-space up axis; assigning re-orients the orbit frame, and the camera settles on the next update */
+  /**
+   * World-space up axis the orbit turns around
+   *
+   * Assign a new value to change it, and the camera settles on the next update. Changing the
+   * returned vector in place doesn't rebuild the orbit frame.
+   * @example
+   * ```ts
+   * orbit.up = { x: 0, y: 0, z: 1 };
+   * ```
+   */
   public get up(): Vector3 {
     return this._up;
   }
@@ -502,7 +951,14 @@ export class OrbitCamera extends EventEmitter<{
   /**
    * Whether {@link OrbitCamera#update | update()} runs from `Ticker.shared` every frame
    *
-   * Turn off to drive updates from your own loop.
+   * Turn off to drive updates from your own loop. A default pixi `Application` renders from its
+   * own ticker, not `Ticker.shared`, so ticker-driven motion (damping and auto-rotate) usually lands
+   * after the frame is drawn. Updating from `app.ticker` keeps it in step with the render.
+   * @example
+   * ```ts
+   * orbit.autoUpdate = false;
+   * app.ticker.add((ticker) => orbit.update(ticker));
+   * ```
    */
   public get autoUpdate(): boolean {
     return this._autoUpdate;
@@ -524,17 +980,37 @@ export class OrbitCamera extends EventEmitter<{
     }
   }
 
-  /** Current polar angle in radians (0 = looking straight down `up`) */
+  /**
+   * Current polar angle in radians, measured from `up`: 0 puts the camera straight above the
+   * target, π/2 level with it and π straight below
+   * @example
+   * ```ts
+   * orbit.on('change', () => (floorGrid.visible = orbit.polarAngle < Math.PI / 2));
+   * ```
+   */
   public get polarAngle(): number {
     return this._spherical.phi;
   }
 
-  /** Current azimuth angle in radians (around `up`) */
+  /**
+   * Current azimuth angle in radians, around `up`: 0 puts the camera on the target's +Z side, and
+   * positive angles move it toward +X
+   * @example
+   * ```ts
+   * orbit.on('change', () => (compassNeedle.rotation = orbit.azimuthAngle));
+   * ```
+   */
   public get azimuthAngle(): number {
     return this._spherical.theta;
   }
 
-  /** Current world-space distance from the camera to {@link OrbitCamera#target | target} */
+  /**
+   * Current world-space distance from the camera to {@link OrbitCamera#target | target}
+   * @example
+   * ```ts
+   * orbit.on('change', () => (labels.visible = orbit.distance < 15));
+   * ```
+   */
   public get distance(): number {
     return _v.copyFrom(this.camera.position).distanceTo(this.target);
   }
@@ -544,6 +1020,11 @@ export class OrbitCamera extends EventEmitter<{
    *
    * The View and camera are owned by the caller and are left intact, so a stray
    * {@link OrbitCamera#update | update()} after destroy is harmless.
+   * @example
+   * ```ts
+   * orbit.destroy();
+   * const walker = new FPSCamera({ view: view3d, position: { x: 0, y: 1.7, z: 5 } });
+   * ```
    */
   public destroy(): void {
     this.autoUpdate = false;
@@ -556,6 +1037,7 @@ export class OrbitCamera extends EventEmitter<{
     view.off('pointerupoutside', this._onPointerUp);
     view.off('pointercancel', this._onPointerUp);
     view.off('wheel', this._onWheel);
+    view.off('contextmenu', this._onContextMenu);
 
     this._pointers.length = 0;
     this._pointerPositions.clear();
@@ -564,14 +1046,26 @@ export class OrbitCamera extends EventEmitter<{
     this.removeAllListeners();
   }
 
-  /** Snapshot `target`, `camera.position`, and `camera.zoom` for a later {@link OrbitCamera#reset | reset()} */
+  /**
+   * Snapshot `target`, `camera.position`, and `camera.zoom` for a later {@link OrbitCamera#reset | reset()}
+   * @example
+   * ```ts
+   * saveViewButton.on('pointertap', () => orbit.saveState());
+   * ```
+   */
   public saveState(): void {
     this._savedTarget.copyFrom(this.target);
     this._savedPosition.copyFrom(this.camera.position);
     this._savedZoom = this.camera.zoom;
   }
 
-  /** Restore the last {@link OrbitCamera#saveState | saveState()} snapshot (the construction pose by default) */
+  /**
+   * Restore the last {@link OrbitCamera#saveState | saveState()} snapshot (the construction pose by default)
+   * @example
+   * ```ts
+   * resetViewButton.on('pointertap', () => orbit.reset());
+   * ```
+   */
   public reset(): void {
     this.target.copyFrom(this._savedTarget);
     this.camera.position.copyFrom(this._savedPosition);
@@ -583,9 +1077,21 @@ export class OrbitCamera extends EventEmitter<{
   }
 
   /**
-   * Rotate around `target` by the given angles and apply the update
-   * @param azimuth - rotation around `up` in radians; positive turns the camera left
-   * @param polar - rotation toward `up` in radians; positive tilts the camera up
+   * Orbit around `target` by the given angles and apply the update
+   *
+   * It works whatever `enabled` and `enableRotate` say, since those only gate input. With damping
+   * on, the turn is spread over the following updates.
+   * @example
+   * ```ts
+   * window.addEventListener('keydown', (event) => {
+   *   if (event.code === 'ArrowLeft') orbit.rotate(-0.1, 0);
+   *   if (event.code === 'ArrowRight') orbit.rotate(0.1, 0);
+   * });
+   * ```
+   * @param azimuth - Angle around `up` in radians; positive moves the camera the way a rightward
+   *   drag does
+   * @param polar - Angle toward `up` in radians; positive raises the camera over the target, as a
+   *   downward drag does
    */
   public rotate(azimuth: number, polar: number): void {
     this._sphericalDelta.theta -= azimuth;
@@ -594,9 +1100,19 @@ export class OrbitCamera extends EventEmitter<{
   }
 
   /**
-   * Pan the target by `(deltaX, deltaY)` View pixels and apply the update
-   * @param deltaX - horizontal pan amount in pixels
-   * @param deltaY - vertical pan amount in pixels
+   * Pan as a drag of `(deltaX, deltaY)` View pixels would, and apply the update
+   *
+   * Positive values move the scene right and down, following the drag. It works whatever
+   * `enabled` and `enablePan` say, and `panSpeed` doesn't scale it.
+   * @example
+   * ```ts
+   * window.addEventListener('keydown', (event) => {
+   *   if (event.code === 'KeyA') orbit.pan(40, 0);
+   *   if (event.code === 'KeyD') orbit.pan(-40, 0);
+   * });
+   * ```
+   * @param deltaX - Horizontal drag in View pixels
+   * @param deltaY - Vertical drag in View pixels
    */
   public pan(deltaX: number, deltaY: number): void {
     this._pan(deltaX, deltaY);
@@ -604,7 +1120,14 @@ export class OrbitCamera extends EventEmitter<{
   }
 
   /**
-   * Zoom by a multiplicative `factor` and apply the update
+   * Zoom by a multiplicative `factor` toward the target and apply the update
+   *
+   * It works whatever `enabled` and `enableZoom` say, and `zoomSpeed` doesn't scale it.
+   * @example
+   * ```ts
+   * zoomInButton.on('pointertap', () => orbit.zoom(1.25));
+   * zoomOutButton.on('pointertap', () => orbit.zoom(0.8));
+   * ```
    * @param factor - `> 1` zooms in (camera moves closer), `< 1` zooms out
    */
   public zoom(factor: number): void {
@@ -618,7 +1141,14 @@ export class OrbitCamera extends EventEmitter<{
    *
    * Runs every frame while {@link OrbitCamera#autoUpdate | autoUpdate} is on, and after
    * every input gesture. Call it yourself when driving the controller from your own loop.
-   * @param ticker - the ticker driving this update; supplies frame timing for auto-rotate.
+   * @example
+   * ```ts
+   * orbit.autoUpdate = false;
+   * app.ticker.add((ticker) => {
+   *   if (orbit.update(ticker)) minimap.redraw();
+   * });
+   * ```
+   * @param ticker - The ticker driving this update; supplies frame timing for auto-rotate.
    *   Omitted, one 60 fps frame is assumed.
    * @returns `true` when the camera changed enough to warrant a re-render
    */
@@ -782,9 +1312,7 @@ export class OrbitCamera extends EventEmitter<{
     this.update(ticker);
   };
 
-  // -- Orbit maths --
-
-  /** Height in View pixels of the camera's viewport — the reference length for drag deltas */
+  /** Height in View pixels of the camera's viewport, the reference length for drag deltas */
   private _viewportHeight(): number {
     return this.view.height * this.camera.viewport.height;
   }
@@ -858,8 +1386,6 @@ export class OrbitCamera extends EventEmitter<{
     this._zoomDirection.copyFrom(_ray.direction);
   }
 
-  // -- Pointer bookkeeping --
-
   /**
    * Convert an event's global position into View-local pixels, kept in `_local`
    * @param event - Pointer event to read the position from
@@ -909,8 +1435,6 @@ export class OrbitCamera extends EventEmitter<{
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  // -- Event handlers --
-
   private readonly _onPointerDown = (event: FederatedPointerEvent): void => {
     if (!this.enabled || this._pointers.includes(event.pointerId)) return;
 
@@ -937,6 +1461,10 @@ export class OrbitCamera extends EventEmitter<{
     }
   };
 
+  /**
+   * Lifting one finger of a pair restarts the one-finger gesture from the finger still down
+   * @param event - The pointer-up, up-outside or cancel event
+   */
   private readonly _onPointerUp = (event: FederatedPointerEvent): void => {
     const index = this._pointers.indexOf(event.pointerId);
 
@@ -949,23 +1477,25 @@ export class OrbitCamera extends EventEmitter<{
       this._gesture = 'none';
       this.emit('end');
     } else if (this._pointers.length === 1) {
-      // Lifting one finger of a pair restarts the single-finger gesture from the survivor.
       const survivor = this._pointers[0];
 
       this._startTouch(survivor, this._pointerPositions.get(survivor)!);
     }
   };
 
+  /**
+   * Line and page deltas (`deltaMode` 1 and 2) are scaled to pixels, and a ctrl-wheel's delta is
+   * boosted tenfold: a trackpad pinch arrives as a ctrl-wheel with tiny deltas
+   * @param event - The wheel event
+   */
   private readonly _onWheel = (event: FederatedWheelEvent): void => {
     if (!this.enabled || !this.enableZoom || this._gesture !== 'none') return;
 
     let deltaY = event.deltaY;
 
-    // Normalise line / page deltas to pixels.
     if (event.deltaMode === 1) deltaY *= 16;
     else if (event.deltaMode === 2) deltaY *= 100;
 
-    // Trackpad pinch arrives as a ctrl-wheel with tiny deltas.
     if (event.ctrlKey) deltaY *= 10;
 
     this.emit('start');
@@ -982,8 +1512,16 @@ export class OrbitCamera extends EventEmitter<{
     this.emit('end');
   };
 
-  // -- Mouse gestures --
+  private readonly _onContextMenu = (event: FederatedPointerEvent): void => {
+    if (this.enabled && this.preventContextMenu) event.preventDefault();
+  };
 
+  /**
+   * Start the gesture assigned to the pressed button; ctrl, meta or shift swaps rotate and pan, as
+   * desktop 3D tools do
+   * @param event - The pointer-down event
+   * @param local - Its View-local position
+   */
   private _startMouse(event: FederatedPointerEvent, local: Vector2): void {
     let action: OrbitMouseAction;
 
@@ -1001,7 +1539,6 @@ export class OrbitCamera extends EventEmitter<{
         action = 'none';
     }
 
-    // A modifier swaps rotate and pan, matching the common desktop convention.
     const modified = event.ctrlKey || event.metaKey || event.shiftKey;
 
     if (modified && action === 'rotate') action = 'pan';
@@ -1066,8 +1603,6 @@ export class OrbitCamera extends EventEmitter<{
 
     this.update();
   }
-
-  // -- Touch gestures --
 
   private _startTouch(pointerId: number, local: Vector2): void {
     this._trackPointer(pointerId, local);
@@ -1152,13 +1687,17 @@ export class OrbitCamera extends EventEmitter<{
     this._panStart.copyFrom(this._panEnd);
   }
 
+  /**
+   * Zoom by the change in finger spread; with `zoomToCursor` on, toward the fingers' midpoint
+   * @param pointerId - The finger that moved
+   * @param local - Its View-local position
+   */
   private _touchPinch(pointerId: number, local: Vector2): void {
     const spread = this._touchSpread(pointerId, local);
 
     this._scale /= Math.pow(spread / this._pinchStart, this.zoomSpeed);
     this._pinchStart = spread;
 
-    // Pinch zooms toward the midpoint of the two fingers.
     const center = this._touchCenter(pointerId, local, this._pinchCenter);
 
     this._setZoomDirection(this.view.toGlobal(center, center, true));

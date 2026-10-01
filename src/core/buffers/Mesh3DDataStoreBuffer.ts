@@ -2,57 +2,59 @@ import type { Mesh3D } from '../../scene/Mesh3D';
 import { DataStoreBuffer } from './DataStoreBuffer';
 
 /**
- * Mesh store row stride, in lanes — the row layout's single source of truth
+ * 32-bit lanes per mesh store row
  *
- * Every reader/writer keys off these lane constants: `copyMeshData`, the
- * user-batch field writers (`Mesh3DBatch`), the CPU cull
- * (`produceCpuCompaction`), and the WGSL compact kernel (`ComputeSystemGpu`
- * interpolates these into its shader source).
+ * Lanes 0 to 15 hold the mesh's matrix as floats, world space for a scene mesh and batch-local for
+ * a batch slot. The `MESH3D_LANE_*` constants name lanes 16 to 20, and 21 to 23 are padding. The
+ * CPU writers and the cull, the WGSL cull kernel and the GLSL instance fetch all read the layout
+ * from these constants. The WGSL `RenderableStruct` doesn't: its fields must stay in lane order.
+ * Lanes 16 to 18 must also stay in one texel, since `instanceFetchBitGl` reads the bone, material
+ * and geometry lanes with a single fetch.
  *
- * Lanes 0-15 hold the world/local matrix as f32 (written as 8 f64 pairs).
- *
- * Stride is 24 (not 21) because WGSL rounds the struct to 16-byte multiples:
- * 16 matrix floats + 5 u32 lanes pad to 24. Lanes 21-23 are spare. Must equal
- * the WGSL `RenderableStruct` stride.
+ * It's 24 rather than 21 because WGSL rounds a struct's size up to its alignment, 16 bytes for a
+ * `mat4x4<f32>`, so 16 matrix floats and 5 `u32`s take 96 bytes.
  * @internal
  */
 export const MESH3D_STORE_STRIDE = 24;
 /**
- * Bone-pit index of the mesh's skeleton (skinned meshes only)
+ * Lane of the skeleton's first bone in the bone pit; written for skinned meshes only, and only
+ * skinned shaders read it
  * @internal
  */
 export const MESH3D_LANE_BONES = 16;
 /**
- * Index into the material store buffer
+ * Lane of the material's row in the material store
  * @internal
  */
 export const MESH3D_LANE_MATERIAL = 17;
 /**
- * Geometry bounds-buffer slot (`NO_BOUNDS` sentinel for dynamic/unregistered)
+ * Lane of the geometry's row in the geometry data store
+ *
+ * Holds -1 as a `u32`, which the cull kernel calls `NO_BOUNDS`, until the geometry has a row.
  * @internal
  */
 export const MESH3D_LANE_GEOMETRY = 18;
 /**
- * Per-instance visibility: 0 = hidden, non-zero = visible. Mirrors `Container3D.worldVisible`
+ * Lane of the mesh's visibility, 0 when hidden, copied from `Container3D.worldVisible`
+ *
+ * The draw-data compaction reads it to skip a hidden mesh without taking it out of the pass.
  * @internal
  */
 export const MESH3D_LANE_VISIBILITY = 19;
 /**
- * Morph: absolute float offset of this instance's weights in the shared morph store
+ * Lane of the float offset of the mesh's morph weights in the shared morph store
  *
- * `0` = no slot (real offsets start past the delta arena), which gates the
- * shader's morph loop. The per-geometry morph facts (delta base, target
- * count, base vertex) live in the geometry data store, via lane 18. Lanes
- * 21-23 are padding.
+ * 0 means no weights, since real offsets start past the delta arena, and skips the shader's morph
+ * loop. The geometry's morph facts are in its geometry row, through lane 18.
  * @internal
  */
 export const MESH3D_LANE_MORPH_WEIGHT = 20;
 
 /**
- * Writes a world matrix into the matrix lanes (0-15) of the row starting at `offset64`
+ * Writes a world matrix into lanes 0 to 15 of the row starting at `offset64`
  *
- * Moves the 16 floats as 8 f64 stores: `Matrix4.elements64` aliases the f32 storage, so
- * no conversion happens on either side.
+ * Moves the 16 floats as 8 f64 copies: `Matrix4.elements64` views the same memory as the floats,
+ * so nothing is converted on either side.
  * @param fl64Buffer - Store data, viewed two floats at a time
  * @param offset64 - Row start in f64 units, half the float offset
  * @param elements64 - The world matrix's `elements64` view
@@ -68,6 +70,18 @@ const copyWorldTransform = (fl64Buffer: Float64Array, offset64: number, elements
   fl64Buffer[offset64 + 7] = elements64[7];
 };
 
+/**
+ * Writes a scene mesh's whole row
+ *
+ * The bone lane is written only for a skinned mesh, since only skinned shaders read it. The morph
+ * lane is always written, 0 without morph state, so a mesh moved onto a morphed geometry without
+ * weights draws its base pose instead of reading the last owner's offset from a reused row.
+ * @param renderable - The mesh
+ * @param _buffer - The store as floats; unused, the matrix goes through `fl64Buffer`
+ * @param u32Buffer - The store as `u32`s, for the index lanes
+ * @param fl64Buffer - The store as f64s, for the matrix
+ * @param offset - Float offset of the mesh's row
+ */
 const copyMeshData = (
   renderable: Mesh3D,
   _buffer: Float32Array,
@@ -82,26 +96,19 @@ const copyMeshData = (
   }
 
   u32Buffer[offset + MESH3D_LANE_MATERIAL] = renderable.material._materialIndex;
-  // Geometry bounds-buffer slot (-1 for dynamic/unregistered) — read by the GPU cull compute.
   u32Buffer[offset + MESH3D_LANE_GEOMETRY] = renderable.geometry._geometryDataIndex;
-  // Visibility flag (1 = visible, 0 = hidden) — read at draw-data level (cull compaction /
-  // vis-only walk) to skip hidden instances without dropping them from the pass.
   u32Buffer[offset + MESH3D_LANE_VISIBILITY] = renderable._worldVisible;
 
-  // Morph weight offset (lane 20). Written unconditionally: 0 is the natural
-  // null (real offsets start past the delta arena), and it's what gates the
-  // shader's morph loop — a mesh swapped onto a morphed geometry with no morph
-  // state renders base pose instead of reading a recycled row's stale lane.
   u32Buffer[offset + MESH3D_LANE_MORPH_WEIGHT] = renderable.morph ? renderable.morph._weightIndex : 0;
 };
 
 /**
- * Per-mesh data store, keyed by `_storeIndex` — one row per renderable
+ * A batch's mesh store, one row per mesh at its `_storeIndex`, laid out as `MESH3D_STORE_STRIDE`
+ * describes
  *
- * Row layout: the world matrix in lanes 0-15 plus the `MESH3D_LANE_*` u32
- * lanes (see `MESH3D_STORE_STRIDE`). The matrix lanes have two writers: the
- * transform pass ({@link Mesh3DDataStoreBuffer.writeWorldTransform}) whenever
- * a mesh moves, and the scene sweep's full-row `set` when a u32 lane changes.
+ * A scene mesh's matrix lanes have two writers: the transform pass, through
+ * {@link Mesh3DDataStoreBuffer.writeWorldTransform}, whenever the mesh moves, and the per-frame
+ * scene update, which rewrites the whole row with `set` when one of its other lanes changes.
  * @internal
  */
 export class Mesh3DDataStoreBuffer extends DataStoreBuffer {
@@ -115,12 +122,11 @@ export class Mesh3DDataStoreBuffer extends DataStoreBuffer {
   }
 
   /**
-   * Writes just the world-matrix lanes of an allocated row and marks it for upload
+   * Writes only the matrix lanes of a mesh's row and marks the row for upload
    *
-   * The transform pass calls this the moment a mesh's world matrix is recomputed,
-   * while the matrix is still in cache; re-reading it from the scene sweep later
-   * in the frame costs a cold pointer chase per moved mesh. The u32 lanes are
-   * untouched.
+   * The transform pass calls it the moment it recomputes a mesh's world matrix, while the matrix is
+   * still in the CPU cache. Reading it again in the scene update later in the frame would cost a
+   * cache miss per moved mesh.
    * @param index - The mesh's slot (`_storeIndex`); must be allocated.
    * @param elements64 - The world matrix's f64 alias (`Matrix4.elements64`).
    */

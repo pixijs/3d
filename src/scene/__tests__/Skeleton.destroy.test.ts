@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Skeleton } from '~/scene/Skeleton';
 
+/** A root node and one child node, with the child as the only skinning joint */
 function createSkeleton(): Skeleton {
-  // Minimal rig: 2 nodes (root + one joint), 1 skinning joint.
   return new Skeleton({
     parent: new Int16Array([-1, 0]),
     joints: new Int16Array([1]),
@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 describe('Skeleton destroy', () => {
-  it('releases the bone-pit reservation and drops container bones', () => {
+  it('leaves its cached per-frame bone-pit index and tick at -1', () => {
     const skeleton = createSkeleton();
 
     skeleton.destroy();

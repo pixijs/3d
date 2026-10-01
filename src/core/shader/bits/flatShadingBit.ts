@@ -1,26 +1,20 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Replaces the interpolated shading normal with the triangle's face normal
+ * Replaces the interpolated normal with the triangle's face normal, for
+ * {@link BaseMaterial3DOptions.flatShading}
  *
- * Derived per-fragment from screen-space derivatives of world position, so it
- * needs no extra attributes and no duplicated vertices — the same geometry
- * renders smooth or faceted purely by material choice. This is what gives
- * low-poly scenes their hard-edged look.
+ * It takes the face normal from the screen-space derivatives of the world position, so it needs
+ * no extra attributes or split vertices: the same geometry draws smooth or faceted by material
+ * alone.
  *
- * The face normal's winding sign depends on screen-space handedness, so it is
- * aligned against the incoming `normal`. That keeps back faces and mirrored
- * (negative-determinant) transforms lit the way the smooth path would light
- * them, and lets `doubleSidedNormalBit` keep working unchanged.
+ * The derivatives' cross product points one way or the other depending on screen handedness, so it
+ * is flipped to agree with the incoming `normal`. Back faces and mirrored transforms then light as
+ * the smooth normal would, and the double-sided flip before it still works.
  *
- * The material system injects this after `doubleSidedNormalBit` and before
- * normal mapping, so a normal map perturbs the face normal rather than being
- * overwritten by it. `normal` is declared by the shader template rather than by
- * any material's own bits, so that insertion point is the same for every
- * material — which is why the flag lives on {@link BaseMaterial3D} rather than
- * on one material class.
- *
- * Injected by {@link BaseMaterial3DOptions.flatShading}.
+ * The renderer adds it after the double-sided flip and before normal mapping, so a normal map bends
+ * the face normal rather than being replaced by it. The template declares `normal`, so that
+ * position is the same for every material, which is why the option is on {@link BaseMaterial3D}.
  * @internal
  */
 export const flatShadingBit: ShaderBit = {

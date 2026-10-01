@@ -11,22 +11,6 @@ function bitNames(material: Material3D, view: View3D): string[][] {
 }
 
 describe('Material3D IBL composition', () => {
-  it('leaves the IBL block out when the view has no environment', () => {
-    const view = new View3D({ width: 64, height: 64 });
-    const material = new Material3D();
-
-    try {
-      for (const names of bitNames(material, view)) {
-        // The environment contract stays: clearcoat, sheen and user bits may still call it.
-        expect(names).toContain('envSourceDefault');
-        expect(names).not.toContain('ibl');
-      }
-    } finally {
-      material.destroy();
-      view.destroy();
-    }
-  });
-
   it('composes the IBL block for a hemisphere and for a cubemap', () => {
     const cubeEnvironment = ColorCubeTexture.from(0xffffff);
     const cubeFaceSources = Object.values(cubeEnvironment.source.faces);

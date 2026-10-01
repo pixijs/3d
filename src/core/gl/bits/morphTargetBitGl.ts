@@ -2,42 +2,30 @@ import { glTexelAddress } from '../../buffers/dataTextureLayout';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * Blend-shape deformation for the WebGL backend — the GLSL twin of `morphTargetBitGpu`
+ * Blend-shape deformation for WebGL, the GLSL twin of `createMorphTargetBitGpu`, which documents
+ * the algorithm: where it runs, the delta layout, the zero offset and zero weight skips, and the
+ * atlas base vertex
  *
- * Sums `Σ delta_i × weight_i` into the vertex position — and, in the
- * `hasNormals` variant, the vertex normal — before the skinning bit runs.
- * The `hasNormals` flag bakes the arena stride
- * (one texel/target positions-only, two — position then normal — with normals)
- * and the extra normal fetch + renormalize. WebGL has no storage buffers, so
- * both stores arrive as rgba32float data textures read with `texelFetch` (the
- * `skinningBitGl` pattern):
+ * WebGL has no storage buffers, so both stores arrive as data textures read with `texelFetch`:
  *
- * - `uMorphTexture` — the shared morph store: delta arena + weight slots.
- *   Deltas are whole texels; weights are individual floats (texel `i >> 2`,
- *   channel `i & 3`).
- * - `uGeometryTexture` — the geometry data store. Row texel 1 carries the
- *   per-geometry morph facts (delta base, target count, atlas base vertex) as
- *   u32 bit patterns, recovered with `floatBitsToUint`.
+ * - `uMorphTexture` is the shared morph store (`rgba32float`). A delta is one texel. A weight is one
+ *   float, at texel `i >> 2`, channel `i & 3`.
+ * - `uGeometryTexture` is the geometry data store (`rgba32uint`). Texel 1 of the geometry's row
+ *   holds its delta base (in floats), target count and atlas base vertex.
  *
- * Per-instance inputs ride the `morphData` local, published by `instanceFetchBitGl`
- * out of the mesh store row: `.x` = the mesh's weight offset
- * (0 = no morph state — real offsets start past the arena — gating the whole
- * block), `.y` = the geometry's store row. `gl_VertexID - baseVertex` recovers
- * the geometry-local vertex id, so atlased (index-rebased) morphed geometry
- * indexes its deltas correctly; non-atlased geometry has baseVertex 0.
- * Parked dials are exactly 0 and skip their fetch — the branch is
- * per-instance-uniform, so it costs a scalar compare at worst.
- * @param hasNormals - Whether the morph deltas carry normals, taking two texels per target
+ * `morphData` comes from `instanceFetchBitGl`: `.x` is the mesh's weight offset and `.y` its
+ * geometry row. The vertex index is `gl_VertexID`.
+ * @param hasNormals - Whether each target also has a normal delta, taking two texels per target
  */
 function createMorphTargetBitGl(hasNormals: boolean): ShaderBit {
-  const step = hasNormals ? ' * 2' : ''; // two texels per target (position, then normal) when normals ride along
+  const step = hasNormals ? ' * 2' : '';
 
   return {
     name: hasNormals ? 'morphTargetNormalGl' : 'morphTargetGl',
     bindings: {
       global: {
         uMorphTexture: 'texture_2d<f32>',
-        uGeometryTexture: 'texture_2d<f32>',
+        uGeometryTexture: 'texture_2d<u32>',
       },
     },
     gl: {
@@ -51,19 +39,17 @@ function createMorphTargetBitGl(hasNormals: boolean): ShaderBit {
           return fetchMorphTexel(index >> 2)[index & 3];
         }
 
-        // Row texel 1 of the geometry data store: (deltaBase, targetCount,
-        // baseVertex, spare) as u32 bit patterns in an f32 texture.
-        vec4 fetchGeometryMorphFacts(int geometryIndex) {
+        uvec4 fetchGeometryMorphFacts(int geometryIndex) {
           int texel = geometryIndex * 2 + 1;
           return texelFetch(uGeometryTexture, ${glTexelAddress('texel')}, 0);
         }
       `,
         input: `
         if (morphData.x != 0.0) {
-          vec4 morphFacts = fetchGeometryMorphFacts(int(morphData.y));
-          int morphTargetCount = int(floatBitsToUint(morphFacts.y));
-          int vidLocal = gl_VertexID - int(floatBitsToUint(morphFacts.z));
-          int morphDeltaTexel = int(floatBitsToUint(morphFacts.x)) / 4 + vidLocal * morphTargetCount${step};
+          uvec4 morphFacts = fetchGeometryMorphFacts(int(morphData.y));
+          int morphTargetCount = int(morphFacts.y);
+          int vidLocal = gl_VertexID - int(morphFacts.z);
+          int morphDeltaTexel = int(morphFacts.x) / 4 + vidLocal * morphTargetCount${step};
           int morphWeightIndex = int(morphData.x);
           vec3 morphedPosition = position.xyz;${hasNormals ? '\n          vec3 morphedNormal = normal;' : ''}
           for (int morphIndex = 0; morphIndex < morphTargetCount; morphIndex++) {
@@ -85,13 +71,13 @@ function createMorphTargetBitGl(hasNormals: boolean): ShaderBit {
 }
 
 /**
- * Positions-only blend-shape deformation (`geometry.morphTargetCount > 0`)
+ * Blend-shape deformation of positions, for a morphed mesh whose geometry has no normal deltas
  * @internal
  */
 export const morphTargetBitGl: ShaderBit = createMorphTargetBitGl(false);
 
 /**
- * Blend-shape deformation that also accumulates NORMAL deltas (`geometry.hasMorphNormals`)
+ * Blend-shape deformation that also applies normal deltas, for geometry with `hasMorphNormals`
  * @internal
  */
 export const morphTargetNormalBitGl: ShaderBit = createMorphTargetBitGl(true);

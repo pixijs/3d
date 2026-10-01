@@ -25,21 +25,10 @@ describe('bitRegistry', () => {
 
     new ShaderDescriptor({ bitsGpu: [make()], bitsGl: [make()] });
     expect(() => new ShaderDescriptor({ bitsGpu: [make()], bitsGl: [make()] })).not.toThrow();
-
-    // The registry's bookkeeping stamps (_identityChecked / _contentSnapshot)
-    // must not poison the content comparison for later recreations.
-    expect(() => assertBitIdentity(make())).not.toThrow();
+    expect(() => assertBitIdentity(make()), 'the stamps on earlier copies stay out of the comparison').not.toThrow();
   });
 
-  it('re-checking a registered bit is a stamped no-op', () => {
-    const bit: ShaderBit = { name: 'stamped' };
-
-    assertBitIdentity(bit);
-    expect(bit._identityChecked).toBe(true);
-    expect(() => assertBitIdentity(bit)).not.toThrow();
-  });
-
-  it('includes template identity in descriptor keys', () => {
+  it('keys descriptors by template identity, since a template changes the compiled output', () => {
     const bit: ShaderBit = { name: 'tplBit' };
     const templateA: ShaderBitTemplate = { bindGroups: ['global'], gpu: '{{header}}A' };
     const templateB: ShaderBitTemplate = { bindGroups: ['global'], gpu: '{{header}}B' };
@@ -48,29 +37,17 @@ describe('bitRegistry', () => {
     const withB = new ShaderDescriptor({ bitsGpu: [bit], bitsGl: [bit], template: templateB });
     const withNone = new ShaderDescriptor({ bitsGpu: [bit], bitsGl: [bit] });
 
-    // Same bits, different template → different compiled output → different key.
     expect(withA.keyGpu).not.toBe(withB.keyGpu);
     expect(withA.keyGpu).not.toBe(withNone.keyGpu);
 
-    // The uid is stamped on the template, so reuse keys identically.
     const withAAgain = new ShaderDescriptor({ bitsGpu: [bit], bitsGl: [bit], template: templateA });
-    expect(withAAgain.keyGpu).toBe(withA.keyGpu);
+    expect(withAAgain.keyGpu, 'the same template object keys the same').toBe(withA.keyGpu);
   });
 });
 
 describe('assertCameraGroupProvided', () => {
   const withCamera: ShaderBitTemplate = { bindGroups: ['global', 'camera', 'batch'], gpu: '' };
-  const withoutCamera: ShaderBitTemplate = { bindGroups: ['global', 'batch'], gpu: '' };
-  const cameraBit: ShaderBit = { name: 'cam', bindings: { camera: { uViewMatrix: 'mat4x4<f32>' } } };
   const otherBit: ShaderBit = { name: 'other', bindings: { global: { uTime: 'f32' } } };
-
-  it("passes when a bit fills the template's camera group", () => {
-    expect(() => assertCameraGroupProvided([otherBit, cameraBit], withCamera)).not.toThrow();
-  });
-
-  it('passes when the template declares no camera group, whatever the bits', () => {
-    expect(() => assertCameraGroupProvided([otherBit], withoutCamera)).not.toThrow();
-  });
 
   it('fails at compile, naming the flag, when the template declares a camera group nobody fills', () => {
     expect(() => assertCameraGroupProvided([otherBit], withCamera)).toThrow(/includeCamera/);

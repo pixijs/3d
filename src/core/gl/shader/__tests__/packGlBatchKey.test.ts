@@ -4,19 +4,13 @@ import { describe, expect, it } from 'vitest';
 
 import { GL_STATE_KEY_RANGE, packGlBatchKey } from '../packGlBatchKey';
 
-// The GL batch key packs shader, state and topology into one number so the batcher breaks
-// on a single compare. A field that outgrows its budget wouldn't error — it would quietly
-// carry into its neighbour and fuse two draws that must stay apart. These tests pin each
-// budget against pixi's own tables, so upstream growth fails here first.
-
 const TOPOLOGIES: Topology[] = ['point-list', 'line-list', 'line-strip', 'triangle-list', 'triangle-strip'];
 
 describe('packGlBatchKey budgets', () => {
   it('fits every State.data flag pixi defines', () => {
     const highestBit = Math.max(...Object.values(STATE_BITS));
 
-    // 8 bits allotted; pixi uses 6.
-    expect(2 ** (highestBit + 1)).toBeLessThanOrEqual(256);
+    expect(2 ** (highestBit + 1), '8 bits allotted; pixi uses 6').toBeLessThanOrEqual(256);
   });
 
   it('fits every blend mode pixi defines', () => {
@@ -29,8 +23,7 @@ describe('packGlBatchKey budgets', () => {
       highest = Math.max(highest, state._blendModeId);
     }
 
-    // 5 bits allotted; pixi's highest id is 10.
-    expect(highest).toBeLessThan(32);
+    expect(highest, "5 bits allotted; pixi's highest id is 10").toBeLessThan(32);
   });
 
   it('maps every topology to a distinct id inside its budget', () => {
@@ -67,9 +60,7 @@ describe('packGlBatchKey identity', () => {
     expect(new Set(keys).size).toBe(4);
   });
 
-  it('gives equal-valued states from different objects the same key', () => {
-    // `stateFor3D()` hands every material its own State, so equal values must key equal —
-    // otherwise every material becomes its own draw and batching collapses.
+  it('gives equal-valued states from different objects the same key, as every material has its own State', () => {
     const a = new State();
     const b = new State();
     a.depthTest = b.depthTest = true;

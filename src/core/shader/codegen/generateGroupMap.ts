@@ -9,10 +9,14 @@ interface GroupData {
 }
 
 /**
- * Generates a map of binding points to uniform/resource names
+ * Maps each group's binding indices to binding names, for WebGL
  *
- * Mimics the bind group generation logic in `compileBindingsWgsl` to ensure WebGL and WebGPU
- * bind group layouts match.
+ * Within a group, the uniform struct takes the first index, under the group's name. Textures and
+ * samplers follow, then storage buffers, each in the order bits first declare them. A group the
+ * template doesn't list, such as `material`, only adds struct fields, so it gets no indices.
+ *
+ * WebGPU assigns its indices in `buildWgslBindingMap`, and the two must agree;
+ * `bindingParity.test.ts` checks that they do.
  * @param bits - Shader bits contributing bindings
  * @param template - The template whose `bindGroups` order defines group indices
  * @returns Record<groupIndex, Record<bindingIndex, uniformName>>
@@ -36,7 +40,6 @@ export function generateGroupMap(
     if (!bit.bindings) continue;
 
     for (const [groupName, bindings] of Object.entries(bit.bindings)) {
-      // A group the template doesn't bind (`material`) only contributes a struct; it has no slots.
       const group = groupData[groupName];
       if (!group) continue;
 
@@ -60,17 +63,12 @@ export function generateGroupMap(
     const map: Record<number, string> = {};
     let bindingIndex = 0;
 
-    // 1. Uniform bindings (single binding for entire struct)
     if (group.hasUniforms) {
-      // In WebGPU this binding is for the Uniform Block.
-      // We map the *Group Name* to this binding index.
       map[bindingIndex++] = groupName;
     }
 
-    // 2. Resource bindings (textures/samplers)
     for (const name in group.resources) map[bindingIndex++] = name;
 
-    // 3. Storage buffer bindings
     for (const name in group.storages) map[bindingIndex++] = name;
 
     result[groupIndex] = map;

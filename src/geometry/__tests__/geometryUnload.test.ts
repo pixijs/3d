@@ -1,5 +1,5 @@
-import { getApp } from '@test-utils';
-import type { Application, Renderer, WebGPURenderer } from 'pixi.js';
+import { expectCleanRender, getApp } from '@test-utils';
+import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { CubeGeometry } from '~/geometry/CubeGeometry';
@@ -35,7 +35,7 @@ function layoutResidency(geometry: Geometry3D): number {
   return gpuCopyCount(geometry as unknown as GpuResident);
 }
 
-/** The atlas internals these tests assert against — dead space is how a vacated range reads. */
+/** The atlas internals these tests assert against; a vacated range shows up as dead space */
 interface AtlasProbe {
   _deadVertexCount: number;
   _deadIndexCount: number;
@@ -98,28 +98,9 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-/**
- * Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL).
- * Both `onSubmittedWorkDone` awaits matter: the first drains earlier frames so their errors
- * can't land in this scope, the second makes sure this frame's work is done before the pop.
- */
-async function renderCatchingValidationErrors(app: Application<Renderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? (app.renderer as WebGPURenderer).gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  await device.queue.onSubmittedWorkDone();
-  device.pushErrorScope('validation');
-  app.render();
-  await device.queue.onSubmittedWorkDone();
-  return device.popErrorScope();
-}
-
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`geometry unload (${preference})`, () => {
-    /** The process-wide pool this backend packs into — the pipe reaches it the same way. */
+    /** The process-wide pool this backend packs into, reached the same way the pipe reaches it */
     const pool = (): GeometryAtlasPool => GeometryAtlasPool.from({ rebaseIndices: preference === 'webgl' });
 
     async function withApp(
@@ -154,7 +135,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(cubeGeometry._geometryAtlasAllocation).toBeNull();
         expect(atlas._deadVertexCount).toBe(allocation.vertexCount);
         expect(atlas._deadIndexCount).toBe(allocation.indexCount);
-        // The vacated bytes stay put until a compaction, so no View sharing the pool rebuilds.
         expect(pool().bufferVersion).toBe(version);
       });
     });
@@ -201,7 +181,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('is re-packed by the next frame when unloaded while still in the scene, drawing identically', async () => {
+    it('is re-packed by the next frame on its own when unloaded while still in the scene, drawing identically', async () => {
       await withApp('geometry-unload-in-scene', (app) => {
         const { view3d, cubeGeometry } = buildView(app);
         const before = pixels(app, view3d);
@@ -210,7 +190,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(cubeGeometry._geometryAtlasAllocation).toBeNull();
         app.render();
 
-        // Nothing dirtied the mesh: the scene walk re-packs an unallocated geometry on its own.
         expect(cubeGeometry._geometryAtlasAllocation).toBeTruthy();
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
       });
@@ -227,15 +206,12 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           cubeGeometry.unload();
           expect(cubeGeometry._geometryAtlasAllocation).toBeNull();
 
-          // Whichever View walks first re-packs the geometry. The other's recorded commands still
-          // read the vacated range, whose bytes stay put until a compaction.
-          expect(await renderCatchingValidationErrors(app)).toBeNull();
+          await expectCleanRender(app);
           expect(cubeGeometry._geometryAtlasAllocation).toBeTruthy();
           expect(differingPixels(before, pixels(app, viewB))).toBe(0);
 
-          // A rebuild forced through an unrelated mesh re-records B against the new allocation.
           ground.invalidate();
-          expect(await renderCatchingValidationErrors(app)).toBeNull();
+          await expectCleanRender(app);
           expect(differingPixels(before, pixels(app, viewB))).toBe(0);
         },
         SIZE * 2,
@@ -253,7 +229,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('is a no-op after a destroy that kept the buffers, which still gives their GPU copies back', async () => {
+    it('is a no-op after a destroy that kept the buffers, which drops the layout but leaves the buffers loaded', async () => {
       await withApp('geometry-unload-after-destroy', (app) => {
         const { view3d } = buildView(app);
 
@@ -264,17 +240,14 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         });
         view3d.root.addChild(mesh);
         app.render();
-        // pixi's destroy nulls `geometry.buffers`, so hold the surviving buffers to probe them after.
-        const buffers = [...dynamic.buffers] as unknown as GpuResident[];
-        expect(gpuCopyCount(...buffers)).toBeGreaterThan(0);
+        const buffersBeforeDestroy = [...dynamic.buffers] as unknown as GpuResident[];
+        expect(gpuCopyCount(...buffersBeforeDestroy)).toBeGreaterThan(0);
 
         mesh.removeFromParent();
         dynamic.destroy(false);
 
-        // The recorded layout goes with the geometry; the buffers `destroyBuffers = false` keeps alive
-        // stay loaded for whoever else shares them, as pixi's own destroy leaves them.
         expect(layoutResidency(dynamic)).toBe(0);
-        expect(gpuCopyCount(...buffers)).toBeGreaterThan(0);
+        expect(gpuCopyCount(...buffersBeforeDestroy)).toBeGreaterThan(0);
         expect(() => dynamic.unload()).not.toThrow();
       });
     });

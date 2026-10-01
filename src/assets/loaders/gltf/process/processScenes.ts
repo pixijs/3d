@@ -3,6 +3,10 @@ import type { GltfFormat } from '../GltfFormat';
 
 /**
  * Converts glTF scenes into descriptor scene entries
+ *
+ * The file's `scene` becomes the default scene. When the file has none, or names one that doesn't
+ * exist, no default is set and {@link Model3D} shows the first scene; glTF leaves that choice to the
+ * viewer.
  * @param gltfRaw - Parsed glTF JSON
  * @param descriptor - Receives the scene entries and the default scene index
  * @internal
@@ -15,9 +19,6 @@ export function processScenes(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor
     name: sceneRaw.name,
   }));
 
-  // glTF `scene` names the scene to display. It is optional — the spec leaves
-  // the choice to the runtime when absent, and every major viewer shows the
-  // first one, so the descriptor falls back to index 0.
   if (gltfRaw.scene !== undefined && gltfRaw.scene < descriptor.scenes.length) {
     descriptor.defaultScene = gltfRaw.scene;
   }

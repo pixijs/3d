@@ -3,12 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { srgbToLinear } from '~/materials/BaseMaterial3D';
 import { Material3D } from '~/materials/pbr/Material3D';
 
-/**
- * Every `ColorSource` material input follows Pixi's display-space convention
- * and is sRGB-decoded to linear light at write time — uniformly, whether it
- * arrives via constructor options or a setter.
- */
-describe('material colour inputs decode sRGB → linear at write', () => {
+describe('material colour inputs are display-space and decode sRGB → linear at write', () => {
   const linear = srgbToLinear(0.5);
 
   it('decodes all five colour inputs from constructor options (alpha raw)', () => {
@@ -47,7 +42,7 @@ describe('material colour inputs decode sRGB → linear at write', () => {
     expect(material.data.attenuationColorIrid![0]).toBeCloseTo(linear, 5);
   });
 
-  it('reads back the canonical hex, tint-style', () => {
+  it('reads back the canonical hex, tint-style, truncating float channels (0.5 → 0x7f)', () => {
     const material = new Material3D({
       sheen: {},
       transmission: {},
@@ -55,8 +50,6 @@ describe('material colour inputs decode sRGB → linear at write', () => {
 
     material.sheen!.color = 'red';
     expect(material.sheen!.color).toBe(0xff0000);
-    // Pixi's Color.toNumber() truncates float channels (0.5 * 255 → 0x7f),
-    // matching `Container.tint`'s canonicalisation exactly.
     material.transmission!.attenuationColor = [0.5, 0.5, 0.5];
     expect(material.transmission!.attenuationColor).toBe(0x7f7f7f);
   });

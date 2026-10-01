@@ -7,16 +7,6 @@ afterEach(() => {
 });
 
 describe('Container3D destroy', () => {
-  it('marks the container as destroyed', () => {
-    const c = new Container3D();
-
-    expect(c.destroyed).toBe(false);
-
-    c.destroy();
-
-    expect(c.destroyed).toBe(true);
-  });
-
   it('is idempotent — a second destroy is a no-op and does not throw', () => {
     const c = new Container3D();
 

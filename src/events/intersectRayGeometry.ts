@@ -5,17 +5,26 @@ import type { HitResult3D } from './HitResult3D';
 const EPSILON = 1e-7;
 
 /**
- * Ray vs. `Geometry3D`, Möller-Trumbore per triangle
+ * Tests a ray against every triangle of a `Geometry3D` with the Möller-Trumbore method
  *
- * Two stages: an AABB pre-reject against `geom.bounds3D`, so a miss against a 10k-tri mesh still returns in O(1)
- * on mobile, then the triangle loop tracking the closest `t`.
+ * A ray that misses `geom.bounds3D` returns before the triangle loop, so a miss costs the same
+ * on any mesh size. Bounds and vertex data are read on every call, so edits to the geometry
+ * take effect on the next pick. The loop keeps the closest `t`; its names follow the method:
+ * `e1` and `e2` are the triangle's edges, `h = direction × e2`, `s = origin - a` and
+ * `q = s × e1`.
  *
- * Requires float32 `aPosition` data. Quantised meshes (KHR_mesh_quantization — int8/int16 positions) would need
- * shader-side unquantisation, which this has no metadata for, and are treated as a miss; use `hitVolume = 'box'`
- * for those, or supply a non-quantised proxy geometry.
+ * - Back faces hit too: only a ray parallel to the triangle is rejected, not the sign of `a`, so
+ *   meshes authored with inverted normals still pick.
+ * - The normal is the triangle's flat normal from its edges, so it exists even without an
+ *   `aNormal` attribute.
+ * - The UV is interpolated from `aUV` when it is float32. Other `aUV` data, such as quantised
+ *   int16, is skipped rather than decoded wrong, and `out.uv` gets the hit's barycentric
+ *   coordinates instead.
  *
- * Requires `'triangle-list'` topology. Line, strip and point geometry is a miss too: its index buffer would
- * otherwise be decoded as garbage triangles. Use `'box'` or a triangle-list proxy geometry for those.
+ * Only float32 `aPosition` data and `'triangle-list'` topology can hit. Quantised positions
+ * (KHR_mesh_quantization) are only dequantised in the shader, and a line, strip or point index
+ * buffer would decode as nonsense triangles; both count as a miss. Use `'box'` or a proxy
+ * geometry for those.
  * @param localRay - The ray in the geometry's local space
  * @param geom - The geometry to test every triangle of
  * @param out - Scratch buffer filled with the closest hit's point / normal / UV; untouched on a miss
@@ -26,7 +35,6 @@ const EPSILON = 1e-7;
 export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitResult3D): number {
   if (geom.topology !== 'triangle-list') return -1;
 
-  // Bounds are read fresh each call, so in-place geometry edits are picked up immediately.
   if (!localRay.intersectsBox(geom.bounds3D)) return -1;
 
   const positionAttr = geom.attributes.aPosition;
@@ -78,14 +86,11 @@ export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitRe
     const e2y = cy - ay;
     const e2z = cz - az;
 
-    // h = dir × e2
     const hx = dy * e2z - dz * e2y;
     const hy = dz * e2x - dx * e2z;
     const hz = dx * e2y - dy * e2x;
 
     const a = e1x * hx + e1y * hy + e1z * hz;
-    // Only rejects rays parallel to the triangle. The sign of `a` is not tested, so back faces hit too and picking
-    // works on inverted-normal authoring.
     if (a > -EPSILON && a < EPSILON) continue;
 
     const f = 1 / a;
@@ -111,7 +116,6 @@ export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitRe
     bestTri = i;
     bestU = u;
     bestV = v;
-    // Flat normal from the triangle's edges, so hits still carry a normal on geometry with no `aNormal` attribute.
     bestNx = e1y * e2z - e1z * e2y;
     bestNy = e1z * e2x - e1x * e2z;
     bestNz = e1x * e2y - e1y * e2x;
@@ -130,8 +134,6 @@ export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitRe
   out.distance = bestT;
   out.triangleIndex = bestTri;
 
-  // Barycentric interpolation over `aUV` when present. `aUV` may be int16 (KHR quantised), so only float32 data is
-  // read; anything else falls through to the raw barycentrics rather than emitting corrupt coordinates.
   const uvAttr = geom.attributes.aUV;
   const uvData = uvAttr?.buffer.data;
   if (uvData instanceof Float32Array && indices) {

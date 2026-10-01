@@ -20,10 +20,6 @@ export class EulerDegrees implements PointLike3D {
     return this._radians._x * RAD_TO_DEG;
   }
 
-  /**
-   * Sets the rotation about x
-   * @param value - Degrees
-   */
   set x(value: number) {
     this._radians.x = value * DEG_TO_RAD;
   }
@@ -33,10 +29,6 @@ export class EulerDegrees implements PointLike3D {
     return this._radians._y * RAD_TO_DEG;
   }
 
-  /**
-   * Sets the rotation about y
-   * @param value - Degrees
-   */
   set y(value: number) {
     this._radians.y = value * DEG_TO_RAD;
   }
@@ -46,16 +38,12 @@ export class EulerDegrees implements PointLike3D {
     return this._radians._z * RAD_TO_DEG;
   }
 
-  /**
-   * Sets the rotation about z
-   * @param value - Degrees
-   */
   set z(value: number) {
     this._radians.z = value * DEG_TO_RAD;
   }
 
   /**
-   * Sets all three angles at once, firing the observer once
+   * Sets all three angles at once, notifying the observer at most once
    * @param x - Degrees about x
    * @param y - Degrees about y, defaults to `x`
    * @param z - Degrees about z, defaults to `x`

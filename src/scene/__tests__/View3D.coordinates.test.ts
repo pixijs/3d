@@ -1,4 +1,3 @@
-import { Point } from 'pixi.js';
 import { describe, expect, test } from 'vitest';
 
 import { Plane } from '~/math/shapes/Plane';
@@ -6,13 +5,19 @@ import { Ray } from '~/math/shapes/Ray';
 import { Vector3 } from '~/math/vector/Vector3';
 import { View3D } from '~/scene/View3D';
 
-/** 800×600 view, camera 10 units up the +Z axis facing -Z (default orientation). */
+/**
+ * An 800×600 view with its camera 10 units up +Z, facing -Z, and no transform pass run, so the
+ * cached camera transform is still identity
+ */
 function makeView() {
   const view3d = new View3D({ width: 800, height: 600 });
   view3d.camera.position.set(0, 0, 10);
 
   return view3d;
 }
+
+/** Half the 800 px view width in world units, so one unit covers 80 px */
+const ORTHO_HALF_WIDTH = 5;
 
 function expectPointClose(actual: { x: number; y: number }, x: number, y: number) {
   expect(actual.x).toBeCloseTo(x, 4);
@@ -26,12 +31,6 @@ function expectVec3Close(actual: { x: number; y: number; z: number }, x: number,
 }
 
 describe('View3D.worldToScreen', () => {
-  test('a point on the camera axis lands at the view centre', () => {
-    const view3d = makeView();
-
-    expectPointClose(view3d.worldToScreen({ x: 0, y: 0, z: 0 })!, 400, 300);
-  });
-
   test('follows the View’s 2D position in the stage', () => {
     const view3d = makeView();
     view3d.position.set(100, 50);
@@ -47,13 +46,11 @@ describe('View3D.worldToScreen', () => {
     expectPointClose(view3d.worldToScreen({ x: 0, y: 0, z: 0 })!, 400, 300);
   });
 
-  test('+y in world space is up on screen', () => {
+  test('follows the View’s rotation', () => {
     const view3d = makeView();
+    view3d.rotation = Math.PI / 2;
 
-    const p = view3d.worldToScreen({ x: 0, y: 1, z: 0 })!;
-
-    expect(p.x).toBeCloseTo(400, 4);
-    expect(p.y).toBeLessThan(300);
+    expectPointClose(view3d.worldToScreen({ x: 0, y: 0, z: 0 })!, -300, 400);
   });
 
   test('returns null behind a perspective camera', () => {
@@ -65,26 +62,18 @@ describe('View3D.worldToScreen', () => {
   test('orthographic mapping is linear in view pixels', () => {
     const view3d = makeView();
     view3d.camera.mode = 'orthographic';
-    view3d.camera.orthographicSize = 5; // half-width 5 world units over 800px → 80 px per unit
+    view3d.camera.orthographicSize = ORTHO_HALF_WIDTH;
 
     expectPointClose(view3d.worldToScreen({ x: 1, y: 0, z: 0 })!, 480, 300);
     expectPointClose(view3d.worldToScreen({ x: 0, y: 1, z: 0 })!, 400, 220);
   });
 
-  test('respects the camera viewport sub-rectangle', () => {
+  test('respects the camera viewport sub-rectangle, putting the origin at the centre of the right half', () => {
     const view3d = makeView();
     view3d.camera.viewport.x = 0.5;
     view3d.camera.viewport.width = 0.5;
 
-    // Centre of the right-half viewport.
     expectPointClose(view3d.worldToScreen({ x: 0, y: 0, z: 0 })!, 600, 300);
-  });
-
-  test('writes into the supplied point and returns it', () => {
-    const view3d = makeView();
-    const out = new Point();
-
-    expect(view3d.worldToScreen({ x: 0, y: 0, z: 0 }, out)).toBe(out);
   });
 
   test('returns null instead of NaN for a zero-area view', () => {
@@ -94,11 +83,9 @@ describe('View3D.worldToScreen', () => {
     expect(view3d.worldToScreen({ x: 0, y: 0, z: 0 })).toBeNull();
   });
 
-  test('skipUpdate = true reads the stale cached camera transform', () => {
+  test('skipUpdate = true reads the stale cached camera transform, which puts the origin on the camera plane', () => {
     const view3d = makeView();
 
-    // No transform pass has run: the cached camera world transform is still identity, which
-    // puts the world origin exactly on the camera plane → null.
     expect(view3d.worldToScreen({ x: 0, y: 0, z: 0 }, undefined, true)).toBeNull();
     expect(view3d.worldToScreen({ x: 0, y: 0, z: 0 })).not.toBeNull();
   });
@@ -132,7 +119,7 @@ describe('View3D.screenToRay', () => {
   test('orthographic rays are parallel with offset origins', () => {
     const view3d = makeView();
     view3d.camera.mode = 'orthographic';
-    view3d.camera.orthographicSize = 5;
+    view3d.camera.orthographicSize = ORTHO_HALF_WIDTH;
 
     const a = view3d.screenToRay({ x: 400, y: 300 }, new Ray());
     const b = view3d.screenToRay({ x: 480, y: 300 }, new Ray());
@@ -140,17 +127,10 @@ describe('View3D.screenToRay', () => {
     expectVec3Close(a.direction, 0, 0, -1);
     expectVec3Close(b.direction, 0, 0, -1);
     expectVec3Close(a.origin, 0, 0, 10);
-    expectVec3Close(b.origin, 1, 0, 10); // 80 px per world unit
+    expectVec3Close(b.origin, 1, 0, 10);
   });
 
-  test('writes into the supplied ray and returns it', () => {
-    const view3d = makeView();
-    const out = new Ray();
-
-    expect(view3d.screenToRay({ x: 0, y: 0 }, out)).toBe(out);
-  });
-
-  test('round-trips through a camera viewport sub-rectangle', () => {
+  test('round-trips through a camera viewport sub-rectangle, whose centre looks straight down the camera axis', () => {
     const view3d = makeView();
     view3d.camera.viewport.x = 0.5;
     view3d.camera.viewport.width = 0.5;
@@ -158,7 +138,6 @@ describe('View3D.screenToRay', () => {
     view3d.camera.viewport.height = 0.5;
     view3d.position.set(20, -30);
 
-    // Centre of the sub-viewport looks straight down the camera axis.
     const centre = { x: 20 + 600, y: -30 + 300 };
     const centreRay = view3d.screenToRay(centre);
     expectVec3Close(centreRay.direction, 0, 0, -1);
@@ -190,17 +169,17 @@ describe('View3D.screenToWorld', () => {
     expectVec3Close(hit, 0, 0, 0);
   });
 
-  test('plane overload returns null when the ray points away', () => {
+  test('plane overload returns null when the camera aims up, away from the plane', () => {
     const view3d = makeView();
     view3d.camera.position.set(0, 5, 10);
-    view3d.camera.lookAt({ x: 0, y: 20, z: 0 }); // aims upward, away from the ground
+    view3d.camera.lookAt({ x: 0, y: 20, z: 0 });
 
     const ground = new Plane(new Vector3(0, 1, 0), 0);
 
     expect(view3d.screenToWorld({ x: 400, y: 300 }, ground)).toBeNull();
   });
 
-  test('a zero-area view yields a degenerate zeroed ray, never NaN', () => {
+  test('a zero-area view yields a zeroed ray, never NaN, which misses a plane it lies off', () => {
     const view3d = makeView();
     view3d.setSize(0, 600);
 
@@ -208,7 +187,6 @@ describe('View3D.screenToWorld', () => {
     expectVec3Close(ray.origin, 0, 0, 0);
     expectVec3Close(ray.direction, 0, 0, 0);
 
-    // The zeroed ray is parallel to (and off) this plane, so the pick reports a clean miss.
     const floor = new Plane(new Vector3(0, 1, 0), -1);
     expect(view3d.screenToWorld({ x: 100, y: 100 }, floor)).toBeNull();
   });

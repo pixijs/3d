@@ -1,13 +1,10 @@
-import { Geometry, State } from 'pixi.js';
+import { State } from 'pixi.js';
 
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * ShaderBit for the output (present) pass: the scene-colour texture + sampler it blits
- * to the screen
- *
- * Shared between the WebGPU and WebGL output passes — the header generates the matching
- * WGSL/GLSL binding declarations.
+ * The output blit's shader bit: the triangle's position input, its UV varying, and the scene
+ * colour texture with its sampler, the same on both backends
  * @internal
  */
 export const outputBit: ShaderBit = {
@@ -27,11 +24,9 @@ export const outputBit: ShaderBit = {
 };
 
 /**
- * GLSL templates for the output pass (the WGSL counterpart lives on the pass)
+ * GLSL half of the output blit's shader template
  *
- * Y-orientation: a WebGL render target samples bottom-left-origin, so the
- * clip-space-derived UV maps straight through here; the WGSL path flips Y for
- * WebGPU's top-left texture origin. Verify against a rendered inset View.
+ * `outputTemplate` in `OutputPass.ts` holds the WGSL half and documents what both do.
  * @internal
  */
 export const outputGlTemplate = {
@@ -40,8 +35,6 @@ export const outputGlTemplate = {
 {{header}}
 
 void main() {
-  // The scene fills only the [0, vp] sub-rect of its pooled power-of-two texture;
-  // scale the [0,1] blit UV onto that sub-rect (uViewportUVScale is 1 full-screen).
   vUv = (aPosition * 0.5 + 0.5) * uViewportUVScale;
   gl_Position = vec4(aPosition, 0.0, 1.0);
 }
@@ -59,27 +52,11 @@ void main() {
 };
 
 /**
- * Creates the fullscreen triangle (one primitive, no seam) covering clip space [-1, 1]^2
+ * Creates the output blit's render state: blended over whatever the view sits on, with no depth
+ * test or write and no culling
  *
- * The executor binds the View's screen rect as the viewport, clipping the triangle to
- * it; the UV samples the whole scene transient onto that rect.
- * @returns The fullscreen-triangle geometry
- * @internal
- */
-export function createOutputGeometry(): Geometry {
-  return new Geometry({
-    attributes: {
-      aPosition: [-1, -1, 3, -1, -1, 3],
-    },
-  });
-}
-
-/**
- * Creates the output state: composite the scene over whatever the View sits on (2D
- * content, for an inset), with no depth interaction
- *
- * Premultiplied-alpha `blend` lets a transparent-background View show the 2D
- * underneath; an opaque scene (alpha 1) fills regardless.
+ * pixi's default blend is for premultiplied alpha, so a view with a transparent background shows
+ * the 2D content beneath it, and an opaque scene covers it.
  * @returns The output-blit render state
  * @internal
  */

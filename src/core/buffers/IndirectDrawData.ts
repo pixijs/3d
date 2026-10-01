@@ -4,20 +4,19 @@ import { Buffer3D } from './Buffer3D';
 import { ARGS_PER_COMMAND, DrawArgs } from './DrawArgs';
 
 /**
- * {@link DrawArgs} with the GPU buffer indirect draws read them from
+ * {@link DrawArgs} with the GPU buffer that indirect draws read them from (WebGPU)
  *
- * A `DrawCommandList` replays against one of these; each `CullResult` owns one, its static lanes
- * copied from the draw list's `DrawArgs` on sync and its `instanceCount` lanes rewritten each
- * frame by the cull — the CPU walk or the compute kernel.
+ * A `DrawCommandList` replays against one. Each `CullResult` owns one: it copies every lane from
+ * the draw list's `DrawArgs` when it syncs, and the cull, on the CPU or in the compute kernel,
+ * rewrites the instance counts every frame.
  * @internal
  */
 export class IndirectDrawData extends DrawArgs {
   /**
-   * GPU-side view of `drawCalls`
+   * The GPU copy of `drawCalls`
    *
-   * `INDIRECT` so `drawIndexedIndirect` sources it, `STORAGE` so the cull compute writes the counts,
-   * `COPY_SRC` so the debug overlay can read survivor counts back (a transfer usage on an already
-   * device-local buffer — no runtime cost to the draw path).
+   * `INDIRECT` so indirect draws read it, and `STORAGE` so the cull compute writes the counts.
+   * Nothing in the engine reads it back, which `COPY_SRC` would allow.
    */
   public drawCallsBuffer: Buffer3D;
 
@@ -33,10 +32,10 @@ export class IndirectDrawData extends DrawArgs {
   }
 
   /**
-   * Ensures room for `commandCount` commands, re-pointing the GPU buffer at the array on growth
+   * Makes room for `commandCount` commands, pointing the GPU buffer at the new array when it grows
    *
-   * Reassigning `.data` re-creates the GPUBuffer at the new size; growth only happens on a
-   * structural rebuild, which re-records the bundle that reads it, so there's no stale baked reference.
+   * Setting the buffer's `data` to a longer array makes pixi create a new `GPUBuffer`. Growth only
+   * happens on a rebuild, which re-records the bundle that reads it, so no bundle keeps the old one.
    * @param commandCount - Number of commands to make room for.
    * @returns The current backing array.
    */
@@ -48,22 +47,21 @@ export class IndirectDrawData extends DrawArgs {
   }
 
   /**
-   * Uploads `commandCount` commands to the GPU
+   * Uploads the first `commandCount` commands
    *
-   * Call after the cull, before replay.
+   * Call after the cull and before the replay.
    * @param commandCount - Number of commands to upload.
    */
   public upload(commandCount: number): void {
-    this.drawCallsBuffer.update(commandCount * ARGS_PER_COMMAND * 4); // 5 u32 * 4 bytes per command
+    this.drawCallsBuffer.update(commandCount * ARGS_PER_COMMAND * 4);
   }
 
   /**
-   * Copies `commandCount` whole command records from `source` and uploads
+   * Copies the first `commandCount` commands from `source`, all five lanes each, and uploads them
    *
-   * Each record is all 5 lanes, not just the count: the indirect draw sources index count + offsets
-   * from *this* buffer, so a cull result's own args buffer must carry the static lanes too. Done on
-   * rebuild (`CullResult.sync`); after that the per-frame cull only rewrites the `instanceCount` lane
-   * in place (the compute on GPU, or the CPU walk).
+   * All five, not just the counts, because the indirect draw reads the index count and offsets from
+   * this buffer too. `CullResult.sync` calls it after a rebuild. From then on the cull rewrites only
+   * the instance counts, in place.
    * @param source - The args to copy records from.
    * @param commandCount - Number of commands to copy.
    */
@@ -74,16 +72,16 @@ export class IndirectDrawData extends DrawArgs {
   }
 
   /**
-   * Frees the GPU copy of the draw args while keeping the CPU array
+   * Frees the GPU copy of the draw args and keeps the CPU array
    *
-   * pixi re-creates the buffer from `drawCalls` on the next fetch, and the next
-   * rebuild rewrites the args anyway. Idempotent.
+   * pixi re-creates the buffer from `drawCalls` the next time it's used, and the next rebuild
+   * rewrites the args anyway. Idempotent.
    */
   public unload(): void {
     this.drawCallsBuffer?.unload();
   }
 
-  /** Releases the exclusively-owned GPU buffer and drops the backing array; idempotent */
+  /** Releases the GPU buffer and drops the CPU array. Idempotent */
   public override destroy(): void {
     if (!this.drawCallsBuffer) return;
 

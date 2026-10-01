@@ -11,13 +11,6 @@ import type { PassStage } from '~/post-processing/Pass3D';
 import { createDefaultGraph3D } from '~/scene/utils/createDefaultGraph3D';
 import type { DefaultGraph3DOptions } from '~/scene/utils/createDefaultGraph3D';
 
-/**
- * The stage contract of the default graph: where each user pass lands relative to the
- * built-in passes, that array order only matters inside the post chain, that composite mode
- * is derived from the chain, and that the post stage is refused to anything that isn't a
- * post effect. These are the facts every pass author writes against.
- */
-
 /** A scene-stage pass that adds one stub graph pass drawing into the scene colour */
 class StubScenePass extends Pass3D {
   constructor(
@@ -86,8 +79,8 @@ async function withGraph<T>(
   }
 }
 
-describe('createDefaultGraph3D stages', () => {
-  it('places each pass at its stage regardless of array order, and the post chain last in array order', async () => {
+describe('createDefaultGraph3D stages, the contract every pass author writes against', () => {
+  it('places each pass at its stage whatever the array order, then the post chain in array order', async () => {
     await withGraph(
       {
         passes: [
@@ -104,20 +97,15 @@ describe('createDefaultGraph3D stages', () => {
           expect(i, name).toBeGreaterThanOrEqual(0);
           return i;
         };
-        // before-opaque: after the shadow map, before the view's own depth reset — a feed is
-        // complete before any scene material can sample it
         expect(at('feed')).toBeGreaterThan(at('shadow'));
         expect(at('feed')).toBeLessThan(at('depthClear'));
-        // after-opaque: part of the opaque world, before the copies are taken
         expect(at('early')).toBeGreaterThan(at('opaque'));
         expect(at('early')).toBeLessThan(at('copyDepth'));
-        // after-transparent: after the last scene draw, before the chain
         expect(at('late')).toBeGreaterThan(at('transparent'));
         expect(at('late')).toBeLessThan(at('fxA'));
-        // the chain keeps array order and the last effect presents; no blit pass remains
         expect(at('fxA')).toBeLessThan(at('fxB'));
         expect(names[names.length - 1]).toBe('fxB');
-        expect(names).not.toContain('output');
+        expect(names, 'the last effect presents, so no output blit runs').not.toContain('output');
       },
     );
   });

@@ -8,9 +8,9 @@ import { getCameraData } from './CameraData';
 import { cameraFrameToPhysicalViewport, frameToPhysicalViewport } from './render-graph/frameToPhysicalViewport';
 import type { RenderSession } from './render-passes/RenderSession';
 
-const _tempMatrix = new Matrix4();
-const _tempMatrix2 = new Matrix4();
-const _tempMatrix3 = new Matrix4();
+const _ndcToLocal = new Matrix4();
+const _localToTarget = new Matrix4();
+const _targetToFrame = new Matrix4();
 const _screenBounds = new Rectangle();
 const _targetBounds = new Rectangle();
 
@@ -29,9 +29,9 @@ const _bounds = new Bounds();
 /**
  * Places a camera's viewport in the View's screen space
  *
- * Writes `_local` — the viewport as a rect of the View in logical pixels, measured from the
- * anchor — and `_placement`, the View's world transform less the renderer's offset (nonzero
- * inside a filter, whose render target starts at the filter's bounds).
+ * Writes `_local`, the viewport as a rect of the View in logical pixels measured from the anchor,
+ * and `_placement`, the View's world transform less the renderer's offset (nonzero inside a
+ * filter, whose render target starts at the filter's bounds).
  * @param view3d - The 3D view supplying size, anchor, and world transform.
  * @param camera - The camera whose viewport is placed.
  * @param rendererOffset - The global uniform offset (accounts for filter bounds).
@@ -78,6 +78,12 @@ function fitFrame(local: Rectangle, placement: Matrix, bounds: Rectangle, out: R
  * Perform Oblique Near-Plane Clipping"): the near plane is replaced by the camera's plane, so
  * everything on its negative side is clipped by the rasteriser at no per-fragment cost. This is
  * what a mirror or a portal cuts its scene with. No-op when there is no plane.
+ *
+ * `q` is the far-face corner opposite the plane, clip `(sign(nx), sign(ny), 1, 1)` taken back to
+ * camera space through the inverse of a perspective projection. Scaling the plane by `s` puts that
+ * corner on the new far plane, which keeps the far plane as tight as it can be. The scaled plane,
+ * less the projection's W row `(0, 0, -1, 0)`, becomes the Z row. Both steps assume a perspective
+ * projection whose X and Y rows don't mix, which an orthographic camera or a rotated View breaks.
  * @param camera - The camera whose projection is patched.
  */
 function applyClippingPlane(camera: Camera3D): void {
@@ -88,15 +94,11 @@ function applyClippingPlane(camera: Camera3D): void {
   const { x: nx, y: ny, z: nz } = plane.normal;
   const nw = plane.constant;
 
-  // Clip-space corner opposite the plane, pulled back into camera space through the inverse of
-  // the projection.
   const qx = (Math.sign(nx) + e[8]) / e[0];
   const qy = (Math.sign(ny) + e[9]) / e[5];
   const qz = -1;
   const qw = (1 + e[10]) / e[14];
 
-  // Scale the plane so it lands exactly on the clip volume's near face, then it becomes the
-  // projection's Z row.
   const s = 2 / (nx * qx + ny * qy + nz * qz + nw * qw);
 
   e[2] = nx * s;
@@ -108,14 +110,14 @@ function applyClippingPlane(camera: Camera3D): void {
 /**
  * Rebuilds a camera's view and projection for the rect its image lands in
  *
- * One placement rule for every camera. The projection is built for `local` — the rect the
- * camera's `viewport` marks out — then premultiplied by `T = S · M · N`: `N` takes NDC onto
- * `local`, `M` is `placement`, and `S` takes the clipped `frame` back to NDC. Every pixel keeps
- * its place when part of the image is clipped away, in either projection mode and under any
- * View transform — lens shift, scale and rotation all fall out of the one product. The clip
- * plane goes in after, then the view-projection and the frustum from it. Nothing here is flipped
- * for a target: that happens on the camera data's copy, so the frustum culls the volume the
- * camera actually sees.
+ * One placement rule for every camera. The projection is built for `local`, the rect the
+ * camera's `viewport` marks out, then premultiplied by `T = S · M · N`: `N` (`_ndcToLocal`) takes
+ * NDC onto `local`, `M` (`_localToTarget`) is `placement`, and `S` (`_targetToFrame`) takes the
+ * clipped `frame` back to NDC. Every pixel keeps its place when part of the image is clipped
+ * away, in either projection mode and under any View transform: lens shift, scale and rotation
+ * all fall out of the one product. The clip plane goes in after, then the view-projection and the
+ * frustum from it. Nothing here is flipped for a target: that happens on the camera data's copy,
+ * so the frustum culls the volume the camera actually sees.
  * @param camera - The camera whose matrices are rebuilt.
  * @param local - The rect the projection is built for.
  * @param placement - Takes `local` into the target.
@@ -129,14 +131,11 @@ function buildProjection(camera: Camera3D, local: Rectangle, placement: Matrix, 
   const { a, b, c, d, tx, ty } = placement;
   const { x: fx, y: fy, width: fw, height: fh } = frame;
 
-  // N: NDC -> local
-  _tempMatrix.set(width / 2, 0, 0, x + width / 2, 0, -height / 2, 0, y + height / 2, 0, 0, 1, 0, 0, 0, 0, 1);
-  // M: local -> target
-  _tempMatrix2.set(a, c, 0, tx, b, d, 0, ty, 0, 0, 1, 0, 0, 0, 0, 1);
-  // S: target -> NDC of the clipped frame
-  _tempMatrix3.set(2 / fw, 0, 0, -(2 * fx) / fw - 1, 0, -2 / fh, 0, (2 * fy) / fh + 1, 0, 0, 1, 0, 0, 0, 0, 1);
+  _ndcToLocal.set(width / 2, 0, 0, x + width / 2, 0, -height / 2, 0, y + height / 2, 0, 0, 1, 0, 0, 0, 0, 1);
+  _localToTarget.set(a, c, 0, tx, b, d, 0, ty, 0, 0, 1, 0, 0, 0, 0, 1);
+  _targetToFrame.set(2 / fw, 0, 0, -(2 * fx) / fw - 1, 0, -2 / fh, 0, (2 * fy) / fh + 1, 0, 0, 1, 0, 0, 0, 0, 1);
 
-  camera.projection.premultiply(_tempMatrix3.multiply(_tempMatrix2).multiply(_tempMatrix));
+  camera.projection.premultiply(_targetToFrame.multiply(_localToTarget).multiply(_ndcToLocal));
 
   applyClippingPlane(camera);
   camera.viewProjection.multiplyMatrices(camera.projection, camera.view);
@@ -213,17 +212,29 @@ export function updateCameraProjectionForTarget(
  * CPU side only: `uploadCamera` finishes the lanes and puts them on the GPU once the lights
  * are packed. Every camera a frame draws from comes through here once (`CameraData._currentSession`):
  * the scene update builds the view camera straight after the transform walk, then
- * `RenderGraph.prepareCameras` builds every `pass.camera` that survived `resolve` — all before
- * any render target is bound, so all read the same winding off the same binding. A camera
+ * `RenderGraph.prepareCameras` builds every `pass.camera` that survived `resolve`. A camera
  * derived from the frame (a portal's) is posed by the pass that draws it, in its `condition`,
  * which runs between the transform walk and this.
  *
- * A camera with a render texture is built for that texture's frame: its size for the projection,
- * the whole of it for the screen-space UV scale, and the winding of a texture, which is never
- * root. Any other camera is built for the view's target, in the view's screen space, with the
- * view's UV scale. The view camera also fills `session.viewport` from its frame, because
- * that rect is derived from the projection this function just wrote and UV scale needs it next.
- * @param camera - The camera to prepare. Must be in `session.view3d`'s scene graph.
+ * A camera with a render texture is built for that texture's frame, in texels, because a pooled
+ * render texture is a frame of a larger source: the frame's size for the projection, and all of
+ * it for the screen-space UV scale, since the graph binds the whole target. Any other camera is
+ * built for the view's target, in the view's screen space, with the view's UV scale. The view
+ * camera also fills `session.viewport` from its frame, because that rect is derived from the
+ * projection this function just wrote and UV scale needs it next. Inset cameras reuse the view's
+ * viewport for their UV scale: the pooled copies are sized to the view, not to the inset.
+ *
+ * On WebGPU the light tile grid is fitted here and uploads with the rest of the camera; WebGL
+ * fits it to the live viewport at each forward draw.
+ *
+ * The executor binds a camera's target with the outer binding's `flipY`, and pixi's
+ * `isFrontFaceInverted` says which way that leaves the front face. This asks for the target the
+ * camera will draw into before any target is bound, so every camera reads the same binding; a
+ * texture's target is never root. The bound copy of the projection matches that winding, which
+ * keeps front faces front-facing. The camera's own matrices and frustum stay as built.
+ * @param camera - The camera to prepare. Throws unless it is in `session.view3d`'s scene graph:
+ *   the view's transform walk is what updates its world transform, and the projection is built
+ *   against the view's size, anchor and world transform.
  * @param session - The frame's render session.
  * @internal
  */
@@ -234,8 +245,6 @@ export function prepareCamera(camera: Camera3D, session: RenderSession): void {
 
   const { view3d, renderer } = session;
 
-  // A camera has to be in the view's tree: that is what updates its world transform, and the
-  // projection is built against this view's size, anchor and world transform.
   if (camera.view3d !== view3d) {
     throw new Error(
       'A render pass camera must live in the View3D it draws from. Add it to the view first, ' +
@@ -247,9 +256,6 @@ export function prepareCamera(camera: Camera3D, session: RenderSession): void {
   const texture = camera.renderTexture;
 
   if (texture) {
-    // The camera draws into a target the size of its texture's frame — a pooled render texture
-    // is a frame of a larger source — so the projection is built in the frame's texels. The
-    // graph binds the whole target, so screen-space UV covers all of it.
     const { frame, source } = texture;
     const targetWidth = Math.round(frame.width * source.resolution);
     const targetHeight = Math.round(frame.height * source.resolution);
@@ -263,46 +269,33 @@ export function prepareCamera(camera: Camera3D, session: RenderSession): void {
     _screenBounds.height = session.defaultTarget.height;
     updateCameraProjectionForView(view3d, camera, _screenBounds, renderer.globalUniforms.globalUniformData.offset);
 
-    // The view camera's frame is the session's on-screen rect. UV scale asks the pool for a
-    // viewport-sized transient, so the session viewport has to exist first. Inset cameras reuse
-    // that same viewport — it is a fact about the view, not about the inset.
     if (camera === view3d.camera) {
       frameToPhysicalViewport(cameraData.frame, session.defaultTarget, renderer, session.viewport);
     }
 
-    // Viewport content occupies a sub-rect [0, vp/tex] of the pooled opaque copies; this maps the
-    // [0,1] viewport UV onto it — (1,1) when the texture matches the viewport. The pool decides
-    // which texture that is, so the graph asks it.
     const vp = session.viewport;
     view3d._graph.setViewportUvScale(vp.width, vp.height, _uvScale);
     cameraData.setViewportUvScale(_uvScale.x, _uvScale.y);
   }
 
-  // WebGPU uploads the viewport lane with the rest of the camera; WebGL copies the live viewport at each forward draw.
   if (isWebGPU) {
     const bounds = texture ? _targetBounds : view3d._graph.sceneViewport(session, _targetBounds);
     const viewport = camera === view3d.camera ? bounds : cameraFrameToPhysicalViewport(camera, session, bounds);
-    if (viewport) cameraData.setViewport(viewport);
+    if (viewport) cameraData.setViewport(viewport, true);
   }
 
-  // The executor binds a camera's target with the outer binding's `flipY`; which way that leaves
-  // the front face is pixi's to say, asked here for the target the camera will draw into before it
-  // is bound. Matching that winding on the bound copy is what keeps front faces front-facing; the
-  // camera's own matrices and frustum stay as built.
   const target = texture ? renderer.renderTarget.getRenderTarget(texture) : session.defaultTarget;
   const frontFaceInverted = renderer.renderTarget.isFrontFaceInverted(target, session.defaultTarget.flipY);
 
-  // WebGPU clips z to [0, w] where GL clips to [-w, w]; the bound copy is remapped to match.
   cameraData.syncFromCamera(camera, frontFaceInverted, isWebGPU);
 }
 
 /**
  * Finishes a prepared camera's lanes once a frame, and on WebGPU uploads them
  *
- * The last lane is the light tile masks, which bin the view's packed lights through this
- * camera. The scene update builds the view camera before the view packs its lights — shadow
- * fitting needs the camera — so this is its own step: `RenderGraph.prepareCameras` runs it for
- * every camera once the lights are settled and before any pass draws.
+ * This step bins the view's packed lights into this camera's tile and depth masks. The scene update
+ * builds the view camera before packing the lights because shadow fitting needs the camera.
+ * `RenderGraph.prepareCameras` runs this step after the lights are settled and before any pass draws.
  *
  * WebGL syncs a dirty uniform group at the next draw. WebGPU render bundles replay without
  * pixi's bind-group sync, so on WebGPU this writes the lanes to the GPU before any pass

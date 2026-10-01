@@ -61,23 +61,20 @@ for (const preference of RENDERERS) {
 
       const mark = SAMPLER_MARK[preference];
 
-      // Nothing casts: even a mesh that receives shadows draws with the stub.
       app.render();
       expect(view._hasShadows).toBe(false);
-      expect(fragmentSource(receiver)).not.toContain(mark);
+      expect(fragmentSource(receiver), 'with nothing casting, even a receiver draws with the stub').not.toContain(mark);
 
-      // The first caster turns sampling on, in the same frame, for meshes that receive.
       sun.castShadow = true;
       app.render();
       expect(view._hasShadows).toBe(true);
-      expect(fragmentSource(receiver)).toContain(mark);
-      expect(fragmentSource(optedOut)).not.toContain(mark);
+      expect(fragmentSource(receiver), 'the first caster turns sampling on, the same frame').toContain(mark);
+      expect(fragmentSource(optedOut), 'for meshes that receive only').not.toContain(mark);
 
-      // The caster going away does not recompile back to the stub.
       sun.castShadow = false;
       app.render();
       expect(view._hasShadows).toBe(true);
-      expect(fragmentSource(receiver)).toContain(mark);
+      expect(fragmentSource(receiver), 'losing the caster does not recompile back to the stub').toContain(mark);
     });
 
     it('updates batched receiver variants and cached draw work when a hidden caster appears', async () => {

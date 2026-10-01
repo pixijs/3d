@@ -71,11 +71,18 @@ export const loadCubemap = {
     return CubeTexture.from({ faces, label: filename });
   },
 
+  /**
+   * Destroys the cube texture, then unloads its faces
+   *
+   * In that order the cube has stopped listening to its faces by the time the loader destroys them.
+   * @param cubeTexture - The cube texture `load` returned
+   * @param _resolvedAsset - Unused
+   * @param loader - The loader that cached the face textures
+   */
   async unload(cubeTexture: CubeTexture, _resolvedAsset?: ResolvedAsset, loader?: Loader) {
     const faces = cubeTexture.source.faces;
     const faceUrls = FACE_KEYS.map((key) => faces[key]._sourceOrigin);
 
-    // The cube stops listening to its faces first, then the loader destroys the face textures it cached
     cubeTexture.destroy(true);
     await loader!.unload(faceUrls);
   },

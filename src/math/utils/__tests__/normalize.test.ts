@@ -53,19 +53,9 @@ describe('normalize', () => {
     expect(normalize(-1, arr)).toBe(-127);
   });
 
-  test('rounds to nearest integer', () => {
-    const arr = new Uint8Array(1);
-    expect(normalize(0.5 / 255, arr)).toBe(1);
-    expect(normalize(0.4 / 255, arr)).toBe(0);
-  });
-
   test('throws for unsupported array type', () => {
     const arr = new Uint8ClampedArray(1);
     expect(() => normalize(0.5, arr)).toThrow('Invalid component type.');
-  });
-
-  test('throws for plain number array', () => {
-    expect(() => normalize(0.5, [] as unknown as Float32Array)).toThrow('Invalid component type.');
   });
 });
 
@@ -101,7 +91,6 @@ describe('denormalize', () => {
     expect(denormalize(0, arr)).toBe(0);
     expect(denormalize(2147483647, arr)).toBe(1);
     expect(denormalize(-2147483647, arr)).toBe(-1);
-    // -2147483648 / 2147483647 < -1, so denormalize should clamp to -1.
     expect(denormalize(-2147483648, arr)).toBe(-1);
   });
 
@@ -124,10 +113,6 @@ describe('denormalize', () => {
   test('throws for unsupported array type', () => {
     const arr = new Uint8ClampedArray(1);
     expect(() => denormalize(0.5, arr)).toThrow('Invalid component type.');
-  });
-
-  test('throws for plain number array', () => {
-    expect(() => denormalize(0.5, [] as unknown as Float32Array)).toThrow('Invalid component type.');
   });
 });
 

@@ -17,183 +17,287 @@ import {
 
 /**
  * Options for {@link Geometry3D}
+ *
+ * Each vertex attribute takes a typed array with its components packed vertex after vertex, or a
+ * pixi `Attribute` whose `format` says how to read its buffer. An `Attribute` is how quantized
+ * data comes in, and it is used as given.
+ * @example
+ * ```ts
+ * const options: Geometry3DOptions = { positions, normals, uvs, indices };
+ * const geometry = new Geometry3D(options);
+ * ```
  * @category geometry
  * @standard
  */
 export interface Geometry3DOptions {
   /**
-   * Mesh positions
-   *
-   * Pass a `Float32Array` for raw floats, or a Pixi `Attribute` (with explicit `format`) for
-   * quantized/non-float data.
+   * Vertex positions, three floats per vertex
+   * @example
+   * ```ts
+   * const triangle = new Geometry3D({ positions: new Float32Array([0, 1, 0, -1, -1, 0, 1, -1, 0]) });
+   * ```
    */
   positions?: Float32Array | Attribute;
   /**
-   * Mesh UVs
-   *
-   * Pass a `Float32Array` for raw floats, or a Pixi `Attribute` (with explicit `format`) for
-   * quantized/non-float data.
+   * Texture coordinates, two floats per vertex
+   * @example
+   * ```ts
+   * const quad = new Geometry3D({ positions, uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]) });
+   * ```
    */
   uvs?: Float32Array | Attribute;
   /**
-   * Mesh normals
+   * Vertex normals, three floats per vertex
    *
-   * Pass a `Float32Array` for raw floats, or a Pixi `Attribute` (with explicit `format`) for
-   * quantized/non-float data.
+   * Without them the geometry shades as if every normal were `(0, 0, 1)`, which suits unlit
+   * billboards and ribbons. `quantizeNormals` decides how they are stored.
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, normals });
+   * ```
    */
   normals?: Float32Array | Attribute;
   /**
-   * Mesh tangents
+   * Vertex tangents, four floats per vertex: the tangent direction, then `1` or `-1` for which way
+   * the bitangent points
    *
-   * Pass a `Float32Array` for raw floats, or a Pixi `Attribute` (with explicit `format`) for
-   * quantized/non-float data.
+   * Normal maps use them when present and otherwise derive a tangent frame per pixel.
+   * `quantizeTangents` decides how they are stored.
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, normals, uvs, tangents });
+   * ```
    */
   tangents?: Float32Array | Attribute;
   /**
-   * Mesh indices
+   * Vertex indices, three per triangle for the default `triangle-list` topology
    *
-   * A `Uint16Array` is upgraded to `Uint32Array` when its byte length is not a multiple of 4
-   * (WebGPU alignment). An existing `Buffer` is used as-is, so several geometries can share one.
+   * Left out, the vertices are drawn in order. A `Uint16Array` whose byte length isn't a multiple
+   * of 4 is copied into a `Uint32Array`, which WebGPU needs. A `Buffer` is used as it is, so
+   * several geometries can share one.
+   * @example
+   * ```ts
+   * const quad = new Geometry3D({
+   *   positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]),
+   *   indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+   * });
+   * ```
    */
   indices?: Uint16Array | Uint32Array | Buffer;
   /**
    * How many indices to draw, when that is fewer than the index buffer holds
    *
-   * `0` draws the whole buffer. Read at draw time only, so changing it never re-uploads anything;
-   * see Pixi's `Geometry.indexCount`.
+   * `0` draws the whole buffer. Only a `dynamic` geometry honours it: every other geometry is
+   * copied into the shared buffers with its whole index buffer, and draws all of it. Use it to draw
+   * a prefix of an index buffer several geometries share.
    * @default 0
+   * @example
+   * ```ts
+   * const firstTen = new Geometry3D({ positions, indices: sharedQuadIndices, indexCount: 10 * 6, dynamic: true });
+   * ```
    */
   indexCount?: number;
   /**
    * Primitive topology used when drawing the mesh
    * @default 'triangle-list'
+   * @example
+   * ```ts
+   * const wireframe = new Geometry3D({ positions, indices: edgeIndices, topology: 'line-list' });
+   * ```
    */
   topology?: Topology;
   /**
-   * Whether the underlying GPU buffers may shrink to fit the data on resize
+   * Whether the geometry's own GPU buffers may shrink to fit their data when it gets smaller
    * @default false
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, shrinkBuffersToFit: true });
+   * ```
    */
   shrinkBuffersToFit?: boolean;
-  /** The 3D bounding box of the geometry; computed from `positions` when omitted */
+  /**
+   * The geometry's local bounding box; computed from `positions` when omitted
+   *
+   * Pass it when you already know the box, to skip scanning the positions.
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({
+   *   positions,
+   *   bounds3D: new Box(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)),
+   * });
+   * ```
+   */
   bounds3D?: Box;
-  /** Bone indices; an integer typed array (format inferred from array type) or explicit `Attribute` */
+  /**
+   * Four bone indices per vertex, for skinning
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, joints: new Uint8Array(vertexCount * 4), weights });
+   * ```
+   */
   joints?: Uint16Array | Uint8Array | Attribute;
-  /** Bone weights; a `Float32Array` for raw floats, integer typed array (normalized), or explicit `Attribute` */
+  /**
+   * Four bone weights per vertex, matching `joints`
+   *
+   * A `Float32Array` is used as floats; an integer array is read as fractions from 0 to 1.
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, joints, weights: new Float32Array(vertexCount * 4) });
+   * ```
+   */
   weights?: Float32Array | Uint16Array | Uint8Array | Attribute;
   /**
-   * Per-vertex colors, always 4 components
+   * Vertex colours, four components per vertex (RGBA)
    *
-   * A `Float32Array` for raw floats, or an integer typed array (hardware-normalized
-   * to [0, 1]). Three-component sources must be widened to RGBA before they get
-   * here — the generic VEC3 padding leaves the fourth lane at zero, which is a
-   * transparent alpha rather than an opaque one.
-   *
-   * The channels are handed through untouched; whether they tint is the
-   * material's call, see {@link BaseMaterial3D#vertexColors}.
+   * A `Float32Array` is used as floats; an integer array is read as fractions from 0 to 1.
+   * Three-component colours must be widened to RGBA with an opaque alpha first, because the data
+   * is read four components per vertex. Whether the colours tint is the material's call; see
+   * {@link BaseMaterial3D#vertexColors}.
+   * @example
+   * ```ts
+   * const red = new Uint8Array([255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255]);
+   * const geometry = new Geometry3D({ positions, colors: red });
+   * ```
    */
   colors?: Float32Array | Uint16Array | Uint8Array | Attribute;
   /**
-   * A second set of per-vertex colors, always 4 components
+   * A second set of vertex colours, read as `aColor1`, with the same rules as `colors`
    *
-   * Exposed as `aColor1`. Nothing consumes it by default — unlike `colors`,
-   * which auto-injects the vertex-color tint — so it is inert until a material
-   * bit declares the attribute and reads it.
+   * Materials never tint with it. It does nothing until a shader bit declares `aColor1` and reads
+   * it, which makes it the place for data that isn't really a colour, such as a wind mask.
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, colors1: windMask });
+   * ```
    */
   colors1?: Float32Array | Uint16Array | Uint8Array | Attribute;
   /**
-   * Whether to interleave the per-vertex attributes into a single buffer
+   * Whether to pack the attributes into one interleaved buffer
    *
-   * Improves cache locality at upload-time cost.
+   * Only a `dynamic` geometry draws from its own buffers. Every other geometry is copied into a
+   * shared, interleaved buffer anyway, so for it this only changes the layout of its own copy.
    * @default false
+   * @example
+   * ```ts
+   * const trail = new Geometry3D({ positions, colors, interleave: true, dynamic: true });
+   * ```
    */
   interleave?: boolean;
   /**
-   * Whether to quantize normals to 16-bit signed integers (snorm16)
+   * Whether to store `Float32Array` normals as 16-bit signed integers
    *
-   * Halves bandwidth versus raw floats with negligible visual impact.
+   * They then take 8 bytes per vertex instead of 12, with negligible visual difference. An
+   * `Attribute` is used as given either way.
    * @default true
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, normals, quantizeNormals: false });
+   * ```
    */
   quantizeNormals?: boolean;
   /**
-   * Whether to quantize tangents to 16-bit signed integers (snorm16)
+   * Whether to store `Float32Array` tangents as 16-bit signed integers
    *
-   * Halves bandwidth versus raw floats with negligible visual impact.
+   * They then take 8 bytes per vertex instead of 16, with negligible visual difference. An
+   * `Attribute` is used as given either way.
    * @default true
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, normals, tangents, quantizeTangents: false });
+   * ```
    */
   quantizeTangents?: boolean;
   /**
-   * Pre-built attribute map
+   * A prebuilt attribute map, keyed by shader attribute name
    *
-   * Use to supply your own buffers or interleaved layout; when set,
-   * `positions`/`uvs`/`normals`/etc. are ignored.
+   * Use it to supply your own buffers or interleaved layout. The names the other options fill are
+   * `aPosition`, `aUV`, `aNormal`, `aTangent`, `aJoints`, `aWeights`, `aColor` and `aColor1`.
+   *
+   * With a map, the per-attribute options build nothing and no bounds are computed, so pass
+   * `bounds3D` as well: a geometry with empty bounds is never culled, and picking, which tests the
+   * bounds first, never hits it.
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({
+   *   attributes: { aPosition: { buffer, format: 'float32x3', stride: 12, offset: 0 } },
+   *   bounds3D: new Box(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)),
+   * });
+   * ```
    */
   attributes?: Record<string, Attribute>;
   /**
-   * When `true`, this geometry is never merged into a `GeometryAtlas`
+   * Keep the geometry out of the shared buffers and draw it from its own
    *
-   * The mesh draws directly from this geometry's own buffers — required for
-   * streaming geometries where the consumer owns the buffers and mutates
-   * them per frame (e.g. ribbon trails, dynamic particle systems).
+   * By default, geometries with the same attributes are copied into shared buffers the first
+   * time they are drawn, so drawing different geometries doesn't switch buffers. That copy is
+   * made once: later writes to a geometry's own buffers don't reach the screen. Set `dynamic` when
+   * you rewrite the vertices every frame, as a trail or a particle system does.
    *
-   * Defaults to `false`; the atlas is the right default for static geometry —
-   * different `Geometry3D` instances that share an attribute layout merge into
-   * one vertex/index buffer, so successive draws of distinct geometries don't
-   * rebind buffer or bind-group state. Cuts state switching from the GPU
-   * command stream and lays the foundation for future multi-draw indirect.
-   * (Instanced batching of multiple meshes sharing the *same* `Geometry3D` +
-   * material is independent of the atlas — the batcher already collapses
-   * those into one instanced draw call regardless.)
-   * Set to `true` only when you need direct buffer control.
-   *
-   * Construction-only — {@link Geometry3D#dynamic} is `readonly`. To change a
-   * geometry's atlas behaviour, build a new geometry.
+   * A dynamic geometry is never frustum-culled, because its vertices can move outside any bounds.
+   * Fixed at construction; build a new geometry to change it.
+   * @default false
    * @example
    * ```ts
-   * // A streaming ribbon whose vertex buffers are mutated per frame:
-   * const geo = new Geometry3D({
-   *   attributes: { aPosition: { buffer, format: 'float32x3', stride: 12, offset: 0 } },
-   *   dynamic: true,
+   * const trail = new Geometry3D({ positions: new Float32Array(64 * 3), dynamic: true });
+   *
+   * app.ticker.add(() => {
+   *   writeTrailPoints(trail.positions);
+   *   trail.attributes.aPosition.buffer.update();
    * });
    * ```
-   * @default false
    */
   dynamic?: boolean;
   /**
-   * Morph-target (blend-shape) vertex deltas
+   * Morph targets (blend shapes), each a set of per-vertex offsets from `positions`
    *
-   * Each entry holds one target's per-vertex position deltas as a flat
-   * `Float32Array` (3 floats per vertex, same vertex order as `positions`),
-   * optionally paired with normal deltas of the same shape — supply normals on
-   * every target or none (the packed delta layout is uniform per geometry).
-   * Composes with `dynamic` and the `GeometryAtlas` freely: the shader
-   * recovers the geometry-local vertex id via the geometry store's
-   * `baseVertex`.
+   * A target holds three floats per vertex, in the same vertex order as `positions`, and can carry
+   * normal offsets of the same shape. Normal offsets are used only when every target has them. A
+   * {@link Mesh3D} drawing the geometry blends the targets by its {@link Mesh3D#weights}.
    *
-   * Deforms on both backends: WebGPU reads the shared morph store as a
-   * storage buffer, WebGL as a data texture.
+   * The culling bounds grow to cover weights from 0 to 1. Weights outside that range can move
+   * vertices past them, so pass a larger `bounds3D` if you use such weights.
+   * @example
+   * ```ts
+   * const geometry = new Geometry3D({ positions, morphTargets: [{ positions: smileOffsets }] });
+   * const face = new Mesh3D({ geometry, material, weights: new Float32Array([0.5]) });
+   * ```
    */
   morphTargets?: {
-    /** Per-vertex position deltas — 3 floats per vertex, same vertex order as `positions` */
+    /**
+     * Offsets from the base positions, three floats per vertex
+     * @example
+     * ```ts
+     * const raise = new Float32Array(vertexCount * 3);
+     * for (let i = 1; i < raise.length; i += 3) raise[i] = 0.5;
+     * const geometry = new Geometry3D({ positions, morphTargets: [{ positions: raise }] });
+     * ```
+     */
     positions: Float32Array;
-    /** Optional per-vertex normal deltas, same shape as the position deltas */
+    /**
+     * Offsets from the base normals, three floats per vertex
+     * @example
+     * ```ts
+     * const geometry = new Geometry3D({
+     *   positions,
+     *   normals,
+     *   morphTargets: [{ positions: bulgeOffsets, normals: bulgeNormalOffsets }],
+     * });
+     * ```
+     */
     normals?: Float32Array;
   }[];
 }
 
 /**
- * A subclass of Pixi's `Geometry` that carries the 3D-specific attribute set
- * (`aPosition`, plus optional `aNormal`/`aUV`/`aTangent`/`aJoints`/`aWeights`/`aColor`/`aColor1`)
- * and supports both interleaved and non-interleaved layouts
+ * A mesh's vertex and index data: positions plus optional normals, UVs, tangents, colours and
+ * skinning data, in separate buffers or interleaved in one
  *
- * Only `aPosition` is required. A geometry without normals shades with a fixed object-space
- * `(0, 0, 1)` normal, which is what unlit billboards and ribbons want.
+ * Only positions are required. Inputs can be raw `Float32Array` data or pixi `Attribute`s,
+ * including the quantized integer formats glTF files use (KHR_mesh_quantization).
  *
- * Position, UV, normal and tangent inputs may be raw `Float32Array` data or
- * pre-built Pixi `Attribute`s, including the quantized integer formats
- * defined by KHR_mesh_quantization. Static geometries are merged into a
- * shared `GeometryAtlas` by default to cut buffer-rebind overhead;
- * set `dynamic: true` to opt out for streaming meshes whose buffers are
- * mutated per frame.
+ * The first time a geometry is drawn it is copied into buffers shared with other geometries, so
+ * later edits to its data don't show. Build a new geometry for a new shape, or make it
+ * {@link Geometry3DOptions#dynamic} if you rewrite it every frame.
  * @example
  * ```ts
  * const geometry = new Geometry3D({
@@ -210,7 +314,16 @@ export interface Geometry3DOptions {
  * @standard
  */
 export class Geometry3D extends Geometry {
-  /** Default options applied when constructing a `Geometry3D` */
+  /**
+   * Defaults applied when constructing a `Geometry3D`
+   *
+   * Each primitive, such as {@link SphereGeometry}, copies these into its own `defaultOptions` when
+   * its module loads, so a later change here reaches only plain `Geometry3D`s.
+   * @example
+   * ```ts
+   * Geometry3D.defaultOptions.quantizeNormals = false;
+   * ```
+   */
   public static defaultOptions: Geometry3DOptions = {
     topology: 'triangle-list',
     shrinkBuffersToFit: false,
@@ -219,123 +332,135 @@ export class Geometry3D extends Geometry {
     quantizeTangents: true,
   };
 
-  /** The 3D bounding box of the geometry */
+  /**
+   * The geometry's local bounding box, used for picking and for a mesh's local bounds
+   *
+   * Culling tests {@link Geometry3D#boundsSphere} instead.
+   * @example
+   * ```ts
+   * const size = geometry.bounds3D.getSize();
+   * ```
+   */
   public bounds3D: Box;
 
   /**
-   * The 3D bounding sphere of the geometry, derived once from {@link Geometry3D#bounds3D} at
-   * construction (centre = box centre, radius = half the space diagonal)
+   * The sphere around {@link Geometry3D#bounds3D}, which frustum culling tests
    *
-   * Read by frustum culling — the CPU cull ({@link Mesh3D#boundingSphere}) and the GPU cull's
-   * per-geometry bounds store both source it, so they share one identical local sphere.
+   * Computed once, at construction, so later edits to the positions or to `bounds3D` don't reach
+   * culling.
+   * @example
+   * ```ts
+   * const radius = geometry.boundsSphere.radius;
+   * ```
    */
   public boundsSphere: Sphere;
 
-  /** Number of vertices in this geometry */
+  /**
+   * Number of vertices
+   * @example
+   * ```ts
+   * const colors = new Float32Array(geometry.vertexCount * 4);
+   * ```
+   */
   get vertexCount(): number {
     return vertexCountFromAttributes(this.attributes);
   }
 
   /**
-   * The atlas allocation for this geometry, if it belongs to a `GeometryAtlas`
-   *
-   * A geometry can only belong to one atlas at a time.
+   * Where the geometry sits in a `GeometryAtlas`; `null` while it isn't packed
    * @internal
    */
   public _geometryAtlasAllocation: GeometryAllocation | null = null;
 
   /**
-   * Slot in the per-renderer GeometryDataStoreBuffer (bounding sphere); -1 until minted
+   * Row in the renderer's `GeometryDataStoreBuffer`; -1 until the store assigns one
    * @internal
    */
   public _geometryDataIndex = -1;
 
   /**
-   * The store that minted `_geometryDataIndex`, so `destroy` can release the
-   * slot without renderer context (same ownership pattern as `Morph._store`)
+   * The store that assigned `_geometryDataIndex`, so `destroy` can free the row without a renderer
    * @internal
    */
   public _geometryDataStore: GeometryDataStoreBuffer | null = null;
 
   /**
-   * When `true`, this geometry is never merged into a `GeometryAtlas`
-   *
-   * The mesh draws directly from this geometry's own buffers — required for
-   * streaming geometries where the consumer owns the buffers and mutates
-   * them per frame (e.g. ribbon trails, dynamic particle systems).
-   *
-   * Set via the {@link Geometry3DOptions#dynamic} constructor option.
-   * `readonly` after construction — to change atlas behaviour, build a
-   * new geometry.
+   * Whether the geometry stays out of the shared buffers; see {@link Geometry3DOptions#dynamic}
+   * @advanced
    */
   public readonly dynamic: boolean;
 
   /**
-   * Number of morph targets on this geometry (0 when none)
+   * Number of morph targets; `0` when there are none
    *
-   * Read by the renderer to compose the morph shader bit and size the mesh's
-   * weight slot in the shared morph store.
+   * A mesh drawing the geometry takes one weight per target.
+   * @example
+   * ```ts
+   * const weights = new Float32Array(geometry.morphTargetCount);
+   * ```
    */
-  public readonly morphTargetCount: number;
+  public readonly morphTargetCount: number = 0;
 
   /**
-   * Base float offset of this geometry's deltas in the shared `MorphStoreBuffer`'s delta arena
-   *
-   * `-1` until uploaded on first render.
+   * Float offset of this geometry's packed offsets in the morph store; `-1` until the first render
+   * packs them
    * @internal
    */
   public _morphDeltaBase = -1;
 
   /**
-   * Float extent of the packed delta block, recorded at pack time (the raw
-   * targets are released then), so `destroy` can return the block to the
-   * arena's free list
+   * Float length of the packed block, recorded at packing because the raw targets are released
+   * then, so `destroy` can hand the block back
    * @internal
    */
   public _morphDeltaFloats = 0;
 
   /**
-   * The store holding this geometry's packed delta block (see `Morph._store`)
+   * The morph store holding the packed block, so `destroy` can hand it back without a renderer
    * @internal
    */
   public _morphStore: MorphStoreBuffer | null = null;
 
   /**
-   * Whether every morph target carries NORMAL deltas
+   * Whether every morph target carries normal offsets
    *
-   * Selects the `|morphN` shader variant and the two-texel delta stride in the
-   * shared morph store — the single fact the packer and the shader compose
-   * both read.
+   * Only then do the targets bend the normals as well as the positions.
+   * @advanced
    */
   public readonly hasMorphNormals: boolean;
 
   /**
-   * Conservative bounds expansion for morphing: Σ over targets of the largest
-   * position-delta length, computed while the deltas are packed
+   * How far morphing can move a vertex: the sum over targets of each target's largest position
+   * offset, computed at packing
    *
-   * Added to the bounds-sphere radius (geometry store row + the mesh's world
-   * sphere) so a deformed surface can't escape its cull bounds for weights in
-   * [0, 1] — the glTF default range; out-of-range weights need a user bounds
-   * override.
+   * Culling adds it to the bounding sphere's radius, which covers weights from 0 to 1.
    * @internal
    */
   public _morphBoundsExpansion = 0;
 
   /**
-   * Raw morph-target deltas (positions, and normals when {@link Geometry3D#hasMorphNormals}),
-   * retained until packed into the shared delta arena on first render, then released
+   * The raw morph targets, kept until the first render packs them into the morph store
    * @internal
    */
   public _morphTargets: { positions: Float32Array; normals?: Float32Array }[] | null = null;
 
   private _attributeKey: string | null = null;
+  /**
+   * Whether `destroy` has run
+   *
+   * `destroy` sets it before calling pixi's `destroy`, which calls `unload()`, so that call does
+   * nothing: this class's `unload` would free the geometry's own buffers, which `destroy(false)`
+   * must leave loaded for the geometries that share them. `destroy` drops the GPU layout through
+   * pixi's base `unload` instead.
+   */
   private _destroyed = false;
 
   /**
-   * A key that identifies the attribute structure (names and formats) of this geometry
+   * The attribute names and formats, ignoring strides, offsets and buffers
    *
-   * Unlike layoutKey, this ignores strides, offsets, and buffer identities.
-   * Geometries with the same attributeKey can be packed into the same GeometryAtlas.
+   * Geometries with the same key are packed into the same shared buffers. A geometry with
+   * positions, normals and UVs has the key `aNormal:snorm16x4|aPosition:float32x3|aUV:float32x2|`.
+   * @advanced
    */
   get attributeKey(): string {
     if (this._attributeKey) return this._attributeKey;
@@ -350,7 +475,6 @@ export class Geometry3D extends Geometry {
 
       if (attr.instance) continue;
 
-      // e.g. "aPosition:float32x3|aNormal:float32x3|aUV:float32x2|"
       key += `${name}:${attr.format}|`;
     }
 
@@ -400,8 +524,6 @@ export class Geometry3D extends Geometry {
         };
       };
 
-      // Non-float positions/UVs come from KHR_mesh_quantization and must be
-      // hardware-normalized so the GPU produces f32 in [-1, 1] / [0, 1].
       addAttribute(positions, 'aPosition', 3, !!positions && !(positions instanceof Float32Array));
       addAttribute(uvs, 'aUV', 2, !!uvs && !(uvs instanceof Float32Array));
       addAttribute(normals, 'aNormal', 3, true, options.quantizeNormals ?? true);
@@ -414,8 +536,6 @@ export class Geometry3D extends Geometry {
 
     super({
       attributes,
-      // Every geometry is indexed — the batched draw path is index-based, so a
-      // sequential [0..vertexCount) buffer is synthesized when none is supplied.
       indexBuffer:
         options.indices instanceof Buffer
           ? options.indices
@@ -424,19 +544,11 @@ export class Geometry3D extends Geometry {
       topology: options.topology,
     });
 
-    // Morph deltas index by a geometry-local vertex id; the morph bits recover
-    // it from the atlas-global one by subtracting the geometry-store row's
-    // baseVertex, so morphed geometry atlases (and culls) like any other.
     this._morphTargets = options.morphTargets ?? null;
     this.morphTargetCount = options.morphTargets?.length ?? 0;
     this.hasMorphNormals = this.morphTargetCount > 0 && options.morphTargets!.every((target) => !!target.normals);
     this.dynamic = options.dynamic ?? false;
 
-    // Use provided bounds or compute from positions. The fallback reads raw
-    // min/max so bounds live in the same space the vertex shader's `position`
-    // output lives in (integer-space Q for quantized meshes, raw world units
-    // for float meshes). The glTF loader still supplies accessor.min/max
-    // explicitly; this fallback is for programmatically-constructed geometries.
     if (options.bounds3D) {
       this.bounds3D = options.bounds3D;
     } else if (positions) {
@@ -450,30 +562,28 @@ export class Geometry3D extends Geometry {
   }
 
   /**
-   * Removes this geometry from its atlas (if any) and then destroys the underlying Pixi geometry
+   * Frees the geometry for good: its place in the shared buffers, the renderer data kept for it,
+   * and its GPU layout
    *
-   * Idempotent: a second call is a no-op. pixi's `Geometry.destroy` is not idempotent (it nulls
-   * `buffers` then re-iterates it on a second call), so this guard makes shared geometry safe to
-   * tear down through multiple owners (several {@link Mesh3D} / {@link BatchedMesh3D} slots, or a
-   * repeated user `destroy`).
-   * @param destroyBuffers - Whether to destroy the underlying GPU buffers as well
+   * Its own buffers are destroyed only with `destroyBuffers`, since other geometries may share
+   * them. Calling it again does nothing, so every owner of a shared geometry can call it.
+   * @param destroyBuffers - Whether to destroy the geometry's own buffers as well
+   * @example
+   * ```ts
+   * view.root.removeChild(mesh);
+   * mesh.geometry.destroy(true);
+   * ```
+   * @see {@link Geometry3D.unload} To free the GPU memory but keep the geometry usable.
    */
   public override destroy(destroyBuffers?: boolean): void {
     if (this._destroyed) return;
 
     this._geometryAtlasAllocation?.atlas.remove(this);
 
-    // Release the per-renderer store rows this geometry occupies — nothing else
-    // frees them: slots live inside one always-resident store buffer that GC can
-    // never reclaim piecemeal, so churned geometries would otherwise grow both
-    // stores for the renderer's lifetime.
     this._geometryDataStore?.remove(this);
     this._geometryDataStore = null;
     this._morphStore?.freeDeltas(this);
 
-    // Release the recorded GPU layout with the base unload only: `destroyBuffers = false` must
-    // leave buffers other geometries may share loaded, so the full `unload()` override must not
-    // run here. The flag below turns the `unload()` call pixi's own destroy makes into a no-op.
     super.unload();
     this._destroyed = true;
 
@@ -483,18 +593,17 @@ export class Geometry3D extends Geometry {
   /**
    * Give this geometry's GPU memory back now, keeping everything needed to rebuild it
    *
-   * Vacates the range it holds in a `GeometryAtlas`, frees the GPU copies of its own vertex /
-   * index buffers, and drops the GPU layout (WebGL VAO) recorded for it. The CPU-side attribute
-   * data is untouched.
+   * Leaves its place in the shared buffers, frees the GPU copies of its own vertex and index
+   * buffers, and drops the GPU layout (WebGL VAO) recorded for it. The CPU-side attribute data is
+   * untouched.
    *
-   * The vacated range is dead space until the atlas's own compaction reclaims it: unload never
-   * repacks, so unloading a run of geometries can't thrash the shared buffer. Nothing rebuilds on
-   * the unload itself either. The next frame that walks a mesh drawing this geometry re-packs it
-   * and re-records that mesh's draw commands — pixel-identically, at whatever offset the atlas
-   * hands out then — so a geometry that is out of the scene comes back when its mesh does, and one
-   * that is still drawn is back in the atlas a frame later.
+   * The space it leaves stays unused until the shared buffers next compact, so unloading a run of
+   * geometries never repacks them. Nothing rebuilds on the unload itself either. The next frame
+   * that draws a mesh using this geometry packs it again, wherever there is room, and re-records
+   * that mesh's draws; the image comes out the same. So a geometry that is out of the scene comes
+   * back when its mesh does, and one that is still drawn is back a frame later.
    *
-   * Idempotent, and a no-op after {@link Geometry3D.destroy}.
+   * Safe to call more than once, and does nothing after {@link Geometry3D.destroy}.
    * @example
    * ```ts
    * view.root.removeChild(mesh);
@@ -508,8 +617,6 @@ export class Geometry3D extends Geometry {
 
     this._geometryAtlasAllocation?.atlas.remove(this);
 
-    // Self-owned buffers only. An atlased geometry's data lives in the atlas's shared buffers,
-    // which stay — they hold every other geometry packed alongside it.
     const buffers = this.buffers;
     for (let i = 0; i < buffers.length; i++) buffers[i].unload();
 
@@ -517,37 +624,36 @@ export class Geometry3D extends Geometry {
   }
 
   /**
-   * The positions of the mesh
+   * The position data
    *
-   * Typed as `TypedArray` because KHR_mesh_quantization meshes store positions
-   * as Int8/Uint8/Int16/Uint16; use the `Float32Array` branch of the union for
-   * vanilla float meshes.
+   * A `Float32Array`, unless the geometry was built from quantized positions. For an interleaved
+   * geometry it is the whole shared buffer, every attribute included.
+   * @example
+   * ```ts
+   * const positions = geometry.positions as Float32Array;
+   * const firstVertexY = positions[1];
+   * ```
    */
   get positions(): TypedArray {
     return this.attributes.aPosition.buffer.data as TypedArray;
   }
 
   /**
-   * Replaces the position buffer data
-   *
-   * The replacement must be at least as long as the original positions array,
-   * otherwise the geometry will not be valid.
+   * Replaces the position data, which must cover at least as many vertices as before
    * @param value - New position data, at least as long as the original
    */
   set positions(value: TypedArray) {
     this.attributes.aPosition.buffer.data = value;
   }
 
-  /** The UVs of the mesh, or `undefined` when no UV attribute is present */
+  /** The UV data, or `undefined` when the geometry has no UVs */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- raw stored data; see the positions example
   get uvs(): TypedArray | undefined {
     return this.attributes.aUV?.buffer.data as TypedArray | undefined;
   }
 
   /**
-   * Replaces the UV buffer data
-   *
-   * The replacement must be at least as long as the positions array, otherwise
-   * the geometry will not be valid.
+   * Replaces the UV data, which must cover at least as many vertices as the positions
    * @param value - New UV data; ignored when the geometry has no UV attribute
    */
   set uvs(value: TypedArray) {
@@ -555,13 +661,23 @@ export class Geometry3D extends Geometry {
     this.attributes.aUV.buffer.data = value;
   }
 
-  /** The normals of the mesh, or `undefined` when no normal attribute is present */
+  /**
+   * The normal data, or `undefined` when the geometry has no normals
+   *
+   * As stored, so with {@link Geometry3DOptions#quantizeNormals} (the default) it is an
+   * `Int16Array` with four values per vertex, `32767` standing for `1`.
+   * @example
+   * ```ts
+   * const normals = geometry.normals as Int16Array;
+   * const firstNormalX = normals[0] / 32767;
+   * ```
+   */
   get normals(): TypedArray | undefined {
     return this.attributes.aNormal?.buffer.data as TypedArray | undefined;
   }
 
   /**
-   * Replaces the normal buffer data
+   * Replaces the normal data, which has to be in the format the normals are stored in
    * @param value - New normal data; ignored when the geometry has no normal attribute
    */
   set normals(value: TypedArray) {
@@ -569,13 +685,19 @@ export class Geometry3D extends Geometry {
     this.attributes.aNormal.buffer.data = value;
   }
 
-  /** The tangents of the mesh, or `undefined` when no tangent attribute is present */
+  /**
+   * The tangent data, or `undefined` when the geometry has no tangents
+   *
+   * As stored, so with {@link Geometry3DOptions#quantizeTangents} (the default) it is an
+   * `Int16Array`, `32767` standing for `1`.
+   */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- raw stored data; see the positions example
   get tangents(): TypedArray | undefined {
     return this.attributes.aTangent?.buffer.data as TypedArray | undefined;
   }
 
   /**
-   * Replaces the tangent buffer data
+   * Replaces the tangent data, which has to be in the format the tangents are stored in
    * @param value - New tangent data; ignored when the geometry has no tangent attribute
    */
   set tangents(value: TypedArray) {
@@ -583,13 +705,19 @@ export class Geometry3D extends Geometry {
     this.attributes.aTangent.buffer.data = value;
   }
 
-  /** The indices of the mesh */
+  /**
+   * The index data
+   * @example
+   * ```ts
+   * const triangleCount = geometry.indices.length / 3;
+   * ```
+   */
   get indices(): Uint32Array | Uint16Array {
     return this.indexBuffer.data as Uint32Array | Uint16Array;
   }
 
   /**
-   * Replaces the index buffer data
+   * Replaces the index data
    * @param value - New vertex indices, three per triangle for `triangle-list`
    */
   set indices(value: Uint32Array | Uint16Array) {

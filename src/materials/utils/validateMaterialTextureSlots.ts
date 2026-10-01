@@ -3,22 +3,49 @@ import type { ShaderBit } from '../../core/shader/ShaderBit';
 import type { BaseMaterial3D } from '../BaseMaterial3D';
 
 /**
- * Assert that the final compiled bit list produces exactly the construction-time Material struct
+ * The material-facing layout a compiled bit list declares
  *
- * Holding the two equal is what makes a material's GPU layout knowable before it ever renders —
- * the `material.data` contract — and it can only hold while struct-contributing bits stay
- * construction-pinned.
- *
- * Throws on divergence, which catches a per-mesh or per-view bit (normal
- * mapping, skinning, tonemapping, fog, …) growing `bindings.material`
- * fields, or a custom `getPrimaryDescriptor` adding struct-bearing bits the
- * constructor never saw. Runs once per shader build, never per frame.
+ * What `validateMaterialStruct` and `validateMaterialTextureSlots` hold a material against. The
+ * material systems build it once per compiled shader and keep it beside the shader, so validating a
+ * material that hits the shader cache is a string compare and a short loop.
+ * @internal
+ */
+export interface MaterialLayout {
+  /** Canonical snapshot of the merged `bindings.material` struct */
+  structSnapshot: string;
+  /** Declared texture names, in the order the compiled shader assigns sample indices */
+  textureNames: string[];
+}
+
+/**
+ * Build the {@link MaterialLayout} a bit list declares
  * @param bits - Final compiled bit list
+ * @returns The struct snapshot and texture names the bits declare
+ * @internal
+ */
+export function getMaterialLayout(bits: readonly ShaderBit[]): MaterialLayout {
+  return {
+    structSnapshot: materialStructSnapshot(mergeMaterialStruct(bits)),
+    textureNames: collectTextureNames(bits),
+  };
+}
+
+/**
+ * Assert that a compiled layout's Material struct matches the material's construction-time struct
+ *
+ * Keeping the two equal is what lets `material.data` have the GPU layout before the material ever
+ * renders, and it holds only while the bits that add struct fields are fixed at construction.
+ *
+ * Throws on a mismatch, which catches a per-mesh or per-view bit (normal mapping, skinning, tone
+ * mapping, fog and so on) adding `bindings.material` fields, or a custom `getPrimaryDescriptor`
+ * adding struct fields the constructor never saw. Runs for every material the systems make
+ * resident, cache hits included.
+ * @param layout - Layout of the final compiled bit list
  * @param material - Material whose construction-time snapshot to check against
  * @internal
  */
-export function validateMaterialStruct(bits: readonly ShaderBit[], material: BaseMaterial3D): void {
-  const compiled = materialStructSnapshot(mergeMaterialStruct(bits));
+export function validateMaterialStruct(layout: MaterialLayout, material: BaseMaterial3D): void {
+  const compiled = layout.structSnapshot;
 
   if (compiled !== material._materialStructSnapshot) {
     throw new Error(
@@ -52,23 +79,23 @@ export function collectTextureNames(bits: readonly ShaderBit[]): string[] {
 }
 
 /**
- * Assert that a material's derived texture slots line up with the final compiled bit list
+ * Assert that a material's derived texture slots line up with a compiled layout's texture names
  *
  * The shader's `sampleX` helper for the i-th declared texture name reads packed nibble `i`, and
- * the batcher packs nibble `i` from `material._textures[i]` — this check is the bridge between
- * the two, run once per shader build (never per frame).
+ * the batcher packs nibble `i` from `material._textures[i]`, so the two orders must agree. Runs for
+ * every material the systems make resident, cache hits included.
  *
  * Throws on divergence, which catches:
  *  (a) a bit outside the material's slot derivation (global / pass / future
  *      infrastructure bits) growing a `textures` declaration, and
  *  (b) a custom `getPrimaryDescriptor` override whose bit list no longer
  *      matches the slots the material derived at construction.
- * @param bits - Final compiled bit list
+ * @param layout - Layout of the final compiled bit list
  * @param material - Material whose derived slot layout to check against
  * @internal
  */
-export function validateMaterialTextureSlots(bits: readonly ShaderBit[], material: BaseMaterial3D): void {
-  const names = collectTextureNames(bits);
+export function validateMaterialTextureSlots(layout: MaterialLayout, material: BaseMaterial3D): void {
+  const names = layout.textureNames;
 
   for (let i = 0; i < names.length; i++) {
     if (material._slotByName[names[i]] !== i) {

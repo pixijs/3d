@@ -1,72 +1,64 @@
 import { MATERIAL_STRIDE_FLOATS } from '../../core/buffers/MaterialDataStoreBuffer';
-import { createStructLayout, formatStructLayout } from '../../core/shader/codegen/structLayout';
+import { createStructLayout } from '../../core/shader/codegen/structLayout';
 import type { StructDefinition } from '../../core/shader/ShaderBit';
 import type { BaseMaterial3D } from '../BaseMaterial3D';
 
 /**
- * A material's GPU-synced state
+ * A material's GPU-side values, as `material.data`
  *
- * One stride-sized buffer laid out exactly as the compiled Material struct, with a generated
+ * One fixed-size buffer laid out exactly as the material's compiled `Material` struct, with an
  * accessor per field:
  *
- * - Scalars read/write as numbers (`u32` fields through the integer view).
- * - Vectors read as live `Float32Array` subarray views and write by copy
- *   from any array-like. Mutating a returned view writes the packed data
- *   directly but bypasses the upload queue — use the setter for normal writes.
- * - Every setter signals the owning material (`update()`), which queues
- *   the row on its store; the queue coalesces repeat writes.
- * - Fields the shader has but users shouldn't touch (`_pad`) get no accessor.
+ * - Scalars read and write as numbers.
+ * - Vectors read as live `Float32Array` views into the buffer and are set by copying from any
+ *   array-like. Writing into a returned view changes the data without queueing an upload, so
+ *   call `material.update()` afterwards.
+ * - Setters queue an upload through `material.update()`; repeat writes in one frame upload once.
  *
- * Because the layout is the GPU layout, uploading a material is a single
- * `set()` of the packed `_f32` storage into the store buffer.
+ * The fields typed here are the ones {@link BaseMaterial3D} reads itself. A material with a fixed
+ * struct narrows the type further, as {@link Material3DData} does.
  * @category materials
  * @advanced
  */
 export interface MaterialData {
   /**
-   * Packed storage — exactly the Material struct layout, stride-sized
+   * The buffer itself, in the struct's layout
    * @internal
    */
   readonly _f32: Float32Array;
-  // Base-material struct fields below are typed so BaseMaterial3D reads them without casts;
-  // materials with a richer fixed struct narrow `data` further (see `Material3DData`).
-  /** Linear-light base colour — present iff the compiled struct declares it */
+  /** Base colour in linear light, alpha in the last lane; absent when the struct doesn't declare it */
   baseColor?: Float32Array;
-  /** Alpha-mask cutoff threshold — present iff the compiled struct declares it */
+  /** Cutoff for `alphaMode: 'mask'`; absent when the struct doesn't declare it */
   alphaCutoff?: number;
-  /** Row-major 2x2 linear part of the UV transform, packed `[m00, m01, m10, m11]` — present iff the compiled struct declares it */
+  /** The UV transform's 2x2 part, row-major as `[m00, m01, m10, m11]`; absent when the struct doesn't declare it */
   uvTransformRow0?: Float32Array;
-  /** Packed UV offset — present iff the compiled struct declares it */
+  /** The UV transform's offset; absent when the struct doesn't declare it */
   uvOffset?: Float32Array;
   /**
-   * Generated per-field accessors; fields outside the typed set may be absent
+   * Any other field the struct declares
    *
-   * No boolean member exists by design — a flag write like `data._dirty = true` must be a compile error, not a silent
-   * no-op property.
+   * The value type has no `boolean`, so a write such as `data._dirty = true` is a compile error
+   * rather than a property the GPU never sees.
    */
   [field: string]: number | ArrayLike<number> | undefined;
 }
 
-/**
- * Constructor for a generated, schema-specific {@link MaterialData} class
- * @internal
- */
 type MaterialDataClass = new (material: BaseMaterial3D) => MaterialData;
 
 const classCache = new Map<string, MaterialDataClass>();
 
 /**
- * Build (or return the cached) data class for a packed Material struct definition
+ * Build, or return the cached, data class for a material struct layout
  *
- * The class is generated once per unique layout — prototype accessors over computed offsets, so
- * instances are plain allocations with a shared hidden class and every access is
- * inline-cacheable.
+ * One class per layout, with accessors on the prototype over fixed offsets, so every instance
+ * shares one hidden class and each access can be inline-cached.
  *
- * Throws when the layout exceeds the store-buffer stride — at construction, the earliest
- * possible moment, with the field table in the message.
- * @param def - Merged Material struct definition from the construction bit list
- * @param snapshot - Cache key (the material's `_materialStructSnapshot`)
- * @returns The generated (or cached) data class for the layout
+ * Float setters compare against `Math.fround(value)`: a float slot rounds what it stores, so an
+ * inexact number like 0.3 would never match. Integer setters compare the raw value, since rounding
+ * to float32 would merge distinct integers. Vector setters copy through a view bounded to the
+ * field, so an oversized source throws a `RangeError` instead of overwriting the next field.
+ * @param def - The merged Material struct from the construction bit list
+ * @param snapshot - Cache key, the material's `_materialStructSnapshot`
  * @internal
  */
 export function getOrCreateMaterialDataClass(def: StructDefinition, snapshot: string): MaterialDataClass {
@@ -75,23 +67,11 @@ export function getOrCreateMaterialDataClass(def: StructDefinition, snapshot: st
 
   const layout = createStructLayout(def);
 
-  if (layout.size > MATERIAL_STRIDE_FLOATS * 4) {
-    throw new Error(
-      `[createMaterialDataClass] Material struct uses ${Math.ceil(layout.size / 4)} floats but the store ` +
-        `stride is ${MATERIAL_STRIDE_FLOATS} — writes would overflow into adjacent material slots. ` +
-        `Trim or pack material fields:\n${formatStructLayout(layout)}`,
-    );
-  }
-
   class GeneratedMaterialData {
     public readonly _f32: Float32Array;
     public readonly _u32: Uint32Array;
     public readonly _material: BaseMaterial3D;
-    /**
-     * Lazily-created vector subarray views, one per vector field
-     *
-     * Public so the prototype accessors (defined outside the class body) can reach it.
-     */
+    /** Each vector field's view, made on first access; public so the prototype accessors can reach it */
     public readonly _views: Record<string, Float32Array> = Object.create(null);
 
     constructor(material: BaseMaterial3D) {
@@ -105,9 +85,6 @@ export function getOrCreateMaterialDataClass(def: StructDefinition, snapshot: st
   const prototype = GeneratedMaterialData.prototype;
 
   for (const element of layout.elements) {
-    // GPU-only stride padding — no public accessor.
-    if (element.name === '_pad') continue;
-
     const floatOffset = element.offset / 4;
     const { components } = element;
 
@@ -120,8 +97,6 @@ export function getOrCreateMaterialDataClass(def: StructDefinition, snapshot: st
         },
         set(this: GeneratedMaterialData, value: number) {
           const words = integer ? this._u32 : this._f32;
-          // A float slot rounds what it stores, so compare against the rounded value or an inexact
-          // number like 0.3 never matches. Rounding an integer to float32 would merge distinct values.
           if (words[floatOffset] === (integer ? value : Math.fround(value))) return;
           words[floatOffset] = value;
           this._material.update();
@@ -136,8 +111,6 @@ export function getOrCreateMaterialDataClass(def: StructDefinition, snapshot: st
           return (this._views[name] ??= this._f32.subarray(floatOffset, end));
         },
         set(this: GeneratedMaterialData, value: ArrayLike<number>) {
-          // Writing through the bounded view keeps an oversized source a
-          // loud RangeError instead of silent neighbour corruption.
           (this._views[name] ??= this._f32.subarray(floatOffset, end)).set(value);
           this._material.update();
         },

@@ -16,8 +16,13 @@ export const MAX_SHADOW_LIGHTS = 4;
 /**
  * Shadow map resolution preset
  *
- * Selects the per-side texel size of each shadow map layer: `'low'` 512, `'medium'` 1024,
- * `'high'` 2048, `'ultra'` 4096. Set per view via {@link View3D#shadowQuality}.
+ * The width and height in texels of each shadow map: `'low'` 512, `'medium'` 1024, `'high'` 2048,
+ * `'ultra'` 4096. Each step up takes four times the GPU memory. Set per view through
+ * {@link View3D#shadowQuality}.
+ * @example
+ * ```ts
+ * const view = new View3D({ width: 800, height: 600, shadowQuality: 'high' });
+ * ```
  * @category rendering
  * @standard
  */
@@ -35,29 +40,32 @@ export const SHADOW_QUALITY_SIZE: Record<ShadowQuality, number> = {
 };
 
 /**
- * Shadow edge-filtering quality
+ * How soft shadow edges are
  *
- * Selects the percentage-closer-filter (PCF) kernel compiled into a receiver's shadow sampler —
- * a wider kernel softens shadow edges at the cost of more texture taps per shadowed fragment.
- * Each tap is a hardware 2×2 bilinear PCF fetch (the shadow map uses a linear comparison
- * sampler), so even a single tap is smooth:
- * - `'hard'` — one tap; the crispest, cheapest edge. Mobile-friendliest.
- * - `'pcf'` — four taps; smooth edges at low cost. The default.
- * - `'pcf-high'` — nine taps; the widest, softest penumbra, for higher-end devices.
+ * Picks the percentage-closer filtering (PCF) kernel a receiver's shader samples the shadow map
+ * with. A wider kernel softens the edges and costs more texture reads per shadowed pixel:
+ * - `'hard'`: one read; the crispest, cheapest edge, and the friendliest to mobile.
+ * - `'pcf'`: four reads; smooth edges at low cost. The default.
+ * - `'pcf-high'`: nine reads; the widest, softest edge, for higher-end devices.
  *
- * Set per view via {@link View3D#shadowFilter}; it governs the kernel for every shadow that
- * view samples.
+ * The shadow map's sampler filters linearly, so on most GPUs each read already blends four
+ * neighbouring comparisons and even `'hard'` has a slightly soft edge. WebGPU and WebGL both let
+ * a GPU skip that blend. Set per view through {@link View3D#shadowFilter}.
+ * @example
+ * ```ts
+ * view3d.shadowFilter = 'pcf-high';
+ * ```
  * @category rendering
  * @standard
  */
 export type ShadowFilter = 'hard' | 'pcf' | 'pcf-high';
 
 /**
- * Per-cascade shadow state shared by both backends
+ * One cascade of a light's shadow, the same on both backends
  *
- * A cascade is a camera — light-space view, ortho or perspective box — plus the metadata packed
- * into the `uShadowData` uniform. Identical on both backends; WebGPU hangs its per-light cull
- * results off the light's `ShadowData` rather than the slot.
+ * A camera, made of the light-space view and an ortho or perspective box, plus what the
+ * `uShadowData` uniform packs for it. WebGPU keeps its per-light cull results on the light's
+ * `ShadowData`, not here.
  * @internal
  */
 export interface CascadeSlot {
@@ -74,12 +82,23 @@ export interface CascadeSlot {
   normalBias: number;
   /** Shadow map resolution (texels per side) */
   mapSize: number;
-  /** Number of cascades for this light (meaningful only on cascade 0; 0 otherwise) */
+  /**
+   * The light's cascade count, on cascade 0 of a light with more than one; `0` everywhere else
+   *
+   * A spot light, a fixed box and a lone cascade all keep `0`, which the shader reads as a plain
+   * shadow.
+   */
   cascadeCount: number;
-  /** View-space split depths (set only on cascade 0; null otherwise) */
+  /**
+   * Distances from the camera where each cascade ends, on cascade 0 of a cascaded light; `null`
+   * everywhere else
+   *
+   * Cascade 0 keeps the array and refills it in place each fit, so a frame allocates nothing.
+   */
   splits: number[] | null;
   /**
    * Whether this cascade's depth layer should be re-rendered this frame
+   *
    * `false` when a temporal update rate (or manual mode) skips it.
    */
   needsRender: boolean;
@@ -89,8 +108,8 @@ export interface CascadeSlot {
  * Whether a light contributes shadow draws this frame
  *
  * True when it casts, has its GPU shadow data, is visible, and fit the shadow-atlas budget
- * (`_shadowDataIndex >= 0`). The shadow passes' prepare and render walk the light list with this
- * same test, so per-light state built in one phase is found in the other.
+ * (`_shadowDataIndex >= 0`). The WebGPU shadow pass tests it in both prepare and render, so
+ * render finds the cull results prepare staged; the WebGL pass tests it in render.
  * @param light - The light to test
  * @internal
  */
@@ -99,13 +118,16 @@ export function castsShadowThisFrame(light: Light): boolean {
 }
 
 /**
- * Releases the per-cascade camera-data bind groups and the cull results held on a light's shadow data
+ * Releases the per-cascade camera data and the cull results held on a light's shadow data
  *
- * Each cull result owns a survivor + indirect-args GPU buffer, recycled to the global `BigPool`.
- * A cascade's camera group is exempt from the renderer GC (recorded cascade bundles reference its
- * buffer, so it must stay resident for its whole life), which means nothing else ever reclaims it —
- * `CameraData.destroy` does. Called when a light is destroyed or detaches from a view — callers
- * null `_gpuShadowData` right after, so this light can never hand back a result it has recycled.
+ * On WebGPU a cascade's camera uniform buffer is exempt from the renderer GC, since recorded
+ * cascade bundles replay it without fetching it again, so only `CameraData.destroy` here ever
+ * frees it. The cull results, a WebGPU-only field reached structurally, go back to the global
+ * `BigPool`, which frees their GPU buffers and keeps their CPU arrays for the next light.
+ *
+ * `Light._releaseShadowState` calls it when the light leaves a view, when the view unloads, and on
+ * destroy, and then sets `_gpuShadowData` to `null`, so the light can never hand back a result it
+ * has already returned.
  * @param data - The light's shadow data
  * @internal
  */
@@ -115,8 +137,6 @@ export function releaseShadowCascades(data: ShadowData): void {
     for (let i = 0; i < cascades.length; i++) cascades[i]?.cameraData.destroy();
   }
 
-  // WebGPU-only field, reached structurally. The results are recycled to the global BigPool, not
-  // destroyed — a later light reclaims their GPU buffers instead of reallocating.
   (data as ShadowData & { cullResults?: CullResults }).cullResults?.release();
 }
 
@@ -160,9 +180,8 @@ export const MAX_SHADOW_SLOTS = MAX_SHADOW_LIGHTS * MAX_CASCADES;
  * Number of cascade slots a light fills and renders
  *
  * The configured cascade count (clamped to `1..MAX_CASCADES`) for a cascaded directional light,
- * `1` for a fixed-box directional, and `1` for spot lights. The single source of truth shared by
- * the shadow passes, both lighting systems, and the packed light list's cascade count, so
- * allocation, upload, and selection always agree.
+ * `1` for a fixed-box directional, and `1` for spot lights. The shadow passes, slot claiming and
+ * the packed light list all read it, so allocation, upload and selection agree.
  * @param light - The light to count cascade slots for
  * @internal
  */
@@ -173,6 +192,9 @@ export function cascadeCountFor(light: Light): number {
 
 /**
  * Creates a shadow map render target for the given quality level
+ *
+ * The depth texture filters linearly through a comparison sampler, so most GPUs blend the four
+ * comparisons around each shader read; see {@link ShadowFilter}.
  * @param quality - The quality tier that sets the map's size
  * @param layers - Texture-array layer count
  * @returns A {@link RenderTarget} with a depth32float 2D-array texture.
@@ -186,9 +208,6 @@ export function createShadowRenderTarget(quality: ShadowQuality, layers: number)
       width: size,
       height: size,
       format: 'depth32float',
-      // Linear filtering on the comparison sampler (`compare` set below) gives
-      // hardware 2×2 bilinear PCF: one fetch depth-tests 4 texels and returns the
-      // interpolated coverage, so each shader tap is already a smooth 2×2 kernel.
       scaleMode: 'linear',
       viewDimension: '2d-array',
       autoGenerateMipmaps: false,
@@ -207,9 +226,11 @@ export function createShadowRenderTarget(quality: ShadowQuality, layers: number)
 /**
  * Computes the single-map perspective shadow view and projection for a spot light
  *
- * Directional lights use the fixed-box (`computeFixedBoxMatrix`) or cascade
- * (`computeCascadeMatrix`) paths and never reach here. The caller pairs the two matrices into a
- * camera and forms the view-projection there.
+ * The field of view is twice `coneAngle`, the near plane is fixed at 1 world unit, and the far
+ * plane is `range`, or 1000 when the light has none; issue #473 covers where that breaks. Directional
+ * lights use the fixed-box (`computeFixedBoxMatrix`) or cascade (`computeCascadeMatrix`) paths and
+ * never reach here. The caller pairs the two matrices into a camera and forms the view-projection
+ * there.
  * @param spotLight - The spot light.
  * @param inverseLightMatrix - Receives the inverse light world transform — the spot's view.
  * @param lightProjectionMatrix - Receives the light projection.

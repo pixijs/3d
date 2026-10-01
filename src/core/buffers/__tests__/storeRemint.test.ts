@@ -13,10 +13,6 @@ const liveRows = (store: DataStoreBuffer): number => {
   return probe._count - probe._freeCount;
 };
 
-// Materials and geometries are user-owned; the store that minted their row is
-// the one they carry. When another store sees them it re-mints, and the row on
-// the store they came from goes back before the new one is minted: the object
-// that joined a store is what unwires it, whether that store is dead or alive.
 describe('store re-mint hands the old row back', () => {
   it('a material registered by a second store frees its row on the first', () => {
     const storeA = new MaterialDataStoreBuffer();
@@ -43,17 +39,16 @@ describe('store re-mint hands the old row back', () => {
     const storeB = new MaterialDataStoreBuffer();
     const material = new Material3D({ baseColor: 0x8899aa });
 
-    storeA.register(material); // queued on A, not yet drained
-    storeB.register(material); // re-minted on B before A's drain
-    expect(liveRows(storeA)).toBe(0);
+    storeA.register(material);
+    storeB.register(material);
+    expect(liveRows(storeA), "registered on B before A's drain").toBe(0);
 
     storeA.update();
     expect(liveRows(storeA)).toBe(0);
     expect(material._uploadQueue).toBe(storeB);
     expect(liveRows(storeB)).toBe(1);
 
-    // A's drain leaves B's queue state alone: the entry is still B's to drain.
-    expect(material._storeQueued).toBe(true);
+    expect(material._storeQueued, "A's drain leaves the entry for B to drain").toBe(true);
     storeB.update();
     expect(material._storeQueued).toBe(false);
 

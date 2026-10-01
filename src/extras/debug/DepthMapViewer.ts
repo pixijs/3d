@@ -29,12 +29,9 @@ export interface DepthMapViewerOptions extends Omit<MeshOptions<Geometry, Shader
  * map) as greyscale
  *
  * Renders a square quad (256×256 by default) in the 2D scene showing the first four array layers
- * in a 2×2 grid — top-left layer 0, top-right layer 1, bottom-left layer 2,
- * bottom-right layer 3. Add it to the stage like any 2D mesh while tuning
- * shadows, then remove it.
- *
- * Works on both backends; on WebGPU the sampler is forced to `non-filtering`
- * since depth textures can't be sampled with a filtering sampler.
+ * in a 2×2 grid: top-left layer 0, top-right layer 1, bottom-left layer 2, bottom-right layer 3.
+ * Add it to the stage like any 2D mesh while tuning shadows, then remove it. Works on both
+ * backends.
  * @category extras:debug
  * @advanced
  */
@@ -52,7 +49,13 @@ export class DepthMapViewer extends Mesh<Geometry, Shader> {
     size: 256,
   };
 
-  /** @param options - Viewer options; see {@link DepthMapViewerOptions} */
+  /**
+   * Builds the quad and the shader that reads `options.texture`
+   *
+   * On WebGPU it switches the shader's sampler binding to `non-filtering`: pixi lays out every
+   * WGSL `sampler` as filtering, and a depth texture can't be sampled through one.
+   * @param options - Viewer options; see {@link DepthMapViewerOptions}
+   */
   constructor(options: DepthMapViewerOptions) {
     const { texture, size, ...rest } = { ...DepthMapViewer.defaultOptions, ...definedProps(options) };
     const geometry = new Geometry({
@@ -178,7 +181,6 @@ export class DepthMapViewer extends Mesh<Geometry, Shader> {
 
     super({ ...rest, texture, geometry, shader });
 
-    // Manual override for WebGPU layout to set sampler to non-filtering
     const gpuProgram = this.shader?.gpuProgram;
     if (gpuProgram) {
       gpuProgram.gpuLayout[2][1].sampler!.type = 'non-filtering';

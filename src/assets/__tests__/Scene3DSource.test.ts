@@ -59,7 +59,12 @@ function makeTexture(): Texture {
   return new Texture({ source: new CanvasSource({ resource: canvas }) });
 }
 
-/** A one-mesh source filled the way the glTF loader fills it; the geometry is dynamic so it owns its GPU buffers */
+/**
+ * A one-mesh source filled the way the glTF loader fills it
+ *
+ * Its two textures share one image, so they are the same `Texture`, and the geometry is dynamic, so
+ * it owns its GPU buffers.
+ */
 function buildSource() {
   const source = new Scene3DSource({
     scenes: [{ name: 'Main', children: [0] }],
@@ -70,7 +75,6 @@ function buildSource() {
   const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1, dynamic: true });
   const material = new Material3D({ baseColorTexture: texture, metallic: 0, roughness: 0.5 });
 
-  // Two glTF textures sharing one image resolve to the same Texture
   source.textures.push(texture, texture);
   source.texture.Orange = texture;
   source.geometries.push([geometry]);

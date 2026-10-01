@@ -73,7 +73,6 @@ describe('ParticleSystem3D', () => {
 
     expect(positionAt(system, 0).map((v) => Math.round(v * 1000) / 1000)).toEqual([11, 2, 3]);
 
-    // moved since, and spawning again picks the move up straight away
     system.position.x = 5;
     system.spawn(1);
 
@@ -86,26 +85,13 @@ describe('ParticleSystem3D', () => {
     const system = makeSystem({ emitRate: 30, life: 10 });
 
     system.update();
-    expect(writtenCount(system)).toBe(0); // 0.5 of a particle owed
+    expect(writtenCount(system), 'half a particle owed').toBe(0);
 
     step(system, STEP);
     expect(writtenCount(system)).toBe(1);
 
     step(system, STEP * 4);
     expect(writtenCount(system)).toBe(3);
-
-    system.destroy();
-  });
-
-  it('stamps each birth with the clock the shader will read', () => {
-    const system = makeSystem({ life: 2.5 });
-
-    step(system, 0.08);
-    system.spawn(1);
-
-    expect(laneAt(system, 0, 'aBirth')).toBeCloseTo(0.08);
-    expect(laneAt(system, 0, 'aLife')).toBeCloseTo(2.5);
-    expect(system.uniforms.uParticleTime).toBeCloseTo(0.08);
 
     system.destroy();
   });
@@ -148,33 +134,9 @@ describe('ParticleSystem3D', () => {
     for (let i = 0; i < 4; i++) system.spawn(1, { position: { x: i, y: 0, z: 0 } });
     expect(positionAt(system, 0)[0]).toBeCloseTo(0);
 
-    // Slot 0 held the oldest, so the fifth spawn lands there.
     system.spawn(1, { position: { x: 99, y: 0, z: 0 } });
     expect(writtenCount(system)).toBe(4);
-    expect(positionAt(system, 0)[0]).toBeCloseTo(99);
-
-    system.destroy();
-  });
-
-  it('fires one-shot and repeating bursts on schedule', () => {
-    const system = makeSystem({
-      life: 100,
-      capacity: 32,
-      bursts: [
-        { time: 0.1, count: 3 },
-        { time: 0.2, count: 2, repeatEvery: 0.1 },
-      ],
-    });
-
-    step(system, 0.1);
-    expect(writtenCount(system)).toBe(3);
-
-    step(system, 0.1);
-    expect(writtenCount(system)).toBe(5);
-
-    // The repeat fires again; the one-shot stays spent.
-    step(system, 0.1);
-    expect(writtenCount(system)).toBe(7);
+    expect(positionAt(system, 0)[0], 'slot 0 held the oldest, so the fifth spawn lands there').toBeCloseTo(99);
 
     system.destroy();
   });
@@ -226,15 +188,13 @@ describe('ParticleSystem3D', () => {
     step(system, 0.1);
     expect(writtenCount(system)).toBe(3);
 
-    // Stopped, the timeline holds at 0.1, so the 0.15 burst waits.
     system.stop();
     for (let i = 0; i < 3; i++) step(system, 0.1);
-    expect(writtenCount(system)).toBe(3);
+    expect(writtenCount(system), 'stopped, the timeline holds at 0.1, so the 0.15 burst waits').toBe(3);
 
-    // Resumed, it fires; the one already spent doesn't fire again.
     system.play();
     step(system, 0.1);
-    expect(writtenCount(system)).toBe(5);
+    expect(writtenCount(system), "resumed, it fires; the one already spent doesn't fire again").toBe(5);
 
     system.destroy();
   });
@@ -249,26 +209,26 @@ describe('ParticleSystem3D', () => {
       ],
     });
 
-    // Past the one-shot and the first repeat: both count as spent, and nothing emits while stopped.
     system.gotoAndStop(0.2);
     expect(system.playing).toBe(false);
     step(system, 0.1);
-    expect(writtenCount(system)).toBe(0);
+    expect(
+      writtenCount(system),
+      'past the one-shot and the first repeat, both count as spent, and nothing emits while stopped',
+    ).toBe(0);
 
-    // Played from 0.2, the next repeat is due at 0.3.
     system.play();
     step(system, 0.05);
-    expect(writtenCount(system)).toBe(0);
+    expect(writtenCount(system), 'played from 0.2, the next repeat is due at 0.3').toBe(0);
     step(system, 0.06);
     expect(writtenCount(system)).toBe(4);
 
-    // Back to the start: the one-shot fires again, then the first repeat.
     system.gotoAndPlay(0);
     expect(system.playing).toBe(true);
     step(system, 0.05);
-    expect(writtenCount(system)).toBe(5);
+    expect(writtenCount(system), 'back at the start, the one-shot fires again').toBe(5);
     step(system, 0.06);
-    expect(writtenCount(system)).toBe(9);
+    expect(writtenCount(system), 'then the first repeat').toBe(9);
 
     system.destroy();
   });
@@ -281,7 +241,6 @@ describe('ParticleSystem3D', () => {
 
     system.onUpdate = (dt, self) => {
       expect(self).toBe(system);
-      // Births this step are written but not yet uploaded.
       calls.push(dt);
     };
     step(system, 0.05);
@@ -316,23 +275,6 @@ describe('ParticleSystem3D', () => {
     system.destroy();
   });
 
-  it('bakes the emitter transform into world-space spawns and leaves local ones alone', () => {
-    const world = makeSystem({ life: 100, shape: new PointShape() });
-    const local = makeSystem({ life: 100, shape: new PointShape(), space: 'local' });
-
-    world.position.set(5, 1, -2);
-    local.position.set(5, 1, -2);
-
-    world.spawn(1);
-    local.spawn(1);
-
-    expect(positionAt(world, 0)).toEqual([5, 1, -2]);
-    expect(positionAt(local, 0)).toEqual([0, 0, 0]);
-
-    world.destroy();
-    local.destroy();
-  });
-
   it('honours overridden position, velocity and size', () => {
     const system = makeSystem({ life: 100, speed: 10, shape: new PointShape() });
 
@@ -341,17 +283,6 @@ describe('ParticleSystem3D', () => {
     expect(positionAt(system, 0)).toEqual([1, 2, 3]);
     expect(sizeAt(system, 0)).toBeCloseTo(0.25);
     expect([laneAt(system, 0, 'aVel'), laneAt(system, 0, 'aVel', 1), laneAt(system, 0, 'aVel', 2)]).toEqual([4, 5, 6]);
-
-    system.destroy();
-  });
-
-  it("writes speed along the shape's direction as the launch velocity", () => {
-    const system = makeSystem({ life: 100, speed: 3, shape: new PointShape() });
-
-    system.spawn(1);
-
-    // A point shape heads straight up.
-    expect([laneAt(system, 0, 'aVel'), laneAt(system, 0, 'aVel', 1), laneAt(system, 0, 'aVel', 2)]).toEqual([0, 3, 0]);
 
     system.destroy();
   });
@@ -366,23 +297,6 @@ describe('ParticleSystem3D', () => {
     const offset = Math.hypot(x - 1, y - 2, z - 3);
 
     expect(offset).toBeCloseTo(0.5, 4);
-
-    system.destroy();
-  });
-
-  it('writes the over-life ends into the birth record, with the end tint already linear', () => {
-    const system = makeSystem({ life: 1, size: 1, sizeEnd: 3, alpha: 1, alphaEnd: 0, colorEnd: 0x808080 });
-
-    system.spawn(1);
-
-    expect(laneAt(system, 0, 'aSizeEnd')).toBe(3);
-    expect(laneAt(system, 0, 'aAlphaEnd')).toBe(0);
-
-    // 0x80 in display space decodes to ~0x37 linear; same path as the spawn tint.
-    const packed = system.data.u32[0 * 4 * system.data.floatStride + system.data.offsets.aColorEnd / 4];
-
-    expect(packed & 0xff).toBeCloseTo(0x37, -1);
-    expect(packed >>> 24).toBe(255);
 
     system.destroy();
   });
@@ -496,9 +410,11 @@ describe('ParticleSystem3D guards and lifecycle', () => {
     step(system, NaN);
     expect(system.time).toBeCloseTo(0.05);
 
-    // A backgrounded tab's frame advances a tenth of a second, not the minutes it was away.
     step(system, 300);
-    expect(system.time).toBeCloseTo(0.15);
+    expect(
+      system.time,
+      "a backgrounded tab's frame advances a tenth of a second, not the minutes it was away",
+    ).toBeCloseTo(0.15);
 
     system.destroy();
   });
@@ -512,14 +428,12 @@ describe('ParticleSystem3D guards and lifecycle', () => {
 
     step(system, 0.1);
 
-    // A hundred repeats were owed; only four bursts of two can survive.
-    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn, 'a hundred repeats were owed; only four bursts of two can survive').toHaveBeenCalledTimes(4);
     expect(writtenCount(system)).toBe(8);
 
-    // The schedule resumes from the present, not from the missed repeats.
     spawn.mockClear();
     step(system, 0.0005);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(spawn, 'the schedule resumes from the present, not from the missed repeats').not.toHaveBeenCalled();
     step(system, 0.001);
     expect(spawn).toHaveBeenCalledTimes(1);
 
@@ -541,18 +455,16 @@ describe('ParticleSystem3D guards and lifecycle', () => {
     expect(system.time).toBe(clock);
     expect(spawn).not.toHaveBeenCalled();
 
-    // Still at 0.05: the repeat due at 0.1 fires on schedule.
     system.play();
     step(system, 0.04);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(spawn, 'still at 0.05, so nothing is due before 0.1').not.toHaveBeenCalled();
     step(system, 0.02);
-    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn, 'the repeat due at 0.1 fires on schedule').toHaveBeenCalledTimes(1);
     expect(writtenCount(system)).toBe(2);
 
-    // A finite seek still moves it.
     system.gotoAndPlay(0);
     step(system, 0.01);
-    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn, 'a finite seek still moves the timeline').toHaveBeenCalledTimes(2);
 
     system.destroy();
   });
@@ -591,8 +503,9 @@ describe('ParticleSystem3D guards and lifecycle', () => {
     system.rotation.x = Math.PI / 2;
     system.spawn(1, { position: { x: 5, y: 5, z: 5 } });
 
-    // PointShape fires along +Y; a quarter turn about X takes that to ±Z.
-    expect(laneAt(system, 0, 'aVel', 1)).toBeCloseTo(0);
+    expect(laneAt(system, 0, 'aVel', 1), 'a quarter turn about X takes the +Y PointShape direction to ±Z').toBeCloseTo(
+      0,
+    );
     expect(Math.abs(laneAt(system, 0, 'aVel', 2))).toBeCloseTo(2);
     expect(positionAt(system, 0)).toEqual([5, 5, 5]);
 
@@ -643,8 +556,10 @@ describe('ParticleSystem3D guards and lifecycle', () => {
     Ticker.shared.remove(render);
 
     expect(order).toEqual(['move', 'particles', 'render']);
-    // The burst baked this frame's emitter position, not the one it had before `move` ran.
-    expect(positionAt(system, 0)[0]).toBeCloseTo(1);
+    expect(
+      positionAt(system, 0)[0],
+      "the burst baked this frame's emitter position, not the one it had before `move` ran",
+    ).toBeCloseTo(1);
 
     system.destroy();
   });

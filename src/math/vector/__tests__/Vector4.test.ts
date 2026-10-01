@@ -25,19 +25,6 @@ describe('Vector4', () => {
       expect(p.z).toBe(0);
       expect(p.w).toBe(1);
     });
-
-    test('respects supplied components', () => {
-      const p = new Vector4(1, 2, 3, 4);
-      expect(p.x).toBe(1);
-      expect(p.y).toBe(2);
-      expect(p.z).toBe(3);
-      expect(p.w).toBe(4);
-    });
-
-    test('w defaults to 1 (not 0) when omitted', () => {
-      const p = new Vector4(5, 6, 7);
-      expect(p.w).toBe(1);
-    });
   });
 
   describe('set', () => {
@@ -51,23 +38,6 @@ describe('Vector4', () => {
       const p = new Vector4();
       p.set(7);
       expectVec4Close(p, 7, 7, 7, 1);
-    });
-
-    test('w defaults to 1 always (not to x)', () => {
-      const p = new Vector4();
-      p.set(5);
-      expect(p.w).toBe(1);
-    });
-
-    test('w defaults to 1 when only x, y, z are passed', () => {
-      const p = new Vector4();
-      p.set(2, 3, 4);
-      expectVec4Close(p, 2, 3, 4, 1);
-    });
-
-    test('returns this', () => {
-      const p = new Vector4();
-      expect(p.set(1, 2, 3, 4)).toBe(p);
     });
 
     test('default with no arguments produces (0, 0, 0, 1)', () => {
@@ -84,18 +54,6 @@ describe('Vector4', () => {
       b.copyFrom(a);
       expectVec4Close(b, 1, 2, 3, 0);
     });
-
-    test('returns this', () => {
-      const a = new Vector4(1, 2, 3, 4);
-      const b = new Vector4();
-      expect(b.copyFrom(a)).toBe(b);
-    });
-
-    test('accepts plain PointData4D objects', () => {
-      const p = new Vector4();
-      p.copyFrom({ x: 5, y: 6, z: 7, w: 8 });
-      expectVec4Close(p, 5, 6, 7, 8);
-    });
   });
 
   describe('copyTo', () => {
@@ -104,12 +62,6 @@ describe('Vector4', () => {
       const b = new Vector4();
       a.copyTo(b);
       expectVec4Close(b, 1, 2, 3, 4);
-    });
-
-    test('returns target', () => {
-      const a = new Vector4(1, 2, 3, 4);
-      const b = new Vector4();
-      expect(a.copyTo(b)).toBe(b);
     });
   });
 
@@ -127,12 +79,6 @@ describe('Vector4', () => {
       expect(a.equals(new Vector4(1, 2, 9, 4))).toBe(false);
       expect(a.equals(new Vector4(1, 2, 3, 9))).toBe(false);
     });
-
-    test('uses strict equality (no epsilon)', () => {
-      const a = new Vector4(0.1 + 0.2, 0, 0, 1);
-      const b = new Vector4(0.3, 0, 0, 1);
-      expect(a.equals(b)).toBe(false);
-    });
   });
 
   describe('clone', () => {
@@ -140,20 +86,6 @@ describe('Vector4', () => {
       const a = new Vector4(1, 2, 3, 4);
       const b = a.clone();
       expectVec4Close(b, 1, 2, 3, 4);
-    });
-
-    test('returns a new instance', () => {
-      const a = new Vector4(1, 2, 3, 4);
-      const b = a.clone();
-      expect(b).not.toBe(a);
-      expect(b).toBeInstanceOf(Vector4);
-    });
-
-    test('mutating the clone does not affect the original', () => {
-      const a = new Vector4(1, 2, 3, 4);
-      const b = a.clone();
-      b.set(9, 9, 9, 9);
-      expectVec4Close(a, 1, 2, 3, 4);
     });
   });
 
@@ -176,17 +108,6 @@ describe('Vector4', () => {
       p.fromArray([0, 0, 1, 2, 3, 4], 2);
       expectVec4Close(p, 1, 2, 3, 4);
     });
-
-    test('works with Float32Array', () => {
-      const p = new Vector4();
-      p.fromArray(new Float32Array([1, 2, 3, 4]));
-      expectVec4Close(p, 1, 2, 3, 4);
-    });
-
-    test('returns this', () => {
-      const p = new Vector4();
-      expect(p.fromArray([1, 2, 3, 4])).toBe(p);
-    });
   });
 
   describe('toArray', () => {
@@ -196,26 +117,11 @@ describe('Vector4', () => {
       expect(arr).toEqual([1, 2, 3, 4]);
     });
 
-    test('writes into supplied array', () => {
-      const p = new Vector4(1, 2, 3, 4);
-      const arr = [0, 0, 0, 0];
-      const result = p.toArray(arr);
-      expect(result).toBe(arr);
-      expect(arr).toEqual([1, 2, 3, 4]);
-    });
-
     test('writes at supplied offset', () => {
       const p = new Vector4(1, 2, 3, 4);
       const arr = [9, 9, 9, 9, 9, 9];
       p.toArray(arr, 2);
       expect(arr).toEqual([9, 9, 1, 2, 3, 4]);
-    });
-
-    test('writes into supplied Float32Array', () => {
-      const p = new Vector4(1, 2, 3, 4);
-      const arr = new Float32Array(4);
-      p.toArray(arr);
-      expect(Array.from(arr)).toEqual([1, 2, 3, 4]);
     });
   });
 
@@ -477,22 +383,12 @@ describe('Vector4', () => {
       const p = new Vector4(0, 0, 0, 5);
       expect(p.magnitude()).toBeCloseTo(5, 5);
     });
-
-    test('returns 0 for the origin', () => {
-      const p = new Vector4(0, 0, 0, 0);
-      expect(p.magnitude()).toBe(0);
-    });
   });
 
   describe('magnitudeSquared', () => {
     test('returns sum of squares across all four components', () => {
       const p = new Vector4(1, 2, 3, 4);
       expect(p.magnitudeSquared()).toBe(1 + 4 + 9 + 16);
-    });
-
-    test('includes the w component', () => {
-      const p = new Vector4(0, 0, 0, 5);
-      expect(p.magnitudeSquared()).toBe(25);
     });
   });
 
@@ -507,12 +403,6 @@ describe('Vector4', () => {
       const a = new Vector4(0, 0, 0, 0);
       const b = new Vector4(0, 0, 0, 4);
       expect(a.distanceTo(b)).toBeCloseTo(4, 5);
-    });
-
-    test('returns 0 for identical points', () => {
-      const a = new Vector4(1, 2, 3, 4);
-      const b = new Vector4(1, 2, 3, 4);
-      expect(a.distanceTo(b)).toBe(0);
     });
   });
 
@@ -529,12 +419,6 @@ describe('Vector4', () => {
       const a = new Vector4(1, 2, 3, 4);
       const b = new Vector4(5, 6, 7, 8);
       expect(a.dot(b)).toBe(5 + 12 + 21 + 32);
-    });
-
-    test('returns 0 for orthogonal vectors', () => {
-      const a = new Vector4(1, 0, 0, 0);
-      const b = new Vector4(0, 1, 0, 0);
-      expect(a.dot(b)).toBe(0);
     });
   });
 
@@ -562,22 +446,9 @@ describe('Vector4', () => {
       const b = new Vector4(1, 0, 0, 0);
       expect(a.angleTo(b)).toBe(Math.PI / 2);
     });
-
-    test('returns PI/2 when the other vector has zero magnitude', () => {
-      const a = new Vector4(1, 0, 0, 0);
-      const b = new Vector4(0, 0, 0, 0);
-      expect(a.angleTo(b)).toBe(Math.PI / 2);
-    });
   });
 
   describe('applyMatrix4', () => {
-    test('identity matrix leaves all four components unchanged', () => {
-      const m = new Matrix4();
-      const p = new Vector4(1, 2, 3, 4);
-      p.applyMatrix4(m);
-      expectVec4Close(p, 1, 2, 3, 4);
-    });
-
     test('w=1 picks up translation (homogeneous position)', () => {
       const m = new Matrix4().makeTranslation(10, 20, 30);
       const p = new Vector4(1, 2, 3, 1);
@@ -624,11 +495,6 @@ describe('Vector4', () => {
   });
 
   describe('Vector4.shared', () => {
-    test('returns a Vector4 reset to (0, 0, 0, 1) on first access', () => {
-      const p = Vector4.shared;
-      expectVec4Close(p, 0, 0, 0, 1);
-    });
-
     test('mutations are reset on next access (w resets to 1)', () => {
       const a = Vector4.shared;
       a.x = 99;

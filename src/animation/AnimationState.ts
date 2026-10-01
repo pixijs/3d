@@ -22,30 +22,70 @@ import type { AnimationPlayer, PropertyAccumulator } from './AnimationPlayer';
  * @standard
  */
 export class AnimationState {
-  /** Animation this state plays */
+  /**
+   * Animation this state plays
+   * @example
+   * ```ts
+   * walk.gotoAndStop(walk.animation.duration);
+   * ```
+   */
   public readonly animation: Animation;
-  /** Player that owns this state */
+  /**
+   * Player that owns this state
+   * @example
+   * ```ts
+   * attack.onComplete = () => attack.player.play('idle');
+   * ```
+   */
   public readonly player: AnimationPlayer;
   /**
    * Current playback time in seconds
    *
    * Writing it moves the playhead without applying the pose. Use
    * {@link AnimationState#gotoAndStop | gotoAndStop()} to seek and show the pose at once.
+   * @example
+   * ```ts
+   * const progress = walk.time / walk.animation.duration;
+   * ```
    * @default 0
    */
   public time: number = 0;
   /**
    * Playback speed multiplier; negative values play backwards
+   * @example
+   * ```ts
+   * walk.animationSpeed = 2;
+   * rewind.animationSpeed = -1;
+   * ```
    * @default 1
    */
   public animationSpeed: number = 1;
   /**
-   * Whether playback wraps at the animation's duration
+   * Whether playback wraps around at the animation's ends
+   * @example
+   * ```ts
+   * const jump = player.play('jump');
+   *
+   * jump.loop = false;
+   * ```
    * @default true
    */
   public loop: boolean = true;
   /**
-   * Relative blend weight used when multiple playing states target the same property
+   * Share of the blend when several playing states drive the same property
+   *
+   * Weights are relative: at 1 and 3, the property ends up a quarter one state and three quarters
+   * the other. They don't fade a state against the rest pose; a state that is the only one driving
+   * a property applies in full at any weight above 0. At 0 the state keeps advancing but writes
+   * nothing.
+   * @example
+   * ```ts
+   * const walk = player.play('walk');
+   * const run = player.play('run');
+   *
+   * walk.weight = 1 - speed;
+   * run.weight = speed;
+   * ```
    * @default 1
    */
   public weight: number = 1;
@@ -67,6 +107,10 @@ export class AnimationState {
   public onComplete: (() => void) | null = null;
   /**
    * Called each time a looping state wraps around its duration
+   * @example
+   * ```ts
+   * walk.onLoop = () => footsteps.play();
+   * ```
    * @default null
    */
   public onLoop: (() => void) | null = null;
@@ -79,13 +123,10 @@ export class AnimationState {
   public _accumulators: PropertyAccumulator[] = [];
 
   /**
-   * Shared scratch buffer, sized to the widest track so sampling never allocates
+   * Scratch for the blend in `_update`, shared by every state and sized to the widest track
    *
-   * Only the blend path uses it: a state writing a property an earlier state
-   * already wrote samples here, then blends into the accumulator; the first writer
-   * samples straight into the accumulator. Morph weight tracks carry one component
-   * per target, which can exceed any built-in value type (a truncated scratch reads
-   * back `undefined` past its end and poisons the sampled values with NaN).
+   * Morph weight tracks carry one component per target, which can exceed any built-in value type.
+   * A scratch too short reads back `undefined` past its end and poisons the blend with NaN.
    */
   private static _scratchBuffer = new Float32Array(4);
 
@@ -108,7 +149,13 @@ export class AnimationState {
     }
   }
 
-  /** Whether this state is advancing on its player's updates */
+  /**
+   * Whether this state is advancing on its player's updates
+   * @example
+   * ```ts
+   * if (!attack.playing) attack.gotoAndPlay(0);
+   * ```
+   */
   public get playing(): boolean {
     return this._playing;
   }
@@ -116,8 +163,15 @@ export class AnimationState {
   /**
    * Starts or resumes playback from the current {@link AnimationState#time | time}
    *
+   * A one-shot animation that already finished completes again on the next update; use
+   * {@link AnimationState#gotoAndPlay | gotoAndPlay(0)} to restart it.
+   *
    * Does nothing once the owning player is destroyed, so a state kept from before
    * cannot put the dead player back on the ticker.
+   * @example
+   * ```ts
+   * pauseButton.on('pointertap', () => (walk.playing ? walk.stop() : walk.play()));
+   * ```
    * @returns This state for chaining
    */
   public play(): this {
@@ -134,6 +188,10 @@ export class AnimationState {
    *
    * The state stops blending, and the player releases its ticker once nothing is playing.
    * To rewind, call {@link AnimationState#gotoAndStop | gotoAndStop(0)}.
+   * @example
+   * ```ts
+   * player.getState('walk').stop();
+   * ```
    * @returns This state for chaining
    */
   public stop(): this {
@@ -147,6 +205,10 @@ export class AnimationState {
 
   /**
    * Jumps to a time and starts playing from there
+   * @example
+   * ```ts
+   * attackButton.on('pointertap', () => attack.gotoAndPlay(0));
+   * ```
    * @param time - Playback time in seconds
    * @returns This state for chaining
    */
@@ -159,7 +221,13 @@ export class AnimationState {
   /**
    * Stops playback at a time and applies that pose to the target right away
    *
-   * Does nothing once the owning player is destroyed, whose target nodes are gone.
+   * The pose is this state's alone, not blended with others; a state still playing overwrites
+   * the properties it drives on the next update. Does nothing once the owning player is
+   * destroyed, whose target nodes are gone.
+   * @example
+   * ```ts
+   * slider.on('change', (value: number) => walk.gotoAndStop(value * walk.animation.duration));
+   * ```
    * @param time - Playback time in seconds
    * @returns This state for chaining
    */
@@ -174,7 +242,15 @@ export class AnimationState {
   }
 
   /**
-   * Advances this state and accumulates sampled track values
+   * Advances this state and adds its sampled track values to the player's accumulators
+   *
+   * The first state to write a property this frame samples straight into the accumulator. Each
+   * later one samples into the shared scratch and lerps in by its share of the weight so far,
+   * which leaves the accumulator holding the weighted average of every sample, whatever order the
+   * states ran in.
+   *
+   * A one-shot state that runs past either end clamps to it and stops, but still samples this
+   * frame, so its end pose is applied and holds.
    *
    * Only {@link AnimationPlayer#update} drives this; it applies the accumulated values afterwards.
    * @param seconds - Time to advance before applying {@link AnimationState#animationSpeed}
@@ -188,7 +264,6 @@ export class AnimationState {
 
     if (time >= duration || time < 0) {
       if (!this.loop) {
-        // Clamp so this frame samples the end pose, then stop: the pose holds after.
         time = time < 0 ? 0 : duration;
         this._completed = true;
         this.stop();
@@ -222,14 +297,10 @@ export class AnimationState {
       const lastIndex = trackIndices[i];
 
       if (!acc.dirty) {
-        // First writer this frame — sample straight into the accumulator. The
-        // shared scratch buffer only earns its keep when a later state blends.
         trackIndices[i] = track.evaluate(this.time, lastIndex, acc.values);
         acc.weight = weight;
         acc.dirty = true;
       } else {
-        // A prior state already wrote acc.values, so sample into scratch and blend
-        // the fresh value into the running weighted average.
         trackIndices[i] = track.evaluate(this.time, lastIndex, scratch);
 
         const newWeight = acc.weight + weight;

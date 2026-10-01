@@ -6,13 +6,22 @@ import type { EffectFragment, PostEffectOptions } from '../../../post-processing
 
 /**
  * Constructor options for {@link TintEffect}
+ * @example
+ * ```ts
+ * const options: TintEffectOptions = { tint: 'skyblue', enabled: false };
+ * view3d.passes = [new TintEffect(options)];
+ * ```
  * @category extras:post-processing
  * @standard
  */
 export interface TintEffectOptions extends PostEffectOptions {
   /**
-   * Multiplier colour
+   * Colour the frame is multiplied by; its alpha is ignored
    * @default 0xffffff
+   * @example
+   * ```ts
+   * new TintEffect({ tint: 0xff8888 });
+   * ```
    */
   tint?: ColorSource;
 }
@@ -20,11 +29,8 @@ export interface TintEffectOptions extends PostEffectOptions {
 /**
  * Multiplies the frame by a flat colour
  *
- * The simplest possible transform effect, and the reference for authoring one: a fragment
- * against the standard header, a uniform group, and plain property accessors.
- *
- * The multiply happens in the frame's display-encoded space (post tone-mapping), matching
- * the `Container.tint` mental model.
+ * The multiply applies to the finished image, after tone mapping, as `Container.tint` does in 2D.
+ * Its source is the smallest example of a single-shader {@link PostEffect}.
  * @example
  * ```ts
  * view.passes = [new TintEffect({ tint: 0xff8888 })];
@@ -73,13 +79,23 @@ vec4 effect(vec2 uv) {
     this.tint = tint!;
   }
 
-  /** Multiplier colour — set any {@link ColorSource}, read back the canonical hex */
+  /**
+   * Colour the frame is multiplied by
+   *
+   * Takes any {@link ColorSource} and reads back as a hex number.
+   * @example
+   * ```ts
+   * const effect = new TintEffect();
+   * effect.tint = 'red';
+   * const hex = effect.tint; // 0xff0000
+   * ```
+   */
   public get tint(): number {
     return this._tint;
   }
 
   /**
-   * Sets the multiplier colour, writing the unpacked lanes straight into the uniform group
+   * Sets the colour the frame is multiplied by
    * @param value - Colour to multiply the frame by; its alpha is ignored
    */
   public set tint(value: ColorSource) {

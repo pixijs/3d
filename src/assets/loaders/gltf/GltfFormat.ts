@@ -1,124 +1,83 @@
-// Hand-maintained subset of the glTF 2.0 schema. Only fields and extensions
-// pixi-3d reads or writes are declared. To support a new extension, declare
-// it explicitly here first — there is deliberately no open-ended index
-// signature to silently absorb unknown keys.
-
 /**
  * Index into one of the glTF root arrays
  * @internal
  */
 export type GltfId = number;
 /**
- * Indices of those attributes that deviate from their initialization value
+ * Where a sparse accessor's element indices are stored
  * @internal
  */
 export interface AccessorSparseIndices {
-  /**
-   * The index of the bufferView with sparse indices
-   *
-   * Referenced bufferView can't have ARRAY_BUFFER or ELEMENT_ARRAY_BUFFER target.
-   */
   bufferView: GltfId;
-  /** The offset relative to the start of the bufferView in bytes; must be aligned */
   byteOffset?: number;
-  /** The indices data type */
   componentType: 5121 | 5123 | 5125 | ({} & number);
 }
 /**
- * Array of size `accessor.sparse.count` times number of components storing the displaced accessor attributes pointed by `accessor.sparse.indices`
+ * Where a sparse accessor's replacement values are stored
  * @internal
  */
 export interface AccessorSparseValues {
-  /**
-   * The index of the bufferView with sparse values
-   *
-   * Referenced bufferView can't have ARRAY_BUFFER or ELEMENT_ARRAY_BUFFER target.
-   */
   bufferView: GltfId;
-  /** The offset relative to the start of the bufferView in bytes; must be aligned */
   byteOffset?: number;
 }
 /**
- * Sparse storage of attributes that deviate from their initialization value
+ * The elements of an accessor that differ from its base, which is the accessor's bufferView or,
+ * without one, all zeros
  * @internal
  */
 export interface AccessorSparse {
-  /** Number of entries stored in the sparse array */
   count: number;
-  /**
-   * Index array of size `count` that points to those accessor attributes that deviate from their initialization value
-   *
-   * Indices must strictly increase.
-   */
   indices: AccessorSparseIndices;
-  /**
-   * Array of size `count` times number of components, storing the displaced accessor attributes pointed by `indices`
-   *
-   * Substituted values must have the same `componentType` and number of components as the base accessor.
-   */
+  /** Replacement values, with the base accessor's component type and component count */
   values: AccessorSparseValues;
 }
 /**
- * A typed view into a bufferView
- *
- * A bufferView contains raw binary data. An accessor provides a typed view into a bufferView or a subset of a bufferView similar to how WebGL's `vertexAttribPointer()` defines an attribute in a buffer.
+ * A typed view of a bufferView, such as one vertex attribute
  * @internal
  */
 export interface Accessor {
-  /** The index of the bufferView */
+  /** Unset for an accessor of all zeros, which `sparse` then fills in */
   bufferView?: GltfId;
-  /** The offset relative to the start of the bufferView in bytes */
   byteOffset?: number;
-  /** The datatype of components in the attribute */
+  /** GL enum: 5120 BYTE, 5121 UNSIGNED_BYTE, 5122 SHORT, 5123 UNSIGNED_SHORT, 5125 UNSIGNED_INT, 5126 FLOAT */
   componentType: 5120 | 5121 | 5122 | 5123 | 5125 | 5126 | ({} & number);
-  /** Specifies whether integer data values should be normalized */
+  /** Whether integer values read as fractions: 0 to 1 when unsigned, -1 to 1 when signed */
   normalized?: boolean;
-  /** The number of attributes referenced by this accessor */
+  /** Number of elements, not of components */
   count: number;
-  /** Specifies if the attribute is a scalar, vector, or matrix */
   type: 'SCALAR' | 'VEC2' | 'VEC3' | 'VEC4' | 'MAT2' | 'MAT3' | 'MAT4' | ({} & string);
-  /** Maximum value of each component in this attribute */
   max?: number[];
-  /** Minimum value of each component in this attribute */
   min?: number[];
-  /** Sparse storage of attributes that deviate from their initialization value */
   sparse?: AccessorSparse;
   name?: any;
 }
 /**
- * The index of the node and TRS property that an animation channel targets
+ * The node property an animation channel drives
  * @internal
  */
 export interface AnimationChannelTarget {
-  /** The index of the node to target */
   node?: GltfId;
-  /**
-   * The name of the node's TRS property to modify, or the "weights" of the Morph Targets it instantiates
-   *
-   * For the "translation" property, the values that are provided by the sampler are the translation along the x, y, and z axes. For the "rotation" property, the values are a quaternion in the order (x, y, z, w), where w is the scalar. For the "scale" property, the values are the scaling factors along the x, y, and z axes.
-   */
+  /** `rotation` values are quaternions `(x, y, z, w)`; `weights` values are one per morph target */
   path: 'translation' | 'rotation' | 'scale' | 'weights' | ({} & string);
 }
 /**
- * Targets an animation's sampler at a node's property
+ * Points one of an animation's samplers at a node property
  * @internal
  */
 export interface AnimationChannel {
-  /** The index of a sampler in this animation used to compute the value for the target */
   sampler: GltfId;
-  /** The index of the node and TRS property to target */
   target: AnimationChannelTarget;
 }
 /**
- * Combines input and output accessors with an interpolation algorithm to define a keyframe graph (but not its target)
+ * Keyframes: their times, their values, and how to interpolate between them
  * @internal
  */
 export interface AnimationSampler {
-  /** The index of an accessor containing keyframe input values, e.g., time */
+  /** Accessor of keyframe times, in seconds */
   input: GltfId;
-  /** Interpolation algorithm */
+  /** Defaults to `LINEAR` */
   interpolation?: 'LINEAR' | 'STEP' | 'CUBICSPLINE' | ({} & string);
-  /** The index of an accessor, containing keyframe output values */
+  /** Accessor of keyframe values; `CUBICSPLINE` stores an in-tangent, a value and an out-tangent per keyframe */
   output: GltfId;
 }
 /**
@@ -126,15 +85,7 @@ export interface AnimationSampler {
  * @internal
  */
 export interface GltfAnimation {
-  /**
-   * An array of channels, each of which targets an animation's sampler at a node's property
-   *
-   * Different channels of the same animation can't have equal targets.
-   */
   channels: AnimationChannel[];
-  /**
-   * An array of samplers that combines input and output accessors with an interpolation algorithm to define a keyframe graph (but not its target)
-   */
   samplers: AnimationSampler[];
   name?: any;
 }
@@ -143,23 +94,18 @@ export interface GltfAnimation {
  * @internal
  */
 export interface Asset {
-  /** A copyright message suitable for display to credit the content creator */
   copyright?: string;
-  /** Tool that generated this glTF model, useful for debugging */
   generator?: string;
-  /** The glTF version that this asset targets */
   version: string;
-  /** The minimum glTF version that this asset targets */
   minVersion?: string;
 }
 /**
- * A buffer points to binary geometry, animation, or skins
+ * A block of binary data
  * @internal
  */
 export interface Buffer {
-  /** The uri of the buffer */
+  /** Unset for a GLB's own binary chunk and for a meshopt fallback */
   uri?: string;
-  /** The length of the buffer in bytes */
   byteLength: number;
   name?: any;
   extensions?: {
@@ -168,19 +114,15 @@ export interface Buffer {
   };
 }
 /**
- * A view into a buffer generally representing a subset of the buffer
+ * A byte range of a buffer
  * @internal
  */
 export interface BufferView {
-  /** The index of the buffer */
   buffer: GltfId;
-  /** The offset into the buffer in bytes */
   byteOffset?: number;
-  /** The total byte length of the buffer view */
   byteLength: number;
-  /** The stride, in bytes */
+  /** Bytes from one element to the next when attributes are interleaved; unset when tightly packed */
   byteStride?: number;
-  /** The target that the GPU buffer should be bound to */
   target?: 34962 | 34963 | ({} & number);
   name?: any;
   extensions?: {
@@ -189,77 +131,62 @@ export interface BufferView {
   };
 }
 /**
- * An orthographic camera containing properties to create an orthographic projection matrix
+ * An orthographic projection
  * @internal
  */
 export interface CameraOrthographic {
-  /** The floating-point horizontal magnification of the view; must not be zero */
   xmag: number;
-  /** The floating-point vertical magnification of the view; must not be zero */
   ymag: number;
-  /** The floating-point distance to the far clipping plane; must be greater than `znear` */
   zfar: number;
-  /** The floating-point distance to the near clipping plane */
   znear: number;
 }
 /**
- * A perspective camera containing properties to create a perspective projection matrix
+ * A perspective projection
  * @internal
  */
 export interface CameraPerspective {
-  /** The floating-point aspect ratio of the field of view */
   aspectRatio?: number;
-  /** The floating-point vertical field of view in radians */
+  /** Vertical field of view in radians */
   yfov: number;
-  /** The floating-point distance to the far clipping plane */
+  /** Unset for an infinite projection */
   zfar?: number;
-  /** The floating-point distance to the near clipping plane */
   znear: number;
 }
 /**
- * A camera's projection
- *
- * A node can reference a camera to apply a transform to place the camera in the scene.
+ * A camera's projection; the nodes that refer to it place it in the scene
  * @internal
  */
 export interface Camera {
-  /** An orthographic camera containing properties to create an orthographic projection matrix */
   orthographic?: CameraOrthographic;
-  /** A perspective camera containing properties to create a perspective projection matrix */
   perspective?: CameraPerspective;
-  /** Specifies if the camera uses a perspective or orthographic projection */
   type: 'perspective' | 'orthographic' | ({} & string);
   name?: any;
 }
 /**
- * Image data used to create a texture
- *
- * Image can be referenced by URI or `bufferView` index. `mimeType` is required in the latter case.
+ * An image, given by a URI or stored in a bufferView
  * @internal
  */
 export interface Image {
-  /** The uri of the image */
   uri?: string;
-  /** The image's MIME type; required if `bufferView` is defined */
+  /** Required when the image is in a `bufferView` */
   mimeType?: 'image/jpeg' | 'image/png' | ({} & string);
-  /** The index of the bufferView that contains the image; use this instead of the image's `uri` */
   bufferView?: GltfId;
   name?: any;
 }
 /**
- * KHR_texture_transform extension on a TextureInfo
+ * `KHR_texture_transform`: offset, rotation and scale for a texture's UVs
  *
  * See https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_texture_transform
  * @internal
  */
 export interface KHRTextureTransform {
-  /** UV offset — defaults to [0, 0] */
+  /** Defaults to `[0, 0]` */
   offset?: [number, number];
-  /** Rotation in radians, counter-clockwise — defaults to 0 */
+  /** Counter-clockwise, in radians; defaults to 0 */
   rotation?: number;
-  /** UV scale — defaults to [1, 1] */
+  /** Defaults to `[1, 1]` */
   scale?: [number, number];
-  /** Overrides the parent TextureInfo.texCoord; currently ignored (single UV set) */
+  /** Overrides the `texCoord` of the texture it sits on; ignored, as every texture samples the first UV set */
   texCoord?: number;
 }
 
@@ -268,52 +195,56 @@ export interface KHRTextureTransform {
  * @internal
  */
 export interface TextureInfo {
-  /** The index of the texture */
   index: GltfId;
-  /** The set index of texture's TEXCOORD attribute used for texture coordinate mapping */
+  /** Which `TEXCOORD_n` set to sample; every texture samples set 0, whatever this says */
   texCoord?: number;
   extensions?: {
     KHR_texture_transform?: KHRTextureTransform;
   };
 }
 /**
- * A set of parameter values that are used to define the metallic-roughness material model from Physically-Based Rendering (PBR) methodology
+ * The core metallic-roughness material values
  * @internal
  */
 export interface MaterialPbrMetallicRoughness {
-  /** The material's base color factor */
+  /** Linear RGBA */
   baseColorFactor?: number[];
-  /** The base color texture */
   baseColorTexture?: TextureInfo;
-  /** The metalness of the material */
+  /** Defaults to 1 */
   metallicFactor?: number;
-  /** The roughness of the material */
+  /** Defaults to 1 */
   roughnessFactor?: number;
-  /** The metallic-roughness texture */
+  /** Roughness in G, metalness in B */
   metallicRoughnessTexture?: TextureInfo;
 }
-/** @internal */
+/**
+ * Reference to a normal map
+ * @internal
+ */
 export interface MaterialNormalTextureInfo {
   index?: any;
   texCoord?: any;
-  /** The scalar multiplier applied to each normal vector of the normal texture */
+  /** Scales the normals' X and Y; defaults to 1 */
   scale?: number;
   extensions?: {
     KHR_texture_transform?: KHRTextureTransform;
   };
 }
-/** @internal */
+/**
+ * Reference to an occlusion map
+ * @internal
+ */
 export interface MaterialOcclusionTextureInfo {
   index?: any;
   texCoord?: any;
-  /** A scalar multiplier controlling the amount of occlusion applied */
+  /** How much of the occlusion applies, from 0 to 1; defaults to 1 */
   strength?: number;
   extensions?: {
     KHR_texture_transform?: KHRTextureTransform;
   };
 }
 /**
- * KHR_materials_transmission — adds light transmission through thin surfaces
+ * `KHR_materials_transmission`: light passing through the surface, as through glass
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_transmission
  * @internal
@@ -323,7 +254,7 @@ export interface KHRMaterialsTransmission {
   transmissionTexture?: TextureInfo;
 }
 /**
- * KHR_materials_volume — adds thickness/attenuation for volumetric refraction
+ * `KHR_materials_volume`: thickness and attenuation for light refracting through a volume
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_volume
  * @internal
@@ -335,7 +266,7 @@ export interface KHRMaterialsVolume {
   attenuationColor?: number[];
 }
 /**
- * KHR_materials_ior — overrides the dielectric index of refraction (default 1.5)
+ * `KHR_materials_ior`: the index of refraction, which defaults to 1.5 without it
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_ior
  * @internal
@@ -344,7 +275,7 @@ export interface KHRMaterialsIor {
   ior?: number;
 }
 /**
- * KHR_materials_iridescence — adds thin-film iridescence
+ * `KHR_materials_iridescence`: thin-film iridescence
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_iridescence
  * @internal
@@ -358,7 +289,7 @@ export interface KHRMaterialsIridescence {
   iridescenceThicknessTexture?: TextureInfo;
 }
 /**
- * KHR_materials_clearcoat — adds a clearcoat layer on top of the base material
+ * `KHR_materials_clearcoat`: a clear coat layer over the base material
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_clearcoat
  * @internal
@@ -371,7 +302,7 @@ export interface KHRMaterialsClearcoat {
   clearcoatNormalTexture?: MaterialNormalTextureInfo;
 }
 /**
- * KHR_materials_sheen — adds a soft retroreflective fabric-like response
+ * `KHR_materials_sheen`: the soft sheen of cloth
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_sheen
  * @internal
@@ -383,7 +314,7 @@ export interface KHRMaterialsSheen {
   sheenRoughnessTexture?: TextureInfo;
 }
 /**
- * KHR_materials_specular — overrides the dielectric F0 colour and strength
+ * `KHR_materials_specular`: the strength and colour of a non-metal's specular reflection
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_specular
  * @internal
@@ -395,10 +326,8 @@ export interface KHRMaterialsSpecular {
   specularColorTexture?: TextureInfo;
 }
 /**
- * KHR_materials_anisotropy — directional roughness for brushed-metal / carbon-fibre looks
+ * `KHR_materials_anisotropy`: roughness that depends on direction, as on brushed metal
  *
- * `anisotropyTexture` packs the per-texel direction in RG (a [-1,1] vector encoded to
- * [0,1]) and the strength in B.
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_anisotropy
  * @internal
  */
@@ -408,9 +337,8 @@ export interface KHRMaterialsAnisotropy {
   anisotropyTexture?: TextureInfo;
 }
 /**
- * KHR_materials_emissive_strength — multiplies emissive output beyond [0, 1]
+ * `KHR_materials_emissive_strength`: a multiplier that lets emission exceed 1
  *
- * Note the field is `emissiveStrength` (not `emissiveStrengthFactor`).
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_emissive_strength
  * @internal
  */
@@ -418,14 +346,14 @@ export interface KHRMaterialsEmissiveStrength {
   emissiveStrength?: number;
 }
 /**
- * KHR_materials_unlit — marker extension; presence flips the material to an unlit shading model
+ * `KHR_materials_unlit`: an empty object whose presence makes the material unlit
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_unlit
  * @internal
  */
 export type KHRMaterialsUnlit = Record<string, never>;
 /**
- * The material appearance of a primitive
+ * A material
  * @internal
  */
 export interface Material {
@@ -442,47 +370,34 @@ export interface Material {
     KHR_materials_emissive_strength?: KHRMaterialsEmissiveStrength;
     KHR_materials_unlit?: KHRMaterialsUnlit;
   };
-  /**
-   * A set of parameter values that are used to define the metallic-roughness material model from Physically-Based Rendering (PBR) methodology
-   *
-   * When not specified, all the default values of `pbrMetallicRoughness` apply.
-   */
+  /** Unset means every metallic-roughness value takes its default */
   pbrMetallicRoughness?: MaterialPbrMetallicRoughness;
-  /** The normal map texture */
   normalTexture?: MaterialNormalTextureInfo;
-  /** The occlusion map texture */
   occlusionTexture?: MaterialOcclusionTextureInfo;
-  /** The emissive map texture */
   emissiveTexture?: TextureInfo;
-  /** The emissive color of the material */
+  /** Linear RGB; defaults to black */
   emissiveFactor?: number[];
-  /** The alpha rendering mode of the material */
+  /** Defaults to `OPAQUE` */
   alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND' | ({} & string);
-  /** The alpha cutoff value of the material */
+  /** The alpha below which `MASK` discards a pixel; defaults to 0.5 */
   alphaCutoff?: number;
-  /** Specifies whether the material is double sided */
   doubleSided?: boolean;
 }
 /**
- * Geometry to be rendered with the given material
+ * One draw of a mesh: vertex attributes, optional indices and a material
  * @internal
  */
 export interface MeshPrimitive {
-  /**
-   * A dictionary object, where each key corresponds to mesh attribute semantic and each value is the index of the accessor containing attribute's data
-   */
+  /** Accessor index per attribute name, such as `POSITION` or `TEXCOORD_0` */
   attributes: {
     [k: string]: GltfId;
   };
-  /** The index of the accessor that contains the indices */
   indices?: GltfId;
-  /** The index of the material to apply to this primitive when rendering */
+  /** Unset means the glTF default material */
   material?: GltfId;
-  /** The type of primitives to render */
+  /** 0 points, 1 lines, 2 line loop, 3 line strip, 4 triangles, 5 triangle strip, 6 triangle fan; defaults to 4 */
   mode?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | ({} & number);
-  /**
-   * An array of Morph Targets, each Morph Target is a dictionary mapping attributes (only `POSITION`, `NORMAL`, and `TANGENT` supported) to their deviations in the Morph Target
-   */
+  /** Morph targets, each an accessor index per attribute name, holding offsets from the base values */
   targets?: {
     [k: string]: GltfId;
   }[];
@@ -491,20 +406,17 @@ export interface MeshPrimitive {
   };
 }
 /**
- * A set of primitives to be rendered
- *
- * A node can contain one mesh. A node's transform places the mesh in the scene.
+ * A mesh: one or more primitives drawn together
  * @internal
  */
 export interface Mesh {
-  /** An array of primitives, each defining geometry to be rendered with a material */
   primitives: MeshPrimitive[];
-  /** Array of weights to be applied to the Morph Targets */
+  /** Starting morph-target weights; a node's own `weights` override them */
   weights?: number[];
   name?: any;
 }
 /**
- * KHR_node_visibility — toggles a node (and its descendants) off when `visible === false`
+ * `KHR_node_visibility`: hides a node and everything under it when `visible` is `false`
  *
  * See https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_node_visibility
  * @internal
@@ -513,29 +425,23 @@ export interface KHRNodeVisibility {
   visible?: boolean;
 }
 /**
- * A node in the node hierarchy
+ * A node: a local transform plus an optional mesh, camera, skin or light
  *
- * When the node contains `skin`, all `mesh.primitives` must contain `JOINTS_0` and `WEIGHTS_0` attributes. A node can have either a `matrix` or any combination of `translation`/`rotation`/`scale` (TRS) properties. TRS properties are converted to matrices and postmultiplied in the `T * R * S` order to compose the transformation matrix; first the scale is applied to the vertices, then the rotation, and then the translation. If none are provided, the transform is the identity. When a node is targeted for animation (referenced by an animation.channel.target), only TRS properties may be present; `matrix` will not be present.
+ * The transform is either `matrix` or any of `translation`, `rotation` and `scale`.
  * @internal
  */
 export interface Node {
-  /** The index of the camera referenced by this node */
   camera?: GltfId;
-  /** The indices of this node's children */
   children?: GltfId[];
-  /** The index of the skin referenced by this node */
   skin?: GltfId;
-  /** A floating-point 4x4 transformation matrix stored in column-major order */
+  /** Column-major 4x4 */
   matrix?: number[];
-  /** The index of the mesh in this node */
   mesh?: GltfId;
-  /** The node's unit quaternion rotation in the order (x, y, z, w), where w is the scalar */
+  /** Quaternion `(x, y, z, w)` */
   rotation?: number[];
-  /** The node's non-uniform scale, given as the scaling factors along the x, y, and z axes */
   scale?: number[];
-  /** The node's translation along the x, y, and z axes */
   translation?: number[];
-  /** The weights of the instantiated Morph Target, one per Morph Target of the used mesh */
+  /** Morph-target weights for the node's mesh, overriding the mesh's own */
   weights?: number[];
   name?: any;
   extensions?: {
@@ -544,17 +450,17 @@ export interface Node {
   };
 }
 /**
- * Texture sampler properties for filtering and wrapping modes
+ * How a texture is filtered and wrapped
  * @internal
  */
 export interface Sampler {
-  /** Magnification filter */
+  /** GL enum: 9728 NEAREST, 9729 LINEAR */
   magFilter?: 9728 | 9729 | ({} & number);
-  /** Minification filter */
+  /** GL enum: 9728 NEAREST, 9729 LINEAR, 9984 to 9987 the four `*_MIPMAP_*` modes */
   minFilter?: 9728 | 9729 | 9984 | 9985 | 9986 | 9987 | ({} & number);
-  /** S (horizontal) wrapping mode */
+  /** GL enum: 33071 CLAMP_TO_EDGE, 33648 MIRRORED_REPEAT, 10497 REPEAT; defaults to REPEAT */
   wrapS?: 33071 | 33648 | 10497 | ({} & number);
-  /** T (vertical) wrapping mode */
+  /** As `wrapS`, for the V axis */
   wrapT?: 33071 | 33648 | 10497 | ({} & number);
   name?: any;
 }
@@ -563,52 +469,38 @@ export interface Sampler {
  * @internal
  */
 export interface Scene {
-  /** The indices of each root node */
   nodes?: GltfId[];
   name?: any;
 }
 /**
- * Joints and matrices defining a skin
+ * The joints and matrices of a skin
  * @internal
  */
 export interface Skin {
-  /**
-   * The index of the accessor containing the floating-point 4x4 inverse-bind matrices
-   *
-   * The default is that each matrix is a 4x4 identity matrix, which implies that inverse-bind matrices were pre-applied.
-   */
+  /** Accessor of one 4x4 matrix per joint; unset means every matrix is the identity */
   inverseBindMatrices?: GltfId;
-  /** The index of the node used as a skeleton root */
+  /** The joints' common root, or an ancestor of it */
   skeleton?: GltfId;
-  /** Indices of skeleton nodes, used as joints in this skin */
   joints: GltfId[];
   name?: any;
 }
 /**
- * A texture and its sampler
+ * A texture: an image and a sampler
  * @internal
  */
 export interface Texture {
-  /**
-   * The index of the sampler used by this texture
-   *
-   * When undefined, a sampler with repeat wrapping and auto filtering should be used.
-   */
+  /** Unset means repeat wrapping and automatic filtering */
   sampler?: GltfId;
-  /**
-   * The index of the image used by this texture
-   *
-   * When undefined, it is expected that an extension or other mechanism will supply an alternate texture source, otherwise behavior is undefined.
-   */
+  /** Unset when an extension supplies the image */
   source?: GltfId;
   name?: any;
 }
 
 /**
- * KHR_draco_mesh_compression extension on a mesh primitive
+ * `KHR_draco_mesh_compression` on a mesh primitive
  *
- * The bufferView contains Draco-encoded geometry; attribute IDs map semantic names
- * to the Draco attribute IDs used when encoding.
+ * The bufferView holds the Draco-encoded geometry. `attributes` maps each attribute name to the
+ * id it was given in the Draco data.
  * @internal
  */
 export interface KHRDracoMeshCompression {
@@ -619,12 +511,10 @@ export interface KHRDracoMeshCompression {
 }
 
 /**
- * Meshopt compression extension data on a bufferView
+ * Meshopt compression of a bufferView: where the compressed bytes are and how to decode them
  *
- * The same shape is used by both `EXT_meshopt_compression` (original) and
- * `KHR_meshopt_compression` (successor) — only the JSON key differs. Describes
- * where in the source buffer the compressed bytes live and how to reconstruct
- * the decoded output.
+ * `EXT_meshopt_compression` and its successor `KHR_meshopt_compression` share this shape. The KHR
+ * version adds a newer encoding and a `COLOR` filter.
  * @internal
  */
 export interface MeshoptCompression {
@@ -638,10 +528,8 @@ export interface MeshoptCompression {
 }
 
 /**
- * Meshopt compression extension data on a Buffer (not BufferView)
- *
- * The buffer is a fallback stub whose real data lives compressed in another
- * buffer; only the `fallback` flag is meaningful at this level.
+ * Meshopt compression on a buffer, where `fallback` marks the buffer as a placeholder for data that
+ * sits compressed in another buffer
  * @internal
  */
 export interface MeshoptCompressionBuffer {
@@ -649,15 +537,18 @@ export interface MeshoptCompressionBuffer {
 }
 
 /**
- * KHR_lights_punctual extension light definition
+ * A light from `KHR_lights_punctual`
  * @internal
  */
 export interface GltfLight {
   name?: string;
+  /** Linear RGB; defaults to white */
   color?: number[];
   intensity?: number;
   type: 'directional' | 'point' | 'spot';
+  /** Unset means infinite */
   range?: number;
+  /** Cone angles in radians from the axis; they default to 0 and π/4 */
   spot?: {
     innerConeAngle?: number;
     outerConeAngle?: number;
@@ -665,7 +556,7 @@ export interface GltfLight {
 }
 
 /**
- * Common glTF extensions
+ * Extensions on the glTF root
  * @internal
  */
 export interface GltfExtensions {
@@ -675,43 +566,31 @@ export interface GltfExtensions {
 }
 
 /**
- * The root object for a glTF asset
+ * The root object of a glTF file
+ *
+ * A hand-kept part of the glTF 2.0 schema, covering what the loader works with. It has no
+ * catch-all index signature, so an extension has to be declared here before the loader can read
+ * it.
  * @internal
  */
 export interface GltfFormat {
-  /** Names of glTF extensions used somewhere in this asset */
   extensionsUsed?: string[];
-  /** Names of glTF extensions required to properly load this asset */
   extensionsRequired?: string[];
-  /** An array of accessors */
   accessors?: Accessor[];
-  /** An array of keyframe animations */
   animations?: GltfAnimation[];
-  /** Metadata about the glTF asset */
   asset: Asset;
-  /** An array of buffers */
   buffers?: Buffer[];
-  /** An array of bufferViews */
   bufferViews?: BufferView[];
-  /** An array of cameras */
   cameras?: Camera[];
-  /** An array of images */
   images?: Image[];
-  /** An array of materials */
   materials?: Material[];
-  /** An array of meshes */
   meshes?: Mesh[];
-  /** An array of nodes */
   nodes?: Node[];
-  /** An array of samplers */
   samplers?: Sampler[];
-  /** The index of the default scene */
+  /** The scene to show on load; unset leaves the choice to the viewer */
   scene?: GltfId;
-  /** An array of scenes */
   scenes?: Scene[];
-  /** An array of skins */
   skins?: Skin[];
-  /** An array of textures */
   textures?: Texture[];
   extensions?: GltfExtensions;
 }

@@ -40,29 +40,29 @@ interface RenderForwardBatchesGpuOptions {
   /** The frame's render session */
   session: RenderSession;
   /**
-   * Cache draw commands as a GPU render bundle (opaque/transmission/outline)
-   * vs. replay the command list immediately every frame (transparent).
+   * Record the draws into a render bundle and replay it, as the key-sorted passes do; `false`
+   * replays the command list every frame, as the distance-sorted passes do
    */
   useBundles: boolean;
   /**
-   * Always rebuild the bundle/command list, ignoring the dirty-version and
-   * count-change checks. Used by transparent (re-sorts every frame).
+   * Rebuild the draw data every frame, ignoring the dirty and count checks; required when
+   * `useBundles` is `false`, since such a pass re-sorts every frame
    */
   alwaysRebuild: boolean;
   /** Optional per-batch sort; defaults to key-based `renderables.sort()` */
   sortBatch?: SortBatchFnGpu;
   /**
-   * When true, the batcher skips texture-atlas packing and the batch
+   * When true, the batcher skips texture-slot packing and the batch
    * texture bind group. Suitable for depth-only or solid-colour passes.
    */
   skipTextureBatching?: boolean;
 }
 
 /**
- * Prepare phase for the bundled forward passes (opaque / transmission / blended-refraction)
+ * Prepare phase for the bundled forward passes, such as opaque and transmission
  *
- * Sorts, populates the instance buffer, builds the draw-command list, and uploads the
- * instance buffer — all **before** any render target is bound.
+ * For each batch whose draw data is stale, sorts, fills the instance buffer, builds the
+ * draw-command list and uploads the instance buffer, all **before** any render target is bound.
  *
  * Split out of `renderForwardBatchesGpu` so a cull compute can run between the
  * uploads here and the bundle replay there (compute can't run inside a render
@@ -70,17 +70,22 @@ interface RenderForwardBatchesGpuOptions {
  * (`useBundles === false`) have no bundle to hoist into and prepare inline in
  * `renderForwardBatchesGpu`, so this returns immediately for them.
  *
- * The draw claim (`claimDrawBuilt`) is deliberately left for
- * `renderForwardBatchesGpu`, so compute can observe that this frame's
- * draw data was rebuilt. Bundle-only invalidation may still happen between
- * prepare and render when the graph binds a new sampled texture source.
+ * The list's own draw args stay on the CPU. They are the template each `CullResult` copies its
+ * lanes from in `CullResult.sync`, and only a result's copy is ever drawn. A rebuild moves the
+ * command list's dirty id, which is what makes every result re-sync and re-record.
+ *
+ * The cull producer is resolved here, on rebuild only. It depends on the batch's `cull` mode and
+ * its instance count, and a change to either forces a rebuild: the `cull` setter invalidates the
+ * batch's draw lists.
+ *
+ * The draw claim (`claimDrawBuilt`) is left for `renderForwardBatchesGpu`. The graph can still
+ * invalidate bundles between prepare and render, when it binds a new sampled texture source.
  * @param options - The pass's pipe, bit, session, and draw-cache policy
  * @internal
  */
 export function prepareForwardBatchesGpu(options: RenderForwardBatchesGpuOptions): void {
   const { pipe, bit, session, useBundles, alwaysRebuild, sortBatch, skipTextureBatching = false } = options;
 
-  // Immediate-replay passes prepare inline in renderForwardBatchesGpu (no bundle).
   if (!useBundles) return;
 
   const { view3d } = session;
@@ -113,28 +118,31 @@ export function prepareForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
       skipTextureBatching,
     });
 
-    // The list's own args stay CPU-side on WebGPU: they are the template each cull result copies
-    // its lanes from (`CullResult.sync`), and only a result's copy is ever drawn from. The rebuild
-    // moved the command list's dirty id, which is what makes every result re-sync and re-record.
     gpuData.instanceBuffer.upload(renderables.count);
 
-    // Resolve the cull producer for this batch — rebuild-gated (it only changes
-    // with instance count, which itself forces a rebuild, and with `view3d.cull`,
-    // whose setter forces one). The compute route reads it to pick who fills the
-    // survivors.
-    list._cullProducer = resolveCullProducer(view3d.cull, true, renderables.count);
+    list._cullProducer = resolveCullProducer(batch.cull, true, renderables.count);
   }
 }
 
 /**
- * Compute phase for bundled forward passes: dispatch the compaction compute over each batch's
- * instance + draw-call buffers — between the prepare uploads and the render's `drawIndexedIndirect`
+ * Compute phase for bundled forward passes: fill each batch's survivors for this pass, between
+ * the prepare uploads and the render's `drawIndexedIndirect`
  *
- * The compute compacts survivors from the list's `instanceBuffer` into this pass's
- * `CullResult` for the batch and rebuilds each command's `instanceCount` there; the render then
- * binds the result's survivors at the instance slot. Recorded here in the graph's execute
- * pre-sweep (no render pass open) and submitted in `ComputeSystemGpu.renderEnd`, ahead of the
- * render submit. Immediate-replay passes aren't compacted, so this returns for them.
+ * Each batch's `CullResult` is first re-synced to its list if prepare rebuilt it. Then the
+ * producer prepare resolved decides who fills its survivors; bundles always bind them:
+ *
+ * - `'off'` runs the visibility-only walk, and only when its answer could have changed: the
+ *   batch's visibility dirty id moved, or the sync reset the result's watermark. Otherwise last
+ *   frame's survivors still stand. The frustum producers can't skip like this, because the camera
+ *   is one of their inputs and has no change signal.
+ * - `'cpu'` runs the frustum cull in JavaScript, `produceCpuCompaction`.
+ * - `'gpu'` records the compaction compute, which `ComputeSystemGpu.renderEnd` submits ahead of
+ *   the render. The frustum is moved into the batch's frame once, as the CPU cull does, so the
+ *   kernel never combines the batch matrix with each instance's.
+ *
+ * The compute reads bounds from the per-geometry store; the CPU cull reads each instance's
+ * cached sphere instead. Results for batches the view detached go back to the pool first.
+ * Immediate-replay passes compact inline in `renderForwardBatchesGpu`, so this returns for them.
  * @param options - The pass's pipe, bit, session, cull results, and draw-cache policy
  * @internal
  */
@@ -143,14 +151,9 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
   if (!useBundles) return;
 
   const { view3d } = session;
-  // Shared across the view's batches: the per-geometry bounds store (GPU buffer, read by the compute
-  // kernel) and the world-space planes of the drawing camera's cull frustum — rebuilt in the update
-  // phase (view camera) or this pass's `prepare` (its own camera), before this.
-  // (The CPU producer sources bounds from each instance's cached sphere, not this store.)
   const boundsBuffer = pipe.geometryDataStoreBuffer.buffer;
   const planes = (options.camera ?? view3d.camera).cullFrustum.planesData;
 
-  // Results for batches the view detached go back to the pool (gated on the batch list's dirty id).
   cullResults.removeDetached(view3d);
 
   for (const batch of view3d._meshBatches) {
@@ -158,21 +161,11 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
     const list = batch.drawLists[bit];
     if (!list || list.view.count === 0) continue;
 
-    // This pass's result for the batch, re-synced to the list if prepare rebuilt it (fresh lane
-    // copy, survivors sized, bundle dropped).
     const result = cullResults.ensure(batch);
     result.sync(list);
 
-    // Route on the producer resolved in prepareForwardBatchesGpu — it selects who FILLS the
-    // survivors (bundles always bind them). 'off' → visibility-only walk; 'cpu' → JS
-    // frustum cull; 'gpu' → the compute kernel.
     const producer = list._cullProducer;
     if (producer === 'off') {
-      // This walk is CPU work, so only run it when its answer could have changed:
-      // something was hidden or shown (the dirty-id moved), or the sync above reset the
-      // watermark because this pass rebuilt its draw data. Otherwise last frame's survivors
-      // are still right. The frustum producers below can't skip like this — the camera is one
-      // of their inputs and it has no change signal.
       if (result.lastVisibilityDirtyId !== batch._visibilityDirtyId) {
         produceCpuCompaction(list, batch, null, result);
       }
@@ -183,8 +176,6 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
       continue;
     }
 
-    // Same batch-frame trick as the CPU cull: transform the frustum into the batch's local space
-    // once, so the kernel tests `L × geom` directly — no per-instance `B × L` combine.
     const batchPlanes = transformFrustumToBatch(planes, batch.storeBuffer.data);
     pipe.renderer.compute3d.dispatch(
       result.indirectDrawData.drawCallsBuffer,
@@ -204,25 +195,32 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
  *
  * For bundled passes the draw data was already built by `prepareForwardBatchesGpu` in the graph
  * pre-sweep (a bundled pass MUST call it from `prepare()`) and this pass's survivors filled in
- * the compute phase; here we bind slots 9/10 and (re)record the result's bundle — now that
- * the graph has bound this pass's sampled textures, so the bundle captures the right bind-group
- * state — then execute it. Immediate-replay passes (transparent) have no prepare phase and
- * build, sync and compact inline.
+ * the compute phase. Here it binds slots 10 and 11 and records the result's bundle if needed,
+ * now that the graph has bound this pass's sampled textures, so the bundle captures the right
+ * bind-group state. A bundle is re-recorded when the list's `bundleDirtyId` moved (a sampled
+ * texture swap re-records without rebuilding the command list), when the camera group differs
+ * from the one it baked, or when `encoder.isBundleValid` finds its target stamp (attachment
+ * state and winding) no longer matches. Every producer fills the survivors, `'off'` included, so
+ * a producer change never invalidates a bundle. The valid bundles replay in one `executeBundle`
+ * call after the batch walk, because WebGPU resets the pass state after every call. A bundle
+ * replay binds nothing, so pixi's GC never sees the resources it uses; `commandList.touch`
+ * stamps them, or the GC would free a texture drawn every frame.
  *
- * Slot bindings: 9 = store, 10 = instances [id + texSlots] — always this pass's survivors for
- * the batch: bundled passes were filled by a producer in the pre-sweep, immediate passes run
- * the same compaction inline right after their per-frame build. Draw-data rebuilds are prepared
- * from the batch/pass dirty versions. Bundle recording is separately gated by the list's
- * `bundleDirtyId` (a sampled texture swap re-records without rebuilding the unchanged command
- * list), by the camera group `isBundleStale` is handed (a different `CameraData` than the
- * bundle baked), and by `encoder.isBundleValid` (the bundle's baked target stamp — attachment
- * state + winding — no longer matches the bound target). Valid bundles are collected and replayed in a
- * single `executeBundle` call after the batch walk. Passes with a different shape (shadow,
- * background, copy-opaque) implement `render()` themselves and don't call this.
+ * Immediate-replay passes, such as transparent, have no prepare phase. They sort and build
+ * inline, then re-sync the result to the rebuilt command list, which re-copies its lanes and
+ * re-sizes its survivors before anything binds them. Then they run the same compaction as the
+ * bundled passes: always visibility, and the frustum above the `'auto'` gate. Their detached
+ * results are dropped here, since they have no compute phase.
+ * A `'gpu'` compaction is recorded now and submitted in `ComputeSystemGpu.renderEnd`, ahead of
+ * the render, so the replayed indirect draws read the compacted counts.
+ *
+ * Slot 10 holds the batch's store and slot 11 this pass's survivors for the batch, as
+ * `[id, texSlots]` records. Passes with a different shape (shadow, background, copy-opaque)
+ * implement `render()` themselves and don't call this.
  *
  * Invariant: `useBundles === false` requires `alwaysRebuild === true` — an
  * immediate replay that skipped rebuild would replay against the previous
- * batch's slot-9/10 bindings. Bundles capture their bindings at record time.
+ * batch's slot-10/11 bindings. Bundles capture their bindings at record time.
  * @param options - The pass's pipe, bit, session, cull results, and draw-cache policy
  * @internal
  */
@@ -250,11 +248,9 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
   const gcNow = pipe.renderer.gc.now;
   const camera = options.camera ?? view3d.camera;
   const cameraData = getCameraData(camera);
-  // Immediate-pass compaction inputs (bundled passes compacted in the pre-sweep).
   const planes = camera.cullFrustum.planesData;
   const boundsBuffer = pipe.geometryDataStoreBuffer.buffer;
 
-  // Immediate passes have no compute phase, so their detached results are removed here.
   if (!useBundles) cullResults.removeDetached(view3d);
 
   let bundleIndex = 0;
@@ -284,19 +280,14 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
       const recorded = result.bundle;
 
       if (!recorded || result.isBundleStale(list, cameraData.bindGroup) || !encoder.isBundleValid(recorded)) {
-        // Sort / instance buffer / command list + cull producer ran in the pre-sweep, and the
-        // compute phase synced and filled this result. Bundles always bind the result's survivors
-        // — every producer fills them ('off' via the visibility-only walk) — so a producer change
-        // never invalidates a recorded bundle.
-        session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 9);
-        session.globalBindGroup.setResource(result.survivors.bufferResource, 10);
+        session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 10);
+        session.globalBindGroup.setResource(result.survivors.bufferResource, 11);
         encoder.beginBundle(`view3d pass ${bit} batch ${batch.uid}`);
         list.commandList.replay(encoder, pipe.renderer.buffer, result.indirectDrawData, cameraData);
         result.bundle = encoder.endBundle();
         result.claimBundleRecorded(list, cameraData.bindGroup);
       }
     } else if (drawRebuilt) {
-      // Immediate replay: no prepare phase, build inline.
       if (sortBatch) sortBatch(renderables, batch, cameraData.position);
       else renderables.sort();
       const gpuData = list.gpuData;
@@ -314,22 +305,14 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
 
       gpuData.instanceBuffer.upload(renderables.count);
 
-      // The rebuild moved the command list, so the result re-copies its lanes and re-sizes its
-      // survivors before anything binds them — growth swaps the underlying GPUBuffer (the
-      // BufferResource identity is stable and re-keys bind groups).
       result.sync(list);
 
-      session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 9);
-      session.globalBindGroup.setResource(result.survivors.bufferResource, 10);
+      session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 10);
+      session.globalBindGroup.setResource(result.survivors.bufferResource, 11);
 
-      // Same compaction as the bundled passes, run right after the per-frame build —
-      // visibility always, frustum above the auto gate. The replay binds the survivors
-      // (slot 10 above), so hidden/culled instances just shrink the counts.
-      const producer = resolveCullProducer(view3d.cull, true, renderables.count);
+      const producer = resolveCullProducer(batch.cull, true, renderables.count);
       list._cullProducer = producer;
       if (producer === 'gpu') {
-        // Recorded now, submitted in ComputeSystemGpu.renderEnd — queue-ordered before the
-        // render submit, so the replayed indirect draws read the compacted counts.
         const batchPlanes = transformFrustumToBatch(planes, batch.storeBuffer.data);
         pipe.renderer.compute3d.dispatch(
           result.indirectDrawData.drawCallsBuffer,
@@ -349,8 +332,6 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
     list.claimDrawBuilt(renderables.count);
 
     if (useBundles) {
-      // A bundle replay binds nothing, so pixi's per-bind GC stamps never reach the resources it
-      // bakes; stamp them here or the GC would collect a texture drawn every frame.
       list.commandList.touch(gcNow);
       bundleRun[bundleIndex++] = result.bundle!;
     } else {
@@ -358,11 +339,8 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
     }
   }
 
-  // Replay the whole run in one call — pass state resets after every executeBundles,
-  // so per-batch calls would pay one cache clear each for the same result.
   if (bundleIndex > 0) {
     encoder.executeBundle(bundleRun);
-    // A retained bundle pins every GPU resource it recorded — release the refs now.
     bundleRun.length = 0;
   }
 }
@@ -370,10 +348,9 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
 /**
  * Scratch for the pass's valid bundles, replayed in a single `executeBundle` call
  *
- * Module-scoped and emptied right after each replay, so it is always empty between
- * calls — the cursor writes in the batch walk rebuild its length exactly, and it
- * holds no bundle refs between frames. Passes render sequentially so it is never
- * live for two passes at once.
+ * Module-scoped and emptied right after each replay, so it holds no bundle between calls: a
+ * retained bundle would pin every GPU resource it recorded. Passes render one at a time, so it is
+ * never live for two at once. pixi's global resource teardown empties it too.
  */
 const bundleRun: RenderBundle[] = [];
 GlobalResourceRegistry.register({

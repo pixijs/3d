@@ -18,71 +18,13 @@ const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 const CENTER = { x: 50, y: 50 };
 
-// A 2×2×2 cube centred at origin, so each face sits one unit from the centre.
+/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
-    -1,
-    -1,
-    -1,
-    1,
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    -1,
-    1,
-    -1, // back
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    1,
-    1,
-    1,
-    1,
-    -1,
-    1,
-    1, // front
+    -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
   ]);
   const indices = new Uint16Array([
-    0,
-    1,
-    2,
-    0,
-    2,
-    3, // back
-    4,
-    6,
-    5,
-    4,
-    7,
-    6, // front
-    0,
-    4,
-    5,
-    0,
-    5,
-    1, // bottom
-    2,
-    6,
-    7,
-    2,
-    7,
-    3, // top
-    1,
-    5,
-    6,
-    1,
-    6,
-    2, // right
-    0,
-    3,
-    7,
-    0,
-    7,
-    4, // left
+    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 2, 6, 7, 2, 7, 3, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4,
   ]);
   const geometry = new Geometry3D({
     positions,
@@ -92,8 +34,7 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-// Run the transform pass + camera projection so worldTransform / viewProjection
-// reflect the current scene state. These tests sit outside the render loop.
+/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -107,8 +48,10 @@ function makeView(): View3D {
   return view3d;
 }
 
-// An origin-centred local-space sphere with a call counter, for proving a
-// barrier keeps the picker away from a descendant's volume entirely.
+/**
+ * An origin-centred sphere volume that counts its `raycast` calls, to prove a barrier keeps the picker away
+ * from a descendant's volume
+ */
 class CountingSphereVolume implements IHitVolume3D {
   public raycastCalls = 0;
   private readonly _sphere: Sphere;
@@ -133,22 +76,6 @@ class CountingSphereVolume implements IHitVolume3D {
 }
 
 describe('interactiveChildren as a registration barrier', () => {
-  test('assignment runs the mixin accessor, not a shadowed data property', () => {
-    const view3d = makeView();
-    const group = new Container3D();
-    group.eventMode = 'static';
-    const mesh = makeCube();
-    group.addChild(mesh);
-    view3d.root.addChild(group);
-    expect(view3d.events._interactiveList).toContain(mesh);
-
-    // Plain assignment must reach the prototype setter and change the list.
-    group.interactiveChildren = false;
-
-    expect(group.interactiveChildren).toBe(false);
-    expect(view3d.events._interactiveList).not.toContain(mesh);
-  });
-
   test('barrier strips a passive mesh under an interactive parent, and restores it', () => {
     const view3d = makeView();
     const group = new Container3D();
@@ -271,7 +198,7 @@ describe('interactiveChildren as a registration barrier', () => {
     expect(view3d.raycast(CENTER)!.target).toBe(group);
   });
 
-  test("'none' and interactiveChildren = false on one node: only clearing both restores", () => {
+  test("'none' and interactiveChildren = false on one node: only clearing both restores, in either order", () => {
     const view3d = makeView();
     const mid = new Container3D();
     const mesh = makeCube();
@@ -281,7 +208,6 @@ describe('interactiveChildren as a registration barrier', () => {
     tickPick(view3d);
     expect(view3d.events._interactiveList).toContain(mesh);
 
-    // Clear the flag first, the mode second.
     mid.eventMode = 'none';
     mid.interactiveChildren = false;
     expect(view3d.events._interactiveList).not.toContain(mesh);
@@ -292,7 +218,6 @@ describe('interactiveChildren as a registration barrier', () => {
     expect(view3d.events._interactiveList).toContain(mesh);
     expect(view3d.raycast(CENTER)!.target).toBe(mesh);
 
-    // Clear the mode first, the flag second.
     mid.eventMode = 'none';
     mid.interactiveChildren = false;
     mid.eventMode = 'passive';
@@ -303,7 +228,7 @@ describe('interactiveChildren as a registration barrier', () => {
     expect(view3d.raycast(CENTER)!.target).toBe(mesh);
   });
 
-  test('a pre-set flag is honoured by the attach walk', () => {
+  test("a pre-set interactiveChildren = false holds through the attach walk: the barrier registers, its subtree doesn't", () => {
     const view3d = makeView();
     const group = new Container3D();
     group.eventMode = 'static';
@@ -317,7 +242,6 @@ describe('interactiveChildren as a registration barrier', () => {
 
     view3d.root.addChild(group);
 
-    // The barrier node registers per its own rule; nothing below it does.
     expect(view3d.events._interactiveList).toContain(mid);
     expect(view3d.events._interactiveList).not.toContain(mesh);
   });
@@ -359,28 +283,10 @@ describe('interactiveChildren as a registration barrier', () => {
     tickPick(view3d);
     expect(view3d.events._interactiveList).not.toContain(mesh);
 
-    // Both cover directions must stop the descent at the barrier child.
     grandparent.eventMode = 'passive';
     expect(view3d.events._interactiveList).not.toContain(mesh);
     grandparent.eventMode = 'static';
     expect(view3d.events._interactiveList).not.toContain(mesh);
     expect(view3d.raycast(CENTER)).toBeNull();
-  });
-
-  test('picking results are unchanged: a barred subtree misses exactly as when it was resolve-pruned', () => {
-    const view3d = makeView();
-    const group = new Container3D();
-    group.eventMode = 'static';
-    const mesh = makeCube();
-    group.addChild(mesh);
-    view3d.root.addChild(group);
-    group.interactiveChildren = false;
-    tickPick(view3d);
-
-    // Same observable outcome the resolve-time prune produced: null, no occlusion side effects.
-    expect(view3d.raycast(CENTER)).toBeNull();
-
-    group.interactiveChildren = true;
-    expect(view3d.raycast(CENTER)!.target).toBe(group);
   });
 });

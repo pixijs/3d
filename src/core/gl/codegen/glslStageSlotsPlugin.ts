@@ -10,10 +10,9 @@ const NESTED_MARKER_PATTERN = /\{\{(.*?)\}\}/g;
  * Collects slot names that appear as `{{name}}` markers inside any of the
  * values about to be injected
  *
- * These count as "indirectly referenced" — the master template doesn't mention
- * them, but another slot's body does, so they will be resolved by
- * `fillTemplateSlots`'s recursive substitution. Same rationale as the WGSL
- * variant — see `wgslStageSlotsPlugin.collectIndirectSlots`.
+ * The template doesn't name these slots, but another slot's code does, and
+ * `fillTemplateSlots` fills markers recursively, so code for them isn't unused.
+ * `wgslStageSlotsPlugin` makes the same check.
  * @param slotCode - Code chunks about to be injected, keyed by slot name
  */
 function collectIndirectSlots(slotCode: Record<string, string[]>): Set<string> {

@@ -41,7 +41,7 @@ interface GlData {
    * Kept separate from `indexTexture` so the build's output survives a frame's culling and every
    * draw can compact from it afresh.
    */
-  indexStaging: Float32Array | null;
+  indexStaging: Uint32Array | null;
   /**
    * Last `Mesh3DBatch._visibilityDirtyId` the in-place compaction consumed
    *
@@ -68,23 +68,24 @@ interface GpuData {
    */
   instanceBuffer: RenderInstanceBuffer;
   /**
-   * Bumped when something a bundle *baked in at record time* changes while the draw commands
-   * themselves stay valid: a sampled texture swapping source (the render graph's doing, when a
-   * pooled transient changes instance as the viewport crosses a size bucket)
+   * Bumped when something a bundle baked at record time changes while the draw commands stay valid
    *
-   * That only. A rebuild needs no bump: it moves the command list's dirty id, and every
-   * result re-syncs and drops its bundle on that (`CullResult.sync`). A camera swap is caught
-   * per result by the bind group {@link CullResult.isBundleStale} is handed. A target changing
-   * attachment state or winding is caught at replay by the encoder's bundle stamp. Every pass
-   * drawing this list re-records against this counter (`CullResult.isBundleStale`); one counter,
-   * one watermark per pass. WebGL never reads it — it rebinds everything live.
+   * The render graph bumps it when a texture a pass samples swaps source, as a pooled texture does
+   * when the viewport crosses into another size bucket, or dies and gives way to a placeholder.
+   * `View3D._invalidateBundleCaches` bumps it
+   * when a global binding changes identity, such as the shadow map, and {@link DrawList.unload}
+   * bumps it too. A rebuild needs no bump: it moves the command list's dirty id, and every result
+   * re-syncs and drops its bundle on that (`CullResult.sync`). A camera swap is caught per result
+   * by the bind group {@link CullResult.isBundleStale} is handed, and a target changing attachment
+   * state or winding by the encoder's bundle stamp at replay. Every pass drawing this list keeps
+   * its own watermark of this one counter. WebGL never reads it, since it rebinds everything live.
    */
   bundleDirtyId: number;
 }
 
 /**
- * One pass's draw list for one batch: the renderables in draw order, the draw commands built
- * from them, and the build output the compactions read
+ * The draw list of one pass bit on one batch: the renderables in draw order, the draw commands
+ * built from them, and the build output the compactions read
  *
  * Camera-independent, and built once per shape change. Every pass that draws this list
  * reads the same list; what a camera decides — which instances survive, how many each
@@ -129,8 +130,9 @@ export class DrawList {
   /**
    * Bumped when the *shape* of this batch's draw work for this pass changes: a renderable
    * added or removed, a mesh rekeyed by `RenderPass.onRenderableDirty` (its shader,
-   * material or geometry changed), or a shared store the recorded commands bind into
-   * growing and reallocating underneath them.
+   * material or geometry changed), a shared store the recorded commands bind into
+   * growing and reallocating underneath them, or a resource the commands captured losing its
+   * GPU copy (`DrawCommandList.onCaptureLost`).
    */
   public drawDirtyId = 0;
 
@@ -143,11 +145,12 @@ export class DrawList {
   public lastDrawDirtyId = -1;
 
   /**
-   * Resolved cull producer for this list, set on rebuild — `prepareForwardBatchesGpu` (WebGPU) or
-   * `renderForwardBatchesGl` (WebGL). Decided by instance count and the view's cull mode, so it is
-   * the same for every pass drawing the list. On WebGPU it selects who *fills* a pass's survivors
-   * ('off' → the visibility-only walk, 'cpu'/'gpu' → the frustum compactions — bundles always
-   * bind survivors). On WebGL it routes the batcher's in-place cull.
+   * How this list is culled, chosen from its batch's `cull` mode and the instance count
+   *
+   * The forward draws (`prepareForwardBatchesGpu`, `renderForwardBatchesGl`) and the shadow passes
+   * set it. On WebGPU it picks what fills a pass's survivors: `'off'` the visibility-only walk,
+   * `'cpu'` and `'gpu'` the frustum compactions; bundles always bind the survivors. On WebGL it
+   * routes the batcher's in-place cull.
    */
   public _cullProducer: 'off' | 'cpu' | 'gpu' = 'off';
 
@@ -187,9 +190,6 @@ export class DrawList {
       bundleDirtyId: 0,
     };
 
-    // A captured resource's GPU copy died (user unload / in-place growth):
-    // the recorded commands and bundles bake the dead handle, so force a
-    // rebuild — the next build re-fetches, re-captures, and re-records.
     this.commandList.onCaptureLost = () => {
       this.drawDirtyId++;
     };
@@ -237,7 +237,7 @@ export class DrawList {
    *
    * The draw watermark is invalidated because the cleared command list must not be replayed
    * as-is — the renderable count alone is unchanged, so nothing else would notice it went
-   * empty — and the bundle counter moves so every node's `CullResult` re-records against the
+   * empty — and the bundle counter moves so every pass's `CullResult` re-records against the
    * rebuild. Idempotent, and recoverable by construction: the next frame rebuilds.
    */
   public unload(): void {

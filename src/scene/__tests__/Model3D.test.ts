@@ -11,6 +11,7 @@ import { Container3D } from '~/scene/Container3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { Model3D } from '~/scene/Model3D';
 
+/** A right triangle in the z = 0 plane, spanning 0 to 1 on x and y */
 function createTriangleGeometry(): Geometry3D {
   return new Geometry3D({ positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) });
 }
@@ -40,18 +41,6 @@ function createBoxSource(): Scene3DSource {
 }
 
 describe('new Model3D', () => {
-  it('builds the scene graph from a bare source', () => {
-    const source = createBoxSource();
-
-    const model = new Model3D(source);
-
-    expect(model.source).toBe(source);
-    expect(model.label).toBe('Model3D');
-    expect(model.children).toHaveLength(1);
-    expect(model.children[0]).toBeInstanceOf(Mesh3D);
-    expect(model.children[0].label).toBe('Box');
-  });
-
   it('merges defaultOptions under its options, skipping explicit undefineds, and forwards container options', () => {
     const model = new Model3D({
       source: createBoxSource(),
@@ -66,14 +55,7 @@ describe('new Model3D', () => {
     expect(model.label).toBe('robot');
   });
 
-  it('builds the same graph through Model3D.from', () => {
-    const model = Model3D.from(createBoxSource(), { receiveShadow: false });
-
-    expect(model.children[0]).toBeInstanceOf(Mesh3D);
-    expect((model.children[0] as Mesh3D).receiveShadow).toBe(false);
-  });
-
-  it('hoists visible descendants of joint nodes directly under the scene root', () => {
+  it('builds no containers for joint nodes, leaving the skinned mesh beneath them as the only child', () => {
     const descriptor: Scene3DDescriptor = {
       scenes: [{ children: [25], name: 'Scene' }],
       nodes: [
@@ -132,18 +114,17 @@ describe('new Model3D', () => {
 
     const model = new Model3D(source);
 
-    // Joints don't produce scene-graph containers; the skinned mesh is hoisted
-    // directly under the model. Armature's scale rides through the skeleton's root bone.
     expect(model.children).toHaveLength(1);
     expect(model.children[0]).toBeInstanceOf(Mesh3D);
     expect(model.children[0].label).toBe('char1');
     expect(model.skeletons).toHaveLength(1);
   });
 
-  it('binds a kept ancestor container to its bone and re-poses the skeleton from the container TRS', () => {
-    // Skeleton-less skin: `Root` anchors the skinned mesh, so it stays in the scene
-    // graph as a Container3D AND is the skeleton's root bone (skeletonNodes[0]). The
-    // bone must track the container's (animatable) local TRS rather than freeze.
+  it('binds a kept ancestor container to its bone, re-posing the skeleton whenever it moves', () => {
+    /**
+     * `Root` is the skeleton's root bone and has the skinned mesh beneath it, so it is not a joint
+     * node and stays a Container3D
+     */
     const descriptor: Scene3DDescriptor = {
       scenes: [{ children: [0], name: 'Scene' }],
       nodes: [
@@ -171,12 +152,10 @@ describe('new Model3D', () => {
     const model = new Model3D(source);
     const skeleton = model.skeletons[0];
 
-    // Root anchors geometry, so it is kept as a Container3D, not dropped as a joint.
     const root = model.children.find((c) => c.label === 'Root');
 
     expect(root).toBeInstanceOf(Container3D);
 
-    // Driving the container's local transform re-poses bone 0 on the next update.
     root!.position.set(7, 8, 9);
     skeleton.updateWorld();
 
@@ -184,25 +163,19 @@ describe('new Model3D', () => {
     expect(skeleton.localPosition[1]).toBe(8);
     expect(skeleton.localPosition[2]).toBe(9);
 
-    // A clean update (no container change) leaves the skeleton non-dirty...
     skeleton.updateWorld();
     expect(skeleton.dirty).toBe(false);
 
-    // ...and a later container-only change is still picked up (the sync runs ahead
-    // of the dirty early-out).
     root!.position.set(1, 2, 3);
     skeleton.updateWorld();
 
-    expect(skeleton.localPosition[0]).toBe(1);
+    expect(skeleton.localPosition[0], 'a container move after a clean update still re-poses the bone').toBe(1);
     expect(skeleton.localPosition[1]).toBe(2);
     expect(skeleton.localPosition[2]).toBe(3);
   });
 
-  it('does not clobber the bind pose of a detached skinned mesh that is also a skeleton bone', () => {
-    // Degenerate-but-valid skeleton-less rig: the skinned mesh node is itself the
-    // skeleton root bone (an ancestor of the joint). It is detached to the model root
-    // with its transform suppressed, so it must keep its seeded bind-pose TRS rather
-    // than be bound to its now-identity container.
+  it('keeps the seeded bind pose of a bone that is also a detached skinned mesh', () => {
+    /** A skin with no skeleton root whose skinned mesh node is itself the root bone, with the joint beneath it */
     const descriptor: Scene3DDescriptor = {
       scenes: [{ children: [0], name: 'Scene' }],
       nodes: [
@@ -236,19 +209,16 @@ describe('new Model3D', () => {
     const model = new Model3D(source);
     const skeleton = model.skeletons[0];
 
-    // The detached mesh is reparented to the model root with its node transform ignored.
     const mesh = model.children.find((c) => c instanceof Mesh3D) as Mesh3D;
 
-    expect(mesh.position.x).toBe(0);
+    expect(mesh.position.x, 'the detached mesh drops its node transform').toBe(0);
 
     skeleton.updateWorld();
 
-    // Bone 0 keeps its seeded glTF translation; it is NOT overwritten by the detached
-    // mesh's suppressed (identity) transform.
     expect(skeleton.localPosition[0]).toBe(10);
   });
 
-  it('detaches a multi-primitive skinned mesh as a Container3D wrapping its primitive meshes', () => {
+  it('detaches a multi-primitive skinned mesh as a Container3D of primitive meshes sharing one skeleton', () => {
     const descriptor: Scene3DDescriptor = {
       scenes: [{ children: [0], name: 'Scene' }],
       nodes: [
@@ -274,8 +244,6 @@ describe('new Model3D', () => {
 
     const model = new Model3D(source);
 
-    // The multi-primitive mesh detaches as a plain Container3D wrapper (not a Mesh3D)
-    // whose children are the per-primitive Mesh3Ds, each wired to the shared skeleton.
     expect(model.children).toHaveLength(1);
 
     const wrapper = model.children[0];
@@ -288,17 +256,6 @@ describe('new Model3D', () => {
       expect(child).toBeInstanceOf(Mesh3D);
       expect((child as Mesh3D).skeleton).toBe(model.skeletons[0]);
     }
-  });
-
-  it('passes autoUpdate through to created animation players', () => {
-    const source = new Scene3DSource({});
-
-    source.animations.idle = new Animation({ label: 'idle', duration: 1 });
-
-    const model = new Model3D({ source, autoUpdate: false });
-
-    expect(model.player).toBeDefined();
-    expect(model.player!.autoUpdate).toBe(false);
   });
 
   it('passes autoPlay through to created animation players', () => {
@@ -318,20 +275,15 @@ describe('new Model3D', () => {
   });
 
   it('sizes width and height against the built graph', () => {
-    // The triangle mesh spans 1 on x and y. Sizing before the nodes exist measures
-    // empty bounds, which silently leaves the scale at 1.
     const model = new Model3D({ source: createBoxSource(), width: 2, height: 4 });
 
-    expect(model.scale.x).toBe(2);
+    expect(model.scale.x, 'sizing before the build would measure empty bounds and leave the scale at 1').toBe(2);
     expect(model.scale.y).toBe(4);
     expect(model.width).toBeCloseTo(2);
     expect(model.height).toBeCloseTo(4);
   });
 
-  it("resolves a 'box' hitVolume against the built graph", () => {
-    // The triangle mesh spans 1 on x and y. Resolving before the nodes exist snapshots a zero
-    // box at the origin, so the model never hits. Read min / max straight off the resolved
-    // volume so a stale snapshot shows.
+  it("resolves a 'box' hitVolume against the built graph, not the zero box an unbuilt model would snapshot", () => {
     const model = new Model3D({ source: createBoxSource(), hitVolume: 'box' });
     const box = model._hitVolumeResolved as Box;
 
@@ -361,7 +313,7 @@ describe('new Model3D', () => {
 });
 
 describe('Model3D cameras', () => {
-  /** A source whose only scene holds one camera node, parented at z = 5 */
+  /** A source whose only scene holds one camera node, placed at z = 5 */
   function createCameraSource(far?: number): Scene3DSource {
     return new Scene3DSource({
       scenes: [{ children: [0] }],

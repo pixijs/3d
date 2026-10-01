@@ -19,13 +19,11 @@ export const INDICES_PER_PARTICLE = 6;
 export const MAX_U16_CAPACITY = 16384;
 
 /**
- * The static `aUV` buffer: `(0,1) (1,1) (1,0) (0,0)` per quad
+ * The static `aUV` buffer, one corner id per vertex in the order {@link cornerIds} writes
  *
- * A perimeter order, so `createIndicesForQuads`' `0-1-2 / 0-2-3` split covers
- * the quad. The particle bit reads the id as a `[-0.5, 0.5]` corner offset and
- * the material reads it as the sprite's UV. `unorm8x2` gives exact 0 / 1 in a
- * quarter of the bytes; the stride is padded to 4 because WebGPU requires a
- * 4-byte-aligned array stride.
+ * The particle bit reads the id as a `[-0.5, 0.5]` corner offset and the material
+ * reads it as the sprite's UV. `unorm8x2` holds an exact 0 and 1 in half the bytes
+ * two floats take, once its stride is padded to the 4 bytes WebGPU requires.
  * @param vertexCount - Vertices to cover, four per quad
  * @internal
  */
@@ -39,7 +37,12 @@ function buildUvBuffer(vertexCount: number): Buffer {
 }
 
 /**
- * The corner ids for `vertexCount` vertices, four to a quad
+ * The corner ids for `vertexCount` vertices, four to a quad: `(0, 1)`, `(1, 1)`, `(1, 0)`, `(0, 0)`
+ *
+ * Each id takes 4 bytes, `u` and `v` then padding, so only the 255s need writing;
+ * corner 3 is all zero. The order runs round the quad's edge, so
+ * `createIndicesForQuads`' `0-1-2 / 0-2-3` split covers it, and since the particle
+ * bit puts `v = 0` on the top edge it winds counter-clockwise on screen.
  * @param vertexCount - Vertices to cover, four per quad
  */
 function cornerIds(vertexCount: number): Uint8Array {
@@ -48,13 +51,10 @@ function cornerIds(vertexCount: number): Uint8Array {
   for (let v = 0; v < vertexCount; v += VERTS_PER_PARTICLE) {
     const o = v * 4;
 
-    // (0, 1), (1, 1), (1, 0), (0, 0): the particle bit puts v = 0 on the top
-    // edge, so this order winds counter-clockwise on screen.
-    data[o + 1] = 255; // corner 0 → (0, 1)
-    data[o + 4] = 255; // corner 1 → (1, 1)
+    data[o + 1] = 255;
+    data[o + 4] = 255;
     data[o + 5] = 255;
-    data[o + 8] = 255; // corner 2 → (1, 0)
-    // Corner 3 is (0, 0), already zero.
+    data[o + 8] = 255;
   }
 
   return data;
@@ -65,7 +65,7 @@ function cornerIds(vertexCount: number): Uint8Array {
  * uses
  *
  * The buffer is supplied here because pixi keys its u16/u32 switch on index
- * count; the real u16 ceiling is the max vertex index — 16384 quads.
+ * count; the real u16 ceiling is the max vertex index, at 16384 quads.
  * @param capacity - Quads to cover; past `MAX_U16_CAPACITY` the indices are 32-bit
  * @internal
  */

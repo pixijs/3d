@@ -1,135 +1,8 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
-/**
- * KHR_materials_clearcoat — a thin transparent lacquer layer on top of the base PBR material
- *
- * The clearcoat layer has its own GGX specular lobe (with `F0 = 0.04`,
- * dielectric IOR ≈ 1.5), its own roughness, and an optional independent
- * normal map.
- *
- * ## Two construction-selected variants
- *
- * Built via `createClearcoatBit`, which emits one of two variants picked
- * at material-construction time (like `getPositionBit` per vertex format,
- * or the base `normalMappingBit` per `normalTexture`):
- *
- *  - **`clearcoat`** (no coat normal map — the common case): the coat frame is
- *    just the geometric surface normal, so there is no TBN to build and no coat
- *    normal texture to sample. Cheaper per fragment — relevant on mobile.
- *  - **`clearcoat:normalMap`**: samples the coat normal map and builds a
- *    derivative-based TBN, exactly as before.
- *
- * Both carry the identical `clearcoatParams` struct binding, so the packed
- * Material layout is the same regardless of variant.
- *
- * ## Double-sided back faces
- *
- * The coat frame is anchored to the *geometric* normal (`vNormal`), not the
- * base-material `normal` — the coat's optional normal map is independent of the
- * base normal map, so reusing the base (possibly base-normal-mapped) `normal`
- * would be wrong. But `vNormal` is the raw interpolated varying, which is NOT
- * flipped on back faces (only the base `normal` is, by `doubleSidedNormalBit`).
- * So both variants front-facing-correct it themselves
- * (`select(-vNormal, vNormal, frontFacing)` / `gl_FrontFacing ? vNormal : -vNormal`).
- * Without this, a double-sided coat reflects the *opposite* hemisphere of the
- * environment on its back faces, and `ccNDotV` collapses to grazing (maximal
- * reflection) — a bright, wrong reflection. `frontFacing` is always available as
- * a fragment builtin, so this needs no extra gating.
- *
- * ## Architecture: a "lobe" emitted into the existing light loop
- *
- * Clearcoat is *not* a second lighting model — it splices three snippets
- * into `pbrLightingBit`'s loop via the lobe convention documented on
- * {@link createLightingBit}:
- *
- *  - `lobePreLighting`  — declare clearcoat normal/roughness/Fresnel hoists.
- *  - `lobePerLight`     — accumulate clearcoat specular for this light.
- *  - `lobePostLighting` — composite: attenuate base lobe by clearcoat
- *                         Fresnel, add clearcoat direct + IBL specular.
- *
- * So a material with clearcoat still runs **one** light loop, samples each
- * shadow map exactly **once**, and pays only the per-iteration cost of an
- * extra GGX evaluation. There is no second `for (i in lights)` and no
- * second shadow lookup.
- *
- * The clearcoat lobe also contributes its own image-based specular,
- * sampling whichever environment source is active via `sampleEnvironment`.
- * Without this, glossy lacquer would only ever *darken* the substrate
- * (Fresnel attenuation) without adding back its own environment reflection
- * — the surface would look lifeless under image-based lighting.
- *
- * ## Required upstream state
- *
- * Set by `pbrMaterialBit` and `pbrLightingBit` before this bit runs:
- *   - `material`               — Material struct (needs `clearcoatParams`)
- *   - `normal`, `viewDir`      — surface frame
- *   - `finalColor`             — base PBR result, attenuated in `lobePostLighting`
- *   - `INV_PI`                 — declared by pbrLightingBit's header
- *   - `input.vUV` / `vUV`      — texture coordinates
- *
- * ## Constants
- *
- * The dielectric Fresnel `CLEARCOAT_F0 = 0.04` (IOR ≈ 1.5) is fixed by the
- * glTF spec. We declare it as a `const` in the WGSL header and `#define` in
- * the GLSL header — *not* as a shader override — because pixi-3d's GLSL
- * backend doesn't translate WGSL `override`s to GLSL `#define`s. Using a
- * literal constant keeps both backends symmetric without needing a separate
- * `glslOverridesPlugin`.
- *
- * The TBN helper (coat-normal-map variant only) is named `calculateClearcoatTBN`
- * (not `calculateTBN`) so a material that uses both base normal mapping AND a
- * clearcoat normal map doesn't redeclare the same identifier as
- * `normalMappingBit`. The WGSL body negates `dpdy()` for the same window-Y
- * convention reason documented on `normalMappingBit` — without it,
- * clearcoat bumps would invert on WebGPU.
- *
- * ## Two-tier roughness
- *
- * `lobePreLighting` derives two roughness values from the same source:
- *
- *  - `ccRoughnessIBL` — raw [0..1] value, used for env-map mip selection
- *    and the BRDF LUT lookup. A "perfect mirror" lacquer
- *    (clearcoatRoughness = 0 in the glTF) must hit mip 0 here, otherwise it
- *    looks frosted.
- *  - `ccRoughness`    — `max(ccRoughnessIBL, 0.04)`, used only by the
- *    direct-lighting GGX. A strict zero would blow up the `(a2 - 1)`
- *    denominator in the GGX distribution.
- *
- * ## IBL specular: Karis split-sum, no AO
- *
- * Clearcoat IBL is `prefiltered * (CLEARCOAT_F0 * brdf.x + brdf.y)` —
- * the same split-sum form as the substrate IBL. F90 is implicitly 1.0;
- * unlike the substrate path, the glTF clearcoat spec doesn't define a
- * per-material F90 override (no clearcoat analogue to KHR_materials_specular),
- * so this term doesn't need plumbing.
- *
- * Critically, clearcoat IBL is **not** multiplied by `occlusion`. AO
- * represents shadowing of the substrate by nearby geometry; the lacquer
- * sits on top of the surface and reflects the environment regardless of
- * substrate occlusion. This matches the glTF reference renderer.
- *
- * ## Per-material data
- *
- * Packed into one `vec4<f32>` (`clearcoatParams`) to keep the Material struct
- * small for materials that *do* enable clearcoat:
- *
- * | xyz channel | meaning                                                 |
- * |-------------|---------------------------------------------------------|
- * | `.x`        | clearcoatFactor — strength of the lacquer layer        |
- * | `.y`        | clearcoatRoughness — independent of base roughness     |
- * | `.z`        | clearcoatNormalScale — applied to tangent-space xy      |
- * | `.w`        | reserved                                                |
- *
- * Texture defaults (set by Material3D): `clearcoat` and `clearcoatRoughness`
- * fall back to WHITE (multiplier = 1). The coat-normal-map variant additionally
- * declares a `clearcoatNormal` slot (defaulting to a flat normal map).
- *
- * Spec: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_clearcoat
- */
-
-/** WGSL: front-facing-corrected geometric normal (see "Double-sided back faces") */
+/** The geometric normal, flipped on back faces; `createClearcoatBit` says why */
 const CC_FACE_NORMAL_GPU = /*wgsl*/ `normalize(select(-input.vNormal, input.vNormal, input.frontFacing))`;
-/** GLSL: front-facing-corrected geometric normal */
+/** The geometric normal, flipped on back faces; `createClearcoatBit` says why */
 const CC_FACE_NORMAL_GL = /*glsl*/ `normalize(gl_FrontFacing ? vNormal : -vNormal)`;
 
 const CLEARCOAT_TBN_GPU = /*wgsl*/ `
@@ -170,15 +43,61 @@ mat3 calculateClearcoatTBN(highp vec3 surfaceNormal, highp vec3 position, highp 
 `;
 
 /**
- * Build a clearcoat bit
+ * Build one of the two `KHR_materials_clearcoat` bits: a clear lacquer layer over the PBR surface,
+ * with its own GGX highlight, roughness and optional normal map
  *
- * `withNormalMap` selects the coat-normal-map variant (samples the coat normal
- * texture + builds a TBN) versus the cheaper default (coat frame = geometric
- * normal). See the file header.
- * @param withNormalMap - Whether the coat samples its own normal texture through a TBN
+ * Material3D picks the variant at construction. Without a coat normal map (`clearcoat`, the common
+ * case) the coat's normal is the geometric normal, so there is no tangent frame to build and no
+ * texture to sample, which matters on mobile. With one (`clearcoat:normalMap`) the bit samples the
+ * map and builds a tangent frame from screen-space derivatives. Both declare the same
+ * `clearcoatParams`, so the material's struct is the same either way.
+ *
+ * The coat is a lobe in `pbrLightingBit`'s light loop (see {@link createLightingBit}), so the
+ * material still runs one loop and samples each shadow once:
+ *
+ * - `lobePreLighting` reads the coat's factor, roughness and normal and hoists the
+ *   light-independent GGX terms.
+ * - `lobePerLight` adds this light's coat highlight: GGX with `pbrLightingBit`'s approximate
+ *   visibility and Fresnel at `F0 = 0.04`, and no diffuse. Neither denominator needs a guard: the
+ *   roughness floor keeps the GGX one at `ccA2` or more, and `ccNDotL > 0` with `ccVisV >= ccA`
+ *   keeps the visibility one positive.
+ * - `lobePostLighting` dims the base layer by the coat's Fresnel, then adds the coat's direct light
+ *   and its environment reflection. Without that reflection a glossy coat would only darken the
+ *   surface under image-based lighting.
+ *
+ * The coat's normal starts from the geometric normal `vNormal`, not the base `normal`, because the
+ * coat's normal map is independent of the base one. `vNormal` isn't flipped on back faces the way
+ * `doubleSidedNormalBit` flips `normal`, so both variants flip it by `frontFacing` themselves
+ * (`CC_FACE_NORMAL_GPU`, `CC_FACE_NORMAL_GL`). Without the flip a double-sided coat reflects the
+ * wrong half of the environment on its back faces, and `ccNDotV` collapses to grazing: a bright,
+ * wrong reflection.
+ *
+ * Roughness comes in two tiers. The environment lookup and the BRDF table take the raw value, so a
+ * mirror coat (roughness 0) samples mip 0 instead of looking frosted. The direct GGX floors it at
+ * 0.04 and adds `pbrMaterialBit`'s `geometricRoughness`, clamped to 1, so a smooth coat on curved
+ * or distant geometry doesn't sparkle.
+ *
+ * The coat's environment reflection is the split sum `prefiltered * (F0 * lut.x + lut.y)`, with
+ * F90 fixed at 1 since the clearcoat spec has no F90 control. It isn't multiplied by occlusion:
+ * occlusion shadows the base surface, and the coat sits on top of it.
+ *
+ * `F0 = 0.04` (IOR 1.5) is fixed by the spec, so it is the shader constant `CLEARCOAT_F0`, a
+ * `const` in WGSL and a `#define` in GLSL. The tangent-frame helper is `calculateClearcoatTBN`
+ * rather than `calculateTBN`, so it doesn't clash with `normalMappingBit`'s when a material has both
+ * maps; its WGSL negates `dpdy()` for the reason `normalMappingBit` documents.
+ *
+ * `clearcoatParams` holds the factor in `.x`, the roughness in `.y` and the coat normal scale in
+ * `.z`; `.w` is unused. The factor reads the red channel of its texture and the roughness the
+ * green, as in glTF. Unset textures hold `Texture.WHITE`. The `clearcoatNormal` slot exists only on
+ * the normal-map variant.
+ *
+ * Reads `normal`, `viewDir`, `finalColor`, `INV_PI` and `geometricRoughness`, which
+ * `pbrMaterialBit` and `pbrLightingBit` declare.
+ *
+ * Spec: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_clearcoat
+ * @param withNormalMap - Whether the coat samples its own normal map through a tangent frame
  */
 function createClearcoatBit(withNormalMap: boolean): ShaderBit {
-  // WGSL coat-normal computation: TBN-perturbed vs. plain geometric normal.
   const gpuNormal = withNormalMap
     ? /*wgsl*/ `
   let ccTangentNormal = sampleClearcoatNormal(input.vUV).rgb * 2.0 - 1.0;
@@ -190,7 +109,6 @@ function createClearcoatBit(withNormalMap: boolean): ShaderBit {
   let ccNormal = normalize(ccTBN * ccScaledNormal);
 `
     : /*wgsl*/ `
-  // No coat normal map: the coat frame is the geometric normal.
   let ccNormal = ${CC_FACE_NORMAL_GPU};
 `;
 
@@ -202,7 +120,6 @@ function createClearcoatBit(withNormalMap: boolean): ShaderBit {
   vec3 ccNormal = normalize(ccTBN * ccScaledNormal);
 `
     : /*glsl*/ `
-  // No coat normal map: the coat frame is the geometric normal.
   vec3 ccNormal = ${CC_FACE_NORMAL_GL};
 `;
 
@@ -226,37 +143,30 @@ function createClearcoatBit(withNormalMap: boolean): ShaderBit {
 
       fragment: {
         lobePreLighting: /*wgsl*/ `
-  // KHR_materials_clearcoat — see clearcoatBit.ts for two-tier roughness rationale.
   let ccFactor = material.clearcoatParams.x * sampleClearcoat(input.vUV).r;
   let ccRoughnessRaw = material.clearcoatParams.y * sampleClearcoatRoughness(input.vUV).g;
   let ccRoughnessIBL = clamp(ccRoughnessRaw, 0.0, 1.0);
-  let ccRoughness = max(ccRoughnessIBL, 0.04);
+  let ccRoughness = min(max(ccRoughnessIBL, 0.04) + geometricRoughness, 1.0);
 ${gpuNormal}
   let ccA = ccRoughness * ccRoughness;
   let ccA2 = ccA * ccA;
   let ccA2InvPi = ccA2 * INV_PI;
-  let ccK = (ccRoughness + 1.0) * (ccRoughness + 1.0) / 8.0;
-  let ccOneMinusK = 1.0 - ccK;
+  let ccOneMinusA = 1.0 - ccA;
   let ccNDotV = max(dot(ccNormal, viewDir), 0.0);
-  let ccVisV = 1.0 / (ccNDotV * ccOneMinusK + ccK);
+  let ccVisV = ccNDotV * ccOneMinusA + ccA;
 
   var clearcoatLight = vec3<f32>(0.0);
 `,
         lobePerLight: /*wgsl*/ `
-    // Clearcoat: GGX specular only (no diffuse, dielectric F0 = 0.04).
     {
       let ccHalfVector = normalize(viewDir + lightDir);
       let ccNDotL = max(dot(ccNormal, lightDir), 0.0);
       if (ccNDotL > 0.0) {
         let ccNDotH = max(dot(ccNormal, ccHalfVector), 0.0);
         let ccDDenom = (ccNDotH * ccNDotH * (ccA2 - 1.0) + 1.0);
-        // 1e-5 (not 1e-7) keeps the denominator safe when fragment math is
-        // promoted to FP16 on mobile — see pbrLightingBit.ts for context.
-        let ccD = ccA2InvPi / (ccDDenom * ccDDenom + 1e-5);
-        let ccVisL = 1.0 / (ccNDotL * ccOneMinusK + ccK);
-        let ccVis = 0.25 * ccVisV * ccVisL;
+        let ccD = ccA2InvPi / (ccDDenom * ccDDenom);
+        let ccVis = 0.5 / (ccNDotL * ccVisV + ccNDotV * (ccNDotL * ccOneMinusA + ccA));
         let ccHDotV = max(dot(ccHalfVector, viewDir), 0.0);
-        // Spherical Gaussian Schlick — see pbrLightingBit.ts for rationale.
         let ccFc5 = exp2((-5.55473 * ccHDotV - 6.98316) * ccHDotV);
         let ccF = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * ccFc5;
         clearcoatLight += ccD * ccF * ccVis * light.color * attenuation * ccNDotL * shadow;
@@ -264,12 +174,9 @@ ${gpuNormal}
     }
 `,
         lobePostLighting: /*wgsl*/ `
-  // Clearcoat composite — see clearcoatBit.ts for IBL formulation and AO rationale.
-  // Spherical Gaussian Schlick — see pbrLightingBit.ts for rationale.
   let ccFcv5 = exp2((-5.55473 * ccNDotV - 6.98316) * ccNDotV);
 
   let ccR = reflect(-viewDir, ccNormal);
-  // Env radiance via the active env-source bit.
   let ccPrefiltered = sampleEnvironment(ccR, ccRoughnessIBL);
   let ccBrdf = textureSampleLevel(uBrdfLutTexture, uBrdfLutSampler, vec2<f32>(ccNDotV, ccRoughnessIBL), 0.0).rg;
   let clearcoatIBL = ccPrefiltered * (CLEARCOAT_F0 * ccBrdf.x + ccBrdf.y);
@@ -295,37 +202,30 @@ ${CLEARCOAT_TBN_GL}`
 #endif
 `,
         lobePreLighting: /*glsl*/ `
-  // KHR_materials_clearcoat — see clearcoatBit.ts for two-tier roughness rationale.
   float ccFactor = material.clearcoatParams.x * sampleClearcoat(vUV).r;
   float ccRoughnessRaw = material.clearcoatParams.y * sampleClearcoatRoughness(vUV).g;
   float ccRoughnessIBL = clamp(ccRoughnessRaw, 0.0, 1.0);
-  float ccRoughness = max(ccRoughnessIBL, 0.04);
+  float ccRoughness = min(max(ccRoughnessIBL, 0.04) + geometricRoughness, 1.0);
 ${glNormal}
   float ccA = ccRoughness * ccRoughness;
   float ccA2 = ccA * ccA;
   float ccA2InvPi = ccA2 * INV_PI;
-  float ccK = (ccRoughness + 1.0) * (ccRoughness + 1.0) / 8.0;
-  float ccOneMinusK = 1.0 - ccK;
+  float ccOneMinusA = 1.0 - ccA;
   float ccNDotV = max(dot(ccNormal, viewDir), 0.0);
-  float ccVisV = 1.0 / (ccNDotV * ccOneMinusK + ccK);
+  float ccVisV = ccNDotV * ccOneMinusA + ccA;
 
   vec3 clearcoatLight = vec3(0.0);
 `,
         lobePerLight: /*glsl*/ `
-    // Clearcoat: GGX specular only (no diffuse, dielectric F0 = 0.04).
     {
       vec3 ccHalfVector = normalize(viewDir + lightDir);
       float ccNDotL = max(dot(ccNormal, lightDir), 0.0);
       if (ccNDotL > 0.0) {
         float ccNDotH = max(dot(ccNormal, ccHalfVector), 0.0);
         float ccDDenom = (ccNDotH * ccNDotH * (ccA2 - 1.0) + 1.0);
-        // 1e-5 (not 1e-7) keeps the denominator safe when fragment math is
-        // promoted to FP16 on mobile — see pbrLightingBit.ts for context.
-        float ccD = ccA2InvPi / (ccDDenom * ccDDenom + 1e-5);
-        float ccVisL = 1.0 / (ccNDotL * ccOneMinusK + ccK);
-        float ccVis = 0.25 * ccVisV * ccVisL;
+        float ccD = ccA2InvPi / (ccDDenom * ccDDenom);
+        float ccVis = 0.5 / (ccNDotL * ccVisV + ccNDotV * (ccNDotL * ccOneMinusA + ccA));
         float ccHDotV = max(dot(ccHalfVector, viewDir), 0.0);
-        // Spherical Gaussian Schlick — see pbrLightingBit.ts for rationale.
         float ccFc5 = exp2((-5.55473 * ccHDotV - 6.98316) * ccHDotV);
         float ccF = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * ccFc5;
         clearcoatLight += ccD * ccF * ccVis * light.color * attenuation * ccNDotL * shadow;
@@ -333,12 +233,9 @@ ${glNormal}
     }
 `,
         lobePostLighting: /*glsl*/ `
-  // Clearcoat composite — see clearcoatBit.ts for IBL formulation and AO rationale.
-  // Spherical Gaussian Schlick — see pbrLightingBit.ts for rationale.
   float ccFcv5 = exp2((-5.55473 * ccNDotV - 6.98316) * ccNDotV);
 
   vec3 ccR = reflect(-viewDir, ccNormal);
-  // Env radiance via the active env-source bit.
   vec3 ccPrefiltered = sampleEnvironment(ccR, ccRoughnessIBL);
   vec2 ccBrdf = texture(uBrdfLutTexture, vec2(ccNDotV, ccRoughnessIBL)).rg;
   vec3 clearcoatIBL = ccPrefiltered * (CLEARCOAT_F0 * ccBrdf.x + ccBrdf.y);
@@ -353,13 +250,13 @@ ${glNormal}
 }
 
 /**
- * Clearcoat without a coat normal map (coat frame = geometric normal)
+ * Clearcoat whose normal is the geometric normal; see `createClearcoatBit`
  * @internal
  */
 export const clearcoatBit: ShaderBit = createClearcoatBit(false);
 
 /**
- * Clearcoat with a coat normal map (samples the coat normal + builds a TBN)
+ * Clearcoat that samples its own normal map; see `createClearcoatBit`
  * @internal
  */
 export const clearcoatNormalMapBit: ShaderBit = createClearcoatBit(true);

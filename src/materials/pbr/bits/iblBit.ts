@@ -1,54 +1,31 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Image-based environment lighting for the PBR substrate
+ * Environment lighting for the PBR surface: specular and diffuse from the view's environment
  *
- * The Karis split-sum approximation ("Real Shading in Unreal Engine 4,"
- * SIGGRAPH 2013) for single scattering, plus Fdez-Agüera multiple-scattering
- * compensation (2019). Same shape as the glTF Sample Renderer's reference
- * implementation, so output should match other compliant PBR renderers within
- * tone-mapping noise.
+ * Karis's split-sum approximation ("Real Shading in Unreal Engine 4", SIGGRAPH 2013) for single
+ * scattering, plus Fdez-Agüera's multiple-scattering compensation (2019):
  *
- * ## Env-agnostic via `sampleEnvironment`
+ * - `k_S` is a roughness-aware Fresnel, `F0 + (max(1 - roughness, F0) - F0) * fc5`, with the
+ *   spherical-Gaussian Schlick `pbrLightingBit` documents.
+ * - Single scattering is `FssEss = k_S * lut.x + f90 * lut.y`, from the BRDF lookup table.
+ * - `FmsEms` adds back the energy the single-scatter table loses to further bounces, lit by the
+ *   irradiance; without it rough metals turn grey. The `1e-5` keeps its denominator off zero when
+ *   `F_avg` and `Ems` both near 1.
+ * - Diffuse takes what is left: `k_D = albedo * (1 - FssEss - FmsEms) * (1 - metallic)`.
  *
- * Environment radiance reads go through `sampleEnvironment(dir, roughness)`,
- * supplied by whichever env-source bit is in the descriptor — cubemap,
- * hemisphere, or the no-env default. Exactly one env-source bit is always
- * present in a lit PBR descriptor (picked by `View3D.environment`), so
- * the function is always resolvable. All env-specific concerns (texture
- * sampling, sRGB decode, mip-level math) live inside the source bit;
- * `iblBit` itself is source-agnostic.
+ * Every environment read goes through `sampleEnvironment(dir, roughness)`, which the view's
+ * environment bit supplies, so this bit works the same for a cube map and a hemisphere. Material3D
+ * leaves it out when the view has no environment. The specular sample reflects off
+ * `specularNormal`, which the anisotropy bit may bend; the irradiance and the table's `N·V` use
+ * `normal`.
  *
- * Contract variables (must be set before the `lighting` slot):
- *   - normal, viewDir, albedo, metallic, roughness, fresnelF0, f90
+ * Irradiance is the environment sampled at roughness 1. For a cube map that is the most blurred
+ * prefiltered mip, a cosine-weighted average of radiance, which is already about irradiance / PI,
+ * so the diffuse term takes no extra `1 / PI`. A hemisphere ignores roughness.
  *
- * Declared by an upstream material bit (typically `pbrMaterialBit`,
- * optionally overridden by `specularBit`) in the `material` slot.
- *
- * Adds to: ambient
- *
- * ## Specular + multiscatter (Fdez-Agüera 2019)
- *
- * Single scatter `FssEss = k_S * scale + f90 * bias` from the BRDF LUT, where
- * `k_S` is a roughness-aware grazing Fresnel (f90 = 1 by default; `specularBit`
- * lowers it for `KHR_materials_specular`). `FmsEms` adds back the multi-bounce
- * energy the single-scatter LUT drops — without it rough metals grey out — lit
- * by the irradiance. Diffuse gets the rest:
- * `kD = albedo * (1 - FssEss - FmsEms) * (1 - metallic)`.
- *
- * ## Diffuse IBL: roughness=1 approximation
- *
- * `roughness = 1` stands in for a cosine-weighted irradiance convolution: it
- * lands on the highest prefiltered mip, which the prefilter normalises by
- * cosine weight, so it already returns ⟨L⟩ ≈ E/π (Lambert's 1/π is baked in).
- * Diffuse is therefore `albedo · ⟨L⟩` — no extra `INV_PI`. Hemisphere and
- * default sources ignore roughness and return their natural value.
- *
- * ## Specular reflection normal (`specularNormal`)
- *
- * The specular env sample reflects off `specularNormal` (set by
- * `pbrMaterialBit`, overwritten by features like anisotropy). Diffuse
- * irradiance and the BRDF `N·V` always use `normal`.
+ * Reads `normal`, `viewDir`, `albedo`, `metallic`, `roughness`, `fresnelF0`, `f90` and
+ * `specularNormal`, which must be final before the `lighting` slot, and adds to `ambient`.
  * @internal
  */
 export const iblBit: ShaderBit = {
@@ -63,7 +40,6 @@ export const iblBit: ShaderBit = {
   gpu: {
     fragment: {
       lighting: /*wgsl*/ `
-  // IBL: single + multiple scattering (Fdez-Agüera) — see iblBit.ts header.
   {
     let NdotV_ibl = max(dot(normal, viewDir), 0.0);
     let R_ibl = reflect(-viewDir, specularNormal);
@@ -73,20 +49,15 @@ export const iblBit: ShaderBit = {
 
     let f_ab = textureSampleLevel(uBrdfLutTexture, uBrdfLutSampler, vec2<f32>(NdotV_ibl, roughness), 0.0).rg;
 
-    // Single scattering, with roughness-aware grazing Fresnel.
     let Fr = max(vec3<f32>(1.0 - roughness), fresnelF0) - fresnelF0;
-    // Use the Spherical Gaussian Schlick approximation from pbrLightingBit.ts.
     let k_S = fresnelF0 + Fr * exp2((-5.55473 * NdotV_ibl - 6.98316) * NdotV_ibl);
     let FssEss = k_S * f_ab.x + f90 * f_ab.y;
 
-    // Multiple scattering: add back the energy the single-scatter LUT dropped.
     let Ems = 1.0 - (f_ab.x + f_ab.y);
     let F_avg = fresnelF0 + (1.0 - fresnelF0) / 21.0;
-    // The epsilon prevents a zero denominator when F_avg and Ems both approach 1.
     let Fms = FssEss * F_avg / (1.0 - F_avg * Ems + 1e-5);
     let FmsEms = Fms * Ems;
 
-    // Diffuse takes the leftover energy; metals contribute none.
     let k_D = albedo * (1.0 - FssEss - FmsEms) * (1.0 - metallic);
 
     ambient += FssEss * radiance + (FmsEms + k_D) * irradiance;
@@ -98,7 +69,6 @@ export const iblBit: ShaderBit = {
   gl: {
     fragment: {
       lighting: /*glsl*/ `
-  // IBL: single + multiple scattering (Fdez-Agüera) — see iblBit.ts header.
   {
     float NdotV_ibl = max(dot(normal, viewDir), 0.0);
     vec3 R_ibl = reflect(-viewDir, specularNormal);
@@ -108,20 +78,15 @@ export const iblBit: ShaderBit = {
 
     vec2 f_ab = texture(uBrdfLutTexture, vec2(NdotV_ibl, roughness)).rg;
 
-    // Single scattering, with roughness-aware grazing Fresnel.
     vec3 Fr = max(vec3(1.0 - roughness), fresnelF0) - fresnelF0;
-    // Use the Spherical Gaussian Schlick approximation from pbrLightingBit.ts.
     vec3 k_S = fresnelF0 + Fr * exp2((-5.55473 * NdotV_ibl - 6.98316) * NdotV_ibl);
     vec3 FssEss = k_S * f_ab.x + f90 * f_ab.y;
 
-    // Multiple scattering: add back the energy the single-scatter LUT dropped.
     float Ems = 1.0 - (f_ab.x + f_ab.y);
     vec3 F_avg = fresnelF0 + (1.0 - fresnelF0) / 21.0;
-    // The epsilon prevents a zero denominator when F_avg and Ems both approach 1.
     vec3 Fms = FssEss * F_avg / (1.0 - F_avg * Ems + 1e-5);
     vec3 FmsEms = Fms * Ems;
 
-    // Diffuse takes the leftover energy; metals contribute none.
     vec3 k_D = albedo * (1.0 - FssEss - FmsEms) * (1.0 - metallic);
 
     ambient += FssEss * radiance + (FmsEms + k_D) * irradiance;

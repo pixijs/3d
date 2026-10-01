@@ -57,11 +57,8 @@ function buildScene(app: Application<WebGPURenderer>): View3D {
   return view3d;
 }
 
-// Bone-pit growth mints a NEW BufferResource. The shadow pass's bind group is created once, so a
-// bundle re-recorded after growth would bake the retired resource unless the slot is re-pointed at
-// every re-record. WebGPU-only: the pass bind group is a WebGPU structure.
-describe.skipIf(isCI)('cascade bone-pit binding (webgpu)', () => {
-  it('re-points at the live bone-pit resource when growth replaces it', async () => {
+describe.skipIf(isCI)('cascade bone-pit binding in the WebGPU shadow pass bind group, which is created once', () => {
+  it('re-points at the live bone-pit resource when growth replaces it, before the cascade bundles re-record', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'shadow-cascade-bone-pit',
       appOptions: { preference: 'webgpu', width: SIZE, height: SIZE },
@@ -76,8 +73,6 @@ describe.skipIf(isCI)('cascade bone-pit binding (webgpu)', () => {
       const staleResource = view3d._bonePit.bufferResource;
       expect(shadowBindGroup.getResource(2)).toBe(staleResource);
 
-      // Growth swaps the pit's buffer and resource; the view's draw caches are invalidated on the
-      // next scene update, so the following frame re-records every cascade bundle.
       (view3d._bonePit as unknown as GrowableBonePit)._ensureCapacity(4096);
       expect(view3d._bonePit.bufferResource).not.toBe(staleResource);
 

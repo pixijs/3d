@@ -12,11 +12,8 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-// `bounds` and `cascades` are mutually exclusive placement modes. The options type rejects
-// combining them (and cascade-only tuning without cascades) at compile time; runtime mutation
-// can still produce the combined state, where cascades win and a one-time warn says so.
 describe('shadow options exclusivity (compile time)', () => {
-  it('rejects mixed placement modes', () => {
+  it('rejects mixed placement modes and cascade-only options without cascades', () => {
     // @ts-expect-error — bounds and cascades are mutually exclusive
     const both: LightShadowOptions = { bounds: Box.fromCenterSize({ x: 0, y: 0, z: 0 }, 10), cascades: 3 };
     // @ts-expect-error — maxDistance is cascade-only
@@ -32,7 +29,7 @@ describe('shadow options exclusivity (compile time)', () => {
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe.skipIf(isCI)(`shadow bounds+cascades warn (${preference})`, () => {
-    it('warns once when mutation sets both, and cascades keep precedence', async () => {
+    it('warns once per page, not per frame, when mutation sets both, and cascades keep precedence', async () => {
       const app = await getApp<Renderer>({
         id: `shadow-config-warn-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE },
@@ -60,13 +57,11 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.render();
         expect(warnSpy.mock.calls.some(isConflictWarn)).toBe(false);
 
-        // The state the types forbid, reached the way types can't see. Two frames in the
-        // conflicted state; the warn is a page-global `warnOnce`, so the first backend in
-        // this file logs it exactly once (not per frame) and the second finds it consumed.
         sun.shadow.bounds = Box.fromCenterSize({ x: 0, y: 0, z: 0 }, 10);
         app.render();
         app.render();
-        expect(warnSpy.mock.calls.filter(isConflictWarn).length).toBe(preference === 'webgpu' ? 1 : 0);
+        const isFirstBackendOnPage = preference === 'webgpu';
+        expect(warnSpy.mock.calls.filter(isConflictWarn).length).toBe(isFirstBackendOnPage ? 1 : 0);
       } finally {
         warnSpy.mockRestore();
         app.destroy();

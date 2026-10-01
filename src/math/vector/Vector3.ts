@@ -8,21 +8,23 @@ import type { PointData3D } from './PointData3D';
 import type { PointLike3D } from './PointLike3D';
 
 /**
- * The `Vector3` object represents a location in a three-dimensional coordinate system or a generic
- * three-component vector
+ * A point or direction in 3D, such as a position, a velocity or an offset
  *
- * `x`, `y` and `z` are positions on the corresponding axes. Math operations follow the unified
- * mutating-default pattern: `a.add(b)` mutates `a`; `a.add(b, out)` writes the result into `out`
- * without mutating `a`.
+ * Math methods change the vector they're called on and return it, so calls chain. Pass an `out`
+ * vector as the last argument to write the result there instead and leave this one as it is. In code
+ * that runs every frame, create `out` vectors once and reuse them: a `new Vector3()` per frame is
+ * garbage the collector has to clean up.
+ *
+ * Where a method takes a point, any {@link PointData3D} works, such as a node's `position` or a
+ * plain `{ x, y, z }` object.
  * @example
  * ```ts
- * const a = new Vector3(1, 2, 3);
- * const b = new Vector3(4, 5, 6);
+ * const toPlayer = new Vector3();
  *
- * a.add(b); // mutates `a`, returns `a`
- *
- * const out = new Vector3();
- * a.add(b, out); // writes a + b into `out`, leaves `a` unchanged
+ * app.ticker.add((ticker) => {
+ *   player.position.subtract(enemy.position, toPlayer).normalize();
+ *   enemy.position.addScaledVector(toPlayer, enemy.speed * (ticker.deltaMS / 1000));
+ * });
  * ```
  * @see {@link PointData3D} For basic x,y,z interface
  * @see {@link PointLike3D} For point manipulation interface
@@ -31,18 +33,39 @@ import type { PointLike3D } from './PointLike3D';
  * @standard
  */
 export class Vector3 implements PointLike3D {
-  /** Position of the point on the x axis */
+  /**
+   * The x component
+   * @example
+   * ```ts
+   * const groundSpeed = Math.hypot(velocity.x, velocity.z);
+   * ```
+   */
   public x = 0;
-  /** Position of the point on the y axis */
+  /**
+   * The y component
+   * @example
+   * ```ts
+   * velocity.y -= gravity * dt;
+   * ```
+   */
   public y = 0;
-  /** Position of the point on the z axis */
+  /**
+   * The z component
+   * @example
+   * ```ts
+   * velocity.z = runSpeed;
+   * ```
+   */
   public z = 0;
 
   /**
-   * A static `Vector3` reset to `(0, 0, 0)` on every access
+   * A static `Vector3` reset to `(0, 0, 0)` on every access, for a result used straight away
    *
-   * > [!IMPORTANT] This point is shared and temporary. Do not store references to it.
-   * @returns The shared scratch vector
+   * > [!IMPORTANT] This vector is shared and temporary. Do not store references to it.
+   * @example
+   * ```ts
+   * const inRange = enemy.getGlobalPosition(Vector3.shared).distanceTo(player.position) < attackRange;
+   * ```
    */
   static get shared(): Vector3 {
     _shared.x = 0;
@@ -54,9 +77,9 @@ export class Vector3 implements PointLike3D {
 
   /**
    * Creates a new `Vector3`
-   * @param x - Position on the x axis
-   * @param y - Position on the y axis
-   * @param z - Position on the z axis
+   * @param x - The x component
+   * @param y - The y component
+   * @param z - The z component
    */
   constructor(x = 0, y = 0, z = 0) {
     this.x = x;
@@ -65,11 +88,16 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Sets the point to a new x, y, z position
-   * @param x - Position on the x axis
-   * @param y - Position on the y axis, defaults to `x`
-   * @param z - Position on the z axis, defaults to `x`
-   * @returns This point, for chaining
+   * Sets the x, y and z components
+   * @example
+   * ```ts
+   * velocity.set(0, jumpSpeed, 0);
+   * size.set(1); // (1, 1, 1)
+   * ```
+   * @param x - The x component
+   * @param y - The y component, defaults to `x`
+   * @param z - The z component, defaults to `x`
+   * @returns This vector, for chaining
    */
   public set(x = 0, y = x, z = x): this {
     this.x = x;
@@ -80,9 +108,13 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Copies x, y, z from the given point into this point
+   * Copies x, y, z from the given point into this vector
+   * @example
+   * ```ts
+   * respawnPoint.copyFrom(player.position);
+   * ```
    * @param p - The point to copy from
-   * @returns This point, for chaining
+   * @returns This vector, for chaining
    */
   public copyFrom(p: PointData3D): this {
     this.x = p.x;
@@ -93,7 +125,11 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Copies this point's x, y, z into the given point
+   * Copies this vector's x, y, z into the given point
+   * @example
+   * ```ts
+   * respawnPoint.copyTo(player.position);
+   * ```
    * @param p - The point to copy into
    * @returns The given point with values updated
    */
@@ -104,7 +140,11 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Checks if another point is equal to this point
+   * Checks if another point is equal to this vector
+   * @example
+   * ```ts
+   * if (!aimPoint.equals(lastAimPoint)) recomputeAim();
+   * ```
    * @param p - The point to check
    * @returns `true` when `x`, `y` and `z` all match exactly (no epsilon tolerance)
    */
@@ -113,7 +153,11 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Creates a copy of this point
+   * Creates a copy of this vector
+   * @example
+   * ```ts
+   * const startVelocity = velocity.clone();
+   * ```
    * @returns A new `Vector3` with the same component values
    */
   public clone(): Vector3 {
@@ -121,8 +165,12 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Returns a readable string representation of this point
-   * @returns A string describing the point's components
+   * Returns a readable string representation of this vector
+   * @example
+   * ```ts
+   * console.log(velocity.toString());
+   * ```
+   * @returns A string describing the vector's components
    */
   public toString(): string {
     return `[pixi-3d/math:Vector3 x=${this.x} y=${this.y} z=${this.z}]`;
@@ -130,9 +178,13 @@ export class Vector3 implements PointLike3D {
 
   /**
    * Reads `x`, `y`, `z` from `array` starting at `offset`
+   * @example
+   * ```ts
+   * vertex.fromArray(positions, vertexIndex * 3);
+   * ```
    * @param array - The array to read from
    * @param offset - The index of the first component
-   * @returns This point, for chaining
+   * @returns This vector, for chaining
    */
   public fromArray(array: number[] | Float32Array, offset = 0): this {
     this.x = array[offset];
@@ -143,9 +195,13 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Writes this point's values into `array` starting at `offset`
+   * Writes this vector's values into `array` starting at `offset`
    *
    * Allocates a new array when one is not supplied.
+   * @example
+   * ```ts
+   * velocity.toArray(velocities, particleIndex * 3);
+   * ```
    * @param array - The array to write into
    * @param offset - The index to write the first component at
    * @returns The array the values were written into
@@ -159,9 +215,14 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Adds `v` to this point
+   * Adds `v` to this vector
+   * @example
+   * ```ts
+   * waypoint.add({ x: 0, y: 2, z: 0 });
+   * barrelBase.add(muzzleOffset, muzzlePosition);
+   * ```
    * @param v - The point to add
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public add(v: PointData3D, out: PointLike3D = this): this {
@@ -173,9 +234,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Subtracts `v` from this point
+   * Subtracts `v` from this vector
+   * @example
+   * ```ts
+   * const toTarget = new Vector3();
+   *
+   * targetPosition.subtract(turretPosition, toTarget);
+   * ```
    * @param v - The point to subtract
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public subtract(v: PointData3D, out: PointLike3D = this): this {
@@ -187,9 +254,13 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise multiplies this point by `v`
+   * Multiplies each component of this vector by the matching component of `v`
+   * @example
+   * ```ts
+   * velocity.multiply({ x: 1, y: 0, z: 1 }, groundVelocity);
+   * ```
    * @param v - The point to multiply by
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public multiply(v: PointData3D, out: PointLike3D = this): this {
@@ -201,9 +272,14 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Multiplies each component of this point by the scalar `s`
+   * Multiplies each component of this vector by the scalar `s`
+   * @example
+   * ```ts
+   * velocity.multiplyScalar(friction);
+   * direction.multiplyScalar(speed * dt, step);
+   * ```
    * @param s - The scalar to multiply by
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public multiplyScalar(s: number, out: PointLike3D = this): this {
@@ -215,9 +291,14 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise divides this point by `v`
+   * Divides each component of this vector by the matching component of `v`
+   * @example
+   * ```ts
+   * worldPosition.divide(cellSize, cell);
+   * const column = Math.floor(cell.x);
+   * ```
    * @param v - The point to divide by
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public divide(v: PointData3D, out: PointLike3D = this): this {
@@ -229,9 +310,16 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Divides each component of this point by the scalar `s`
+   * Divides each component of this vector by the scalar `s`
+   * @example
+   * ```ts
+   * const center = new Vector3();
+   *
+   * for (const point of points) center.add(point);
+   * center.divideScalar(points.length);
+   * ```
    * @param s - The scalar to divide by
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public divideScalar(s: number, out: PointLike3D = this): this {
@@ -239,10 +327,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Adds `v * s` to this point
+   * Adds `v * s` to this vector, such as a velocity times the frame time
+   * @example
+   * ```ts
+   * velocity.addScaledVector(gravity, dt);
+   * rayOrigin.addScaledVector(rayDirection, hitDistance, hitPoint);
+   * ```
    * @param v - The point to scale and add
    * @param s - The scalar to multiply `v` by
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public addScaledVector(v: PointData3D, s: number, out: PointLike3D = this): this {
@@ -254,8 +347,12 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Negates each component of this point
-   * @param out - The target to write the result into, defaults to this point
+   * Negates each component of this vector, reversing its direction
+   * @example
+   * ```ts
+   * toThreat.negate(fleeDirection);
+   * ```
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public negate(out: PointLike3D = this): this {
@@ -267,9 +364,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise minimum of this point and `v`
+   * Sets each component to the smaller of this vector's and `v`'s
+   * @example
+   * ```ts
+   * const boundsMin = new Vector3(Infinity, Infinity, Infinity);
+   *
+   * for (const point of points) boundsMin.min(point);
+   * ```
    * @param v - The point to compare with
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public min(v: PointData3D, out: PointLike3D = this): this {
@@ -281,9 +384,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise maximum of this point and `v`
+   * Sets each component to the larger of this vector's and `v`'s
+   * @example
+   * ```ts
+   * const boundsMax = new Vector3(-Infinity, -Infinity, -Infinity);
+   *
+   * for (const point of points) boundsMax.max(point);
+   * ```
    * @param v - The point to compare with
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public max(v: PointData3D, out: PointLike3D = this): this {
@@ -295,12 +404,16 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Component-wise clamp of this point between `min` and `max`
+   * Clamps each component of this vector between the matching components of `min` and `max`
    *
    * Assumes `min <= max` componentwise.
+   * @example
+   * ```ts
+   * cameraTarget.clamp(levelMin, levelMax);
+   * ```
    * @param min - The lower bound per component
    * @param max - The upper bound per component
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public clamp(min: PointData3D, max: PointData3D, out: PointLike3D = this): this {
@@ -312,10 +425,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Normalizes this point to unit length
+   * Scales this vector to unit length, keeping its direction
    *
-   * Zero-magnitude points are left unchanged.
-   * @param out - The target to write the result into, defaults to this point
+   * A zero vector stays zero.
+   * @example
+   * ```ts
+   * input.normalize();
+   * toTarget.normalize(aimDirection);
+   * ```
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public normalize(out: PointLike3D = this): this {
@@ -329,11 +447,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Rescales this point so its magnitude equals `length`
+   * Scales this vector so its length equals `length`, keeping its direction
    *
-   * Zero-magnitude points are left unchanged.
-   * @param length - The target magnitude
-   * @param out - The target to write the result into, defaults to this point
+   * A zero vector stays zero.
+   * @example
+   * ```ts
+   * if (velocity.magnitude() > maxSpeed) velocity.setLength(maxSpeed);
+   * ```
+   * @param length - The target length
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public setLength(length: number, out: PointLike3D = this): this {
@@ -347,25 +469,38 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Computes the magnitude (length) of this point
-   * @returns The magnitude
+   * Computes the length of this vector
+   * @example
+   * ```ts
+   * const speed = velocity.magnitude();
+   * ```
+   * @returns The length
    */
   public magnitude(): number {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z);
   }
 
   /**
-   * Computes the squared magnitude of this point
+   * Computes the squared length of this vector
    *
-   * Cheaper than `magnitude()` for length comparisons.
-   * @returns The squared magnitude
+   * Cheaper than {@link Vector3#magnitude}, since it skips the square root, and enough to compare
+   * lengths.
+   * @example
+   * ```ts
+   * if (velocity.magnitudeSquared() < 0.0001) velocity.set(0);
+   * ```
+   * @returns The squared length
    */
   public magnitudeSquared(): number {
     return this.x * this.x + this.y * this.y + this.z * this.z;
   }
 
   /**
-   * Computes the Euclidean distance from this point to `v`
+   * Computes the distance from this point to `v`
+   * @example
+   * ```ts
+   * const reached = waypoint.distanceTo(player.position) < 0.5;
+   * ```
    * @param v - The point to measure to
    * @returns The distance
    */
@@ -374,7 +509,13 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Computes the squared Euclidean distance from this point to `v`
+   * Computes the squared distance from this point to `v`
+   *
+   * Cheaper than {@link Vector3#distanceTo} and enough to compare distances.
+   * @example
+   * ```ts
+   * if (bulletPosition.distanceToSquared(target.position) < hitRadius * hitRadius) hit(target);
+   * ```
    * @param v - The point to measure to
    * @returns The squared distance
    */
@@ -387,8 +528,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Computes the dot product of this point and `v`
-   * @param v - The other point
+   * Computes the dot product of this vector and `v`
+   *
+   * For unit vectors it's the cosine of the angle between them: 1 when they point the same way, 0 at
+   * right angles and -1 when opposite.
+   * @example
+   * ```ts
+   * const targetIsAhead = forward.dot(toTarget) > 0;
+   * ```
+   * @param v - The other vector
    * @returns The dot product
    */
   public dot(v: PointData3D): number {
@@ -396,9 +544,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Computes the angle between this point and `v`
-   * @param v - The other point
-   * @returns The angle in radians
+   * Computes the angle between this vector and `v`
+   *
+   * Returns π/2 when either vector has zero length.
+   * @example
+   * ```ts
+   * const canSeePlayer = forward.angleTo(toPlayer) < visionHalfAngle;
+   * ```
+   * @param v - The other vector
+   * @returns The angle in radians, from 0 to π
    */
   public angleTo(v: PointData3D): number {
     const denominator = Math.sqrt(this.magnitudeSquared() * (v.x * v.x + v.y * v.y + v.z * v.z));
@@ -409,9 +563,13 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Computes the 3D cross product `this x v`
-   * @param v - The other point
-   * @param out - The target to write the result into, defaults to this point
+   * Computes the cross product `this × v`, a vector at right angles to both
+   * @example
+   * ```ts
+   * edgeA.cross(edgeB, faceNormal).normalize();
+   * ```
+   * @param v - The other vector
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public cross(v: PointData3D, out: PointLike3D = this): this {
@@ -429,9 +587,15 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Applies a {@link Matrix3} (column-major) to this point
+   * Multiplies this vector by the 3x3 matrix `m`, such as a normal matrix
+   * @example
+   * ```ts
+   * const normalMatrix = new Matrix3().getNormalMatrix(mesh.worldTransform);
+   *
+   * worldNormal.copyFrom(localNormal).applyMatrix3(normalMatrix).normalize();
+   * ```
    * @param m - The matrix to apply
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public applyMatrix3(m: Matrix3, out: PointLike3D = this): this {
@@ -447,12 +611,19 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Applies a {@link Matrix4} to this point, treating it as a position (`w = 1`) and performing
-   * the perspective divide
+   * Transforms this point by `m`, translation included, then divides by the resulting `w`
    *
-   * Use {@link Vector3#transformDirection} for direction vectors.
+   * The divide is what a projection matrix needs: with a camera's
+   * {@link Camera3D#viewProjection | viewProjection}, x and y come out from -1 to 1 across the
+   * visible area. Use {@link Vector3#applyAffineMatrix4} for transforms that don't project, and
+   * {@link Vector3#transformDirection} for directions.
+   * @example
+   * ```ts
+   * point.applyMatrix4(camera.viewProjection, ndc);
+   * const onScreen = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1;
+   * ```
    * @param m - The matrix to apply
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public applyMatrix4(m: Matrix4, out: PointLike3D = this): this {
@@ -469,12 +640,17 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Like {@link Vector3#applyMatrix4} but assumes `m` is affine (bottom row `[0, 0, 0, 1]`) and
-   * skips the perspective divide
+   * Transforms this point by `m`, translation included, without the divide
+   * {@link Vector3#applyMatrix4} does
    *
-   * Use for world-matrix transforms where no projection is involved.
-   * @param m - The affine matrix to apply
-   * @param out - The target to write the result into, defaults to this point
+   * Cheaper, and correct for any transform that doesn't project, such as a node's world transform. A
+   * projection matrix needs {@link Vector3#applyMatrix4}.
+   * @example
+   * ```ts
+   * muzzleOffset.applyAffineMatrix4(gun.worldTransform, muzzleWorldPosition);
+   * ```
+   * @param m - The matrix to apply
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public applyAffineMatrix4(m: Matrix4, out: PointLike3D = this): this {
@@ -490,9 +666,13 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Rotates this point by the unit {@link Quaternion} `q`
+   * Rotates this vector by the unit {@link Quaternion} `q`
+   * @example
+   * ```ts
+   * forward.set(0, 0, 1).applyQuaternion(ship.quaternion);
+   * ```
    * @param q - The unit quaternion to rotate by
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public applyQuaternion(q: Quaternion, out: PointLike3D = this): this {
@@ -517,12 +697,13 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Treats this point as a direction and applies the upper-left 3x3 of {@link Matrix4} `m`,
-   * ignoring translation
-   *
-   * The result is normalized to unit length.
+   * Turns this direction by the rotation and scale in `m`, ignoring its translation, then normalizes it
+   * @example
+   * ```ts
+   * const cameraForward = new Vector3(0, 0, -1).transformDirection(camera.worldTransform);
+   * ```
    * @param m - The matrix whose rotation to apply
-   * @param out - The target to write the result into, defaults to this point
+   * @param out - The target to write the result into, defaults to this vector
    * @returns The point the result was written into
    */
   public transformDirection(m: Matrix4, out: PointLike3D = this): this {
@@ -543,12 +724,17 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Sets this point to the Cartesian position represented by the {@link Spherical} coordinate `s`
+   * Sets this point to the position the {@link Spherical} coordinate `s` describes
    *
-   * `phi` is the polar angle measured from the +Y axis; `theta` is the azimuthal angle measured
-   * from the +Z axis.
+   * `phi` is the angle down from the +Y axis and `theta` the angle around Y, starting at +Z and turning
+   * toward +X.
+   * @example
+   * ```ts
+   * orbit.theta += turnSpeed * dt;
+   * cameraOffset.setFromSpherical(orbit);
+   * ```
    * @param s - The spherical coordinate to convert
-   * @returns This point, for chaining
+   * @returns This vector, for chaining
    */
   public setFromSpherical(s: Spherical): this {
     const sinPhiRadius = Math.sin(s.phi) * s.radius;
@@ -561,11 +747,21 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Sets this point to the Cartesian position represented by the {@link Cylindrical} coordinate `c`
+   * Sets this point to the position the {@link Cylindrical} coordinate `c` describes
    *
-   * `theta` is the azimuthal angle measured from the +Z axis; `y` is the height above the XZ plane.
+   * `theta` is the angle around Y, starting at +Z and turning toward +X, and `y` is the height above the
+   * XZ plane.
+   * @example
+   * ```ts
+   * const slot = new Cylindrical(towerRadius, 0, 2);
+   *
+   * for (let i = 0; i < torchCount; i++) {
+   *   slot.theta = (i / torchCount) * Math.PI * 2;
+   *   torchPositions[i].setFromCylindrical(slot);
+   * }
+   * ```
    * @param c - The cylindrical coordinate to convert
-   * @returns This point, for chaining
+   * @returns This vector, for chaining
    */
   public setFromCylindrical(c: Cylindrical): this {
     this.x = c.radius * Math.sin(c.theta);
@@ -576,11 +772,16 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Reads column `index` of the column-major {@link Matrix4} `m` into this point (only the first
-   * three components of the column are read)
+   * Reads the first three values of column `index` of `m` into this vector
+   *
+   * In a transform, column 3 is the translation and columns 0 to 2 are the X, Y and Z axes, scaled.
+   * @example
+   * ```ts
+   * const worldPosition = new Vector3().setFromMatrixColumn(node.worldTransform, 3);
+   * ```
    * @param m - The matrix to read from
-   * @param index - The column index
-   * @returns This point, for chaining
+   * @param index - The column index, `0` to `3`
+   * @returns This vector, for chaining
    */
   public setFromMatrixColumn(m: Matrix4, index: number): this {
     return this.fromArray(m.elements, index * 4);

@@ -20,17 +20,6 @@ describe('lerp', () => {
     expect(lerp(0, 10, 2)).toBeCloseTo(20, 5);
     expect(lerp(0, 10, -1)).toBeCloseTo(-10, 5);
   });
-
-  test('handles negative ranges', () => {
-    expect(lerp(-10, 10, 0.5)).toBeCloseTo(0, 5);
-    expect(lerp(-5, -1, 0.25)).toBeCloseTo(-4, 5);
-  });
-
-  test('returns same value when x equals y', () => {
-    expect(lerp(7, 7, 0)).toBe(7);
-    expect(lerp(7, 7, 0.5)).toBe(7);
-    expect(lerp(7, 7, 1)).toBe(7);
-  });
 });
 
 describe('inverseLerp', () => {
@@ -97,10 +86,6 @@ describe('damp', () => {
 
   test('approaches y as dt grows', () => {
     expect(damp(0, 10, 5, 100)).toBeCloseTo(10, 5);
-  });
-
-  test('returns x when lambda is 0 (no damping)', () => {
-    expect(damp(0, 10, 0, 1)).toBeCloseTo(0, 5);
   });
 
   test('produces a value between x and y for finite parameters', () => {

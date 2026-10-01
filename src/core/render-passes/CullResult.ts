@@ -19,8 +19,8 @@ import type { DrawList } from './DrawList';
  * this draw will bind is not the one the bundle baked ({@link CullResult.isBundleStale}).
  *
  * Recycled through the global `BigPool`: {@link CullResult.reset} drops the bundle and the
- * watermarks so a reused result re-syncs on first use, keeping its GPU buffers to be resized
- * rather than reallocated.
+ * watermarks and frees the GPU copies of both buffers, so a pooled result holds no GPU memory. Its
+ * CPU arrays stay, so a reused result resizes them instead of allocating new ones.
  * @internal
  */
 export class CullResult {
@@ -181,6 +181,9 @@ export class CullResults {
 
   /**
    * Returns the result for `batch` at `index` to the pool, if one was minted
+   *
+   * Results are minted per index, so the array can have holes; it is trimmed back to its last
+   * live result.
    * @param batch - The batch the result culls
    * @param index - Which of the owner's results per batch
    */
@@ -190,7 +193,6 @@ export class CullResults {
     if (!results || !result) return;
     BigPool.return(result);
     results[index] = undefined;
-    // Results are minted per index, so the array may have holes; keep `length` at the last live one.
     while (results.length > 0 && !results[results.length - 1]) results.pop();
   }
 

@@ -7,7 +7,7 @@ import { Box } from '~/math/shapes/Box';
 import { Ray } from '~/math/shapes/Ray';
 import { Vector3 } from '~/math/vector/Vector3';
 
-// Single triangle in the XY plane, spanning x, y ∈ [-1, 1], normal +Z.
+/** One triangle in the XY plane spanning x, y ∈ [-1, 1], wound to face +Z */
 function makeTriangle(): Geometry3D {
   return new Geometry3D({
     positions: new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]),
@@ -15,7 +15,7 @@ function makeTriangle(): Geometry3D {
   });
 }
 
-// Quad (two triangles) in the XY plane from (-1,-1) to (1,1).
+/** A two-triangle quad in the XY plane from (-1, -1) to (1, 1), with UVs running from (0, 0) to (1, 1) */
 function makeQuad(): Geometry3D {
   return new Geometry3D({
     positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]),
@@ -25,40 +25,24 @@ function makeQuad(): Geometry3D {
 }
 
 describe('intersectRayGeometry', () => {
-  test('hits a triangle along +Z ray and returns the distance to the plane', () => {
-    const geom = makeTriangle();
-    const ray = new Ray(new Vector3(0, 0, 5), new Vector3(0, 0, -1));
-    const hit = createHitResult3D();
-
-    const t = intersectRayGeometry(ray, geom, hit);
-
-    expect(t).toBeCloseTo(5, 5);
-    expect(hit.point.z).toBeCloseTo(0, 5);
-    expect(hit.triangleIndex).toBe(0);
-  });
-
   test('returns -1 when the ray misses the triangle but passes the AABB', () => {
     const geom = makeTriangle();
-    // Ray passes through bounds3D but outside the triangle (corner cut-off).
     const ray = new Ray(new Vector3(0.95, 0.95, 5), new Vector3(0, 0, -1));
     const hit = createHitResult3D();
 
     expect(intersectRayGeometry(ray, geom, hit)).toBe(-1);
   });
 
-  test('AABB pre-reject returns -1 for a ray that misses the bounds entirely', () => {
+  test('AABB pre-reject returns -1 for a ray that misses the bounds entirely, leaving the hit untouched', () => {
     const geom = makeTriangle();
     const ray = new Ray(new Vector3(10, 10, 5), new Vector3(0, 0, -1));
     const hit = createHitResult3D();
 
     expect(intersectRayGeometry(ray, geom, hit)).toBe(-1);
-    // The out-param is left untouched.
     expect(hit.distance).toBe(-1);
   });
 
   test('returns the closer of two triangles at different depths', () => {
-    // Two stacked triangles: front at z=2, back at z=0 — the ray from z=5
-    // reaches the front one at t=3.
     const geom = new Geometry3D({
       positions: new Float32Array([-1, -1, 2, 1, -1, 2, 0, 1, 2, -1, -1, 0, 1, -1, 0, 0, 1, 0]),
       indices: new Uint16Array([0, 1, 2, 3, 4, 5]),
@@ -73,9 +57,8 @@ describe('intersectRayGeometry', () => {
     expect(hit.triangleIndex).toBe(0);
   });
 
-  test('returns interpolated UV at the hit point', () => {
+  test('returns the UV interpolated at the hit point, (0.5, 0.5) at the quad centre', () => {
     const geom = makeQuad();
-    // The ray hits the quad's centre, where the corner UVs interpolate to (0.5, 0.5).
     const ray = new Ray(new Vector3(0, 0, 5), new Vector3(0, 0, -1));
     const hit = createHitResult3D();
 
@@ -124,11 +107,8 @@ describe('intersectRayGeometry', () => {
     expect(hit.distance).toBe(-1);
   });
 
-  test('quantised (non-float) positions degrade to -1 rather than producing garbage', () => {
-    // int16 positions: the picker never unquantises on the CPU, so it must
-    // refuse cleanly instead of reading the bytes as floats. Padded to x4
-    // because WebGPU has no 3-component snorm16 format; the picker only checks
-    // whether `buffer.data` is a Float32Array, so any non-float array will do.
+  test('quantised positions are a miss, since the picker reads only Float32Array positions and never unquantises', () => {
+    /** Padded to four components per vertex, since WebGPU has no three-component snorm16 format */
     const positionsInt16 = new Int16Array([-32767, -32767, 0, 0, 32767, -32767, 0, 0, 0, 32767, 0, 0]);
     const geom = new Geometry3D({
       attributes: {

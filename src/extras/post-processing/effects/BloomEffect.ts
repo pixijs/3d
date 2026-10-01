@@ -6,14 +6,14 @@ import { FullscreenPass } from '../../../post-processing/effects/FullscreenPass'
 import { PostEffect } from '../../../post-processing/effects/PostEffect';
 import type { EffectFragment, EffectIO, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
 
-// -- Pass 1: bright extract ---------------------------------------------------
-// Keeps only what exceeds the threshold, with a quadratic knee straddling it
-// so the cut-off never shows as a hard edge, and writes the survivors into
-// level 0 of the pyramid. The four diagonal taps, one input texel out, box the
-// chain image down on the way, so single bright texels don't flicker as the
-// camera moves. The hue is kept: the pixel is scaled, not clipped.
-// uBloom = (threshold, knee, _, _).
-
+/**
+ * First pass: keeps what passes the threshold and writes it into level 0 of the pyramid
+ *
+ * A quadratic knee either side of the threshold fades the cut-off in, so it never shows as a hard
+ * edge. Four diagonal taps one input texel out average the chain image down on the way, so a
+ * single bright texel doesn't flicker as the camera moves. The pixel is scaled rather than
+ * clipped, which keeps its hue. Reads `uBloom` = (threshold, knee, unused, unused).
+ */
 const BRIGHT_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -45,12 +45,13 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-// -- Pass 2..N: downsample ----------------------------------------------------
-// Each level is the one above at half size through a 13-tap kernel: a 2×2 of
-// bilinear taps at ±1 source texel carrying half the weight, plus a 3×3 grid at
-// ±2 texels for the rest. The overlapping footprints are what stop a single
-// bright texel from flickering between levels. Offsets are in source texels.
-
+/**
+ * Downsample pass: each pyramid level is the one above at half size, through a 13-tap kernel
+ *
+ * A 2×2 of bilinear taps at ±1 source texel carries half the weight, and a 3×3 grid at ±2 source
+ * texels the rest. The overlapping footprints stop a single bright texel from flickering between
+ * levels.
+ */
 const DOWN_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -94,15 +95,15 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-// -- Pass N+1..2N-1: upsample -------------------------------------------------
-// Walks back up the pyramid. Each pass reads the coarser level with four
-// bilinear taps at half-texel offsets (the 3×3 tent in four fetches) and blends
-// it over the finer level in place: the output is premultiplied with `radius`
-// in alpha, so the fixed-function 'normal' blend lands
-// `finer = mix(finer, tent(coarser), radius)`. Tent of tent of tent is close to
-// a Gaussian, which is why the glow reads smooth rather than blobby.
-// uBloomUp = (radius, _, _, _).
-
+/**
+ * Upsample pass: walks back up the pyramid, blending each coarser level over the finer one in place
+ *
+ * Four bilinear taps at half-texel offsets make a 3×3 tent filter in four fetches. The output is
+ * premultiplied with `radius` in alpha, so pixi's `'normal'` blend (`one`, `one-minus-src-alpha`)
+ * lands `finer = mix(finer, tent(coarser), radius)`. A tent of a tent of a tent is close to a
+ * Gaussian, which is why the glow reads smooth rather than blobby. Reads `uBloomUp` = (radius,
+ * unused, unused, unused).
+ */
 const UP_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -124,11 +125,12 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-// -- Pass 2N: combine ---------------------------------------------------------
-// Two taps: the chain image plus level 0 of the pyramid, magnified. RGB only:
-// bloom adds light, never coverage.
-// uBloomCombine = (intensity, _, _, _).
-
+/**
+ * Last pass: adds level 0 of the pyramid, magnified, onto the chain image
+ *
+ * Only RGB is added, because bloom adds light, never coverage. Reads `uBloomCombine` =
+ * (intensity, unused, unused, unused).
+ */
 const COMBINE_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -146,68 +148,91 @@ vec4 effect(vec2 uv) {
 
 /**
  * Constructor options for {@link BloomEffect}
+ * @example
+ * ```ts
+ * const options: BloomEffectOptions = { threshold: 0.5, intensity: 1.2, levels: 6 };
+ * view3d.passes = [new BloomEffect(options)];
+ * ```
  * @category extras:post-processing
  * @standard
  */
 export interface BloomEffectOptions extends PostEffectOptions {
   /**
-   * Brightness above which a pixel blooms, in the chain image's units
+   * Brightness above which a pixel blooms, measured on its brightest channel
    *
-   * Measured on the brightest channel. A soft knee half the threshold wide on either side of
-   * it fades the cut-off in rather than switching it on: bloom starts at half the threshold
-   * and is fully in by one and a half times it.
+   * A soft knee fades the cut-off in rather than switching it on: bloom starts at half the
+   * threshold and is fully in by one and a half times it. {@link BloomEffect} explains why the
+   * default is too high for most scenes.
    * @default 1
+   * @example
+   * ```ts
+   * new BloomEffect({ threshold: 0.5 });
+   * ```
    */
   threshold?: number;
   /**
    * Strength of the glow added back onto the frame
    * @default 1
+   * @example
+   * ```ts
+   * new BloomEffect({ intensity: 2 });
+   * ```
    */
   intensity?: number;
   /**
    * How much each coarser level blends into the finer one, `0` to `1`
    *
-   * `0` keeps only the finest level (a tight halo), `1` replaces each level with the one
-   * below it (the widest, softest haze).
+   * `0` keeps only the finest level, a tight halo. `1` replaces each level with the coarser one,
+   * the widest and softest haze.
    * @default 0.6
+   * @example
+   * ```ts
+   * new BloomEffect({ radius: 0.9 });
+   * ```
    */
   radius?: number;
   /**
-   * Depth of the pyramid; each level halves the previous one and doubles the reach
+   * Number of textures in the blur pyramid; each one is half the size of the last and doubles
+   * the glow's reach
    *
-   * Construction-only: every level is a texture the effect allocates from the graph. Rounded
-   * to a whole number, at least 1.
+   * Fixed at construction. Rounded to a whole number, at least 1.
    * @default 5
+   * @example
+   * ```ts
+   * new BloomEffect({ levels: 3 });
+   * ```
    */
   levels?: number;
   /**
-   * Resolution of the pyramid's top level in device pixels per logical pixel — pixi's meaning,
-   * as on filters
+   * Texels per logical pixel for the largest pyramid texture, as `resolution` means on a pixi filter
    *
-   * Bloom is low-frequency by nature, so a fraction of the view is the usual choice: `0.5` is
-   * half a logical pixel, a quarter of a DPR-2 viewport. Construction-only.
+   * A glow has no fine detail, so a fraction is the usual choice: `0.5` gives one texel to every
+   * two logical pixels across. Fixed at construction.
    * @default 0.5
+   * @example
+   * ```ts
+   * new BloomEffect({ resolution: 0.25 });
+   * ```
    */
   resolution?: number;
 }
 
 /**
- * Bloom: bright parts of the frame glow outward
+ * Bright parts of the frame glow outward
  *
- * A progressive pyramid. A bright extract writes level 0 at `resolution`; each level below
- * is a 13-tap downsample of the one above at half its size; then the walk back up blends each
- * coarser level over the finer one with a tent filter; a two-tap combine adds level 0 onto
- * the frame. `2 × levels` small passes, none of them at screen size but the combine.
+ * The effect keeps what passes `threshold`, blurs it through a pyramid of `levels` textures, each
+ * half the size of the last, and adds the result back onto the frame. That costs `2 × levels`
+ * passes, all drawn at `resolution` or smaller except the last.
  *
- * `threshold`, `intensity` and `radius` are live uniform writes. `levels` and `resolution`
- * are construction-only, since each level is a graph texture.
+ * `threshold`, `intensity` and `radius` are plain uniform writes, so they can change every frame.
+ * `levels` and `resolution` are fixed at construction; replace the effect to change them.
  *
- * The threshold is applied to whatever the chain carries at this slot: display-encoded values
- * when the view tone-maps its materials, so only near-white pixels bloom at the default
- * threshold; lower it to catch bright highlights.
+ * The threshold applies to the image the chain carries at this point. A normal canvas stores it
+ * in 8 bits, so no channel passes 1, and at the default threshold even pure white passes only an
+ * eighth of its brightness. Lower it, to around `0.5`, to make highlights glow.
  * @example
  * ```ts
- * view.passes = [new BloomEffect({ threshold: 0.8, intensity: 0.6 })];
+ * view.passes = [new BloomEffect({ threshold: 0.5, intensity: 0.6 })];
  * ```
  * @category extras:post-processing
  * @standard
@@ -231,10 +256,16 @@ export class BloomEffect extends PostEffect {
     resolution: 0.5,
   };
 
-  /** Depth of the pyramid, fixed at construction */
-  public readonly levels: number;
-  /** Resolution of the pyramid's top level, fixed at construction */
-  public readonly resolution: number;
+  /**
+   * Number of textures in the blur pyramid, fixed at construction
+   * @advanced
+   */
+  public readonly levels: number = 0;
+  /**
+   * Texels per logical pixel for the largest pyramid texture, fixed at construction
+   * @advanced
+   */
+  public readonly resolution: number = 0;
 
   private readonly _brightUniforms = new UniformGroup({
     uBloom: { value: new Float32Array(4), type: 'vec4<f32>' },
@@ -267,6 +298,12 @@ export class BloomEffect extends PostEffect {
    * Add the bright extract, the downsample and upsample walks, and the combine for this slot
    * @param graph - Render graph being built.
    * @param io - Input/output handles for this slot in the chain.
+   * @example
+   * ```ts
+   * const glow = graph.createColor({ label: 'glow' });
+   * bloom.build(graph, { ...io, output: glow });
+   * ```
+   * @advanced
    */
   public override build(graph: RenderGraph, io: EffectIO): void {
     const levels: ColorHandle[] = [];
@@ -323,9 +360,13 @@ export class BloomEffect extends PostEffect {
     );
   }
 
-  // --- Live params: plain lane writes, visible next frame ---
-
-  /** Brightness above which a pixel blooms */
+  /**
+   * Brightness above which a pixel blooms; {@link BloomEffectOptions#threshold} has the details
+   * @example
+   * ```ts
+   * bloom.threshold = 0.4;
+   * ```
+   */
   public get threshold(): number {
     return (this._brightUniforms.uniforms.uBloom as Float32Array)[0];
   }
@@ -338,7 +379,15 @@ export class BloomEffect extends PostEffect {
     this.writeLane(this._brightUniforms, 'uBloom', 1, value * 0.5);
   }
 
-  /** Strength of the glow added back onto the frame */
+  /**
+   * Strength of the glow added back onto the frame
+   *
+   * `0` hides the glow, but every pass still runs; set `enabled` to `false` to skip them.
+   * @example
+   * ```ts
+   * bloom.intensity = 1 + Math.sin(time) * 0.5;
+   * ```
+   */
   public get intensity(): number {
     return (this._combineUniforms.uniforms.uBloomCombine as Float32Array)[0];
   }
@@ -350,7 +399,13 @@ export class BloomEffect extends PostEffect {
     this.writeLane(this._combineUniforms, 'uBloomCombine', 0, value);
   }
 
-  /** How much each coarser level blends into the finer one, `0` (tight) to `1` (wide) */
+  /**
+   * How much each coarser level blends into the finer one, `0` (tight) to `1` (wide)
+   * @example
+   * ```ts
+   * bloom.radius = 0.85;
+   * ```
+   */
   public get radius(): number {
     return (this._upUniforms.uniforms.uBloomUp as Float32Array)[0];
   }

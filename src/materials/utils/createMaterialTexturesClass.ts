@@ -3,17 +3,24 @@ import type { Texture } from 'pixi.js';
 import type { BaseMaterial3D } from '../BaseMaterial3D';
 
 /**
- * Keyed texture-slot surface of a material
+ * A material's `textures`: one property per texture slot its shader declares
  *
- * Generated per slot-name list; subclasses narrow it with their declared slots (see
- * `Material3DTextures`), mirroring how {@link MaterialData} is narrowed by typed data interfaces.
+ * Reading a slot gives the bound texture, and assigning one swaps it. Assigning a name with no slot
+ * throws. Every slot holds a texture; one you never set holds the material's default, usually
+ * `Texture.WHITE`. Swaps don't change the shader, except a normal slot moving between its flat
+ * default and a real normal map, which adds or drops normal mapping.
  *
- * The index value is `Texture | undefined` — not because a present slot ever
- * holds `undefined` (every slot is seeded with a default at derivation), but
- * because subclasses declare *optional* extension slots (e.g. `sheen?`), which
- * TypeScript only permits under an `undefined`-bearing index signature. The
- * consequence is that writing `undefined` to a slot type-checks yet crashes the
- * batcher's pack — treat slots as write-only-with-a-Texture.
+ * Each material narrows this type with its own slots, as {@link Material3DTextures} does. The
+ * index type includes `undefined` only so those can list optional slots: assigning `undefined`
+ * type-checks, but it throws and leaves the slot empty.
+ * @example
+ * ```ts
+ * const water = new BaseMaterial3D({
+ *   descriptor: { bitsGpu: [myRippleBit], bitsGl: [myRippleBit] },
+ *   textures: { ripples: rippleTexture },
+ * });
+ * water.textures.ripples = calmRippleTexture;
+ * ```
  * @category materials
  * @standard
  */
@@ -21,29 +28,20 @@ export interface MaterialTextures {
   [slot: string]: Texture | undefined;
 }
 
-/**
- * Constructor for a generated, slot-list-specific material textures object
- * @internal
- */
 type MaterialTexturesClass = new (material: BaseMaterial3D) => object;
 
 const classCache = new Map<string, MaterialTexturesClass>();
 
 /**
- * Build (or return the cached) textures class for an ordered slot-name list
+ * Build, or return the cached, textures class for an ordered list of slot names
  *
- * The generated class is the keyed runtime face of `_textures`, mirroring the construction
- * `textures:` option (`material.textures.waterNormal = tex`). One class per unique list; the
- * derivation walk that produced the list also fixed each name's index, so accessors bake their
- * slot index directly.
- *
- * Reads return the bound texture; writes delegate to `BaseMaterial3D._setTextureSlot`
- * (the shared slot-swap chokepoint — no-op when unchanged, otherwise re-batch
- * via the texture cache key, never a recompile) and then apply the
- * slot-name-specific shader-variant flip. Instances are sealed so a typo'd slot
- * write throws instead of silently creating an own property the batcher never sees.
- * @param names - Slot names in pack order, as fixed by the material's derivation walk
- * @returns The generated (or cached) textures class for the list
+ * One class per list. The derivation walk that produced the list also fixed each name's index, so
+ * each accessor bakes its index in. Writes go through `BaseMaterial3D._setTextureSlot`, which owns
+ * what a swap does. That covers normal mapping too: a swap to another texture source makes each
+ * mesh using the material pick its shader again, and that checks the normal slot.
+ * Instances are sealed, so a misspelt slot name throws instead of adding a property the renderer
+ * never reads.
+ * @param names - Slot names in pack order, as the material's derivation walk fixed them
  * @internal
  */
 export function getOrCreateMaterialTexturesClass(names: readonly string[]): MaterialTexturesClass {
@@ -52,7 +50,6 @@ export function getOrCreateMaterialTexturesClass(names: readonly string[]): Mate
   if (TexturesClass) return TexturesClass;
 
   class MaterialTextures {
-    /** Owning material — accessors read/write its packed slot array */
     public readonly _material: BaseMaterial3D;
 
     constructor(material: BaseMaterial3D) {
@@ -67,11 +64,6 @@ export function getOrCreateMaterialTexturesClass(names: readonly string[]): Mate
         return this._material._textures[index];
       },
       set(this: MaterialTextures, value: Texture) {
-        // All slot-write semantics live on the material: identity early-out, batch re-key, frame
-        // derivation. The normal-mapping shader variant recompiles on its own via the texture-swap
-        // dirty path (cross-source swap → _markDescriptorDirty → per-mesh _descriptorDirtyId
-        // watermark → _batchDirty → ensureMaterial's live normal check), so no slot-name-specific
-        // bookkeeping is needed here.
         this._material._setTextureSlot(index, value);
       },
       enumerable: true,

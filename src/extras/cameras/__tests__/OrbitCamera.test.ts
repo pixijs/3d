@@ -1,6 +1,6 @@
 import 'pixi.js/browser';
 import type { FederatedPointerEvent, FederatedWheelEvent } from 'pixi.js';
-import { Application, Ticker } from 'pixi.js';
+import { Application, Rectangle, Ticker } from 'pixi.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import type { OrbitCameraOptions } from '~/extras/cameras/OrbitCamera';
@@ -120,9 +120,7 @@ describe('OrbitCamera', () => {
   });
 });
 
-// Drives the real pixi EventSystem from DOM events on the canvas so the View3D
-// hit-test, global-move tracking, and local-space conversion are all exercised.
-describe('OrbitCamera through the pixi event system', () => {
+describe('OrbitCamera driven by DOM events through the pixi event system: hit-test, global moves and local space', () => {
   let app: Application;
 
   beforeAll(async () => {
@@ -151,14 +149,95 @@ describe('OrbitCamera through the pixi event system', () => {
     });
   }
 
-  it('rotates on a canvas drag and zooms on a canvas wheel', () => {
-    const view = new View3D({ width: 400, height: 300 });
+  const views: View3D[] = [];
+  const created: OrbitCamera[] = [];
 
-    view.camera.position.set(0, 0, 10);
-    app.stage.addChild(view);
+  function addView(width = 400, height = 300): View3D {
+    const view = app.stage.addChild(new View3D({ width, height }));
+
+    views.push(view);
     app.render();
 
-    const controls = new OrbitCamera({ view, autoUpdate: false });
+    return view;
+  }
+
+  function make(view: View3D, options: Partial<OrbitCameraOptions> = {}): OrbitCamera {
+    const controls = new OrbitCamera({ view, autoUpdate: false, ...options });
+
+    created.push(controls);
+
+    return controls;
+  }
+
+  afterEach(() => {
+    for (const controls of created) controls.destroy();
+    for (const view of views) view.destroy();
+    created.length = 0;
+    views.length = 0;
+  });
+
+  function contextMenuPrevented(x: number, y: number): boolean {
+    const rect = app.canvas.getBoundingClientRect();
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + x,
+      clientY: rect.top + y,
+    });
+
+    app.canvas.dispatchEvent(event);
+
+    return event.defaultPrevented;
+  }
+
+  it('keeps the context menu from opening over the View', () => {
+    make(addView());
+
+    expect(contextMenuPrevented(200, 150)).toBe(true);
+  });
+
+  it('lets the context menu open while preventContextMenu is off or the controller is disabled', () => {
+    const controls = make(addView(), { preventContextMenu: false });
+
+    expect(contextMenuPrevented(200, 150)).toBe(false);
+
+    controls.preventContextMenu = true;
+    expect(contextMenuPrevented(200, 150)).toBe(true);
+
+    controls.enabled = false;
+    expect(contextMenuPrevented(200, 150)).toBe(false);
+  });
+
+  it('lets the context menu open outside the View', () => {
+    make(addView(200, 150));
+
+    expect(contextMenuPrevented(350, 250)).toBe(false);
+  });
+
+  it("lets the context menu open outside the View's hitArea", () => {
+    const view = addView();
+
+    view.hitArea = new Rectangle(0, 0, 100, 100);
+    make(view);
+
+    expect(contextMenuPrevented(50, 50)).toBe(true);
+    expect(contextMenuPrevented(200, 150)).toBe(false);
+  });
+
+  it('stops blocking the context menu once destroyed', () => {
+    const controls = make(addView());
+
+    controls.destroy();
+
+    expect(contextMenuPrevented(200, 150)).toBe(false);
+  });
+
+  it('rotates on a canvas drag and zooms on a canvas wheel', () => {
+    const view = addView();
+
+    view.camera.position.set(0, 0, 10);
+
+    const controls = make(view);
     const changes: number[] = [];
 
     controls.on('change', () => changes.push(1));
@@ -178,8 +257,5 @@ describe('OrbitCamera through the pixi event system', () => {
     );
 
     expect(controls.distance).toBeLessThan(10);
-
-    controls.destroy();
-    view.destroy();
   });
 });

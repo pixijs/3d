@@ -7,6 +7,10 @@ import type { Scene3DSource } from '~/assets/Scene3DSource';
 
 const POSITIONS = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
 
+const GLB_MAGIC = 0x46546c67;
+const GLB_CHUNK_TYPE_JSON = 0x4e4f534a;
+const GLB_CHUNK_TYPE_BIN = 0x004e4942;
+
 /**
  * Builds a GLB shaped like gltfpack's output: the BIN chunk holds the meshopt-compressed
  * vertex bytes, and the bufferView points at a URI-less fallback buffer that carries no data.
@@ -64,17 +68,17 @@ function packGlb(json: unknown, bin: Uint8Array): Blob {
   const header = new ArrayBuffer(12 + 8);
   const view = new DataView(header);
 
-  view.setUint32(0, 0x46546c67, true); // 'glTF'
+  view.setUint32(0, GLB_MAGIC, true);
   view.setUint32(4, 2, true);
   view.setUint32(8, length, true);
   view.setUint32(12, jsonChunk.byteLength, true);
-  view.setUint32(16, 0x4e4f534a, true); // 'JSON'
+  view.setUint32(16, GLB_CHUNK_TYPE_JSON, true);
 
   const binHeader = new ArrayBuffer(8);
   const binView = new DataView(binHeader);
 
   binView.setUint32(0, binChunk.byteLength, true);
-  binView.setUint32(4, 0x004e4942, true); // 'BIN'
+  binView.setUint32(4, GLB_CHUNK_TYPE_BIN, true);
 
   return new Blob([header, jsonChunk, binHeader, binChunk]);
 }

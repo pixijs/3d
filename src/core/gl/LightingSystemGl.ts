@@ -1,17 +1,14 @@
-import { Color, CubeTexture, ExtensionType } from 'pixi.js';
+import { CubeTexture, ExtensionType } from 'pixi.js';
 import type { WebGLRenderer } from 'pixi.js';
 
-import { addLinearRgb, writeLinearRgb } from '../../materials/BaseMaterial3D';
-import { HEMISPHERE_DEFAULT_UP } from '../../scene/lights/environment/Hemisphere';
+import { addLinearRgb } from '../../materials/BaseMaterial3D';
 import type { Light } from '../../scene/lights/Light';
 import { MAX_LIGHTS } from '../../scene/View3D';
 import type { View3D } from '../../scene/View3D';
 import { RenderPassBit } from '../render-passes/RenderPass';
 import type { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
+import { writeHemisphere } from '../writeHemisphere';
 import { getGlobalGlData } from './shader/globalBitGl';
-
-// Shared scratch for per-frame color parsing.
-const scratchColor = new Color();
 
 /**
  * WebGL counterpart to `LightingSystemGpu`
@@ -42,45 +39,37 @@ export class LightingSystemGl {
 
   /**
    * Packs the frame's light and shadow state into the view's global uniform group
+   *
+   * Calls the shadow pass's `beginFrame` before the light loop, every frame even when the pass is
+   * culled. Each light up to `MAX_LIGHTS` then goes through `prepareShadow` before it's packed, so
+   * its shadow slot index is current when written; lights past the cap are skipped.
+   *
+   * The hemisphere uniforms are written only while the environment is a `Hemisphere`; under any
+   * other environment no compiled shader reads them, so stale values are harmless.
    * @param view3d - The view whose global uniforms receive the packed data
    * @param lights - The frame's visible-scene light list
    */
   public update(view3d: View3D, lights: Light[]): void {
     const shadowPass = view3d.passByBit[RenderPassBit.SHADOW] as ShadowRenderPassBase | undefined;
 
-    // Start the pass's shadow frame (advance the cadence clock + reset the slot
-    // cursor) before the light loop. Runs every frame even when the pass is
-    // culled, so the cadence tracks real frames.
     shadowPass?.beginFrame(view3d);
 
     const glData = getGlobalGlData(view3d, this._renderer);
     const globalUniforms = glData.globalUniformGroup.uniforms;
-    const globalLightParams = globalUniforms.uGlobalLightParams as Float32Array;
+    const globalLightParams = globalUniforms.uGlobalLightParams;
 
     globalLightParams[0] = 0;
     globalLightParams[1] = 0;
     globalLightParams[2] = 0;
 
-    // Hemisphere uniforms — only refreshed when env is a hemisphere object.
-    // Under any other env kind the hemisphere bit isn't compiled into any
-    // shader, so stale uniform values are unread and harmless.
     const environment = view3d.environment;
     if (environment !== null && !(environment instanceof CubeTexture)) {
-      const hi = environment.intensity ?? 1;
-      const hemisphereSky = globalUniforms.uHemisphereSky as Float32Array;
-      const hemisphereGround = globalUniforms.uHemisphereGround as Float32Array;
-      const hemisphereUp = globalUniforms.uHemisphereUp as Float32Array;
-
-      writeLinearRgb(hemisphereSky, 0, scratchColor.setValue(environment.skyColor), hi);
-
-      writeLinearRgb(hemisphereGround, 0, scratchColor.setValue(environment.groundColor), hi);
-
-      const up = environment.up ?? HEMISPHERE_DEFAULT_UP;
-      const lenSq = up.x * up.x + up.y * up.y + up.z * up.z;
-      const invLen = lenSq > 0 ? 1 / Math.sqrt(lenSq) : 0;
-      hemisphereUp[0] = up.x * invLen;
-      hemisphereUp[1] = up.y * invLen;
-      hemisphereUp[2] = up.z * invLen;
+      writeHemisphere(
+        environment,
+        globalUniforms.uHemisphereSky,
+        globalUniforms.uHemisphereGround,
+        globalUniforms.uHemisphereUp,
+      );
     }
 
     const lightDataList = view3d._lightDataList;
@@ -99,8 +88,6 @@ export class LightingSystemGl {
 
       if (lightDataList.count >= MAX_LIGHTS) continue;
 
-      // Claim, update, and upload this light's shadow — a no-op for non-casters
-      // (which it also marks unshadowed). The slots land in the view's shadow list.
       shadowPass?.prepareShadow(light, view3d);
 
       lightDataList.add(light);

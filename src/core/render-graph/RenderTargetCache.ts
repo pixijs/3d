@@ -2,11 +2,7 @@ import { RenderTarget } from 'pixi.js';
 import type { RenderTargetDescriptor, TextureSource } from 'pixi.js';
 
 /**
- * Resolved attachment set for a render-pass group
- *
- * `texture` fields point at live `TextureSource`s; `depthReadOnly`
- * distinguishes the read-only depth variant required by the
- * depth-sample-during-transparent pattern.
+ * The attachments a render target is looked up by: live `TextureSource`s, plus whether the depth is read-only
  * @internal
  */
 export interface PassAttachments {
@@ -14,7 +10,7 @@ export interface PassAttachments {
   colors?: { texture: TextureSource }[];
   /** Depth attachment */
   depth?: { texture: TextureSource };
-  /** Bind the depth attachment read-only (sampled while still depth-testing) */
+  /** Attach the depth read-only, for a pass that depth-tests against it without writing it */
   depthReadOnly?: boolean;
 }
 
@@ -30,10 +26,10 @@ export class RenderTargetCache {
   private readonly _targets: Record<string, RenderTarget> = Object.create(null);
 
   /**
-   * Keys whose target was minted by this cache (`_createRenderTarget`), as
-   * opposed to seeded via `addToCache`. Only graph-minted targets are torn
-   * down in `destroy()` — seeded targets (pixi's `session.defaultTarget`) are
-   * pixi-owned and re-seeded each frame.
+   * Keys whose target this cache created, as opposed to one seeded with `addToCache`
+   *
+   * Only these are torn down. A seeded target is pixi's `session.defaultTarget`, which pixi owns
+   * and the graph seeds again whenever the default target's textures change.
    */
   private readonly _ownedKeys: Set<string> = new Set();
 
@@ -87,21 +83,15 @@ export class RenderTargetCache {
   }
 
   /**
-   * Free every graph-minted target's own GPU object + resize listener WITHOUT
-   * freeing any attachment — all attachment `TextureSource`s are externally
-   * owned (transient-pool / default depth / pass color textures).
+   * Frees every target this cache created, and its `resize` listener, without freeing any
+   * attachment: the pool, the default target or a pass owns each attachment texture
    *
-   * - Color (+depth) targets: detach the depth so pixi's `destroy()` won't free
-   *   the shared depth texture, but leave color attached so `sizeSource` still
-   *   resolves for the resize-listener removal (color textures are minted with
-   *   explicit `texture` objects, so `_managedColorTextures` is false and pixi
-   *   leaves them alone).
-   * - Depth-only targets: pixi still binds a `resize` listener, because
-   *   `sizeSource` falls back to the depth texture. `destroy()` can't be used
-   *   (it would free that externally-owned depth source), so remove the listener
-   *   directly, then drop the depth reference.
-   *
-   * Seeded targets are never in `_ownedKeys`, so they are never touched.
+   * - Colour (and depth) targets: the depth is detached first, because pixi's `destroy()` destroys
+   *   a depth attachment. The colour stays attached, since `destroy()` removes the listener through
+   *   it, and pixi destroys colour textures only for a target that created them.
+   * - Depth-only targets: pixi listens on the depth texture, the only one there is to size the
+   *   target by. `destroy()` would destroy that texture, so the listener is removed by hand and the
+   *   depth reference dropped.
    */
   private _releaseOwned(): void {
     for (const key of this._ownedKeys) {
@@ -147,9 +137,9 @@ export class RenderTargetCache {
   }
 
   /**
-   * Build the cache key: color uids in order, then `depth<uid>` with optional `_ro`
+   * Build the cache key: colour uids in order, then `depth<uid>` with `_ro` when read-only
    *
-   * Load/store/clear are excluded — they're per-pass state, not identity.
+   * Load, store and clear stay out: they are set per bind, not per target.
    * @param attachments - The pass's resolved color and depth attachments
    */
   private _renderTargetKey(attachments: PassAttachments): string {

@@ -1,6 +1,7 @@
-import { BindGroup, Geometry, RenderTexture, State, Texture, UniformGroup } from 'pixi.js';
+import { BindGroup, RenderTexture, State, Texture, UniformGroup } from 'pixi.js';
 import type { WebGPURenderer, WebGLRenderer } from 'pixi.js';
 
+import { fullscreenTriangleGeometry } from '../fullscreenTriangleGeometry';
 import { iblSamplingFuncsBit } from '../shader/bits/iblSamplingFuncsBit';
 import type { ShaderBit } from '../shader/ShaderBit';
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
@@ -28,12 +29,20 @@ interface GenerateBrdfLutOptions {
 }
 
 /**
- * Renders the Karis split-sum BRDF integration LUT used by IBL specular lighting
+ * Renders the BRDF lookup table that IBL specular lighting reads, following Karis's split sum
  *
- * UV x = NdotV, UV y = roughness; each texel holds the scale/bias pair the
- * lighting shader combines with the prefiltered environment cube. Runs
- * synchronously on the given renderer and restores the caller's render-target
- * binding afterwards.
+ * UV x is `NdotV` and UV y is roughness. Each texel Monte Carlo integrates GGX for that pair into
+ * the scale (red) and bias (green) the lighting shader applies to F0 before multiplying by the
+ * prefiltered environment cube. The geometry term is Smith with Schlick-GGX at
+ * `k = roughness² / 2`, the paper's choice for image-based lighting. `NdotV` is clamped to 0.001,
+ * since the visibility term divides by it.
+ *
+ * The table is `rgba16float`: 8-bit storage bands visibly once tone mapping stretches a smooth
+ * gradient, such as the shading across a sphere of one colour.
+ *
+ * Runs synchronously, and can run mid-frame on first use. It restores the caller's binding with
+ * `getBindState` rather than `push` and `pop`: a 2D filter binds its input with `bind`, so `pop`
+ * would land back on the screen and the caller's next draws would go there.
  * @param options - Renderer plus size/sample-count overrides.
  * @returns The generated rgba16float LUT texture.
  * @internal
@@ -68,13 +77,6 @@ export function generateBrdfLut(options: GenerateBrdfLutOptions): Texture {
     0: local,
   });
 
-  // 16-bit float storage is required to avoid contour banding from 8-bit
-  // quantization of the BRDF integration result. The Karis split-sum LUT
-  // values are <= ~1.04 and tone-mapping amplifies any per-code steps into
-  // visible bands on smooth gradients (uniform-coloured spheres are the
-  // canonical failure case). RG channels would suffice (the LUT shader writes
-  // only red/green) but rgba16float has wider renderable-format coverage
-  // across WebGPU adapters.
   const textureSource = RenderTexture.create({
     width: size,
     height: size,
@@ -85,20 +87,8 @@ export function generateBrdfLut(options: GenerateBrdfLutOptions): Texture {
     source: textureSource,
   });
 
-  const geometry = new Geometry({
-    attributes: {
-      aPosition: new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
-    },
-    topology: 'triangle-strip',
-  });
+  const geometry = fullscreenTriangleGeometry();
 
-  // Capture the caller's live binding and replay it after drawing, rather than
-  // push/pop: pop() restores the render-target stack's top, but a 2D filter binds
-  // its input texture off the stack (FilterSystem uses bind, not push), so pop()
-  // would snap back to the screen and the caller's subsequent draws would land there.
-  // This runs lazily mid-frame (first use), so the restore must carry every bind
-  // axis (frame, orientation, subresource) — the capture replays non-destructively.
-  // Null when nothing is bound yet (a standalone call outside a render).
   const savedBind = renderer.renderTarget.renderTarget ? renderer.renderTarget.getBindState() : null;
 
   renderer.renderTarget.bind({ target: textureSource, clear: true });
@@ -110,6 +100,9 @@ export function generateBrdfLut(options: GenerateBrdfLutOptions): Texture {
   });
 
   if (savedBind) renderer.renderTarget.bind(savedBind);
+
+  local.destroy();
+  shader.destroy();
 
   return texture;
 }

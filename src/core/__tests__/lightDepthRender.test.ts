@@ -99,6 +99,7 @@ for (const preference of ['webgl', 'webgpu'] as const) {
           ) {
             const count = session.view3d._lightDataList.count;
             this.masks.fill(count === 32 ? -1 : (1 << count) - 1);
+            this.depthMasks.fill(-1);
             this.depthPlane.fill(0);
             return true;
           });
@@ -123,68 +124,72 @@ for (const preference of ['webgl', 'webgpu'] as const) {
   );
 }
 
-it('renders every WebGL light-mask bit and sparse combinations like an explicit light subset', async () => {
-  const app = await getApp<Renderer>({
-    id: 'light-mask-bit-iteration-webgl',
-    appOptions: { preference: 'webgl', width: 32, height: 32, resolution: 1, backgroundColor: 0x000000 },
-  });
-  const view = new View3D({ width: 32, height: 32 });
-  const geometry = new PlaneGeometry({ width: 4, height: 4 });
-  const material = new Material3D({ baseColor: 0xffffff, roughness: 0.6 });
-  const lights = Array.from(
-    { length: 32 },
-    (_, i) =>
-      new DirectionalLight({
-        color: [0xffffff, 0xff8080, 0x80ff80, 0x8080ff][i % 4],
-        intensity: 0.015 * (1 + (i % 5)),
-        castShadow: false,
-      }),
-  );
-  try {
-    expect(app.renderer.type).toBe(RendererType.WEBGL);
-    app.stage.addChild(view);
-    view.camera.position.z = 5;
-    view.root.addChild(new Mesh3D({ geometry, material, castShadow: false, receiveShadow: false }));
-    const masks = [
-      0,
-      ...Array.from({ length: 32 }, (_, i) => 1 << i),
-      -1,
-      0x80000001,
-      0xaaaaaaaa,
-      0x55555555,
-      0x80204081,
-    ];
-    for (const mask of masks) {
-      for (const light of lights) light.removeFromParent();
-      for (const light of lights) view.root.addChild(light);
-      const prepare = vi.spyOn(LightTiles.prototype, 'prepare').mockImplementation(function (this: LightTiles) {
-        this.masks.fill(mask);
-        this.depthPlane.fill(0);
-        return true;
-      });
-      let actual: Uint8ClampedArray;
-      try {
+it.each(['webgl', 'webgpu'] as const)(
+  'renders every %s light-mask bit and sparse combinations like the selected lights repacked alone',
+  async (preference) => {
+    const app = await getApp<Renderer>({
+      id: 'light-mask-bit-iteration-' + preference,
+      appOptions: { preference, width: 32, height: 32, resolution: 1, backgroundColor: 0x000000 },
+    });
+    const view = new View3D({ width: 32, height: 32 });
+    const geometry = new PlaneGeometry({ width: 4, height: 4 });
+    const material = new Material3D({ baseColor: 0xffffff, roughness: 0.6 });
+    const lights = Array.from(
+      { length: 32 },
+      (_, i) =>
+        new DirectionalLight({
+          color: [0xffffff, 0xff8080, 0x80ff80, 0x8080ff][i % 4],
+          intensity: 0.015 * (1 + (i % 5)),
+          castShadow: false,
+        }),
+    );
+    try {
+      expect(app.renderer.type).toBe(preference === 'webgpu' ? RendererType.WEBGPU : RendererType.WEBGL);
+      app.stage.addChild(view);
+      view.camera.position.z = 5;
+      view.root.addChild(new Mesh3D({ geometry, material, castShadow: false, receiveShadow: false }));
+      const masks = [
+        0,
+        ...Array.from({ length: 32 }, (_, i) => 1 << i),
+        -1,
+        0x80000001,
+        0xaaaaaaaa,
+        0x55555555,
+        0x80204081,
+      ];
+      for (const mask of masks) {
+        for (const light of lights) light.removeFromParent();
+        for (const light of lights) view.root.addChild(light);
+        const prepare = vi.spyOn(LightTiles.prototype, 'prepare').mockImplementation(function (this: LightTiles) {
+          this.masks.fill(mask);
+          this.depthMasks.fill(-1);
+          this.depthPlane.fill(0);
+          return true;
+        });
+        let actual: Uint8ClampedArray;
+        try {
+          app.render();
+          actual = canvasPixels(app.canvas);
+        } finally {
+          prepare.mockRestore();
+        }
+        for (const light of lights) light.removeFromParent();
+        for (let i = 0; i < lights.length; i++) if ((mask >>> i) & 1) view.root.addChild(lights[i]);
         app.render();
-        actual = canvasPixels(app.canvas);
-      } finally {
-        prepare.mockRestore();
+        const expected = canvasPixels(app.canvas);
+        expect(actual.some((value, i) => i % 4 !== 3 && value > 0)).toBe(mask !== 0);
+        expect(
+          actual.every((value, i) => value === expected[i]),
+          'mask ' + (mask >>> 0).toString(16),
+        ).toBe(true);
       }
-      // Repack only the selected lights, so the reference does not depend on their original bit positions.
-      for (const light of lights) light.removeFromParent();
-      for (let i = 0; i < lights.length; i++) if ((mask >>> i) & 1) view.root.addChild(lights[i]);
-      app.render();
-      const expected = canvasPixels(app.canvas);
-      expect(actual.some((value, i) => i % 4 !== 3 && value > 0)).toBe(mask !== 0);
-      expect(
-        actual.every((value, i) => value === expected[i]),
-        'mask ' + (mask >>> 0).toString(16),
-      ).toBe(true);
+    } finally {
+      for (const light of lights) light.destroy();
+      view.destroy({ children: true });
+      geometry.destroy();
+      material.destroy();
+      app.destroy();
     }
-  } finally {
-    for (const light of lights) light.destroy();
-    view.destroy({ children: true });
-    geometry.destroy();
-    material.destroy();
-    app.destroy();
-  }
-});
+  },
+  15000,
+);

@@ -4,7 +4,7 @@ import { Matrix4 } from '../math/matrix/Matrix4';
 import { Frustum } from '../math/misc/Frustum';
 import { Vector3 } from '../math/vector/Vector3';
 import type { Camera3D } from '../scene/cameras/Camera3D';
-import { LIGHT_TILE_LANES, LightTiles } from './LightTiles';
+import { LIGHT_DEPTH_LANES, LIGHT_TILE_LANES, LightTiles } from './LightTiles';
 import type { ReadonlyRect, RenderSession } from './render-passes/RenderSession';
 
 /** Eye extracted from a camera's world transform; never escapes this module */
@@ -13,9 +13,10 @@ const scratchCameraPosition = new Vector3();
 /**
  * Negates a projection's Y row in place
  *
- * Pixi inverts the front face for some bindings (a `flipY` render texture, a WebGL FBO); a draw
- * into one needs its projection's Y to match, or front faces cull as back faces. Only the copy
- * bound to the GPU is ever flipped — a camera's own matrices stay as built.
+ * Pixi inverts the front face for some bindings (`isFrontFaceInverted`: a WebGL framebuffer or a
+ * `flipY` binding, but not both); a draw into one needs its projection's Y to match, or front
+ * faces cull as back faces. Only the copy bound to the GPU is ever flipped; a camera's own
+ * matrices stay as built.
  * @param projection - The matrix to flip.
  */
 function flipProjectionY(projection: Matrix4): void {
@@ -30,11 +31,12 @@ function flipProjectionY(projection: Matrix4): void {
  * Remaps a projection's clip z from GL's `[-w, w]` to WebGPU's `[0, w]` in place, `(z + w) / 2`
  *
  * `Camera3D` builds every projection in the GL convention. WebGPU discards clip z below zero, so
- * without this the nearer half of the range is lost — centimetres for a perspective camera, half
- * the depth for an orthographic one, and the whole slab behind an oblique clip plane, which the
- * construction puts exactly at `-w`. Applied to the bound copy only, after the clip plane, so the
- * plane lands on WebGPU's near face and the camera's own matrices stay as built. What the depth
- * buffer then stores is the same `(z + 1) / 2` GL stores, so depth readers share one formula.
+ * without this the nearer half of the range is lost: a sliver past the near plane for a
+ * perspective camera, half the depth for an orthographic one, and the whole slab behind an
+ * oblique clip plane, which the construction puts exactly at `-w`. Applied to the bound copy
+ * only, after the clip plane, so the plane lands on WebGPU's near face and the camera's own
+ * matrices stay as built. What the depth buffer then stores is the same `(z + 1) / 2` GL stores,
+ * so depth readers share one formula.
  * @param projection - The matrix to remap.
  */
 function remapProjectionZeroToOne(projection: Matrix4): void {
@@ -49,13 +51,13 @@ function remapProjectionZeroToOne(projection: Matrix4): void {
  * Somewhere a pass draws from: a position, a view, a projection, and the frustum to cull against
  *
  * This is what a render pass actually needs from a camera. A {@link Camera3D} owns one, and so
- * does a shadow cascade — which is why it exists as its own thing rather than as fields on the
+ * does a shadow cascade, which is why it exists as its own thing rather than as fields on the
  * camera. A cascade's projection is an off-centre, texel-snapped box built to stop shadow edges
  * crawling, and its view comes from the light-space fit rather than a node transform, so it can't
  * be a `Camera3D` without pushing shadow vocabulary into the public camera API.
  *
- * The matrices here *are* the uniform lanes — the uniform group holds these same objects — so
- * this is the single home for camera data, GPU side and CPU side both.
+ * The matrices here *are* the uniform lanes: the uniform group holds these same objects, so this
+ * is the single home for camera data, GPU side and CPU side both.
  * @internal
  */
 export class CameraData {
@@ -63,19 +65,19 @@ export class CameraData {
   public readonly uniformGroup: UniformGroup;
   /** Bound at group 1 by every draw from this camera data; bundles bake it */
   public readonly bindGroup: BindGroup;
-  /** Eye position in world space — the `uCameraPosition` lane */
+  /** Eye position in world space, the `uCameraPosition` lane */
   public readonly position = new Vector3();
-  /** World-to-view — the `uViewMatrix` lane */
+  /** World-to-view, the `uViewMatrix` lane */
   public readonly view = new Matrix4();
   /**
-   * View-to-clip — the `uProjectionMatrix` lane: Y-flipped when the bound target's winding is,
+   * View-to-clip, the `uProjectionMatrix` lane: Y-flipped when the bound target's winding is,
    * and on WebGPU with clip z remapped to `[0, w]`
    */
   public readonly projection = new Matrix4();
-  /** `projection × view` — the `uViewProjectionMatrix` lane, and what the draws transform by */
+  /** `projection × view`, the `uViewProjectionMatrix` lane, and what the draws transform by */
   public readonly viewProjection = new Matrix4();
   /**
-   * Content rect over texture size — the `uViewportUVScale` lane
+   * Content rect over texture size, the `uViewportUVScale` lane
    *
    * Maps `[0, 1]` screen UV onto the sub-rect this camera's image actually occupies in the
    * texture it was drawn into. `(1, 1)` when the image fills the texture; smaller when the
@@ -84,16 +86,7 @@ export class CameraData {
    * with the camera because it is a fact about the camera's target.
    */
   public readonly viewportUvScale = new Point(1, 1);
-  /**
-   * The GPU viewport in the target's physical pixels, stored in `uViewport`
-   *
-   * `xy` holds the origin and `zw` holds the size. The shader maps a fragment's pixel position
-   * to image coordinates with `(position.xy - xy) / zw`. Each WebGL forward draw copies the live
-   * pass viewport after the graph binds the target and applies the camera's frame. WebGPU writes
-   * the camera target's viewport during preparation, before uploading the uniform buffer.
-   */
-  public readonly viewport = new Rectangle(0, 0, 1, 1);
-  /** Screen-tile and depth masks, uploaded with this camera's uniforms */
+  /** Screen-tile masks, depth masks and the lanes that index them, uploaded with this camera's uniforms */
   public readonly lightTiles = new LightTiles();
   /**
    * The volume to cull against, written by this camera data's owner
@@ -126,8 +119,8 @@ export class CameraData {
   public _currentSession: RenderSession | null = null;
 
   /**
-   * @param frustum - Cull volume to adopt. Pass the owner's existing one — a `Camera3D` has a
-   *   public `frustum` — so there is only ever one. Omitted, this allocates its own.
+   * @param frustum - Cull volume to adopt. Pass the owner's existing one (a `Camera3D` has a
+   *   public `frustum`), so there is only ever one. Omitted, this allocates its own.
    */
   constructor(frustum: Frustum = new Frustum()) {
     this.frustum = frustum;
@@ -137,8 +130,9 @@ export class CameraData {
       uProjectionMatrix: { value: this.projection, type: 'mat4x4<f32>' },
       uViewProjectionMatrix: { value: this.viewProjection, type: 'mat4x4<f32>' },
       uViewportUVScale: { value: this.viewportUvScale, type: 'vec2<f32>' },
-      uViewport: { value: this.viewport, type: 'vec4<f32>' },
+      uLightTileTransform: { value: this.lightTiles.tileTransform, type: 'vec4<f32>' },
       uLightTiles: { value: this.lightTiles.masks, type: 'vec4<i32>', size: LIGHT_TILE_LANES },
+      uLightDepthMasks: { value: this.lightTiles.depthMasks, type: 'vec4<i32>', size: LIGHT_DEPTH_LANES },
       uLightDepthPlane: { value: this.lightTiles.depthPlane, type: 'vec4<f32>' },
     });
     this.uniformGroup.isStatic = true;
@@ -149,9 +143,9 @@ export class CameraData {
   /**
    * Writes the lanes and marks them for upload
    *
-   * Takes copies, so a caller is free to reuse the matrices it passes — the light's per-cascade
-   * scratch does exactly that — and the flip, when asked for, is applied to the copy, so the
-   * caller's projection is never changed under it. The view-projection is the product, formed
+   * Takes copies, so a caller is free to reuse the matrices it passes, as the light's per-cascade
+   * scratch does. The flip, when asked for, is applied to the copy, so the caller's projection is
+   * never changed under it. The view-projection is the product, formed
    * here so nothing downstream can read one that disagrees with its own parts. The frustum is
    * left alone; see `CameraData.frustum` for why it isn't derived from the same matrices.
    * @param position - Eye position in world space.
@@ -188,27 +182,23 @@ export class CameraData {
   }
 
   /**
-   * Copies the GPU viewport and marks it for upload when its origin or size changes
-   * @param rect - The live GPU viewport, in the target's physical pixels.
+   * Fits the light tile grid to the GPU viewport and marks it for upload when the fit changes
+   *
+   * Each WebGL forward draw passes the live pass viewport after the graph binds the target and
+   * applies the camera's frame. WebGPU passes the camera target's viewport during preparation,
+   * before uploading the uniform buffer.
+   * @param rect - The GPU viewport, in the target's physical pixels.
+   * @param topDown - Whether pixel rows count down from the top of the target (WebGPU).
    * @returns This camera data, for chaining.
    */
-  public setViewport(rect: ReadonlyRect): this {
-    const viewport = this.viewport;
-    const { x, y, width, height } = rect;
-
-    if (viewport.x !== x || viewport.y !== y || viewport.width !== width || viewport.height !== height) {
-      viewport.x = x;
-      viewport.y = y;
-      viewport.width = width;
-      viewport.height = height;
-      this.uniformGroup.update();
-    }
+  public setViewport(rect: ReadonlyRect, topDown = false): this {
+    if (this.lightTiles.setViewport(rect, topDown)) this.uniformGroup.update();
 
     return this;
   }
 
   /**
-   * Prepares this camera's light tile masks and marks them for upload after binning
+   * Prepares this camera's light tile and depth masks and marks them for upload after binning
    *
    * See `LightTiles.prepare` for the binning and caching rules.
    * @param session - The frame's render session, with the view's lights packed.
@@ -234,7 +224,7 @@ export class CameraData {
   }
 
   /**
-   * Frees the GPU side — the bind group, then the uniform buffer under it
+   * Frees the GPU side: the bind group, then the uniform buffer under it
    *
    * The bind group goes first so what it binds reacts to the change before the buffer dies. The
    * `UniformGroup` itself is renderer-managed and never destroyed; its buffer is this data's, and
@@ -252,7 +242,7 @@ export class CameraData {
 /**
  * A camera's data, created on first use and kept on the camera
  *
- * One per camera, shared by every pass drawing from it — it adopts the camera's own `frustum`.
+ * One per camera, shared by every pass drawing from it; it adopts the camera's own `frustum`.
  * Created lazily: a camera that never renders never allocates a uniform group or a bind group.
  * @param camera - The camera whose data to fetch.
  * @returns The camera's data.

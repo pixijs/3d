@@ -2,112 +2,170 @@ import { Container, Matrix, TextureSource, Ticker, UPDATE_PRIORITY, warn } from 
 import type { Renderer } from 'pixi.js';
 
 /**
- * Options for {@link ContainerSource} (and, via {@link ContainerTextureOptions}, for {@link ContainerTexture})
+ * Options for {@link ContainerTexture} and {@link ContainerSource}
+ * @example
+ * ```ts
+ * const screen = new ContainerTexture({ container: gameUi, width: 512, height: 512, renderer: app.renderer });
+ * ```
  * @category rendering
  * @standard
  */
 export interface ContainerSourceOptions {
-  /** The 2D {@link Container} rendered into this source's pixels; reparented out of any existing parent */
+  /**
+   * The 2D {@link Container} to draw; it moves out of its current parent, so it stops drawing on the stage
+   * @example
+   * ```ts
+   * const badge = new ContainerTexture({ container: badgeGraphics, renderer: app.renderer });
+   * ```
+   */
   container: Container;
   /**
-   * Source pixel width. Omitted → measured from the `container`'s local bounds at construction. When *both*
-   * `width` and `height` are omitted the capture also offsets to the container's top-left, so an off-origin
-   * container is captured as authored. Pass an explicit `width` AND `height` for a fixed (0,0)→(w,h) window.
+   * Width of the capture in logical pixels
+   *
+   * Omitted, it is measured from the container's local bounds at construction, and is never below 1.
+   * When `width` and `height` are both omitted, the capture also moves the container's top-left
+   * corner to the origin, so a container drawn away from (0, 0) is captured whole. Given both, the
+   * capture is the window from (0, 0) to (`width`, `height`), and
+   * {@link ContainerSourceOptions#transform} moves the container into it.
+   * @example
+   * ```ts
+   * const banner = new ContainerTexture({ container: bannerText, width: 1024, height: 256 });
+   * ```
    */
   width?: number;
-  /** Source pixel height; see {@link ContainerSourceOptions#width} for the auto-measure / offset behaviour */
+  /**
+   * Height of the capture in logical pixels, measured when omitted as
+   * {@link ContainerSourceOptions#width} describes
+   * @example
+   * ```ts
+   * const banner = new ContainerTexture({ container: bannerText, width: 1024, height: 256 });
+   * ```
+   */
   height?: number;
-  /** Source resolution (pixel density) */
+  /**
+   * Texels per logical pixel; `2` gives a sharper texture for four times the memory
+   * @example
+   * ```ts
+   * const label = new ContainerTexture({ container: labelText, resolution: 2 });
+   * ```
+   * @default 1
+   */
   resolution?: number;
-  /** Antialias the render target */
+  /**
+   * Whether to multisample the render target, which smooths the edges of shapes drawn into it
+   * @example
+   * ```ts
+   * const chart = new ContainerTexture({ container: pieChart, antialias: true });
+   * ```
+   * @default false
+   */
   antialias?: boolean;
   /**
-   * Transform applied when capturing the `container` into the texture, for a fixed explicit-size window — use
-   * it to offset (and/or scale) a container that isn't authored at the origin, e.g.
-   * `new Matrix().translate(128, 128)` to capture a 256×256 square centred on the origin. When set, it always
-   * wins; when omitted with an explicit size the capture stays identity (an off-origin container clips); when
-   * omitted with auto-measure (no `width`/`height`) the capture offsets to the container's bounds. The capture
-   * is never auto-fit *per frame*, so nothing shifts as the container animates. Sets the initial value of the
-   * runtime-mutable {@link ContainerSource#transform}.
+   * Matrix applied to the container when it is captured, to move or scale it into the window
+   *
+   * `new Matrix().translate(128, 128)` captures a 256 × 256 window centred on the container's
+   * origin. When given, it always wins. When omitted, the capture applies no transform if you gave
+   * a size, and moves the container's top-left corner to the origin if you didn't. The capture
+   * never refits itself, so nothing shifts as the container animates. Change it later through the
+   * texture's `transform` property.
+   * @example
+   * ```ts
+   * const radar = new ContainerTexture({
+   *   container: radarDisc,
+   *   width: 256,
+   *   height: 256,
+   *   transform: new Matrix().translate(128, 128),
+   * });
+   * ```
    */
   transform?: Matrix;
   /**
-   * Renderer to retain on the source. Storing it lets you call {@link ContainerSource#render} with no
-   * argument, and is required for {@link ContainerSourceOptions#firstRender} and
-   * {@link ContainerSourceOptions#autoUpdate}. Optional — pass the renderer to each `render()` call instead if
-   * you'd rather not retain a reference.
+   * Renderer to keep for `render()` calls with no argument
+   *
+   * {@link ContainerSourceOptions#firstRender} and {@link ContainerSourceOptions#autoUpdate} need it.
+   * Leave it out to pass a renderer to every `render()` call instead.
+   * @example
+   * ```ts
+   * const screen = new ContainerTexture({ container: gameUi, renderer: app.renderer });
+   *
+   * screen.render();
+   * ```
    */
   renderer?: Renderer;
   /**
-   * Render once immediately during construction, so the texture has pixels before it is ever sampled — avoids
-   * the empty-until-first-render (black) footgun. **Default `true`**, but it only fires when a
-   * {@link ContainerSourceOptions#renderer} is given; without one the default silently no-ops (nothing to
-   * render with). Pass `false` to opt out. Setting `true` explicitly without a `renderer` warns.
+   * Whether to render once during construction, so the texture has a picture before anything samples it
+   *
+   * It only happens when {@link ContainerSourceOptions#renderer} is given. Without one, the
+   * default does nothing and an explicit `true` warns.
+   * @example
+   * ```ts
+   * const screen = new ContainerTexture({ container: gameUi, renderer: app.renderer, firstRender: false });
+   * ```
+   * @default true
    */
   firstRender?: boolean;
   /**
-   * Re-render the container every frame off `Ticker.shared` (requires {@link ContainerSourceOptions#renderer})
-   * For animated content that would otherwise need a manual per-frame `render()` call. Default `false` — the
-   * source does nothing on its own and you drive `render()` yourself, which is cheaper for static content.
-   * Toggle later via {@link ContainerSource#autoUpdate}. Has no effect without a `renderer` (warns).
+   * Whether to re-render the container every frame, for animated content
+   *
+   * It needs a {@link ContainerSourceOptions#renderer}; without one it warns and waits until one is
+   * set. Leave it off for static content and call `render()` when the container changes.
+   *
+   * It renders from `Ticker.shared` one priority step above where an application renders. That
+   * captures before the scene draws only when the application renders from `Ticker.shared`
+   * (`sharedTicker: true`). A default application renders from its own ticker, and the texture then
+   * shows the previous frame's capture.
+   * @example
+   * ```ts
+   * const screen = new ContainerTexture({ container: gameUi, renderer: app.renderer, autoUpdate: true });
+   * ```
+   * @default false
    */
   autoUpdate?: boolean;
 }
 
 /**
- * A {@link TextureSource} whose pixels are a live 2D PixiJS {@link Container}, rendered into its own render target
+ * A {@link TextureSource} whose pixels are a live 2D PixiJS {@link Container}
  *
- * This is the producer half of the container-as-texture primitive: it owns the GPU resource and
- * the render-into-framebuffer logic, mirroring how `VideoSource` owns a live video.
+ * The source behind {@link ContainerTexture}, whose docs cover when to render, the first render
+ * and which way up the picture is. Build one yourself to make several `Texture`s, each with its
+ * own frame, over one live container that renders once for all of them.
  *
- * Because the live machinery lives on the source, any number of `Texture` views (different frames /
- * trims) can share one `ContainerSource`. For the common one-texture case use {@link ContainerTexture}.
+ * It owns its render target the way a `VideoSource` owns its video, and nothing in it depends on
+ * 3D. The size is fixed at construction; the inherited {@link TextureSource#resize} changes it.
+ * @example
+ * ```ts
+ * import { Rectangle, Texture } from 'pixi.js';
  *
- * The container is reparented into a private root (removing it from any prior parent, so it is never
- * double-rendered) and drawn by {@link ContainerSource#render}. By default **you** drive that — call it once
- * after setup, or every frame for animated content — passing the renderer (or retaining one via the
- * `renderer` option so you can call `render()` with no argument). For animated content you can instead opt in
- * to {@link ContainerSourceOptions#autoUpdate}, which re-renders every frame off `Ticker.shared`; otherwise
- * the source does nothing on its own: no per-frame cost you didn't ask for, and nothing holding it alive but
- * your own reference. **Render at least once before the source is sampled** — until its first draw the render
- * target is empty (transparent/black), so a mesh using a never-rendered source shows black. Passing a
- * `renderer` does this for you once on construction by default (see {@link ContainerSourceOptions#firstRender}).
- * A manual `render()` must run at a safe point (before you render your scene), never *inside* a render pass (a
- * re-entrant render crashes the GPU backend); `autoUpdate` sequences itself just before the application's
- * render for you. The size is fixed at construction (measured from the container if omitted); use the inherited
- * {@link TextureSource#resize} to change it.
- *
- * The capture renders with Pixi's `flipY` (screen orientation), so it samples **upright on 3D geometry**
- * with ordinary UVs — no per-material flip needed. Orientation is handled at *render* time, not sampling:
- * the projection flip is welded to the winding/cull inversion, so 3D content (a `View3D`) captured inside
- * stays correctly culled.
- *
- * Nothing here depends on 3D: a general 2D primitive.
+ * const sheet = new ContainerSource({ container: icons, width: 256, height: 128, renderer: app.renderer });
+ * const play = new Texture({ source: sheet, frame: new Rectangle(0, 0, 128, 128) });
+ * const pause = new Texture({ source: sheet, frame: new Rectangle(128, 0, 128, 128) });
+ * ```
  * @category rendering
  * @advanced
  */
 export class ContainerSource extends TextureSource {
   private _container: Container;
 
-  /** Private identity root that owns the `container` — detaches it from its prior parent */
+  /**
+   * Parent of the container, and what the capture renders
+   *
+   * Destroyed with the source, which also frees the batchers pixi keeps for its render group.
+   */
   private readonly _root: Container;
-  /** Capture transform (offset/scale) applied to the container when rendering it into the target */
   private readonly _transform = new Matrix();
 
-  /** Retained renderer enabling argument-less {@link ContainerSource#render}, `firstRender` and `autoUpdate` */
   private _renderer: Renderer | null = null;
   private _autoUpdate = false;
   private _isConnectedToTicker = false;
 
-  /** Bound per-frame callback for `autoUpdate`; identity is stable so `Ticker.shared.remove` can match it */
   private readonly _onTick = (): void => {
     this.render();
   };
 
   /**
-   * Registered with the retained renderer's destroy runner, so a renderer destroyed while retained
-   * detaches the auto-update tick and drops the dangling reference instead of rendering through a dead
-   * renderer every frame. Must not mutate the runner itself — it fires mid-emit.
+   * Hook on the kept renderer's destroy runner: drops the renderer and stops the tick, so a
+   * destroyed renderer is never rendered through. It must not add to or remove from the runner,
+   * which calls it mid-emit.
    */
   private readonly _onRendererDestroy = {
     destroy: (): void => {
@@ -118,7 +176,6 @@ export class ContainerSource extends TextureSource {
 
   constructor(options: ContainerSourceOptions) {
     const { container } = options;
-    // Only measure the container when a dimension is omitted — getLocalBounds() is expensive.
     const bounds = options.width === undefined || options.height === undefined ? container.getLocalBounds() : undefined;
     const width = Math.max(1, Math.ceil(options.width ?? bounds!.width));
     const height = Math.max(1, Math.ceil(options.height ?? bounds!.height));
@@ -133,20 +190,16 @@ export class ContainerSource extends TextureSource {
     super({
       width,
       height,
-      // `resolution`/`antialias` are optional — forwarding `undefined` would override TextureSource's own
-      // defaults (yielding a NaN-sized render target), so default them here.
       resolution: options.resolution ?? 1,
       antialias: options.antialias ?? false,
     });
 
     this._root = new Container();
-    this._root.addChild(container); // reparents out of any existing parent
+    this._root.addChild(container);
     this._container = container;
     if (options.transform) {
       this._transform.copyFrom(options.transform);
     } else if (options.width === undefined && options.height === undefined) {
-      // Full auto-measure: capture the container as-authored by shifting its top-left to (0,0), so an
-      // off-origin container fits. Explicit size keeps the fixed (0,0)→(w,h) window (offset via `transform`).
       this._transform.translate(-bounds!.minX, -bounds!.minY);
     }
 
@@ -154,9 +207,6 @@ export class ContainerSource extends TextureSource {
       this._setRenderer(options.renderer);
     }
 
-    // `firstRender` defaults to true: render once now if a renderer is available, so the texture has pixels
-    // before it is ever sampled. The default silently no-ops without a renderer (nothing to render with); only
-    // an *explicit* `firstRender: true` with no renderer is a misuse worth warning about.
     if (options.firstRender ?? true) {
       if (this._renderer) {
         this.render();
@@ -175,39 +225,36 @@ export class ContainerSource extends TextureSource {
   }
 
   /**
-   * The retained {@link Renderer}, or `null`
+   * The renderer kept for {@link ContainerSource#render} calls with no argument, or `null`
    *
-   * Set it to enable argument-less {@link ContainerSource#render} and
-   * {@link ContainerSource#autoUpdate} after construction; clearing it (`null`) halts an active
-   * `autoUpdate`.
+   * Clearing it stops {@link ContainerSource#autoUpdate} until another is set.
    */
   public get renderer(): Renderer | null {
     return this._renderer;
   }
 
   /**
-   * Retains (or clears) the renderer and reconciles the auto-update tick against it
-   * @param value - Renderer to retain, or `null` to release it
+   * Keeps a renderer, or releases it with `null`
+   * @param value - Renderer to keep, or `null` to release it
    */
   public set renderer(value: Renderer | null) {
     this._setRenderer(value);
   }
 
   /**
-   * Whether the source re-renders every frame off `Ticker.shared` (sequenced just before the application's render)
+   * Whether the source re-renders every frame from `Ticker.shared`
    *
-   * Requires a retained {@link ContainerSource#renderer}; enabling it without one warns and stays
-   * off. Default `false` — drive {@link ContainerSource#render} yourself for static content. While on, the
-   * ticker retains the source (as with an auto-updating `VideoSource`); {@link ContainerSource#destroy} (or
-   * setting it `false`) halts the tick.
+   * {@link ContainerSourceOptions#autoUpdate} covers the renderer it needs and when the capture runs.
+   * While it is on, the ticker holds a reference to the source, as with an auto-updating
+   * `VideoSource`; turning it off or destroying the source releases it.
    */
   public get autoUpdate(): boolean {
     return this._autoUpdate;
   }
 
   /**
-   * Toggles the per-frame render tick; warns when enabled with no retained renderer
-   * @param value - `true` to start the per-frame render tick, `false` to stop it
+   * Starts or stops the per-frame render; warns when turned on with no kept renderer
+   * @param value - `true` to re-render every frame, `false` to stop
    */
   public set autoUpdate(value: boolean) {
     if (value === this._autoUpdate) return;
@@ -219,17 +266,17 @@ export class ContainerSource extends TextureSource {
   }
 
   /**
-   * The capture transform applied to the container (offset/scale)
+   * The matrix applied to the container when it is captured; see {@link ContainerSourceOptions#transform}
    *
-   * Mutable: assign a new {@link Matrix}, or mutate the returned one in place, then call
-   * {@link ContainerSource#render} to redraw with it.
+   * Assign a new {@link Matrix} or change this one in place, then call {@link ContainerSource#render}
+   * to redraw with it.
    */
   public get transform(): Matrix {
     return this._transform;
   }
 
   /**
-   * Copies `value` into the source's own capture-transform instance
+   * Copies `value` into the source's own matrix
    * @param value - Capture transform to copy in
    */
   public set transform(value: Matrix) {
@@ -237,28 +284,31 @@ export class ContainerSource extends TextureSource {
   }
 
   /**
-   * Swaps the {@link Container} this source renders, reparenting the new one into the private root
+   * Swaps the {@link Container} this source renders, reusing its render target
    *
-   * The old container is detached. The source's size is unchanged, and nothing is drawn until you
-   * next call {@link ContainerSource#render}. Enables reusing one render target's GPU memory for a
-   * different container (e.g. a pooled texture), instead of allocating a new one.
+   * The new container moves out of its current parent and the old one is left detached. The size
+   * stays the same, and the old picture stays until the next {@link ContainerSource#render}. A pool
+   * of these reuses GPU memory across containers instead of allocating a source per container.
    * @param container - The new container to render
    */
   public setContainer(container: Container): void {
     if (container === this._container) return;
     this._root.removeChildren();
-    this._root.addChild(container); // reparents out of its prior parent
+    this._root.addChild(container);
     this._container = container;
   }
 
   /**
-   * Renders the container into this source through the capture {@link ContainerSource#transform}
+   * Renders the container into this source through its {@link ContainerSource#transform}
    *
-   * You own when this happens — call it once after setup (the source is empty/black until its first render),
-   * or each frame for animated content. Pass a `renderer`, or omit it to use the one retained via the
-   * `renderer` option / {@link ContainerSource#renderer} (a passed renderer is also retained for later
-   * calls). Must be called at a safe point (before you render your scene), never inside another render pass.
-   * @param renderer - Renderer to draw with, retained for later calls; omit to use the retained one
+   * Call it before you render your scene, never from code that runs during a render. A renderer
+   * passed here is kept for later calls with no argument; with none passed or kept, it warns and
+   * draws nothing.
+   *
+   * It renders with pixi's `flipY`, which stores the picture upright for 3D geometry with ordinary
+   * UVs. Pixi flips the face winding along with the projection, so a `View3D` inside the container
+   * still culls the right faces.
+   * @param renderer - Renderer to draw with, kept for later calls; omit to use the kept one
    */
   public render(renderer?: Renderer): void {
     const r = renderer ?? this._renderer;
@@ -271,28 +321,27 @@ export class ContainerSource extends TextureSource {
   }
 
   /**
-   * Destroys this source's render target
+   * Destroys this source's render target, stops {@link ContainerSource#autoUpdate} and releases the
+   * kept renderer
    *
-   * By default the reparented `container` is left intact (the caller owns it); pass `true` to
-   * destroy the `container` and its children too.
-   * @param destroyContainer - Also destroy the reparented `container` and its children
+   * The container comes back detached and intact, since you own it; pass `true` to destroy it and
+   * its children too.
+   * @param destroyContainer - Also destroy the container and its children
    */
   public override destroy(destroyContainer = false): void {
     this._autoUpdate = false;
     this._setRenderer(null);
-    this._root.removeChildren(); // hand the container back genuinely detached
+    this._root.removeChildren();
     if (destroyContainer) {
       this._container.destroy({ children: true });
     }
-    // Destroying the capture root's render group also frees the batchers pixi cached under its instruction set.
     this._root.destroy();
     super.destroy();
   }
 
   /**
-   * Central renderer retention: swaps the destroy-runner hook alongside the reference, so renderer
-   * teardown is always observed for as long as a renderer is retained.
-   * @param value - Renderer to retain, or `null` to release the current one
+   * Keeps `value`, moving the destroy hook with it so the kept renderer's teardown is always seen
+   * @param value - Renderer to keep, or `null` to release the current one
    */
   private _setRenderer(value: Renderer | null): void {
     if (value === this._renderer) return;
@@ -303,16 +352,15 @@ export class ContainerSource extends TextureSource {
   }
 
   /**
-   * Connects or disconnects the per-frame render tick to match `autoUpdate` and renderer availability
+   * Adds or removes the per-frame tick to match `autoUpdate` and the kept renderer; safe to call on any change
    *
-   * Idempotent — safe to call on any state change (autoUpdate toggle, renderer swap, destroy).
+   * The tick runs at `UPDATE_PRIORITY.LOW + 1`, one step above an application's render, which
+   * {@link ContainerSourceOptions#autoUpdate} explains.
    */
   private _configureAutoUpdate(): void {
     const shouldTick = this._autoUpdate && this._renderer !== null;
     if (shouldTick === this._isConnectedToTicker) return;
     if (shouldTick) {
-      // Run just before the application's render (UPDATE_PRIORITY.LOW), so the capture reflects this frame's
-      // container state and is uploaded before the scene that samples it draws.
       Ticker.shared.add(this._onTick, this, UPDATE_PRIORITY.LOW + 1);
     } else {
       Ticker.shared.remove(this._onTick, this);

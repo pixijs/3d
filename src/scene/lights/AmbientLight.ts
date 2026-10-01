@@ -6,8 +6,7 @@ import type { LightOptions } from './Light';
 /**
  * Constructor options for {@link AmbientLight}
  *
- * Same shape as {@link LightOptions}, minus the shadow fields — ambient light
- * never casts shadows.
+ * The {@link LightOptions} without the shadow fields: ambient light casts no shadows.
  * @example
  * ```ts
  * const fill = new AmbientLight({ color: 0xffffff, intensity: 0.3, label: 'fill' });
@@ -17,20 +16,21 @@ import type { LightOptions } from './Light';
  */
 export interface AmbientLightOptions extends Omit<LightOptions, 'castShadow' | 'shadow'> {
   /**
-   * Linear intensity multiplier applied to {@link LightOptions.color | color}
+   * Brightness; see {@link Light.intensity}
    * @default 0.5
+   * @example
+   * ```ts
+   * const fill = new AmbientLight({ intensity: 0.2 });
+   * ```
    */
   intensity?: number;
 }
 
 /**
- * Uniform fill light that adds a constant per-channel radiance to every fragment
+ * Light that reaches every surface equally, whatever its position or direction
  *
- * The contribution is independent of surface normal and position. Cheap enough
- * that you almost always want one: it lifts shadowed areas off pure black
- * without per-pixel lighting cost.
- *
- * Never casts shadows; `castShadow` is ignored.
+ * It lifts shadowed areas off pure black for almost no cost. Several ambient lights add up.
+ * It casts no shadows; `castShadow` is ignored.
  * @example
  * ```ts
  * import { AmbientLight } from '@pixi/3d';
@@ -46,28 +46,34 @@ export class AmbientLight extends Light {
   /**
    * Default {@link AmbientLightOptions} merged under every constructor call
    *
-   * `new AmbientLight(opts)` resolves as
-   * `{ ...AmbientLight.defaultOptions, ...definedProps(opts) }`. Mutate to
-   * change the defaults process-wide.
+   * `new AmbientLight(opts)` resolves as `{ ...AmbientLight.defaultOptions, ...opts }`, ignoring
+   * options set to `undefined`. Mutate to change the defaults process-wide.
+   * @example
+   * ```ts
+   * AmbientLight.defaultOptions.intensity = 0.2;
+   * ```
    */
   public static defaultOptions: AmbientLightOptions = {
     color: 0xffffff,
     intensity: 0.5,
   };
 
-  /** Discriminator for the ambient light kind */
+  /** Always `'ambient'` */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
   public readonly type = 'ambient';
 
   /**
-   * Creates a new `AmbientLight`. Add it to a {@link View3D} by parenting it
-   * under {@link View3D.root | view.root}.
-   * @param options - construction options; see {@link AmbientLightOptions}.
+   * Creates a new `AmbientLight`; add it under {@link View3D.root | view.root} to light the view
+   * @param options - Construction options; see {@link AmbientLightOptions}.
    */
   constructor(options: AmbientLightOptions = {}) {
     super({ label: 'AmbientLight', ...AmbientLight.defaultOptions, ...definedProps(options) });
   }
 
-  /** Ambient light has no direction to cast along */
+  /**
+   * Always `false`: ambient light has no direction to cast along
+   * @advanced
+   */
   override get canCastShadow(): boolean {
     return false;
   }

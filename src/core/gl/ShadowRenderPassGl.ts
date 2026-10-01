@@ -12,6 +12,7 @@ import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/s
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import { instanceFetchBitGl } from '../shader/bits/instanceFetchBitGl';
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
+import { UINT_EMPTY } from '../textures/DefaultTextures';
 import { shadowGlobalBitGl } from './shader/shadowGlobalBitGl';
 import type { View3DPipeGl } from './View3DPipeGl';
 
@@ -22,16 +23,16 @@ import type { View3DPipeGl } from './View3DPipeGl';
 interface ShadowRenderPassGlOptions {
   /** The owning WebGL renderer */
   renderer: WebGLRenderer;
-  /**
-   * Graph-imported handle for the shadow-map array texture
-   *
-   * The pass owns the underlying `TextureSource` (lazy-allocated via `this.renderTarget`,
-   * reallocated on quality changes); the handle is the graph's tracking reference, registered in
-   * `createDefaultGraph3D` via `graph.importDepth(() => pass.renderTarget.depthStencilTexture)`.
-   */
+  /** The graph's handle for the shadow-map array; `ShadowRenderPassBase#shadowMapHandle` describes it */
   shadowMapHandle: DepthHandle;
 }
 
+/**
+ * The WebGL shadow-map vertex template
+ *
+ * Declares `normal` and `tangent` although depth needs neither, because the skinning and morph
+ * bits write them.
+ */
 const shadowGlVertexTemplate = `#version 300 es
 
 {{header}}
@@ -39,10 +40,9 @@ const shadowGlVertexTemplate = `#version 300 es
 void main() {
   mat4 modelMatrix;
 
-  // Mutable locals -- skinning bit modifies these before world transform
   vec4 position;
-  vec3 normal = vec3(0.0);   // dummy, required by skinning bit
-  vec3 tangent = vec3(0.0);  // dummy, required by skinning bit
+  vec3 normal = vec3(0.0);
+  vec3 tangent = vec3(0.0);
 
   {{input}}
 
@@ -73,10 +73,14 @@ const shadowTemplateGl: ShaderBitTemplate = {
  * Renders shadows for 3D scenes in WebGL, generating shadow maps from light perspectives
  *
  * Uses a cached DrawCommandList per batch: only rebuilds when that shadow
- * pass's draw version changes. On clean frames, redraws the cached commands.
+ * pass's draw version or instance count changes. On clean frames, redraws the cached commands.
  *
- * State is cached in DrawList so multiple View3D instances don't corrupt
- * each other's persistent buffers or command lists.
+ * Draw state lives in each batch's DrawList, so View3D instances never share an index texture
+ * or command list.
+ *
+ * The shadow shader's `global` group is the lighter `shadowGlobalBitGl`, so its descriptor turns
+ * off the `globalBitGl` that `compileShader` would add, whose bindings would clash with it. The
+ * camera group is the standard one and still comes from `compileShader`.
  * @internal
  */
 export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, ShadowData> {
@@ -88,7 +92,12 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
    */
   private readonly _shadowUniformGroup: UniformGroup;
 
-  /** Single bind group wrapping `_shadowUniformGroup` (slot 0) + the bone-pit texture (slot 1) */
+  /**
+   * Single bind group for every shadow draw, its slots in `shadowGlobalBitGl`'s order: 0 the
+   * uniform group, 1 the bone pit, 2 the morph store, 3 the geometry data store, then
+   * `instanceFetchBitGl`'s own textures, 4 the casting batch's mesh store and 5 this pass's
+   * instance index. The cascade's matrices come from its camera group at group 1.
+   */
   private readonly _shadowBindGroup: BindGroup;
 
   constructor(options: ShadowRenderPassGlOptions) {
@@ -108,9 +117,6 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
         shaderDescriptor: {
           bitsGl: [shadowGlobalBitGl, instanceFetchBitGl],
           template: shadowTemplateGl,
-          // Supplies its own lighter `global` group; the full globalBitGl would
-          // collide with it (mismatched bindings → crash). The camera group is
-          // the standard one, so it still comes from the compiler.
           includeGlobal: false,
         },
         state: shadowState,
@@ -124,31 +130,40 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
     uniformGroup.ubo = false;
 
     this._shadowUniformGroup = uniformGroup;
-    // Slots: 0 uniforms, 1 bone-pit, 2 morph store, 3 geometry facts (shadow-morph),
-    // 4 the casting batch's mesh store, 5 this pass's instance index. The last two
-    // are `instanceFetchBitGl`'s own bindings, so they follow the shadow globals.
-    // The cascade's matrices are not here — they come from its camera group at group 1.
     this._shadowBindGroup = new BindGroup({
       0: uniformGroup,
       1: Texture.EMPTY.source,
       2: Texture.EMPTY.source,
-      3: Texture.EMPTY.source,
-      4: Texture.EMPTY.source,
-      5: Texture.EMPTY.source,
+      3: UINT_EMPTY.source,
+      4: UINT_EMPTY.source,
+      5: UINT_EMPTY.source,
     });
   }
 
-  /** WebGL keeps makeOrthographic's native [-1,1] depth range */
+  /** WebGL keeps the native [-1, 1] depth range, which `shadowBitGl` maps to [0, 1] when it samples */
   protected override readonly _applyZRangeFix = false;
 
   /**
    * Renders shadows in two sweeps, mirroring the WebGPU pass
    *
-   * Sweep 1 rebuilds each batch's cached DrawCommandList on structural change (draw version /
-   * count) and resolves its cull producer; sweep 2 walks the casting lights — each rendering
-   * cascade culls every batch against its own volume and draws into its layer, compacting
-   * survivors inside the draw's upload. Per-view survivor sets need no persistent state here: GL
-   * executes immediately, so each upload is consumed before the next view overwrites it.
+   * Sweep 1 rebuilds each batch's cached DrawCommandList on structural change (draw version or
+   * count) and resolves its cull producer; `'off'` draws the full index, and `'cpu'` compacts in
+   * the batcher's draw. It builds only while some light casts with a claimed shadow slot,
+   * deliberately looser than `castsShadowThisFrame`: a hidden light still keeps its lists built,
+   * since visibility doesn't dirty the pass and a list skipped while hidden would replay stale
+   * when the light shows again. With no caster, nothing builds and the lists aren't marked
+   * current, so a batch isn't stranded with an empty command list once a caster appears.
+   *
+   * Sweep 2 walks the casting lights. Each cascade that needs rendering this frame clears its own
+   * layer of the shadow map, culls every batch against its own volume and draws into the layer; a
+   * cascade the light's update rate skips keeps its layer and frozen matrix. GL runs each draw
+   * immediately, so a cascade's compacted index is consumed before the next one overwrites it,
+   * and the pass needs no per-light records as WebGPU does.
+   *
+   * The bone pit and the morph and geometry stores are bound once per frame, and the batch's world
+   * matrix, mesh store and the pass's index texture per batch, which also picks up a texture that
+   * growth replaced. The cascade's layer is bound, not pushed, so `session.activeTarget` is reset
+   * afterwards and the next pass binds the default target again.
    * @param session - The frame's render session
    */
   public render(session: RenderSession): void {
@@ -164,28 +179,14 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
 
     const batcher = this.pipe.renderer.material3d.batcher;
 
-    // Single shared bind group + uniform group for every shadow draw — WebGL uploads uniforms
-    // per draw, so we swap the batch matrix between draws instead of holding a group per light.
-    // The cascade's own matrices come from its camera group at group 1. The bone-pit only needs
-    // (re)binding once per frame.
     const bindGroup = this._shadowBindGroup;
     const uniformGroup = this._shadowUniformGroup;
     bindGroup.setResource(bonePitSource, 1);
-    // Shadow-morph data textures, re-bound each frame so a store reallocation from
-    // arena growth is captured (same as the forward pipe re-binds slots 8–9).
     bindGroup.setResource(this.pipe._morphStoreBuffer.texture.source, 2);
     bindGroup.setResource(this.pipe.geometryDataStoreBuffer.texture.source, 3);
 
-    const cullOn = view3d.cull !== 'off';
-
-    // Deliberately looser than `castsShadowThisFrame`: no `worldVisible`, so a hidden light still
-    // keeps the command list built. Gating the build on a per-frame visibility flag would leave a
-    // stale list to replay when the light reshows (visibility doesn't dirty the pass).
     const hasCaster = lights.some((l) => l.castShadow && l._gpuShadowData && l._shadowDataIndex >= 0);
 
-    // Sweep 1 — per batch, light-independent: rebuild the command list on structural change and
-    // resolve the cull producer (WebGL has no compute → 'gpu' degrades to 'cpu'; 'auto' still gates
-    // by count). 'off' keeps the full upload; the batcher's draw compacts for 'cpu'.
     for (const batch of view3d._meshBatches) {
       if (!batch.renderData._worldVisible) continue;
       const list = batch.drawLists[this.bit];
@@ -196,9 +197,6 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
 
       const needsRebuild = list.isDrawStale(renderables.count);
 
-      // The watermarks are only claimed alongside an actual build: with no caster
-      // there is nothing to build, and marking the cache current would strand this batch with an
-      // empty command list once a caster appears.
       if (hasCaster && needsRebuild) {
         list.claimDrawBuilt(renderables.count);
         renderables.sort();
@@ -212,13 +210,9 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
         });
       }
 
-      list._cullProducer = cullOn ? resolveCullProducer(view3d.cull, false, renderables.count) : 'off';
+      list._cullProducer = resolveCullProducer(batch.cull, false, renderables.count);
     }
 
-    // Sweep 2 — per casting light: cull every batch against each rendering cascade's own volume and
-    // draw into its layer. Immediate mode is what keeps this stateless (no WebGPU-style per-light
-    // records): the compacting upload runs inside each draw, right before the GL calls that consume
-    // it, so one cascade's survivors never need to outlive its own draws.
     for (const light of lights) {
       if (!castsShadowThisFrame(light)) continue;
 
@@ -226,15 +220,10 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
 
       for (let c = 0; c < cascadeCount; c++) {
         const slot = this._cascadeSlot(light, c);
-        // A temporal update rate / manual mode skipped this cascade this frame —
-        // its existing layer and frozen matrix stay valid (and it culls nothing).
         if (!slot.needsRender) continue;
 
-        const frustum = cullOn ? slot.cameraData.frustum : null;
+        const frustum = slot.cameraData.frustum;
 
-        // bind (not push) the cascade's shadow-map layer: the graph re-establishes the default
-        // target after this self-managing pass. One bind + clear per layer, then every batch
-        // draws into it.
         this.pipe.renderer.renderTarget.bind({
           target: this.renderTarget,
           clear: true,
@@ -246,13 +235,9 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
           const list = batch.drawLists[this.bit];
           if (!list || list.view.count === 0) continue;
 
-          // The shared uniform group re-uploads per draw — uBatchWorldMatrix varies per batch.
           uniformGroup.uniforms.uBatchWorldMatrix = batch.renderData.worldTransform;
           uniformGroup.update();
 
-          // Each batch owns its mesh store and each pass its index list, so both are
-          // re-bound per batch. Re-reading `.texture.source` also picks up a source
-          // swapped out by store growth.
           bindGroup.setResource(batch.storeBuffer.texture.source, 4);
           if (list.glData.indexTexture) bindGroup.setResource(list.glData.indexTexture.texture.source, 5);
 
@@ -260,26 +245,32 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
         }
       }
 
-      // The light's cascades that needed rendering this frame are now drawn, so its layers belong
-      // to the live map generation and its one-shot invalidation is satisfied.
       this._completeShadowUpdate(light);
     }
 
     this.pipe.renderer.colorMask.setMask(0b1111);
 
-    // Shadow's per-light binds leave the live binding on the shadow map. Reset
-    // activeTarget so the next default-target pass re-establishes the borrowed
-    // surface — the invariant CopyOpaque follows.
     session.activeTarget = null;
   }
 
   /**
-   * Releases the single pass-owned shadow bind group (the shared batch-world uniform group in
-   * slot 0 + the bone-pit texture in slot 1)
+   * Drops the texture slots along with the shadow map: the textures they point at belong to the
+   * View, the pipe and the batches, and the pipe frees its own when its renderer dies while this
+   * View lives on
+   */
+  public override unload(): void {
+    for (let i = 1; i <= 5; i++) {
+      this._shadowBindGroup.setResource(i < 3 ? Texture.EMPTY.source : UINT_EMPTY.source, i);
+    }
+    super.unload();
+  }
+
+  /**
+   * Releases the pass-owned shadow bind group
    *
-   * `super.destroy()` frees the inherited shadow-map render target. The wrapped
-   * `_shadowUniformGroup` is renderer-managed (UniformGroups are never destroyed), and the
-   * bone-pit source is owned by View3D.
+   * `super.destroy()` frees the inherited shadow-map render target. pixi's `UniformGroup` has no
+   * `destroy`, so `_shadowUniformGroup` is left to garbage collection, and the textures the bind
+   * group points at belong to the View, the pipe and the batches.
    */
   public override destroy(): void {
     if (this._destroyed) return;

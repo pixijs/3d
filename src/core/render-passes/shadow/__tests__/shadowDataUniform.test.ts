@@ -71,16 +71,15 @@ for (const preference of RENDERERS) {
       app.stage.addChild(view);
       app.render();
 
-      const uShadowData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uShadowData as Float32Array;
+      const uShadowData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uShadowData;
 
-      // Same array, not a copy: the shadow pass writing a slot is what writes the uniform.
-      expect(uShadowData).toBe(view._shadowDataList.data);
+      expect(uShadowData, 'the same array, so writing a slot writes the uniform').toBe(view._shadowDataList.data);
       expect(view._shadowDataList.count).toBe(1);
       expect(sun._shadowDataIndex).toBe(0);
       expectFittedOrthoSlot(uShadowData, 0);
     });
 
-    it('gives each further caster the next slot, one stride along the uniform', async () => {
+    it('gives each further caster the next slot, a full stride along the uniform rather than over the first slot or its params', async () => {
       app = await getApp({ id: `shadow-data-stride-${preference}`, appOptions: { preference } });
 
       const view = new View3D({ width: 64, height: 64 });
@@ -97,18 +96,18 @@ for (const preference of RENDERERS) {
       app.stage.addChild(view);
       app.render();
 
-      const uShadowData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uShadowData as Float32Array;
+      const uShadowData = view._gpuData[app.renderer.uid].globalUniformGroup.uniforms.uShadowData;
 
       expect(first._shadowDataIndex).toBe(0);
       expect(second._shadowDataIndex).toBe(1);
 
-      // Both slots hold a real matrix, so the second was written a full stride along rather than
-      // over the first or into the params the shader reads at the slot's tail.
       expectFittedOrthoSlot(uShadowData, 0);
       expectFittedOrthoSlot(uShadowData, 1);
 
-      // The two suns look from opposite sides, so slot 1 cannot be a copy of slot 0.
-      expect(slotMatrix(uShadowData, 1)).not.toEqual(slotMatrix(uShadowData, 0));
+      expect(
+        slotMatrix(uShadowData, 1),
+        'the suns look from opposite sides, so slot 1 is no copy of slot 0',
+      ).not.toEqual(slotMatrix(uShadowData, 0));
     });
   });
 }

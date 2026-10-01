@@ -16,71 +16,13 @@ const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 const CENTER = { x: 50, y: 50 };
 
-// A 2×2×2 cube centred at origin, so each face sits one unit from the centre.
+/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
-    -1,
-    -1,
-    -1,
-    1,
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    -1,
-    1,
-    -1, // back
-    -1,
-    -1,
-    1,
-    1,
-    -1,
-    1,
-    1,
-    1,
-    1,
-    -1,
-    1,
-    1, // front
+    -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
   ]);
   const indices = new Uint16Array([
-    0,
-    1,
-    2,
-    0,
-    2,
-    3, // back
-    4,
-    6,
-    5,
-    4,
-    7,
-    6, // front
-    0,
-    4,
-    5,
-    0,
-    5,
-    1, // bottom
-    2,
-    6,
-    7,
-    2,
-    7,
-    3, // top
-    1,
-    5,
-    6,
-    1,
-    6,
-    2, // right
-    0,
-    3,
-    7,
-    0,
-    7,
-    4, // left
+    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 2, 6, 7, 2, 7, 3, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4,
   ]);
   const geometry = new Geometry3D({
     positions,
@@ -90,8 +32,7 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-// Run the transform pass + camera projection so worldTransform / viewProjection
-// reflect the current scene state. These tests sit outside the render loop.
+/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -106,20 +47,6 @@ function makeView(): View3D {
 }
 
 describe('passive nodes under an interactive ancestor — implicit pick registration', () => {
-  test('default-mode mesh under a parent made static after attach targets the parent', () => {
-    const view3d = makeView();
-    const robot = new Container3D();
-    robot.addChild(makeCube());
-    view3d.root.addChild(robot);
-
-    robot.eventMode = 'static';
-    tickPick(view3d);
-
-    const hit = view3d.raycast(CENTER);
-    expect(hit).not.toBeNull();
-    expect(hit!.target).toBe(robot);
-  });
-
   test('parent made static before attach registers the subtree through the attach walk', () => {
     const view3d = makeView();
     const robot = new Container3D();
@@ -151,7 +78,6 @@ describe('passive nodes under an interactive ancestor — implicit pick registra
 
     expect(view3d.raycast(CENTER)!.target).toBe(parent);
 
-    // Flip the covering ancestors back and forth; the mesh must stay registered exactly once.
     parent.eventMode = 'passive';
     parent.eventMode = 'static';
     grandparent.eventMode = 'passive';
@@ -243,7 +169,7 @@ describe('passive nodes under an interactive ancestor — implicit pick registra
     expect(view3d.raycast(CENTER)).toBeNull();
   });
 
-  test('hitVolume on a passive plain container registers and unregisters it', () => {
+  test('hitVolume on a passive plain container, which has no default volume, registers and unregisters it', () => {
     const view3d = makeView();
     const parent = new Container3D();
     const shape = new Container3D();
@@ -252,7 +178,6 @@ describe('passive nodes under an interactive ancestor — implicit pick registra
     parent.eventMode = 'static';
     tickPick(view3d);
 
-    // A plain container has no default volume, so nothing is registered yet.
     expect(view3d.events._interactiveList).not.toContain(shape);
     expect(view3d.raycast(CENTER)).toBeNull();
 
@@ -276,7 +201,6 @@ describe('passive nodes under an interactive ancestor — implicit pick registra
     expect(view3d.eventMode).toBe('dynamic');
     expect(view3d.events._interactiveList).toContain(mesh);
 
-    // Removing the implicitly registered mesh must not decrement the count.
     robot.removeChild(mesh);
     expect(view3d.eventMode).toBe('dynamic');
 

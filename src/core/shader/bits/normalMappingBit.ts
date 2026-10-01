@@ -1,52 +1,34 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Per-pixel normal mapping using a normal map texture and a derivative-based TBN
+ * Bends `normal` by the material's normal map, with a tangent frame built from screen-space
+ * derivatives
  *
- * Uses screen-space derivatives to calculate tangent/bitangent (no tangent
- * attributes needed).
+ * The renderer adds it when the material's `normal` slot holds a real map and the mesh has UVs but
+ * no `aTangent`; with tangents it adds `tangentNormalMappingBit` instead. `calculateTBN` is
+ * Schüler's cotangent frame ("Followup: Normal Mapping Without Precomputed Tangents", 2013): it
+ * works out the tangent and bitangent from the derivatives of the world position and the UV, so the
+ * mesh needs no tangent attribute.
  *
- * Without this bit: Uses interpolated vertex normals (flat/smooth shading)
- * With this bit: Per-pixel normals from normal map (detailed surface)
+ * The map's normal is scaled as glTF's `normalTexture.scale` asks: `xy` times the material's
+ * `normalScale`, then normalized. The bit declares no `material` fields of its own. It is chosen
+ * per mesh, while a material's struct is fixed at construction, so `normalScale` and the `normal`
+ * texture come from the material bit (`pbrMaterialBit` or `phongMaterialBit`).
  *
- * Requires:
- *   - normal: vec3 - Must be initialized to vertex normal before this runs
- *   - input.vPosition / vPosition - World position
- *   - input.vUV / vUV - Texture coordinates
- *   - uNormalTexture - Normal map texture (in local bindings)
- *
- * Outputs:
- *   - normal: vec3 - Updated with normal map detail
- *
- * ## WGSL window-Y compensation (the `-dpdy(...)` in calculateTBN)
- *
- * WGSL's window-Y points DOWN (framebuffer convention) while GLSL's window-Y
- * points UP (legacy OpenGL). So `dpdy(p) == -dFdy(p)` for the same fragment.
- * Without compensation this negates BOTH tangent and bitangent in the derived
- * TBN (each is built from terms that all flip together with `dp2` / `duv2`),
- * which negates the in-plane perturbation — the bumps invert: convex ridges
- * shade like concave dents and vice versa.
- *
- * We negate `dpdy()` in the WGSL `calculateTBN` so the WGSL TBN matches the
- * GLSL TBN bit-for-bit. Negating only `dpdy()` (not the cross-product result)
- * keeps the math closest in form to the GLSL version, so a future reader can
- * diff the two backends. Pinned by `tests/normalMappingBit.test.ts`.
- *
- * Note: this comment lives at the TS level (not inside the WGSL string) so
- * the explanation doesn't ship to every user's GPU driver as shader source.
+ * WGSL's `calculateTBN` negates `dpdy`. Window y points down in WebGPU and up in WebGL, so
+ * `dpdy(p)` is `-dFdy(p)` for the same fragment. Left alone, that flips both the tangent and the
+ * bitangent, which turns the bumps inside out: ridges shade like dents. Negating `dpdy` makes the
+ * WGSL frame match the GLSL one. `normalMappingBit.test.ts` holds the two in step.
  * @internal
  */
 export const normalMappingBit: ShaderBit = {
   name: 'normalMapping',
 
-  // No bindings: `normalScale` lives in pbrMaterialBit's material struct —
-  // this bit is selected per-mesh, and per-mesh bits must not reshape the
-  // per-material struct.
   gpu: {
     header: `
 fn calculateTBN(surfaceNormal: vec3<f32>, position: vec3<f32>, texCoord: vec2<f32>) -> mat3x3<f32> {
   let dp1 = dpdx(position);
-  let dp2 = -dpdy(position); // WGSL window-Y is flipped vs GLSL; see file header
+  let dp2 = -dpdy(position);
   let duv1 = dpdx(texCoord);
   let duv2 = -dpdy(texCoord);
 
@@ -61,8 +43,6 @@ fn calculateTBN(surfaceNormal: vec3<f32>, position: vec3<f32>, texCoord: vec2<f3
 `,
     fragment: {
       material: `
-  // Normal mapping. material.normalScale defaults to 1 (no-op); broadcast
-  // across xy and renormalised by the final normalize().
   let normalMapSample = sampleNormal(input.vUV).rgb;
   var tangentNormal = normalMapSample * 2.0 - 1.0;
   tangentNormal = vec3<f32>(tangentNormal.xy * material.normalScale, tangentNormal.z);
@@ -92,7 +72,6 @@ mat3 calculateTBN(highp vec3 surfaceNormal, highp vec3 position, highp vec2 texC
 `,
       material: `
   {
-  // Normal mapping — see WGSL counterpart for the normalScale rationale.
   vec3 normalMapSample = sampleNormal(vUV).rgb;
   vec3 tangentNormal = normalMapSample * 2.0 - 1.0;
   tangentNormal.xy *= material.normalScale;

@@ -15,6 +15,13 @@ export interface LoadedImages {
 
 /**
  * Loads every glTF image (external URI, data URI, or embedded bufferView) as a texture
+ *
+ * An embedded image loads through a blob URL, revoked as soon as the load settles, since the texture
+ * keeps the decoded image. The loader still caches the texture under that URL, so the URL stays the
+ * key that unloads it.
+ *
+ * If any image fails, the ones that loaded are unloaded before the error is rethrown: the caller
+ * never receives their cache keys, so nothing else could release them.
  * @param images - The glTF image entries to load
  * @param basePath - URL prefix for relative image URIs
  * @param json - Parsed glTF JSON, used to resolve embedded bufferViews
@@ -52,8 +59,6 @@ export async function loadImages(
           parser: 'texture',
         });
       } finally {
-        // The texture keeps the decoded image, so the blob URL has no further use. The loader still
-        // caches the texture under it, which is the key that unloads it.
         URL.revokeObjectURL(src);
       }
     }
@@ -63,8 +68,6 @@ export async function loadImages(
   const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
 
   if (failure) {
-    // The images that did load sit in the loader's cache under keys the caller never receives, so
-    // release them here. The loader has already dropped the failed one, so its key is a no-op.
     await loader.unload(urls);
     throw failure.reason;
   }

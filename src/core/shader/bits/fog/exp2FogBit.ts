@@ -1,17 +1,13 @@
 import type { ShaderBit } from '../../ShaderBit';
 
 /**
- * Exponential-squared distance fog
+ * Exponential-squared distance fog, `factor = 1 - exp(-(density * depth)²)`
  *
- *     factor = 1 - exp(-(density * depth)²)
+ * `depth` is the fragment's view-space depth and `density` is `uFogParams.z`. Squaring keeps the
+ * fog thinner than `exponentialFogBit`'s while `density * depth` is below 1 and thicker past it,
+ * so the camera's surroundings stay clear and the distance fades out.
  *
- * The squared term flattens out the near-camera contribution and
- * concentrates the falloff in the mid/far field — gives a more
- * "atmospheric" haze that doesn't desaturate fragments right in front
- * of the camera. Standard choice for outdoor / atmospheric scenes.
- *
- * Runs in linear radiance, before any tone-mapping bit — `uFogColor` arrives
- * already decoded and scaled by exposure.
+ * It runs after exposure and before tone mapping, as `linearFogBit` describes.
  * @internal
  */
 export const exp2FogBit: ShaderBit = {
@@ -29,7 +25,6 @@ export const exp2FogBit: ShaderBit = {
     },
     fragment: {
       end: /*wgsl*/ `
-  // uFogParams = (near, far, density); exp2 reads density.
   let fogD = global.uFogParams.z * input.vFogDepth;
   let fogFactor = 1.0 - exp(-fogD * fogD);
   finalColor = mix(finalColor, global.uFogColor, fogFactor);

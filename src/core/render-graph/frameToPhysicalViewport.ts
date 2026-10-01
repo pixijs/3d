@@ -29,8 +29,10 @@ function roundLikePixi(value: number): number {
  *
  * Shared by both callers below, which differ only in what they measure against: a whole render
  * target, or the content rect a camera's image is placed inside. The rect is scaled into
- * physical pixels, shifted so `origin` becomes zero, rounded, then trimmed to fit — a viewport
- * running past its bounds is clamped rather than dropped, and never shrinks below one pixel.
+ * physical pixels, shifted so `origin` becomes zero, rounded, then trimmed to fit. A rect that
+ * starts outside is pulled to the edge and loses the overhang, so what is left is the part that
+ * was inside. A viewport running past its bounds is clamped rather than dropped, and never
+ * shrinks below one pixel.
  * @param frame - The rect to place, in logical pixels.
  * @param scale - Logical pixels to physical pixels.
  * @param originX - Logical x that maps to the left edge of `bounds`.
@@ -54,8 +56,6 @@ function placeViewport(
   let w = roundLikePixi(frame.width * scale);
   let h = roundLikePixi(frame.height * scale);
 
-  // A negative corner means the rect starts outside: pull it to the edge and take the overhang
-  // off the size, so what is left is the part that was inside all along.
   if (x < 0) {
     w += x;
     x = 0;
@@ -84,14 +84,13 @@ function placeViewport(
  * Convert a logical-pixel rect to a physical-pixel viewport for `target`, matching the
  * rounding/clamping that Pixi's `RenderTargetSystem.bind()` performs when given a `frame`
  *
- * We replicate the math here so we can call `setViewport` directly — going through `bind()`
- * would close and reopen the WebGPU pass encoder.
+ * The math is repeated here so the graph can narrow the viewport with the pipe's `setViewport`
+ * instead of binding again, which on WebGPU would end the render pass and begin a new one.
  *
- * WebGL's framebuffer has a bottom-left origin, so when rendering to the
- * root the y must be flipped relative to the texture height. WebGPU and
- * WebGL FBOs both use top-left origin, no flip. Pixi's GL adaptor does the
- * same flip inside `startRenderPass`; `setViewport` does not, so we apply
- * it here.
+ * Only the WebGL canvas needs a y flip: `gl.viewport` measures y up from the bottom, and pixi
+ * draws into every other WebGL framebuffer upside down, which already lines y up. Pixi's GL
+ * adaptor applies that flip inside `startRenderPass`, but `setViewport` bypasses it, so the
+ * result carries it.
  * @param frame - The logical-pixel rect to convert.
  * @param target - The render target the viewport applies to.
  * @param renderer - The active renderer (drives the WebGL root Y-flip).

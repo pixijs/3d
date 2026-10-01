@@ -1,12 +1,11 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Modulates the Blinn-Phong specular strength by a grayscale texture
+ * Scales `specularStrength` by the red channel of the material's specular map
  *
- * Read from the red channel (the de-facto convention for standalone specular
- * maps). Added only when a specular texture is supplied — it overwrites the
- * `specularStrength` default (1.0) that `phongMaterialBit` declares, so
- * it must sit after that bit in the descriptor.
+ * Red is the usual channel for a standalone specular map. Present only on a material built with
+ * `specularTexture`. It multiplies the value `phongMaterialBit` declares, so it must come after
+ * that bit.
  * @internal
  */
 export const phongSpecularTextureBit: ShaderBit = {

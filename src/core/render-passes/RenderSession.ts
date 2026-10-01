@@ -16,30 +16,31 @@ export type ReadonlyRect = Readonly<Pick<Rectangle, 'x' | 'y' | 'width' | 'heigh
 /**
  * All data render passes need for a single frame
  *
- * Created fresh each frame by `View3DPipe.execute()`. The pipeline loop populates
- * {@link RenderSession#activeTarget} as it transitions between render targets.
+ * The view's pipe builds a new one each frame, and the graph keeps
+ * {@link RenderSession#activeTarget} up to date as it moves between render targets.
  *
  * ## Frames and viewports
  *
- * Pixi's words: a *frame* is a rect in logical pixels, what `bind` is handed; a *viewport* is
- * the physical-pixel rect that frame resolves to. A View3D's placement flows through these
- * plus one shader lane:
+ * These are pixi's words: a *frame* is a rect in logical pixels, which is what a render-target
+ * bind takes, and a *viewport* is the physical-pixel rect it resolves to, the frame times the
+ * resolution. A view's placement on screen runs through these rects and one shader uniform:
  *
- * - the view camera's `CameraData.frame` — the View's on-screen rect, clipped to the screen.
- *   What the screen bind is handed.
- * - {@link RenderSession#viewport} — that frame in physical pixels, in the live GPU
- *   viewport convention (WebGL root Y-flip baked in): where the scene lands on
- *   the *screen*. A fact about the view. It does not move for a camera pass.
- * - {@link RenderSession#activeViewport} — the live GPU rect. The bind, or a camera
- *   pass's frame within it. Copies, depth clear, and pass texel size read this.
- * - the camera group's `uViewportUVScale` — `viewport / pooledTextureSize`: maps `[0,1]`
- *   viewport UV onto a transient's sub-rect (`(1,1)` when the texture matches the viewport).
- *   Asked of the pool via {@link RenderGraph#setViewportUvScale}.
+ * - The view camera's frame is the view's rect on screen, clipped to the screen. The screen
+ *   bind takes it.
+ * - {@link RenderSession#viewport} is that frame in physical pixels, in the GPU's own viewport
+ *   convention, with WebGL's flip of the root target already applied. It says where the scene
+ *   lands on the screen, and stays put while a camera pass draws.
+ * - {@link RenderSession#activeViewport} is the live GPU rect: the bind's, or a camera pass's
+ *   rect inside it. The depth clear and the size of one pass texel read it.
+ * - The camera uniform `uViewportUVScale` is the viewport's size over the size of the pooled
+ *   texture it sits in. It maps `[0, 1]` viewport UV onto the part of the texture the scene fills,
+ *   and is `(1, 1)` when the texture matches the viewport. {@link RenderGraph#setViewportUvScale}
+ *   asks the pool for it.
  *
- * Direct mode: scene passes bind the screen at the view camera's frame; copies and depth
- * clear read `activeViewport`. Composite mode: scene passes bind a pooled transient
- * at its `Texture.frame`; `OutputPass` blits it back onto the screen rect, sampling
- * through `uViewportUVScale`.
+ * In direct mode the scene passes bind the screen at the view camera's frame, and the depth clear
+ * reads `activeViewport`. In composite mode they bind a pooled texture at its `Texture.frame`, and
+ * the output blit, or the last post effect, draws it back onto the view's rect on screen through
+ * `uViewportUVScale`.
  * @category rendering
  * @advanced
  */
@@ -50,51 +51,48 @@ export interface RenderSession {
   /**
    * The view camera's frame resolved to a physical-pixel viewport
    *
-   * Same lower-left-origin convention as the live `gl.viewport` / WebGPU viewport; the
-   * WebGL root Y-flip is baked in. Written when the scene update builds the view camera —
-   * hence a mutable `Rectangle`. A fact about the view, not the live bind: it does not move
-   * for a camera pass.
+   * In the convention the GPU viewport uses, with WebGL's flip of the root target applied. The
+   * scene update writes it when it builds the view camera, so it is a mutable `Rectangle`. It
+   * describes the view, not the live bind, so it doesn't move while a camera pass draws.
    */
   viewport: Rectangle;
 
   /** All lights collected from scene traversal */
   lights: Light[];
 
-  /** The render target that was active when the pipeline started (respects filters) */
+  /** The render target that was bound when the view started drawing, such as a filter's input */
   defaultTarget: RenderTarget;
 
   /**
-   * The target the pipeline loop has established as the live open pass (null = none /
-   * needs re-establishing)
+   * The target the graph last bound and left open, or `null` when the next pass has to bind again
    *
-   * Self-managing passes that close or divert the live pass (CopyOpaque, Shadow) null
-   * it so the next default-target pass rebinds.
+   * Whatever closes or moves the live GPU pass (a copy, the shadow pass, mipmap generation) sets
+   * it to `null`, so the next pass binds its target again.
    */
   activeTarget: RenderTarget | null;
 
   /**
    * Live GPU rect of {@link RenderSession#activeTarget}, in physical pixels
    *
-   * The rect of the current bind, or a camera pass's frame within it for the duration of
-   * that `render`. Copies, depth clear, and pass texel size read this. Typed
-   * {@link ReadonlyRect} so shared state can't be mutated through it.
+   * The rect of the current bind, or a camera pass's rect inside it while that pass renders. The
+   * depth clear and the size of one pass texel read it. It is a {@link ReadonlyRect} because it can
+   * be the graph's own storage.
    */
   activeViewport: ReadonlyRect;
 
   /**
-   * True until this view's depth has been reset this frame
+   * `true` until this view's depth has been reset this frame
    *
-   * Initialised `true` by the pipe; spent (set `false`) by the first thing that clears
-   * the scene depth — the scene-target bind's load-op clear in composite mode, else
-   * DepthClearPass's manual clear. DepthClearPass no-ops once spent, so the reset
-   * happens exactly once per view however the graph provides it.
+   * The pipe starts it `true`, and the first thing that clears the scene depth sets it `false`:
+   * the clear on binding the scene target in composite mode, or else the depth clear pass. That
+   * pass does nothing once it is `false`, so the view's depth is reset exactly once a frame.
    */
   needsDepthClear: boolean;
 
   /** The backend-specific global bind group for this View3D */
   globalBindGroup: BindGroup;
 
-  /** The backend-specific global uniform group for this View3D */
+  /** The global uniform group for this View3D; only WebGL sets it */
   globalUniformGroup?: UniformGroup;
 
   /** The renderer driving this frame (WebGPURenderer or WebGLRenderer) */

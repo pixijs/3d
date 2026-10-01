@@ -1,4 +1,4 @@
-import { getApp, isCI } from '@test-utils';
+import { expectCleanRender, getApp, isCI } from '@test-utils';
 import type { Application, RenderTarget, Renderer, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -80,19 +80,6 @@ function pixels(app: Application<Renderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Renders one frame, returning the WebGPU validation error it raised (always `null` on WebGL). */
-async function renderCatchingValidationErrors(app: Application<Renderer>): Promise<GPUError | null> {
-  const device = 'gpu' in app.renderer ? (app.renderer as WebGPURenderer).gpu.device : null;
-  if (!device) {
-    app.render();
-    return null;
-  }
-
-  device.pushErrorScope('validation');
-  app.render();
-  return device.popErrorScope();
-}
-
 /** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
@@ -104,11 +91,8 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-// The shadow map is the largest allocation a view owns (64 MB at the default tier), so a view must
-// be able to give it back through `unload` and take it again without a crash or a changed picture.
-// CI's GPU adapters are unreliable, so — like the scene suite — these run locally.
 for (const preference of ['webgpu', 'webgl'] as const) {
-  describe.skipIf(isCI)(`shadow target lifecycle (${preference})`, () => {
+  describe.skipIf(isCI)(`shadow map unload and re-creation, with no crash or changed picture (${preference})`, () => {
     async function withApp(id: string, run: (app: Application<Renderer>) => void): Promise<void> {
       const app = await getApp<Renderer>({
         id: `${id}-${preference}`,
@@ -148,13 +132,14 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(pass.targetVersion).toBe(version + 1);
         expect(boundShadowSource(app, view3d)).toBe(DEPTH_EMPTY.source);
 
-        // A fresh target holds no depth from the discarded one; the light's generation stamp is
-        // what makes it re-render its layers rather than trust the layers it "already drew".
         app.render();
         expect(pass._renderTarget).not.toBeNull();
 
         const after = pixels(app, view3d);
-        expect(differingPixels(before, after)).toBe(0);
+        expect(
+          differingPixels(before, after),
+          "the light's target version makes it redraw its layers into the fresh, empty map",
+        ).toBe(0);
       });
     });
 
@@ -181,13 +166,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const before = pass._renderTarget!;
         expect(before.depthStencilTexture!.width).toBe(512);
 
-        // The view field is only applied at the frame boundary (`beginFrame`), so nothing frees
-        // the map mid-frame — it stays bound and baked into recorded bundles until then.
         view3d.shadowQuality = 'high';
-        expect(pass._renderTarget).toBe(before);
+        expect(pass._renderTarget, 'nothing frees the map mid-frame, while bundles still bake it').toBe(before);
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
 
         expect(pass._renderTarget).not.toBe(before);
         expect(pass._renderTarget!.depthStencilTexture!.width).toBe(2048);
@@ -196,13 +178,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it('re-renders a throttled light’s layers after a release', async () => {
+    it('re-renders a manual light’s layers after a release, though its cadence would skip that frame', async () => {
       await withApp('shadow-unload-manual', (app) => {
         const { view3d, sun, pass } = buildScene(app);
 
-        // Manual mode is where the generation stamp earns its keep: nothing in the scene changes,
-        // so the cadence alone would let this light skip every frame after its first — including
-        // the frame that has to redraw its layers into a map it has never drawn into.
         sun.shadow.update = 'manual';
         sun.refreshShadows();
         app.render();
@@ -235,7 +214,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('renders through the placeholder after a release while the pass is culled', async () => {
+    it('renders through the comparison placeholder after a release while the pass is skipped and the shader still samples', async () => {
       const app = await getApp<Renderer>({
         id: `shadow-release-culled-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE },
@@ -245,9 +224,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const { view3d, sun, pass } = buildScene(app);
         app.render();
 
-        // Turning the caster off culls the shadow pass but keeps the forward program that
-        // declares the shadow sampler, so the release leaves that program sampling the
-        // DEPTH_EMPTY placeholder — which GL only accepts as a comparison texture.
         sun.castShadow = false;
         app.render();
         const before = pixels(app, view3d);
@@ -255,8 +231,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         pass.unload();
         expect(boundShadowSource(app, view3d)).toBe(DEPTH_EMPTY.source);
 
-        const error = await renderCatchingValidationErrors(app);
-        expect(error).toBe(null);
+        await expectCleanRender(app);
         expect(differingPixels(before, pixels(app, view3d))).toBe(0);
       } finally {
         app.destroy();
@@ -265,11 +240,8 @@ for (const preference of ['webgpu', 'webgl'] as const) {
   });
 }
 
-// A swapped map lives only in the global bind group, which every bundle bakes, so the frame that
-// installs it has to re-record each of them — and only once: the bind that installs the map is the
-// single invalidation, landing before any pass claims its bundle version for the frame.
 describe.skipIf(isCI)('shadow map swap (webgpu)', () => {
-  it('re-records every bundle exactly once per swap', async () => {
+  it('re-records every bundle, which bakes the global bind group, exactly once per swap', async () => {
     const app = await getApp<Renderer>({
       id: 'shadow-swap-bundles-webgpu',
       appOptions: { preference: 'webgpu', width: SIZE, height: SIZE },

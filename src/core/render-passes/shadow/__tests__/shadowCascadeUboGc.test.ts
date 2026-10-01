@@ -47,11 +47,8 @@ function buildScene(app: Application<WebGPURenderer>): { view3d: View3D; sun: Di
   return { view3d, sun };
 }
 
-// A cascade's camera group is baked into that cascade's recorded render bundle, which replays
-// without re-fetching it. A throttled cascade never re-uploads, so pixi's GC would see an idle
-// buffer and unload it out from under the live bundle. WebGPU-only: WebGL uploads per draw.
-describe.skipIf(isCI)('cascade uniform buffers (webgpu)', () => {
-  it('are realized eagerly and exempted from renderer garbage collection', async () => {
+describe.skipIf(isCI)('cascade uniform buffers, which recorded WebGPU bundles replay without fetching', () => {
+  it('are realized eagerly and exempted from renderer garbage collection, since a throttled cascade never re-uploads', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'shadow-cascade-ubo-gc',
       appOptions: { preference: 'webgpu', width: SIZE, height: SIZE },
@@ -67,10 +64,11 @@ describe.skipIf(isCI)('cascade uniform buffers (webgpu)', () => {
       const buffers = cascades.map((cascade) => cascade.cameraData.uniformGroup.buffer!);
       expect(buffers.map((buffer) => buffer.autoGarbageCollect)).toEqual(buffers.map(() => false));
 
-      // Exempt means nothing else will ever collect them, so detaching the light has to free them
-      // itself — otherwise attach/detach churn leaks one uniform buffer per cascade per cycle.
       view3d.root.removeChild(sun);
-      expect(buffers.map((buffer) => buffer.destroyed)).toEqual(buffers.map(() => true));
+      expect(
+        buffers.map((buffer) => buffer.destroyed),
+        'nothing else collects an exempt buffer, so detaching the light frees it',
+      ).toEqual(buffers.map(() => true));
     } finally {
       app.destroy();
     }

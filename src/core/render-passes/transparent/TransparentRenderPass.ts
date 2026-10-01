@@ -16,25 +16,13 @@ interface TransparentRenderPassOptions {
 }
 
 /**
- * Plain transparent 3D mesh pass
+ * Draws alpha-blended materials that don't refract, such as smoke, particles and alpha sprites,
+ * back to front from the camera, re-sorted every frame
  *
- * Alpha-blended materials with no opaque-handle sampling (smoke, particles, simple alpha
- * sprites). Refractive blended materials (water etc.) route through `BlendedRefractionPass`.
- *
- * One class for both backends, programming against the `View3DPipe` interface only — no
- * `core/gpu/**` or `core/gl/**` runtime imports. The draw is declared `sort: 'distance'` via
- * `ForwardRenderPass`: back-to-front by camera distance, recomputed every frame (no caching).
- * The pipe owns the camera read and the per-backend distance math (WebGPU store-buffer path vs.
- * WebGL store/world-matrix split).
- *
- * `sort: 'distance'` also sets `_updatesViewKey = false` in the base: the inherited
- * `onRenderableDirty` still (re)computes the batch key, but does NOT touch the sorted-view key —
- * transparent order is distance-based and recomputed each frame in the pipe, not from the
- * per-mesh key.
- *
- * Attachments (colour + writable depth) match `OpaqueRenderPass`; per-material `depthMask` (set
- * by `alphaMode`) decides whether individual draws actually write depth, so blended fragments
- * don't lock in occlusion.
+ * Blended materials that refract, such as water, go to `BlendedRefractionPass` instead. The pass
+ * declares a writable depth like the opaque pass, but an `alphaMode` of `'blend'` turns the
+ * material's depth writes off, so a blended fragment doesn't hide what is drawn behind it later.
+ * One class serves both backends through the `View3DPipe` interface.
  * @internal
  */
 export class TransparentRenderPass extends ForwardRenderPass {

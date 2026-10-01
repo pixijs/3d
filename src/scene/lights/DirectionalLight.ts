@@ -4,9 +4,7 @@ import { Light } from './Light';
 import type { LightOptions } from './Light';
 
 /**
- * Constructor options for {@link DirectionalLight}
- *
- * Same shape as {@link LightOptions}.
+ * Constructor options for {@link DirectionalLight}, the same as {@link LightOptions}
  * @example
  * ```ts
  * const sun = new DirectionalLight({ intensity: 3, castShadow: true, shadow: { cascades: 3 } });
@@ -14,23 +12,19 @@ import type { LightOptions } from './Light';
  * @category scene
  * @standard
  */
-export interface DirectionalLightOptions extends LightOptions {} // oxlint-disable-line no-empty-object-type
+export interface DirectionalLightOptions extends LightOptions {}
 
 /**
- * Parallel-ray light that lights every fragment from the same direction
+ * Light that arrives from one direction everywhere in the scene, like the sun
  *
- * Position-independent shading — the sun is the canonical example. Cheap to
- * evaluate (one dot product per pixel), so it's the default recommendation for
- * the scene's key light.
+ * The usual choice for a scene's main light.
  *
- * The light's direction is its local **-Z** axis transformed by its world
- * matrix. Position is ignored for shading (parallel rays have no origin) but
- * matters for shadow-frustum framing — keep the light at a sensible distance
- * from your scene origin and aim it with {@link Container3D.lookAt | lookAt}.
+ * It shines along its local **-Z** axis, so only its rotation matters: moving it changes
+ * neither the lighting nor the shadow, which is fitted to the scene or to the camera. Aim it
+ * with {@link Container3D.lookAt | lookAt} from any position.
  *
- * Supports cascaded shadow maps (CSM) via {@link LightShadow.cascades} for
- * large scenes where one shadow frustum can't resolve both near and far
- * geometry.
+ * Its shadow covers one box over the scene by default. For a large world, turn on
+ * {@link LightShadow.cascades | cascades}, which keep shadows near the camera sharp.
  * @example
  * ```ts
  * import { DirectionalLight } from '@pixi/3d';
@@ -54,9 +48,12 @@ export class DirectionalLight extends Light {
   /**
    * Default {@link DirectionalLightOptions} merged under every constructor call
    *
-   * `new DirectionalLight(opts)` resolves as
-   * `{ ...DirectionalLight.defaultOptions, ...definedProps(opts) }`. Mutate
-   * to change the defaults process-wide.
+   * `new DirectionalLight(opts)` resolves as `{ ...DirectionalLight.defaultOptions, ...opts }`,
+   * ignoring options set to `undefined`. Mutate to change the defaults process-wide.
+   * @example
+   * ```ts
+   * DirectionalLight.defaultOptions.castShadow = true;
+   * ```
    */
   public static defaultOptions: DirectionalLightOptions = {
     color: 0xffffff,
@@ -64,13 +61,13 @@ export class DirectionalLight extends Light {
     castShadow: false,
   };
 
-  /** Discriminator for the directional light kind */
+  /** Always `'directional'` */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
   public readonly type = 'directional';
 
   /**
-   * Creates a new `DirectionalLight`. Add it to a {@link View3D} by
-   * parenting it under {@link View3D.root | view.root}.
-   * @param options - construction options; see {@link DirectionalLightOptions}.
+   * Creates a new `DirectionalLight`; add it under {@link View3D.root | view.root} to light the view
+   * @param options - Construction options; see {@link DirectionalLightOptions}.
    */
   constructor(options: DirectionalLightOptions = {}) {
     super({ label: 'DirectionalLight', ...DirectionalLight.defaultOptions, ...definedProps(options) });

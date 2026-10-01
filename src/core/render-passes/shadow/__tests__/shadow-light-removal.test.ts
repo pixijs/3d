@@ -74,6 +74,7 @@ function buildScene(
   return { view3d, sunA };
 }
 
+/** Builds a scene, renders one more frame so every capture has the same frame history, and reads its pixels */
 async function pixelsFor(
   preference: 'webgl' | 'webgpu',
   id: string,
@@ -85,7 +86,6 @@ async function pixelsFor(
   });
   try {
     const view3d = build(app);
-    // Settle one frame before extracting so every capture compares like frame histories.
     app.render();
     return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
   } finally {
@@ -104,21 +104,14 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-// Removing a non-last shadow light shifts the remaining lights' list indices; nothing a survivor draws
-// may key on that position. WebGPU carries real per-light state (cached bundles + cull targets on the
-// light's own shadow data — removal must free it and never replay it); WebGL's per-light work is
-// stateless, so this pins that both backends re-render the survivor's own shadow after the shift.
-// CI's GPU adapters are unreliable, so — like the scene suite — this runs locally.
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe.skipIf(isCI)(`shadow light removal (${preference})`, () => {
-    it('after removing the first of two shadow lights, the survivor renders its own shadow', async () => {
-      // Two lights, then detach the first (list index 0 → the others shift down). `removeChild` runs
-      // `_detach`, which frees sunA's per-light shadow state and splices it out of the light list.
+    it('after removing the first of two shadow lights, the survivor renders its own shadow, not one keyed to its old list index', async () => {
       const afterRemoval = await pixelsFor(preference, 'shadow-rm-2then1', (app) => {
         const { view3d, sunA } = buildScene(app, true, true);
-        app.render(); // both cast — builds both lights' shadow state
+        app.render();
         view3d.root.removeChild(sunA!);
-        app.render(); // sunB must render ITS shadow, not anything of sunA's
+        app.render();
         return view3d;
       });
 
@@ -127,11 +120,11 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
       const budget = Math.round((afterRemoval.length / 4) * 0.01);
 
-      // The survivor matches a scene built with only sunB — removal rebinds cleanly, no crash, no stale VP.
-      expect(differingPixels(afterRemoval, justB)).toBeLessThan(budget);
-      // And it is NOT sunA's shadow — the survivor draws from its own state, not anything keyed to the
-      // removed light's list position (and this confirms the two lights' shadows genuinely differ).
-      expect(differingPixels(afterRemoval, justA)).toBeGreaterThan(budget);
+      expect(differingPixels(afterRemoval, justB), 'matches a scene built with only sunB').toBeLessThan(budget);
+      expect(
+        differingPixels(afterRemoval, justA),
+        "differs from sunA's shadow, which also shows the two lights' shadows differ",
+      ).toBeGreaterThan(budget);
     });
   });
 }

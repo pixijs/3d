@@ -6,6 +6,11 @@ import { clampSegments } from './utils/clampSegments';
 
 /**
  * Options for {@link PlaneGeometry}
+ * @example
+ * ```ts
+ * const options: Partial<PlaneGeometryOptions> = { width: 16, height: 9, flipV: true };
+ * const screen = new PlaneGeometry(options);
+ * ```
  * @category geometry
  * @standard
  */
@@ -13,33 +18,54 @@ export interface PlaneGeometryOptions extends Geometry3DOptions {
   /**
    * The width of the plane along the local X axis
    * @default 1
+   * @example
+   * ```ts
+   * const banner = new PlaneGeometry({ width: 4, height: 1 });
+   * ```
    */
   width: number;
   /**
    * The height of the plane along the local Y axis
    * @default 1
+   * @example
+   * ```ts
+   * const poster = new PlaneGeometry({ width: 2, height: 3, flipV: true });
+   * ```
    */
   height: number;
   /**
    * Subdivision count along the width (X axis); the plane is split into this many quads horizontally
+   *
+   * Floored, and clamped to a minimum of 1.
    * @default 1
+   * @example
+   * ```ts
+   * const water = new PlaneGeometry({ width: 50, height: 50, widthSegments: 128, heightSegments: 128 });
+   * ```
    */
   widthSegments: number;
   /**
    * Subdivision count along the height (Y axis); the plane is split into this many quads vertically
+   *
+   * Floored, and clamped to a minimum of 1.
    * @default 1
+   * @example
+   * ```ts
+   * const flag = new PlaneGeometry({ width: 3, height: 2, widthSegments: 30, heightSegments: 20 });
+   * ```
    */
   heightSegments: number;
   /**
-   * Put `v = 0` on the top edge instead of the bottom, i.e. image orientation
+   * Put `v = 0` on the top edge instead of the bottom, which is how images are laid out
    *
-   * Image formats address rows top-down while the default UVs run v-up, so an
-   * image texture mapped onto a plane renders upside-down. Set this when the
-   * plane is a surface for a picture rather than for a tiling or procedural
-   * material.
-   *
-   * Only the UVs change — positions, normals and winding are untouched.
+   * Images store their rows top-down while the default UVs run upward, so an image texture on a
+   * default plane renders upside down. Set this when the plane shows a picture rather than a tiling
+   * or procedural material. Only the UVs change; positions, normals and winding stay the same.
    * @default false
+   * @example
+   * ```ts
+   * const photo = new PlaneGeometry({ width: 4, height: 3, flipV: true });
+   * ```
    */
   flipV: boolean;
 }
@@ -68,7 +94,13 @@ export interface PlaneGeometryOptions extends Geometry3DOptions {
  * @standard
  */
 export class PlaneGeometry extends Geometry3D {
-  /** Default options for {@link PlaneGeometry} */
+  /**
+   * Default options for {@link PlaneGeometry}
+   * @example
+   * ```ts
+   * PlaneGeometry.defaultOptions.flipV = true;
+   * ```
+   */
   public static defaultOptions: PlaneGeometryOptions = {
     ...Geometry3D.defaultOptions,
     width: 1,
@@ -78,24 +110,24 @@ export class PlaneGeometry extends Geometry3D {
     flipV: false,
   };
 
-  /** Backing store for {@link PlaneGeometry.spriteQuad}, built on first read */
+  /** Backing store for {@link PlaneGeometry.spriteQuad}, built on first read so importing the module builds nothing */
   private static _spriteQuad: PlaneGeometry | null = null;
 
   /**
-   * The shared 1×1 image-oriented quad — `new PlaneGeometry({ flipV: true })`,
-   * built once and reused process-wide. What every {@link Sprite3D} draws, and
-   * the geometry to hand a {@link BatchedMesh3D} slot when driving billboards
-   * without per-sprite scene nodes.
+   * The shared 1×1 quad every {@link Sprite3D} draws: `new PlaneGeometry({ flipV: true })`, built
+   * on first read and reused everywhere
    *
-   * One geometry for every sprite is the point. The batcher keys draws on
-   * pipeline plus geometry uid, so same-mode sprites — however many distinct
-   * textures and tints they carry — collapse into a single instanced draw.
+   * Draws batch by pipeline and geometry, so sprites with the same billboard mode batch into
+   * instanced draws even when their textures and tints differ. Give it to {@link BatchedMesh3D}
+   * slots too when you draw billboards without a scene node per sprite.
    *
-   * Its `destroy` is a no-op, the same guard pixi puts on `Texture.EMPTY` /
-   * `Texture.WHITE`, so no path — user code, `sprite.destroy(true)`, a
-   * scene-wide geometry sweep — can tear the quad out from under every other
-   * sprite in the process. A getter rather than a field so nothing is built at
-   * import time.
+   * Its `destroy` does nothing, as with pixi's `Texture.WHITE`, so no `destroy` call can pull the
+   * quad out from under every other sprite.
+   * @example
+   * ```ts
+   * const sprites = new BatchedMesh3D({ size: 10_000, parent: view.root });
+   * sprites.setGeometryAt(0, PlaneGeometry.spriteQuad);
+   * ```
    * @see {@link Sprite3D} For the managed node that draws this quad.
    */
   public static get spriteQuad(): PlaneGeometry {

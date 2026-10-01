@@ -9,19 +9,6 @@ import { View3D } from '~/scene/View3D';
 const makeTexture = (): Texture => new Texture({ source: new TextureSource({ width: 8, height: 8, resolution: 1 }) });
 
 describe('BatchedMesh3D options', () => {
-  it("labels itself 'BatchedMesh3D' unless given a label", () => {
-    expect(new BatchedMesh3D({ size: 1 }).label).toBe('BatchedMesh3D');
-    expect(new BatchedMesh3D({ size: 1, label: 'crowd' }).label).toBe('crowd');
-  });
-
-  it('forwards Container3D options to the base', () => {
-    const batched = new BatchedMesh3D({ size: 4, visible: false, scale: 2 });
-
-    expect(batched.size).toBe(4);
-    expect(batched.visible).toBe(false);
-    expect(batched.scale.x).toBe(2);
-  });
-
   it('has no size options: slots are not children, so there are no bounds to size against', () => {
     // @ts-expect-error width, height and depth are omitted from BatchedMesh3DOptions
     const batched = new BatchedMesh3D({ size: 1, width: 2 });

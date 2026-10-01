@@ -16,17 +16,11 @@ interface OpaqueRenderPassOptions {
 }
 
 /**
- * Opaque 3D mesh pass — one class for both backends
+ * Draws opaque and alpha-tested materials in key order, writing colour and depth
  *
- * It programs against the `View3DPipe` interface only, so importing it pulls in **no**
- * `core/gpu/**` or `core/gl/**` runtime code. The draw is expressed declaratively via
- * {@link ForwardRenderPass} with `sort: 'key'` (stable batch-key order, cacheable).
- * The pipe translates that into its own mechanism — a cached WebGPU render bundle or a
- * WebGL persistent instance buffer.
- *
- * Per-dirty-mesh keying is inherited from `RenderPass.onRenderableDirty` (the
- * primary-material path, via `pipe.renderer.material3d.computeBatchKey`). Attachments
- * (colour + writable depth) and the empty-bit cull come from {@link ForwardRenderPass}.
+ * A {@link ForwardRenderPass} with `sort: 'key'`, so each pipe can reuse its draw work between
+ * frames. It programs against the `View3DPipe` interface only, so importing it pulls in no
+ * `core/gpu/**` or `core/gl/**` code.
  * @internal
  */
 export class OpaqueRenderPass extends ForwardRenderPass {

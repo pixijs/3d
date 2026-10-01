@@ -29,13 +29,20 @@ export type AnimationTarget = Container3D | { skeleton: Skeleton; boneIndex: num
  * @standard
  */
 export interface AnimationPlayerOptions {
-  /** Root scene node that animation track names are resolved against */
+  /**
+   * Root of the hierarchy to animate; tracks find their nodes in its subtree, itself included
+   * @example
+   * ```ts
+   * const player = new AnimationPlayer({ target: robot, animations: [walk] });
+   * ```
+   */
   target: Container3D;
   /**
-   * Animations available to this player
-   *
-   * More can be added with {@link AnimationPlayer#addAnimations}. Each track label names its
-   * target as `<node label or glTF node index>.<channel>`, split on the last `.`.
+   * Animations to register, keyed as {@link AnimationPlayer#addAnimations} describes
+   * @example
+   * ```ts
+   * const player = new AnimationPlayer({ target: robot, animations: { walk, run } });
+   * ```
    */
   animations?: Record<string, Animation> | Animation[];
   /**
@@ -47,6 +54,12 @@ export interface AnimationPlayerOptions {
    * Whether to use {@link Ticker.shared} to advance playing animations
    *
    * Set to `false` when manually calling {@link AnimationPlayer#update}.
+   * @example
+   * ```ts
+   * const player = new AnimationPlayer({ target: robot, animations: [walk], autoUpdate: false });
+   *
+   * app.ticker.add((ticker) => player.update(ticker));
+   * ```
    * @default true
    */
   autoUpdate?: boolean;
@@ -55,6 +68,10 @@ export interface AnimationPlayerOptions {
    *
    * `true` plays the first registered animation, and a string plays the animation
    * registered under that label.
+   * @example
+   * ```ts
+   * const player = new AnimationPlayer({ target: robot, animations: [idle, walk], autoPlay: 'idle' });
+   * ```
    * @default false
    */
   autoPlay?: boolean | string;
@@ -77,13 +94,22 @@ export class PropertyAccumulator {
 }
 
 /**
- * Plays animations on a {@link Container3D} hierarchy
+ * Plays animations on a {@link Container3D} and its children
  *
- * `AnimationPlayer` owns the active {@link AnimationState} objects for a
- * target, resolves track names to target properties, blends active states, and
- * applies the final values during {@link AnimationPlayer#update}. By default, active states are
- * advanced by {@link Ticker.shared}; set {@link AnimationPlayer#autoUpdate} to
- * `false` when driving playback from a custom loop.
+ * A {@link Model3D} loaded with animations already has one as {@link Model3D#player | player}.
+ * Build your own to play animations authored in code.
+ *
+ * Each animation gets one {@link AnimationState} per player, holding its time, speed and weight.
+ * Any number can play at once. Where two playing states drive the same property, the player
+ * blends their values by {@link AnimationState#weight}, which is how crossfades work. Playback
+ * advances on {@link Ticker.shared} unless {@link AnimationPlayer#autoUpdate} is off.
+ * @example
+ * ```ts
+ * const player = new AnimationPlayer({ target: robot, animations: [idle, walk] });
+ * const walking = player.play('walk');
+ *
+ * walking.animationSpeed = 1.5;
+ * ```
  * @category animation
  * @standard
  */
@@ -92,14 +118,22 @@ export class AnimationPlayer {
    * Default {@link AnimationPlayerOptions} merged under every constructor call
    *
    * `new AnimationPlayer(opts)` resolves as `{ ...AnimationPlayer.defaultOptions, ...opts }`.
-   * Mutate to change defaults process-wide.
+   * Mutate to change defaults process-wide. A {@link Model3D} passes its own `autoUpdate` and
+   * `autoPlay`, so its player follows {@link Model3D.defaultOptions} instead.
+   * @example
+   * ```ts
+   * AnimationPlayer.defaultOptions.autoUpdate = false;
+   * ```
    */
   public static defaultOptions: Partial<AnimationPlayerOptions> = {
     autoUpdate: true,
     autoPlay: false,
   };
 
-  /** Root scene node animated by this player */
+  /**
+   * Root of the hierarchy this player animates
+   * @advanced
+   */
   public readonly target: Container3D;
 
   private readonly _states: AnimationState[] = [];
@@ -109,6 +143,7 @@ export class AnimationPlayer {
 
   private _autoUpdate: boolean;
   private _isConnectedToTicker: boolean = false;
+  /** Set while `update` or `stop` loops over `_states`; {@link AnimationPlayer#_deactivate} says why */
   private _updating: boolean = false;
   private _destroyed: boolean = false;
 
@@ -142,6 +177,12 @@ export class AnimationPlayer {
    * Labels of every registered animation, in registration order
    *
    * Pass one to {@link AnimationPlayer#play} or {@link AnimationPlayer#getState}.
+   * @example
+   * ```ts
+   * for (const label of player.animationLabels) {
+   *   addButton(label, () => player.play(label));
+   * }
+   * ```
    */
   public get animationLabels(): readonly string[] {
     return (this._animationLabels ??= Array.from(this._animations.keys()));
@@ -152,6 +193,12 @@ export class AnimationPlayer {
    *
    * Array entries are keyed by each animation's own label. Record entries are keyed
    * by the record property name.
+   * @example
+   * ```ts
+   * player.addAnimations([wave]);
+   * player.addAnimations({ cheer: celebrate });
+   * player.play('cheer');
+   * ```
    * @param animations - Animations to register
    */
   public addAnimations(animations: Record<string, Animation> | Animation[]): void {
@@ -166,6 +213,10 @@ export class AnimationPlayer {
 
   /**
    * Returns a registered animation by label
+   * @example
+   * ```ts
+   * const walkDuration = player.getAnimation('walk')?.duration ?? 0;
+   * ```
    * @param label - Registered animation label
    * @returns The animation, or `undefined` when nothing is registered under the label
    */
@@ -174,7 +225,16 @@ export class AnimationPlayer {
   }
 
   /**
-   * Starts playback of an animation
+   * Starts or resumes an animation from its state's current time
+   *
+   * Animations already playing carry on and blend with it; call {@link AnimationPlayer#stop}
+   * first to switch from one to another. {@link AnimationState#play} covers restarting a one-shot
+   * animation that already finished.
+   * @example
+   * ```ts
+   * player.stop();
+   * player.play('run');
+   * ```
    * @param animation - The animation, or the label it's registered under
    * @returns The playback state for the animation
    */
@@ -182,10 +242,15 @@ export class AnimationPlayer {
     return this.getState(animation).play();
   }
 
-  /** Stops every playing animation, each holding its current time and pose */
+  /**
+   * Stops every playing animation, each holding its current time and pose
+   * @example
+   * ```ts
+   * menu.on('open', () => player.stop());
+   * ```
+   */
   public stop(): void {
     const states = this._states;
-    // Hold the list still while stopping, so no single stop compacts it under the loop.
     const updating = this._updating;
 
     this._updating = true;
@@ -199,7 +264,13 @@ export class AnimationPlayer {
     if (!updating) this._removeStopped();
   }
 
-  /** Whether any animation on this player is playing */
+  /**
+   * Whether any animation on this player is playing
+   * @example
+   * ```ts
+   * if (!player.playing) player.play('idle');
+   * ```
+   */
   public get playing(): boolean {
     const states = this._states;
 
@@ -213,7 +284,15 @@ export class AnimationPlayer {
   /**
    * Returns the reusable playback state for an animation without starting playback
    *
-   * Each animation has one state per player, created on first request.
+   * Each animation has one state per player, created on first request. Throws for a label nothing
+   * is registered under; {@link AnimationPlayer#getAnimation} returns `undefined` instead.
+   * @example
+   * ```ts
+   * const jump = player.getState('jump');
+   *
+   * jump.loop = false;
+   * jump.gotoAndPlay(0);
+   * ```
    * @param animation - The animation, or the label it's registered under
    * @returns The playback state for the animation
    */
@@ -243,6 +322,11 @@ export class AnimationPlayer {
    *
    * Disable this when driving animation from a custom ticker or fixed-step loop
    * with {@link AnimationPlayer#update}.
+   * @example
+   * ```ts
+   * player.autoUpdate = false;
+   * app.ticker.add((ticker) => player.update(ticker));
+   * ```
    */
   public get autoUpdate(): boolean {
     return this._autoUpdate;
@@ -317,18 +401,21 @@ export class AnimationPlayer {
    *
    * Runs every frame from `Ticker.shared` while {@link AnimationPlayer#autoUpdate | autoUpdate}
    * is on and something is playing. Call it yourself when driving playback from your own loop.
+   *
+   * `onComplete` and `onLoop` callbacks run once every pose is applied, so they see this frame's
+   * final pose and may play, stop or seek any state. A state they start begins advancing on the
+   * next update.
    * @example
    * ```ts
    * player.autoUpdate = false;
    * app.ticker.add((ticker) => player.update(ticker));
    * ```
-   * @param ticker - the ticker driving this update; its `deltaMS` sets how far playback
+   * @param ticker - The ticker driving this update; its `deltaMS` sets how far playback
    *   advances. Omitted, one 60 fps frame is assumed.
    */
   public update(ticker?: Ticker): void {
     const seconds = ticker ? ticker.deltaMS / 1000 : 1 / 60;
     const states = this._states;
-    // States played from a callback join next frame.
     const count = states.length;
 
     this._updating = true;
@@ -350,8 +437,6 @@ export class AnimationPlayer {
       }
     }
 
-    // Callbacks run once every pose is applied, so they see the final frame and can
-    // freely play, stop, or seek other states.
     for (let i = 0; i < count; i++) {
       states[i]._emitCallbacks();
 
@@ -362,7 +447,13 @@ export class AnimationPlayer {
     this._removeStopped();
   }
 
-  /** Whether {@link AnimationPlayer#destroy} has been called on this player */
+  /**
+   * Whether {@link AnimationPlayer#destroy} has been called on this player
+   * @example
+   * ```ts
+   * if (!player.destroyed) player.play('idle');
+   * ```
+   */
   public get destroyed(): boolean {
     return this._destroyed;
   }
@@ -373,6 +464,13 @@ export class AnimationPlayer {
    * After calling `destroy`, the player should not be reused. Calling `destroy`
    * again is a no-op, and playback calls on an {@link AnimationState} kept from before it
    * are ignored, so a destroyed player never returns to the ticker.
+   *
+   * A {@link Model3D} destroys its own player; call this for one you built yourself.
+   * @example
+   * ```ts
+   * player.destroy();
+   * crate.destroy();
+   * ```
    */
   public destroy(): void {
     if (this._destroyed) return;
@@ -423,6 +521,14 @@ export class AnimationPlayer {
     this._isConnectedToTicker = false;
   }
 
+  /**
+   * Returns the accumulator for a track's property, binding it on first use
+   *
+   * Tracks with the same label share an accumulator, which is how states driving the same
+   * property blend. The node part of the label is looked up in the glTF node map when it is a
+   * number the map holds, and otherwise by searching the subtree for a node label or bone name.
+   * @param track - Track whose label names the property
+   */
   private _getAccumulator(track: Track): PropertyAccumulator {
     const trackLabel = track.label;
 
@@ -436,7 +542,6 @@ export class AnimationPlayer {
     let foundSkeleton: Skeleton | undefined;
     let foundBoneIndex = -1;
 
-    // 1. Try resolving via nodeMap (fastest, O(1))
     if (this._nodeMap) {
       const index = parseInt(nodeLabel, 10);
       if (!isNaN(index)) {
@@ -452,7 +557,6 @@ export class AnimationPlayer {
       }
     }
 
-    // 2. Fallback to name search (O(N) walk)
     if (!target && !foundSkeleton) {
       const found = findTarget(this.target, nodeLabel);
       target = found?.node;
@@ -477,7 +581,9 @@ export class AnimationPlayer {
 }
 
 /**
- * Recursively searches for a node OR a skeleton bone with the given label
+ * Depth-first search for a node with the given label, or a bone of that name on a skinned mesh
+ *
+ * `Skeleton.indexOf` throws for a name that isn't a bone, so the search catches that and moves on.
  * @param target - Subtree root to search, itself included
  * @param label - Node label or bone name to find
  * @internal
@@ -491,9 +597,7 @@ function findTarget(
   if (target instanceof Mesh3D && target.skeleton) {
     try {
       return { skeleton: target.skeleton, boneIndex: target.skeleton.indexOf(label) };
-    } catch {
-      // The label isn't a bone of this skeleton; indexOf throws on unknown labels.
-    }
+    } catch {}
   }
 
   for (const child of target.children) {

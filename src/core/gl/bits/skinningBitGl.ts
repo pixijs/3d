@@ -2,13 +2,12 @@ import { glTexelAddress } from '../../buffers/dataTextureLayout';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * Skeletal animation for WebGL using bone matrices stored in a texture
+ * Skeletal animation for WebGL using bone matrices stored in a texture, the GLSL twin of
+ * `skinningBitGpu`, which documents the three-row bone matrices and how they transform
  *
- * WebGL doesn't support storage buffers, so bone matrices are packed into
- * an RGBA32F texture and read with `texelFetch`.
- *
- * `bonePitIndex` is a local published by the active instance bit: this mesh's base
- * bone index inside the shared BonePit texture.
+ * WebGL has no storage buffers, so the bone pit arrives as an `rgba32float` data texture read with
+ * `texelFetch`, a bone being three texels. `bonePitIndex` is a local from `instanceFetchBitGl`: the
+ * mesh's first bone in the pit.
  * @internal
  */
 export const skinningBitGl: ShaderBit = {
@@ -25,9 +24,6 @@ export const skinningBitGl: ShaderBit = {
   gl: {
     vertex: {
       header: `
-        // Three rows of four, not a mat4: a bone matrix is affine, so its fourth row is
-        // always (0, 0, 0, 1). Twelve floats instead of sixteen is three texels instead of
-        // four, and blending rows is a quarter less work than blending mat4s.
         void getBoneRows(uint jointIndex, uint bonePitIndex, out vec4 r0, out vec4 r1, out vec4 r2) {
           int baseTexel = int(bonePitIndex + jointIndex) * 3;
 
@@ -60,8 +56,6 @@ export const skinningBitGl: ShaderBit = {
         skinRow1 += b1 * aWeights.w;
         skinRow2 += b2 * aWeights.w;
 
-        // Row-major affine: transforming a point is three dot products, and the w the mat4
-        // form would compute is always 1. Direction vectors use the rotation part only.
         position = vec4(dot(skinRow0, position), dot(skinRow1, position), dot(skinRow2, position), position.w);
         normal = vec3(dot(skinRow0.xyz, normal), dot(skinRow1.xyz, normal), dot(skinRow2.xyz, normal));
         tangent = vec3(dot(skinRow0.xyz, tangent), dot(skinRow1.xyz, tangent), dot(skinRow2.xyz, tangent));
