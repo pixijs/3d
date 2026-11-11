@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GltfFormat, Material } from '~/assets/loaders/gltf/GltfFormat';
+import type { GltfFormat } from '~/assets/loaders/gltf/GltfFormat';
 import { processMaterial, processMaterials } from '~/assets/loaders/gltf/process/processMaterials';
 import { processNodes } from '~/assets/loaders/gltf/process/processNodes';
 import type { Scene3DDescriptor } from '~/assets/Scene3DDescriptor';
@@ -10,7 +10,6 @@ import type { Material3D } from '~/materials/pbr/Material3D';
 import type { Mesh3D } from '~/scene/Mesh3D';
 import { Model3D } from '~/scene/Model3D';
 
-/** Two nodes whose primitives name no material, beside a red material 0 they must not inherit */
 const noMaterialGltf = {
   asset: { version: '2.0' },
   scenes: [{ nodes: [0, 1] }],
@@ -79,7 +78,7 @@ describe('glTF default material', () => {
   });
 
   it('applies the spec metallic/roughness defaults to a material with no pbrMetallicRoughness', () => {
-    const material = processMaterial({ name: 'Bare' } as Material, new Scene3DSource({})) as Material3D;
+    const material = processMaterial({ name: 'Bare' }, new Scene3DSource({})) as Material3D;
 
     expect(material.metallic).toBe(1);
     expect(material.roughness).toBe(1);

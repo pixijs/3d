@@ -5,7 +5,7 @@
 > [release](../../releases):
 >
 > ```sh
-> npm install pixi.js
+> npm install pixi.js@^8.23.0
 > npm install ./pixi-3d-{{version}}.tgz
 > ```
 >

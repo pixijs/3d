@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { MATERIAL_STRIDE_FLOATS } from '~/core/buffers/MaterialDataStoreBuffer';
 import { createStructLayout } from '~/core/shader/codegen/structLayout';
 import type { StructDefinition } from '~/core/shader/ShaderBit';
 import type { BaseMaterial3D } from '~/materials/BaseMaterial3D';
@@ -14,7 +13,6 @@ const DEF: StructDefinition = {
   flags: 'u32',
 };
 
-/** Stands in for the owning material, whose `update()` is all the data class calls */
 const STUB_MATERIAL = { update(): void {} } as unknown as BaseMaterial3D;
 
 function makeData() {
@@ -22,12 +20,12 @@ function makeData() {
 }
 
 describe('getOrCreateMaterialDataClass', () => {
-  it('lays accessors out at the struct offsets, over one stride-sized buffer', () => {
+  it('lays accessors out at the struct offsets, over a buffer of whole texels: 36 bytes of fields take 48', () => {
     const data = makeData();
     const layout = createStructLayout(DEF);
     const offsets = Object.fromEntries(layout.elements.map((e) => [e.name, e.offset / 4]));
 
-    expect(data._f32.length).toBe(MATERIAL_STRIDE_FLOATS);
+    expect(data._f32.length).toBe(12);
 
     data.wide = [1, 2, 3, 4];
     data.tint = [5, 6, 7];
@@ -69,15 +67,6 @@ describe('getOrCreateMaterialDataClass', () => {
     expect(updates).toBe(0);
 
     expect(() => (data.wide = [1, 2, 3, 4, 5])).toThrow(RangeError);
-  });
-
-  it('makes a stray boolean flag write a compile error, and inert at runtime', () => {
-    const data = makeData();
-
-    // @ts-expect-error MaterialData has no boolean members, so `_dirty = true` can't pass for a signal
-    data._dirty = true;
-
-    expect(data.strength).toBe(0);
   });
 });
 

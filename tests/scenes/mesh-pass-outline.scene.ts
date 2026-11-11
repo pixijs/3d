@@ -9,13 +9,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * A {@link MeshPass} installed from `View3D.passes`: the inverted-hull {@link OutlinePass}
- * redraws every mesh whose material opts into the `outline` pass. Two meshes opt in and one
- * doesn't, so the opt-in reads straight off the frame; the ink is a colour rather than black
- * so the override constants are proven to reach the fragment stage on both backends.
- */
-
 const SIZE = 220;
 
 export const scene: TestScene = {

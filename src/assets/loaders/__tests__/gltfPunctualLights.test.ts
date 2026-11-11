@@ -7,7 +7,6 @@ import { writeLight } from '~/core/LightDataList';
 import { srgbToLinear } from '~/materials/BaseMaterial3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 
-/** Checks that a loader colour, encoded to sRGB, decodes back to the file's linear value */
 const expectRoundTripsTo = (encoded: unknown, linear: number[]) => {
   const channels = encoded as number[];
   expect(channels).toHaveLength(3);

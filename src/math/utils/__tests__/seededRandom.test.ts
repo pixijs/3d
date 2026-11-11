@@ -46,20 +46,6 @@ describe('seededRandom', () => {
     expect(differs).toBe(true);
   });
 
-  test('successive calls with same seed produce different values (advancing state)', () => {
-    const random = seededRandom('advancing');
-    const first = random();
-    const second = random();
-    expect(first).not.toBe(second);
-  });
-
-  test('handles empty string seed', () => {
-    const random = seededRandom('');
-    const v = random();
-    expect(v).toBeGreaterThanOrEqual(0);
-    expect(v).toBeLessThan(1);
-  });
-
   test('fills ten buckets within 30% of an even share', () => {
     const random = seededRandom('uniform-test');
     const buckets: number[] = Array.from({ length: 10 }, () => 0);

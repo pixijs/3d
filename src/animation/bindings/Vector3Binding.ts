@@ -1,10 +1,7 @@
 import type { PointLike3D } from '../../math/vector/PointLike3D';
 import { Binding } from './Binding';
 
-/**
- * Applies three-component samples to objects that expose mutable point data
- * @internal
- */
+/** @internal */
 export class Vector3Binding extends Binding {
   constructor(private readonly _target: PointLike3D) {
     super();

@@ -10,21 +10,6 @@ import type { EffectIO } from '~/post-processing/effects/PostEffect';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * What a sample helper does when it reaches past the content.
- *
- * The view is an inset, so its scene transient rounds up into a pool bucket and the content
- * occupies only a corner of it. The rest of that texture is not blank: the pool recycles by
- * size, so it holds whatever the previous tenant wrote, and a bind clears only the frame.
- *
- * The effect samples a uv range of -0.25 to 1.25, so the outer sixth of every side comes from
- * outside the content rect. Clamped, those bands replicate the content's edge, which is the
- * horizontal and vertical smear this image is of. Unclamped, they show another pass's picture.
- *
- * The pattern runs to all four edges and each edge is a different hue, so a band reading the
- * wrong thing cannot coincidentally match.
- */
-
 const bandsBit: ShaderBit = {
   name: 'contentClampBands',
   gpu: {
@@ -85,14 +70,11 @@ export const scene: TestScene = {
     backgroundColor: 0x101418,
   },
   create: async (app) => {
-    // Smaller than the canvas on both axes, so the transient is bucketed and padded.
     const view = new View3D({ width: 160, height: 120, passes: [new ZoomOutEffect()] });
     view.position.set(80, 60);
     view.camera.fov = 45;
     view.camera.position.z = 5;
     view.camera.lookAt({ x: 0, y: 0, z: 0 });
-    // Sized to fill the view exactly, so the plane's UV and the transient's content rect are the
-    // same square and the bands above sit on the edge the clamp has to replicate.
     const height = 2 * 5 * Math.tan((45 * Math.PI) / 360);
     view.root.addChild(
       new Mesh3D({

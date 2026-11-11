@@ -5,7 +5,6 @@ import { Scene3DSource } from '~/assets/Scene3DSource';
 import { Model3D } from '~/scene/Model3D';
 import { Skeleton } from '~/scene/Skeleton';
 
-/** An empty source, which builds an empty model without a renderer */
 const emptySource = new Scene3DSource({});
 
 function createSkeleton(): Skeleton {
@@ -37,7 +36,7 @@ describe('Model3D destroy', () => {
 
     expect(playerDestroy).toHaveBeenCalledTimes(1);
     expect(skeletonDestroy).toHaveBeenCalledTimes(1);
-    expect(model.skeletons).toHaveLength(0);
+    expect(model.skeletons).toBeNull();
     expect(model.player).toBeUndefined();
     expect(model.destroyed).toBe(true);
     expect(model.source).toBe(emptySource);

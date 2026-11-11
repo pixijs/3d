@@ -13,6 +13,7 @@ interface Loc {
 export interface AstComment {
   type: 'Line' | 'Block' | 'Shebang';
   value: string;
+  range: [number, number];
   loc: Loc;
 }
 
@@ -32,7 +33,14 @@ export interface AstNode {
   params?: AstNode[];
   parameter?: AstNode | null;
   left?: AstNode | null;
+  right?: AstNode | null;
+  operator?: string;
+  object?: AstNode | null;
+  property?: AstNode | null;
+  callee?: AstNode | null;
+  arguments?: AstNode[];
   argument?: AstNode | null;
+  expression?: AstNode | null;
   init?: AstNode | null;
   source?: AstNode | null;
   comments?: AstComment[];
@@ -52,6 +60,7 @@ interface SourceCode {
 interface Fixer {
   replaceText(node: AstNode, text: string): unknown;
   insertTextAfter(node: AstNode, text: string): unknown;
+  replaceTextRange(range: [number, number], text: string): unknown;
 }
 
 interface NodeDiagnostic {
@@ -63,6 +72,7 @@ interface NodeDiagnostic {
 interface LocDiagnostic {
   loc: { start: LineColumn };
   message: string;
+  fix?: (fixer: Fixer) => unknown;
 }
 
 export interface RuleContext {
@@ -92,15 +102,15 @@ function docTarget(node: AstNode): AstNode {
 }
 
 const LINE_DIRECTIVE =
-  /^\s*(?:(?:oxlint|eslint)-(?:disable|enable)|@ts-(?:expect-error|ignore|nocheck)|prettier-ignore|oxfmt-ignore|(?:c8|v8|istanbul) ignore|Auto-generated)\b|^\/\s*<reference\b/;
+  /^\s*(?:(?:oxlint|eslint|unused-internal)-(?:disable|enable)|@ts-(?:expect-error|ignore|nocheck)|prettier-ignore|oxfmt-ignore|(?:c8|v8|istanbul) ignore|Auto-generated|AUTO-GENERATED)\b|^\/\s*<reference\b/;
 const BLOCK_DIRECTIVE =
-  /^\s*(?:[#@]__(?:PURE|NO_SIDE_EFFECTS)__|@vite-ignore|webpack[A-Z]\w*:|(?:oxlint|eslint)-(?:disable|enable)|prettier-ignore|(?:c8|v8|istanbul) ignore)\b|^!|@license\b|^\s*(?:wgsl|glsl)\s*$/;
+  /^\s*(?:[#@]__(?:PURE|NO_SIDE_EFFECTS)__|@vite-ignore|webpack[A-Z]\w*:|(?:oxlint|eslint|unused-internal)-(?:disable|enable)|prettier-ignore|(?:c8|v8|istanbul) ignore)\b|^!|@license\b|^\s*(?:wgsl|glsl)\s*$/;
 
 /**
- * True for comments that instruct a tool rather than explain code: lint and TypeScript
- * suppressions, formatter ignores, coverage hints, triple-slash references, bundler annotations,
- * license headers, the `wgsl` and `glsl` tags editors read to highlight a shader string, and the
- * header `scripts/build/index.mts` writes into generated barrels.
+ * True for comments that instruct a tool rather than explain code: lint, TypeScript and
+ * `check-unused-internal` suppressions, formatter ignores, coverage hints, triple-slash references,
+ * bundler annotations, license headers, the `wgsl` and `glsl` tags editors read to highlight a
+ * shader string, and the header `scripts/build/index.mts` writes into generated barrels.
  * @param comment - The comment to classify
  */
 export function isDirective(comment: AstComment): boolean {

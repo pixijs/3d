@@ -8,17 +8,6 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * The runtime chain-rewire path: the tint starts `enabled: false`, so the
- * first frames compile a direct-to-screen graph (empty chain → no composite).
- * Mid-run the flag flips and the per-frame enabled-key check must tear the
- * graph down and rebuild it composite — scene → transient → tint presents.
- *
- * The reference image is the TINTED result: if the rewire never fires the
- * scene stays blue and the snapshot diff screams. Timing margin is generous
- * (toggle at 40ms, screenshot at 160ms — several frames after).
- */
-
 const SIZE = 200;
 
 export const scene: TestScene = {
@@ -62,8 +51,6 @@ export const scene: TestScene = {
     view.position.set(170, 130);
     app.stage.addChild(view);
 
-    // Direct-mode frames render first; this flip must rewire the graph to the
-    // composite chain before the screenshot lands.
     setTimeout(() => {
       tint.enabled = true;
     }, 40);

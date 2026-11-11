@@ -5,46 +5,21 @@ import { Buffer3D } from './Buffer3D';
 import { alignToDataTextureRows, dataTextureSize, uploadFloatRange } from './dataTextureLayout';
 
 /**
- * Floats per bone matrix, three rows of four
- *
- * A bone matrix is a joint world transform times an inverse bind, and both come out of
- * `Matrix4.multiplyAffine`, so the fourth row is always `(0, 0, 0, 1)`. Storing it would cost
- * four floats and four component loads per bone for no information. See
- * {@link Matrix4.multiplyAffineTo3x4} for the layout and why the shader prefers it.
+ * Floats per bone matrix: the three rows {@link Matrix4.multiplyAffineTo3x4} writes, since the fourth
+ * is always `(0, 0, 0, 1)`
  * @internal
  */
 export const BONE_MATRIX_FLOATS = 12;
 
-/**
- * Options for `BonePit`
- * @internal
- */
 interface BonePitOptions {
-  /** Initial capacity in bone matrices, not floats; defaults to 256 */
   initialBoneCapacity?: number;
 }
 
 /**
- * A view's bone matrices for the frame, every skeleton's packed one after another
- *
- * One buffer for the whole view, so no skeleton needs a storage buffer of its own. Each frame:
- *
- * - `clear()` first.
- * - `add(skeleton)` for every skeleton drawn, which appends `skeleton.worldMatrix` and returns the
- *   index of its first bone, counted in bones rather than floats.
- * - `update()` once after the adds, to upload the part in use.
- *
- * Skinning reads bone `baseIndex + jointIndex`, and on both backends the base index reaches the
- * shader through the bone lane of the mesh's store row.
+ * Call `clear`, then `add` for each skeleton drawn, then `update` once, every frame
  * @internal
  */
 export class BonePit {
-  /**
-   * The CPU array of packed bone matrices
-   *
-   * Sized to whole data-texture rows once it's past one row, so the WebGL texture never claims
-   * texels past its end.
-   */
   public data: Float32Array;
 
   private _buffer: Buffer3D | null = null;
@@ -52,26 +27,28 @@ export class BonePit {
 
   private _boneCount = 0;
   private _tick = 0;
-  /**
-   * Bumped whenever `_ensureCapacity` reallocates the array
-   *
-   * `updateView3DScene` invalidates the view's draw caches when it moves, since every batch in the
-   * view binds the bone buffer.
-   */
+
+  /** Bumped when growth replaces the buffer, so whatever bound the old one must bind again */
   public bufferVersion = 0;
 
   private _texture: Texture | null = null;
   private _textureSource: BufferImageSource | null = null;
 
-  /** Buffers `_ensureCapacity` replaced; it says why they're kept, and `_freeRetired` frees them */
   private readonly _retiredBuffers: Buffer3D[] = [];
+
+  /**
+   * The `Skeleton._worldId` each `add` slot last copied. A match skips the copy only while no earlier
+   * slot changed, and `update` trims it to the frame's adds, since later slots may lie under moved bones
+   */
+  private readonly _slotWorldIds: number[] = [];
+  private _addCount = 0;
+  private _changed = false;
 
   constructor(options: BonePitOptions = {}) {
     const initialBones = options.initialBoneCapacity ?? 256;
     this.data = new Float32Array(alignToDataTextureRows(initialBones * BONE_MATRIX_FLOATS));
   }
 
-  /** The bone data as a storage buffer for WebGPU shaders, created on first read */
   public get buffer(): Buffer3D {
     return (this._buffer ??= new Buffer3D({
       data: this.data,
@@ -81,12 +58,10 @@ export class BonePit {
     }));
   }
 
-  /** Bindable resource over {@link BonePit#buffer} */
   public get bufferResource(): BufferResource {
     return (this._bufferResource ??= new BufferResource({ buffer: this.buffer }));
   }
 
-  /** The bone data as a data texture for WebGL shaders, created on first read */
   public get texture(): Texture {
     return this._texture || this._initTexture();
   }
@@ -107,17 +82,12 @@ export class BonePit {
     return this._texture;
   }
 
-  /** Clears the pit for the next frame; resets the count without clearing memory */
   public clear(): void {
     this._boneCount = 0;
+    this._addCount = 0;
     this._tick++;
   }
 
-  /**
-   * Appends a skeleton's bone matrices, once per frame however many meshes share the skeleton
-   * @param skeleton - The skeleton whose world matrices to append.
-   * @returns The base bone index for this skeleton within the pit (matrix index).
-   */
   public add(skeleton: Skeleton): number {
     if (skeleton._bonePitTick === this._tick) {
       return skeleton._bonePitIndex;
@@ -126,22 +96,26 @@ export class BonePit {
     skeleton._bonePitTick = this._tick;
 
     const baseIndex = this._boneCount;
-    const jointCount = skeleton.jointCount;
+    const slot = this._addCount++;
 
-    this._ensureCapacity(this._boneCount + jointCount);
-
-    const dstOffsetFloats = baseIndex * BONE_MATRIX_FLOATS;
-    this.data.set(skeleton.worldMatrix, dstOffsetFloats);
-
-    this._boneCount += jointCount;
-
+    this._boneCount += skeleton.jointCount;
     skeleton._bonePitIndex = baseIndex;
+
+    if (!this._changed && this._slotWorldIds[slot] === skeleton._worldId) return baseIndex;
+
+    this._changed = true;
+    this._slotWorldIds[slot] = skeleton._worldId;
+    this._ensureCapacity(this._boneCount);
+    this.data.set(skeleton.worldMatrix, baseIndex * BONE_MATRIX_FLOATS);
 
     return baseIndex;
   }
 
-  /** Uploads the bones in use to whichever GPU views exist; call once a frame, after the adds */
   public update(): void {
+    if (this._slotWorldIds.length !== this._addCount) this._slotWorldIds.length = this._addCount;
+    if (!this._changed) return;
+
+    this._changed = false;
     if (this._boneCount === 0) return;
 
     const floats = this._boneCount * BONE_MATRIX_FLOATS;
@@ -150,16 +124,7 @@ export class BonePit {
     if (this._textureSource) uploadFloatRange(this._textureSource, 0, floats);
   }
 
-  /**
-   * Doubles the array, in whole texture rows, until it holds `requiredBoneCount` bones
-   *
-   * The buffer is retired rather than resized: draws recorded earlier still bind the old one,
-   * which has to outlive their submit, and a {@link Buffer3D} is exempt from pixi's GC, so
-   * `_freeRetired` frees it on `unload` or `destroy`. The next `buffer` read builds a new one over
-   * the new array, which uploads whole on first use. The data texture, which only WebGL reads, is
-   * pointed at the new array and resized.
-   * @param requiredBoneCount - Bones the array must hold
-   */
+  /** Retires the buffer rather than destroying it, since draws recorded earlier still bind it; `_freeRetired` frees it */
   private _ensureCapacity(requiredBoneCount: number): void {
     const requiredFloats = requiredBoneCount * BONE_MATRIX_FLOATS;
     if (requiredFloats <= this.data.length) return;
@@ -191,18 +156,11 @@ export class BonePit {
     }
   }
 
-  /** Frees buffers orphaned by growth; `unload` and `destroy` call it. Idempotent */
   private _freeRetired(): void {
     for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
     this._retiredBuffers.length = 0;
   }
 
-  /**
-   * Frees the GPU copies of the pit, whichever exist, and keeps the CPU array
-   *
-   * Covers the buffer, the data texture, and the buffers growth retired. The buffer and
-   * the texture re-upload from `data` the next time a shader uses them. Idempotent.
-   */
   public unload(): void {
     if (!this.data) return;
 
@@ -211,12 +169,6 @@ export class BonePit {
     this._freeRetired();
   }
 
-  /**
-   * Releases every owned GPU resource and drops the backing array
-   *
-   * Covers the buffer and data texture, whichever exist, and every buffer that growth
-   * retired. Idempotent, so a second call does nothing.
-   */
   public destroy(): void {
     if (!this.data) return;
 
@@ -228,6 +180,7 @@ export class BonePit {
     this._texture?.destroy(true);
 
     (this.data as Float32Array | null) = null;
+    (this._slotWorldIds as number[] | null) = null;
     this._buffer = null;
     this._bufferResource = null;
 

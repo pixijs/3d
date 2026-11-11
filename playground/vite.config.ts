@@ -50,6 +50,8 @@ function serveStaticAssets(): Plugin {
     // (its publicDir is examples/assets). Mirror that here so the same scenes run
     // unchanged in the playground.
     ['/venice-sunset/', path.resolve(projectRoot, 'examples/assets/venice-sunset')],
+    // The examples' assets, which pixijs.com publishes at https://pixijs.com/assets/3d/
+    ['/site-assets/', path.resolve(projectRoot, 'examples/assets')],
   ];
 
   return {
@@ -93,6 +95,21 @@ function serveStaticAssets(): Plugin {
   };
 }
 
+/**
+ * Points the asset URLs of the guides' examples at the local copies, so an asset added to
+ * examples/assets loads before pixijs.com publishes it
+ */
+function siteAssetUrls(): Plugin {
+  return {
+    name: 'site-asset-urls',
+    transform(code, id) {
+      if (!id.includes('/__docs__/examples/')) return null;
+
+      return code.replaceAll('https://pixijs.com/assets/3d/', '/site-assets/');
+    },
+  };
+}
+
 // WebGPU only exists in secure contexts, so on-device testing over the LAN
 // (a bare-IP origin) needs HTTPS — point these at a (self-signed) key/cert
 // pair to enable it. Unset = plain HTTP, unchanged.
@@ -118,17 +135,20 @@ export default defineConfig({
     { name: 'download-assets', buildStart: () => downloadAssets() },
     preact(),
     serveStaticAssets(),
+    siteAssetUrls(),
   ],
   resolve: {
-    alias: {
-      'pixi.js': path.resolve(projectRoot, 'node_modules/pixi.js'),
-      '~': path.resolve(projectRoot, 'src'),
+    alias: [
+      // Match the bare import only. A subpath such as `pixi.js/ktx2` must go through pixi's `exports`
+      // map, which a folder alias would skip.
+      { find: /^pixi\.js$/, replacement: path.resolve(projectRoot, 'node_modules/pixi.js') },
+      { find: '~', replacement: path.resolve(projectRoot, 'src') },
       // Subpaths must precede the bare package alias: vite matches aliases in order.
-      '@pixi/3d/webgl': path.resolve(projectRoot, 'src/core/gl/init.ts'),
-      '@pixi/3d/webgpu': path.resolve(projectRoot, 'src/core/gpu/init.ts'),
-      '@pixi/3d/extras': path.resolve(projectRoot, 'src/extras/index.ts'),
-      '@pixi/3d': path.resolve(projectRoot, 'src/index.ts'),
-    },
+      { find: '@pixi/3d/webgl', replacement: path.resolve(projectRoot, 'src/core/gl/init.ts') },
+      { find: '@pixi/3d/webgpu', replacement: path.resolve(projectRoot, 'src/core/gpu/init.ts') },
+      { find: '@pixi/3d/extras', replacement: path.resolve(projectRoot, 'src/extras/index.ts') },
+      { find: '@pixi/3d', replacement: path.resolve(projectRoot, 'src/index.ts') },
+    ],
   },
   server: {
     https: httpsKey && httpsCert ? { key: fs.readFileSync(httpsKey), cert: fs.readFileSync(httpsCert) } : undefined,

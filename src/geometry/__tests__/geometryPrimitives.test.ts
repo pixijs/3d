@@ -12,6 +12,8 @@ import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
 import { TorusGeometry } from '~/geometry/TorusGeometry';
 import { TorusKnotGeometry } from '~/geometry/TorusKnotGeometry';
+import { Box } from '~/math/shapes/Box';
+import { Vector3 } from '~/math/vector/Vector3';
 
 function expectCloseTuple(data: ArrayLike<number>, offset: number, expected: [number, number, number]): void {
   expect(data[offset]).toBeCloseTo(expected[0], 5);
@@ -59,10 +61,6 @@ function expectNoDegenerateTriangles(geometry: Geometry3D): void {
   }
 }
 
-/**
- * Checks that every triangle winds counter-clockwise seen from the side its vertex normals face,
- * which is the side that stays visible when back faces are culled
- */
 function expectTrianglesFaceTheirNormals(geometry: Geometry3D): void {
   const positions = geometry.positions;
   const normals = geometry.normals ?? [];
@@ -332,25 +330,6 @@ describe('geometry primitives', () => {
     }
   });
 
-  it('IcosahedronGeometry coerces non-finite and fractional detail to a sane value', () => {
-    const baseline = new IcosahedronGeometry({ detail: 0 });
-
-    try {
-      for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -10, 1.7]) {
-        const geometry = new IcosahedronGeometry({ detail: bad });
-
-        try {
-          expect(Number.isFinite(geometry.vertexCount)).toBe(true);
-          expect(geometry.vertexCount).toBeGreaterThanOrEqual(baseline.vertexCount);
-        } finally {
-          geometry.destroy(true);
-        }
-      }
-    } finally {
-      baseline.destroy(true);
-    }
-  });
-
   it('PlaneGeometry clamps fractional and invalid segment counts to per-shape minimums', () => {
     const cases: Array<{ widthSegments: number; heightSegments: number }> = [
       { widthSegments: 0, heightSegments: 0 },
@@ -603,6 +582,7 @@ describe('geometry primitives', () => {
       positions: positionAttribute,
       normals: normalAttribute,
       indices: new Uint16Array([0, 1, 2]),
+      bounds3D: new Box(new Vector3(0, 0, 0), new Vector3(1, 1, 1)),
     });
 
     try {

@@ -1,11 +1,12 @@
 import { definedProps } from 'pixi.js';
 
 import type { Mesh3DData, MeshPassCache } from '../core/batcher/Mesh3DData';
+import { passBitRegistry } from '../core/render-passes/passBitRegistry';
 import { RenderPassBit } from '../core/render-passes/RenderPass';
 import type { HitVolume3D } from '../events/HitResult3D';
 import { resolveHitVolume } from '../events/resolveHitVolume';
-import type { Geometry3D } from '../geometry/Geometry3D';
-import type { BaseMaterial3D } from '../materials/BaseMaterial3D';
+import { Geometry3D } from '../geometry/Geometry3D';
+import { BaseMaterial3D } from '../materials/BaseMaterial3D';
 import { Sphere } from '../math/shapes/Sphere';
 import type { Destroy3DOptions } from '../utils/Destroy3DOptions';
 import { resolveDestroy3DFlag } from '../utils/Destroy3DOptions';
@@ -14,23 +15,16 @@ import { Container3D } from './Container3D';
 import { Morph } from './Morph';
 import type { Skeleton } from './Skeleton';
 
-/**
- * Scratch for {@link Mesh3D.boundingSphere}'s morph-expanded path: the local sphere plus the
- * conservative morph reach, transformed as one
- */
 const _morphExpandedSphere = new Sphere();
 
 /**
  * How a mesh turns to face the camera; see {@link Mesh3D#billboardMode}
  *
- * - `'none'`: no turning; the mesh draws as authored. The default.
+ * - `'none'`: no turning; the mesh draws as authored.
  * - `'spherical'`: lies square to the screen however the camera turns. Suits glows, impact
  *   flashes, icons and distance markers.
  * - `'cylindrical'`: turns around its own up axis toward the camera but never tips, so it stays
  *   planted. Suits trees, grass, crowd cutouts and flat stand-ins for distant models.
- *
- * The vertex shader does the turning, so it works with any material, a lit one as well as an
- * unlit card, and any geometry, flat or solid.
  * @example
  * ```ts
  * const mode: BillboardMode = upright ? 'cylindrical' : 'spherical';
@@ -44,8 +38,8 @@ export type BillboardMode = 'none' | 'spherical' | 'cylindrical';
 /**
  * Constructor options for {@link Mesh3D}
  *
- * `geometry` and `material` are required. The {@link Container3DOptions} apply too, and `label`
- * defaults to `'Mesh3D'`.
+ * `geometry` and `material` can be left out: a mesh built without them draws nothing until both
+ * are assigned. The {@link Container3DOptions} apply too, and `label` defaults to `'Mesh3D'`.
  * @example
  * ```ts
  * const mesh = new Mesh3D({
@@ -57,27 +51,32 @@ export type BillboardMode = 'none' | 'spherical' | 'cylindrical';
  *   parent: view.root,
  * });
  * ```
- * @see {@link Mesh3D} For the constructed scene node and runtime accessors.
  * @category scene
  * @standard
  */
 export interface Mesh3DOptions extends Container3DOptions {
   /**
-   * The geometry to draw; required
+   * The geometry to draw
+   *
+   * Left out, the mesh holds {@link Geometry3D.EMPTY} and draws nothing until you assign
+   * {@link Mesh3D#geometry}.
    * @example
    * ```ts
    * const ball = new Mesh3D({ geometry: new SphereGeometry(), material });
    * ```
    */
-  geometry: Geometry3D;
+  geometry?: Geometry3D;
   /**
-   * The material to draw the geometry with; required
+   * The material to draw the geometry with
+   *
+   * Left out, the mesh holds {@link BaseMaterial3D.EMPTY} and draws nothing until you assign
+   * {@link Mesh3D#material}.
    * @example
    * ```ts
    * const ball = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0xff8844 }) });
    * ```
    */
-  material: BaseMaterial3D;
+  material?: BaseMaterial3D;
   /**
    * Skeleton that deforms the mesh; leave it out for a mesh that doesn't bend
    *
@@ -109,7 +108,8 @@ export interface Mesh3DOptions extends Container3DOptions {
   /**
    * Starting morph target weights, one per target in the geometry; left out, they're all 0
    *
-   * Ignored when the geometry has no morph targets. See {@link Mesh3D#weights}.
+   * Ignored when the geometry has no morph targets, or isn't given yet: weights exist only once
+   * the mesh has a morph geometry, so set {@link Mesh3D#weights} after assigning one.
    * @example
    * ```ts
    * const face = new Mesh3D({ geometry: faceGeometry, material, weights: new Float32Array([0, 1]) });
@@ -132,8 +132,14 @@ export interface Mesh3DOptions extends Container3DOptions {
  *
  * Add it anywhere under {@link View3D.root | view.root} and the view draws it in the passes its
  * material and settings call for: opaque, transparent, shadow and so on. A mesh with a
- * {@link Skeleton} bends with its bones, and one whose geometry has morph targets gets a
- * {@link Morph}. For thousands of copies, {@link BatchedMesh3D} draws them without a node each.
+ * {@link Skeleton} bends with its bones, and one whose geometry has morph targets blends them by
+ * its {@link Mesh3D#weights | weights}. For thousands of copies, {@link BatchedMesh3D} draws them
+ * without a node each.
+ *
+ * The geometry and material can come later: until it has both, a mesh draws nothing. Assigning
+ * them, before or after the mesh joins a view, gives the same mesh as passing them to the
+ * constructor, and a {@link Mesh3D#castShadow}, {@link Mesh3D#enablePass} or
+ * {@link Mesh3D#disablePass} change made while it waits applies once it has both.
  * @example
  * ```ts
  * import { Mesh3D, Material3D } from '@pixi/3d';
@@ -145,26 +151,21 @@ export interface Mesh3DOptions extends Container3DOptions {
  * // Skinned mesh:
  * const skinned = new Mesh3D({ geometry: skinnedGeometry, material, skeleton });
  *
+ * // Geometry and material assigned later:
+ * const later = new Mesh3D({ parent: view.root });
+ * later.geometry = geometry;
+ * later.material = material;
+ *
  * // Toggle shadow casting at runtime:
  * mesh.castShadow = false;
  * ```
  * @see {@link Mesh3DOptions} For the constructor options.
- * @see {@link Container3D} For the scene-graph base class.
- * @see {@link BaseMaterial3D} For the material base class and pass authoring.
- * @see {@link Geometry3D} For vertex/index data construction.
- * @see {@link Skeleton} For skinned-mesh bone hierarchies.
- * @see {@link View3D} For the scene root that indexes meshes.
- * @see {@link BatchedMesh3D} For the high-instance-count counterpart.
  * @category scene
  * @standard
  */
 export class Mesh3D extends Container3D implements Mesh3DData {
   /**
-   * Default {@link Mesh3DOptions} merged under every constructor call
-   *
-   * `new Mesh3D(opts)` resolves as `{ ...Mesh3D.defaultOptions, ...opts }`, ignoring options set
-   * to `undefined`. Mutate to change the defaults process-wide. `geometry`, `material` and
-   * `skeleton` have no default here.
+   * Defaults for every new `Mesh3D`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * Mesh3D.defaultOptions.castShadow = false;
@@ -179,19 +180,12 @@ export class Mesh3D extends Container3D implements Mesh3DData {
 
   private _geometry: Geometry3D;
   private _material: BaseMaterial3D;
+  /** `0` while the geometry or material is a placeholder, else `~0`; cached to skip the `EMPTY` getters per frame */
+  private _placeholderMask = 0;
   private _billboardMode: BillboardMode;
 
-  /** Cache behind {@link Mesh3D#boundingSphere}, made on first read: only culled meshes need one */
   private _worldBoundsSphere: Sphere | null = null;
-  /**
-   * `Container3D._worldTransformId` the cached sphere was built against
-   *
-   * `-1` forces a rebuild: at first, and whenever the geometry, and with it the local sphere, is
-   * swapped, since that doesn't move the transform.
-   */
   private _worldBoundsCacheId = -1;
-  /** Whether the user asked for shadows; {@link Mesh3D#updateShadow} decides if the mesh casts them */
-  private _castShadowIntent: boolean;
 
   /**
    * Skeleton that deforms this mesh; `undefined` for a mesh that doesn't bend
@@ -207,9 +201,8 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   /**
    * Whether this mesh is shadowed by lights that cast shadows
    *
-   * Only lit materials take shadows. Their shader leaves the shadow lookup out until a light in
-   * the view first casts a shadow, and keeps it from then on. After changing this at runtime, call
-   * {@link Mesh3D#invalidate | invalidate} so the shader is rebuilt.
+   * Only lit materials take shadows. After changing it at runtime, call
+   * {@link Mesh3D#invalidate | invalidate}.
    * @example
    * ```ts
    * water.receiveShadow = false;
@@ -218,109 +211,67 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    */
   public receiveShadow: boolean;
 
-  /**
-   * The mesh's morph target state; `undefined` when its geometry has no morph targets
-   *
-   * So it doubles as the check for a morphed mesh, as {@link Mesh3D#skeleton} does for a skinned
-   * one.
-   * @example
-   * ```ts
-   * if (mesh.morph) mesh.morph.weights.fill(0);
-   * ```
-   */
-  public readonly morph?: Morph;
+  /** @internal */
+  public _morph?: Morph;
 
-  /**
-   * The mesh's own pass bits, today only `SHADOW` from {@link Mesh3D#updateShadow}
-   *
-   * OR'd with the material's `_passBit` to give {@link Mesh3D#renderPassMask}.
-   * @internal
-   */
-  public renderPassBits = 0;
+  /** @internal */
+  public _enabledPassBits = 0;
 
-  /**
-   * Per-pass bundled cache: shader, state, topology, batchKey
-   * @internal
-   */
+  /** @internal */
+  public _disabledPassBits = 0;
+
+  /** @internal */
   public _passCache: Record<number, MeshPassCache> = Object.create(null);
 
-  /**
-   * Index of this mesh in the View's scene-batch store buffer. `-1` when detached
-   * @internal
-   */
+  /** @internal */
   public _storeIndex = -1;
 
-  /**
-   * Bone-pit base this mesh's store row was last written with; -1 when it has never held one
-   *
-   * Watermarked per mesh rather than per skeleton because one skeleton can dress several
-   * meshes, and the pit dedupes the second and later adds.
-   * @internal
-   */
+  /** @internal */
   public _lastBonePitIndex = -1;
 
-  /**
-   * Draw-order key for the pass being keyed; `updateMesh3DKeys` owns its layout
-   * @internal
-   */
+  /** @internal */
   public _sortKey = 0;
 
   /**
-   * Whether the mesh's per-pass cache is stale and needs rebuilding
+   * Raise it with `_markBatchDirty`; the flag alone does nothing until the mesh is queued
    * @internal
    */
   public _batchDirty = true;
 
   /**
-   * {@link RenderPassBit} flags of the passes the mesh is a member of, compared with
-   * {@link Mesh3D#renderPassMask} to catch a change
+   * Whether the mesh is in its view's update queue
    * @internal
    */
+  public didRenderableUpdate = false;
+
+  /** @internal */
+  // unused-internal-disable-next-line -- `Geometry3D._meshes` reads and writes it through its UnstableList index key
+  public _geometryMeshIndex = -1;
+
+  /** @internal */
+  // unused-internal-disable-next-line -- `BaseMaterial3D._meshes` reads and writes it through its UnstableList index key
+  public _materialMeshIndex = -1;
+
+  /** @internal */
   public _lastRenderPass = 0;
 
-  /**
-   * Last `material._descriptorDirtyId` this mesh rebuilt against, to catch shader-variant and
-   * pass changes
-   *
-   * `-1` makes the next frame rebuild. Swapping the material resets it: the id counts per
-   * material, so an equal value on the new one would be a coincidence, not "unchanged".
-   * @internal
-   */
+  /** @internal */
   public _lastDescriptorDirtyId = -1;
 
-  /**
-   * Last {@link Container3D.worldVisible} value the render side saw (see `updateView3DScene`)
-   *
-   * A flip re-emits the store row, whose visibility lane mirrors `worldVisible`, and bumps the
-   * batch's visibility dirty-id. Hiding and showing then change only draw data, not membership,
-   * so no draw commands or bundles are rebuilt.
-   * @internal
-   */
+  /** @internal */
   public _lastWorldVisible = 1;
 
-  /**
-   * Index in `View3D._skinnedMeshes`; `-1` when not skinned or detached
-   * @internal
-   */
+  /** @internal */
   public _skinnedMeshIndex = -1;
 
-  /**
-   * Index in `View3D._morphedMeshes`; `-1` when not morphed or detached
-   * @internal
-   */
+  /** @internal */
   public _morphedMeshIndex = -1;
 
-  /**
-   * Index in {@link View3D.meshes}; `-1` when detached
-   * @internal
-   */
+  /** @internal */
   public _allMeshIndex = -1;
 
   /**
    * Creates a new `Mesh3D`; add it under {@link View3D.root | view.root} to draw it
-   *
-   * `hitVolume`, `width`, `height`, `depth` and `parent` are applied last, once the mesh is built:
-   * the first four measure the geometry, and attaching to a view registers the skeleton and morph.
    * @example
    * ```ts
    * const mesh = new Mesh3D({ geometry, material });
@@ -328,15 +279,11 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    * ```
    * @param options - Construction options; see {@link Mesh3DOptions}.
    */
-  constructor(options: Mesh3DOptions) {
-    /**
-     * The mesh's own options, pulled out so the base constructor's option loop never assigns them:
-     * `geometry` and `material` have setters over fields not yet set, and `weights` needs the
-     * morph state
-     */
+  constructor(options: Mesh3DOptions = {}) {
+    /** Held out of `Container3D`'s constructor, which would assign them before the mesh is ready */
     const {
-      geometry,
-      material,
+      geometry = Geometry3D.EMPTY,
+      material = BaseMaterial3D.EMPTY,
       skeleton,
       castShadow,
       receiveShadow,
@@ -357,14 +304,14 @@ export class Mesh3D extends Container3D implements Mesh3DData {
 
     this._geometry = geometry;
     this._material = material;
+    this._updatePlaceholderMask();
     this.skeleton = skeleton;
-    this._castShadowIntent = castShadow!;
+    if (castShadow) this._enabledPassBits = RenderPassBit.SHADOW;
     this.receiveShadow = receiveShadow!;
     this._billboardMode = billboardMode!;
-    if (this._geometry.morphTargetCount > 0) {
-      this.morph = new Morph(weights ?? new Float32Array(this._geometry.morphTargetCount));
+    if (geometry.morphTargetCount > 0) {
+      this._morph = new Morph(weights ?? new Float32Array(geometry.morphTargetCount));
     }
-    this.updateShadow();
     if (hitVolume !== undefined) this.hitVolume = hitVolume;
     if (width !== undefined) this.width = width;
     if (height !== undefined) this.height = height;
@@ -375,15 +322,16 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   /**
    * Morph target weights, one per target; `undefined` when the geometry has no morph targets
    *
-   * The same array as {@link Morph#weights}: write into it, and animations do too. Replacing the
-   * array has a catch, which `Morph#weights` explains.
+   * Change its values at any time rather than assigning a new array: a playing animation keeps
+   * writing the old one, and the parts a model node's mesh splits into share one array, so a new
+   * array cuts this mesh loose from both.
    * @example
    * ```ts
    * if (face.weights) face.weights[smileIndex] = 0.8;
    * ```
    */
   get weights(): Float32Array | undefined {
-    return this.morph?.weights;
+    return this._morph?.weights;
   }
 
   /**
@@ -392,13 +340,11 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    * @param value - New weights, one per morph target.
    */
   set weights(value: Float32Array | undefined) {
-    if (this.morph && value) this.morph.weights = value;
+    if (this._morph && value) this._morph.weights = value;
   }
 
   /**
-   * The geometry this mesh draws
-   *
-   * Assigning another rebuilds the mesh's shader on the next frame, for the new vertex layout.
+   * The geometry this mesh draws; {@link Geometry3D.EMPTY} until it's given one
    * @example
    * ```ts
    * rock.geometry = isFar ? lowDetailRock : highDetailRock;
@@ -409,41 +355,55 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   }
 
   /**
-   * Swaps the geometry
+   * Swaps the geometry, refitting a `hitVolume` given as `'box'` or `'geometry'`
    *
-   * The mesh rebuilds its shader, its store row and its {@link Mesh3D#boundingSphere} for it. A
-   * `hitVolume` given as `'box'` or `'geometry'` is fitted to the new geometry. A hit shape you
-   * gave yourself stays, and the default box is read from the geometry at pick time.
+   * A geometry with as many morph targets as there are {@link Mesh3D#weights} keeps them; one with
+   * a different count gets new weights, all 0; one with none leaves `weights` undefined.
    * @param value - Geometry to draw.
    */
   set geometry(value: Geometry3D) {
     if (this._geometry === value) return;
+    if (this._view3d) {
+      this._geometry._meshes.remove(this);
+      value._meshes.add(this);
+    }
     this._geometry = value;
-    this._batchDirty = true;
-    this._storeDirty = true;
+    this._markBatchDirty();
+    this._markStoreDirty();
     this._worldBoundsCacheId = -1;
+    this._updatePlaceholderMask();
+    if (value.morphTargetCount !== (this._morph?.weights.length ?? 0)) this._replaceMorph();
     if (typeof this._hitVolumeInput === 'string') {
       this._hitVolumeResolved = resolveHitVolume(this, this._hitVolumeInput);
     }
   }
 
-  /**
-   * Hit volume used when an interactive mesh sets no explicit `hitVolume`
-   *
-   * Read per pick rather than cached, so geometry swaps and in-place bounds mutations take
-   * effect immediately.
-   * @internal
-   * @returns The geometry's local-space AABB, {@link Geometry3D.bounds3D}
-   */
+  private _replaceMorph(): void {
+    const old = this._morph;
+    old?._store?.freeSlot(old);
+
+    const count = this._geometry.morphTargetCount;
+    const morph = count > 0 ? new Morph(new Float32Array(count)) : undefined;
+    this._morph = morph;
+
+    const view = this._view3d;
+    if (!view) return;
+    if (old && !morph) view._morphedMeshes.remove(this);
+    else if (!old && morph) view._morphedMeshes.add(this);
+  }
+
+  /** @internal */
   public override _getDefaultHitVolume(): HitVolume3D {
     return this._geometry.bounds3D;
   }
 
   /**
-   * The material this mesh draws with
+   * The material this mesh draws with; {@link BaseMaterial3D.EMPTY} until it's given one
    *
-   * Assigning another rebuilds the mesh's shader on the next frame and checks again whether the
-   * mesh casts shadows.
+   * Many meshes can draw one material, and a value written to it shows on all of them. A
+   * {@link Model3D}'s meshes draw its source's materials, shared with every model built from that
+   * source; {@link Model3D#materials} gives one model copies of its own. For one mesh alone, assign
+   * `mesh.material.clone({ baseColor: 0xff0000 })`, and destroy the copy when you're done with it.
    * @example
    * ```ts
    * crate.material = selected ? highlightMaterial : crateMaterial;
@@ -454,55 +414,125 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   }
 
   /**
-   * Swaps the material, rebuilding the mesh's shader and store row and checking its shadow casting
-   * again
+   * Swaps the material
    * @param value - Material to draw the geometry with.
    */
   set material(value: BaseMaterial3D) {
     if (this._material === value) return;
+    if (this._view3d) {
+      this._material._meshes.remove(this);
+      value._meshes.add(this);
+    }
     this._material = value;
-    this._batchDirty = true;
-    this._storeDirty = true;
+    this._markBatchDirty();
+    this._markStoreDirty();
     this._lastDescriptorDirtyId = -1;
-    this.updateShadow();
+    this._updatePlaceholderMask();
+  }
+
+  private _updatePlaceholderMask(): void {
+    this._placeholderMask = this._geometry === Geometry3D.EMPTY || this._material === BaseMaterial3D.EMPTY ? 0 : ~0;
+  }
+
+  /** @internal */
+  public _markBatchDirty(): void {
+    this._batchDirty = true;
+    this._queueMeshUpdate();
+  }
+
+  /** @internal */
+  public _markStoreDirty(): void {
+    this._storeDirty = true;
+    this._queueMeshUpdate();
+  }
+
+  /** @internal */
+  public _queueMeshUpdate(): void {
+    if (this.didRenderableUpdate || !this._view3d) return;
+    this.didRenderableUpdate = true;
+    this._view3d._onRenderableUpdate(this);
   }
 
   /**
    * Whether this mesh casts shadows
    *
    * A mesh whose material has `alphaMode: 'blend'`, or uses transmission, casts none even while
-   * this is `true`. See {@link Mesh3D#updateShadow | updateShadow} for a material changed after
-   * the mesh got it.
+   * this is `true`. Setting it is `enablePass('shadow')` or `disablePass('shadow')`.
    * @example
    * ```ts
    * grass.castShadow = false;
    * ```
    */
   get castShadow(): boolean {
-    return this._castShadowIntent;
+    return (this._enabledPassBits & RenderPassBit.SHADOW) !== 0;
   }
 
   /**
-   * Sets whether the mesh should cast shadows and checks whether it can
-   * @param value - Whether the mesh should cast shadows; blended and transmissive materials still won't.
+   * Sets whether the mesh casts shadows, from the next render
+   * @param value - Whether the mesh casts shadows.
    */
   set castShadow(value: boolean) {
-    if (this._castShadowIntent === value) return;
-    this._castShadowIntent = value;
-    this.updateShadow();
+    if (value) this._enablePassBit(RenderPassBit.SHADOW);
+    else this._disablePassBit(RenderPassBit.SHADOW);
+  }
+
+  /**
+   * Adds this mesh to a render pass, whatever its material says
+   *
+   * {@link BaseMaterial3D#enablePass} for one mesh: the pass draws this mesh from the next render,
+   * and other meshes sharing the material don't follow. It undoes this mesh's own `disablePass`
+   * for the pass. `'shadow'` is the same as setting `castShadow`.
+   * @param name - The pass's `name`, such as `'outline'`.
+   * @example
+   * ```ts
+   * hovered.enablePass('outline');
+   * ```
+   */
+  public enablePass(name: string): void {
+    this._enablePassBit(passBitRegistry.getOrAllocate(name));
+  }
+
+  /**
+   * Takes this mesh out of a render pass, whatever its material says
+   *
+   * The mesh leaves the pass on the next render, and other meshes sharing the material stay in it.
+   * `disablePass('opaque')` draws nothing of the mesh while it still casts its shadow. Only the
+   * named pass is left, so a material that later turns `'blend'` brings the mesh into the
+   * transparent pass. {@link Mesh3D#enablePass} undoes it. Does nothing for a pass name nothing
+   * has used yet.
+   * @param name - The pass's `name`, such as `'opaque'`.
+   * @example
+   * ```ts
+   * shadowProxy.disablePass('opaque');
+   * ```
+   */
+  public disablePass(name: string): void {
+    const bit = passBitRegistry.get(name);
+    if (bit !== undefined) this._disablePassBit(bit);
+  }
+
+  private _enablePassBit(bit: number): void {
+    if (this._enabledPassBits & bit) return;
+    this._enabledPassBits |= bit;
+    this._disabledPassBits &= ~bit;
+    this._markBatchDirty();
+  }
+
+  private _disablePassBit(bit: number): void {
+    if (this._disabledPassBits & bit) return;
+    this._enabledPassBits &= ~bit;
+    this._disabledPassBits |= bit;
+    this._queueMeshUpdate();
   }
 
   /**
    * How this mesh turns to face the camera; see {@link BillboardMode} for the modes
    *
-   * The vertex shader rebuilds the mesh around its world position in axes aimed at the camera,
-   * keeping the scale of each axis. A flat card ends up facing the lens, and a solid mesh keeps its
-   * depth while it turns. Local `+Z` ends up pointing at the viewer, so author a card facing `+Z`.
-   * It works with any material, lit or unlit. Changing it recompiles the mesh's shader on the next
-   * frame.
-   *
-   * {@link BatchedMesh3D} slots have it too, through {@link BatchedMesh3D#items | items}, and need
-   * {@link BatchedMesh3D#invalidate | invalidate} after a change.
+   * Local `+Z` turns to face the viewer, so author a card facing `+Z`; any material works, lit or
+   * unlit. A solid mesh keeps its depth and the scale along each axis as it turns, but loses the
+   * shear of a non-uniformly scaled parent under a rotation. Its shadow and its culling use the
+   * unturned mesh, so geometry off-centre from its origin can be culled while on screen, and meshes
+   * with different modes don't share a draw.
    * @example
    * ```ts
    * card.billboardMode = 'cylindrical';
@@ -513,18 +543,22 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   }
 
   /**
-   * Switches the billboard basis, recompiling the shader variant on the next frame
+   * Sets how the mesh turns to face the camera
    * @param value - How to orient the mesh toward the camera, or `'none'` to draw it as authored.
    */
   set billboardMode(value: BillboardMode) {
     if (this._billboardMode === value) return;
     this._billboardMode = value;
-    this._batchDirty = true;
+    this._markBatchDirty();
   }
 
   /**
    * The {@link RenderPassBit} flags of the passes that draw this mesh: its material's passes, plus
-   * `SHADOW` while it casts shadows
+   * `SHADOW` while it casts shadows, or none while it holds {@link Geometry3D.EMPTY} or
+   * {@link BaseMaterial3D.EMPTY}
+   *
+   * The mesh's own {@link Mesh3D#enablePass} and {@link Mesh3D#disablePass} win over its
+   * material's, and a blended or transmissive material casts no shadow.
    * @example
    * ```ts
    * const castsShadow = (mesh.renderPassMask & RenderPassBit.SHADOW) !== 0;
@@ -532,24 +566,19 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    * @advanced
    */
   get renderPassMask(): number {
-    return this.renderPassBits | this._material._passBit;
+    const passBit = this._material._passBit;
+    const mask = (this._enabledPassBits | passBit) & ~this._disabledPassBits & this._placeholderMask;
+
+    return passBit & (RenderPassBit.TRANSPARENT | RenderPassBit.TRANSMISSION) ? mask & ~RenderPassBit.SHADOW : mask;
   }
 
   /**
-   * This mesh's bounding {@link Sphere} in world space
+   * This mesh's bounding {@link Sphere} in world space, large enough for morph weights from 0 to 1
    *
-   * The geometry's {@link Geometry3D.boundsSphere} moved by
-   * {@link Container3D.worldTransform | worldTransform}, its radius scaled by the transform's
-   * largest axis scale. A morphed mesh's sphere grows by the farthest its morph targets can move a
-   * vertex at weights from 0 to 1, as the GPU cull's does, so it holds every pose.
-   *
-   * It's rebuilt only when the world transform or the geometry changes, so every read in a frame,
-   * including each render pass that culls the mesh, shares one computation. It follows the last
-   * world transform the view worked out, so read it after the view's transform pass, as with
-   * `worldTransform`.
-   *
-   * Dynamic geometry has no bounds, so its sphere is empty (`radius < 0`). The sphere is shared:
-   * don't change it, and `clone()` it to keep a copy.
+   * Cached until the world transform or geometry changes, so reading it often is cheap. It follows
+   * {@link Container3D.worldTransform | worldTransform}, so it can be out of date after a change
+   * this frame. Dynamic geometry gives an empty sphere (`radius < 0`). The sphere is shared: don't
+   * change it, and `clone()` it to keep a copy.
    * @example
    * ```ts
    * if (camera.frustum.intersectsSphere(enemy.boundingSphere)) enemy.lookAt(player.position);
@@ -562,7 +591,7 @@ export class Mesh3D extends Container3D implements Mesh3DData {
       const geometry = this._geometry;
       if (geometry.dynamic) {
         sphere.makeEmpty();
-      } else if (geometry._morphBoundsExpansion > 0) {
+      } else if (this._morph && geometry._morphBoundsExpansion > 0) {
         _morphExpandedSphere.copyFrom(geometry.boundsSphere);
         _morphExpandedSphere.radius += geometry._morphBoundsExpansion;
         _morphExpandedSphere.applyMatrix4(this.worldTransform, sphere);
@@ -574,41 +603,12 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   }
 
   /**
-   * Works out again whether this mesh casts shadows, from {@link Mesh3D#castShadow | castShadow}
-   * and its material
-   *
-   * Setting `castShadow` or `material` calls it. Call it yourself after switching the mesh's
-   * material to or from `alphaMode: 'blend'`: a material doesn't know its meshes, so it can't tell
-   * them.
-   *
-   * When the answer changes, the mesh rebuilds on the next frame, which gives the shadow pass
-   * draw state for a mesh that starts casting.
-   * @example
-   * ```ts
-   * glass.alphaMode = 'blend';
-   * for (const mesh of glassMeshes) mesh.updateShadow();
-   * ```
-   */
-  public updateShadow(): void {
-    const translucent = RenderPassBit.TRANSPARENT | RenderPassBit.TRANSMISSION;
-    const isTranslucent = (this._material._passBit & translucent) !== 0;
-    const prev = this.renderPassBits;
-    if (this._castShadowIntent && !isTranslucent) {
-      this.renderPassBits |= RenderPassBit.SHADOW;
-    } else {
-      this.renderPassBits &= ~RenderPassBit.SHADOW;
-    }
-
-    if (this.renderPassBits !== prev) this._batchDirty = true;
-  }
-
-  /**
    * Makes the mesh rebuild its shader and draw state on the next frame
    *
    * Assigning `geometry`, `material` or `billboardMode` does this for you, and so do most material
    * changes; {@link BaseMaterial3D} lists the ones that need this call. Call it too after changing
-   * {@link Mesh3D#receiveShadow | receiveShadow}, or after editing the geometry's attributes in
-   * place, such as adding tangents.
+   * {@link Mesh3D#receiveShadow | receiveShadow}. It doesn't re-read vertex data edited in place;
+   * call {@link Geometry3D.unload} for that.
    * @example
    * ```ts
    * mesh.receiveShadow = false;
@@ -616,21 +616,16 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    * ```
    */
   public invalidate(): void {
-    this._batchDirty = true;
+    this._markBatchDirty();
   }
 
   /**
-   * Frees this mesh's geometry from the GPU now: its buffers and its range in the shared geometry
-   * buffer
+   * Unloads this mesh's geometry now
    *
-   * The vertex data stays on the CPU, so the next frame that draws the mesh uploads it again and
-   * draws the same image. The mesh also rebuilds then, since its recorded draw points at the range
-   * the geometry gave up.
-   *
-   * The material is left alone, since one material usually dresses many meshes. Call
-   * {@link BaseMaterial3D.unload} for that, or {@link Model3D.unload} to free a model's geometry
-   * and textures together. Unloading a mesh that's still drawn works but gains nothing, since the
-   * next frame uploads it all again; remove it from the scene first.
+   * The vertex data stays on the CPU, so the next frame that draws the mesh uploads it again.
+   * Remove the mesh from the scene first, or that happens straight away. The material is left
+   * alone, since it's usually shared: call {@link BaseMaterial3D.unload} for that, or
+   * {@link Model3D.unload} to free a model's geometry and textures together.
    * @example
    * ```ts
    * view.root.removeChild(mesh);
@@ -645,34 +640,43 @@ export class Mesh3D extends Container3D implements Mesh3DData {
     super.unload();
     this._geometry.unload();
 
-    this._batchDirty = true;
-    this._storeDirty = true;
+    this._markBatchDirty();
+    this._markStoreDirty();
   }
 
-  /**
-   * Publishes the freshly recomputed world matrix into this mesh's store row
-   *
-   * Runs inside the transform pass, so the matrix is written while it is hot instead of
-   * being re-read cold by the scene sweep. Only the matrix lanes move; the u32 lanes stay
-   * event-driven through `_storeDirty`. A mesh with no row yet (first frame after attach)
-   * defers to the sweep, which allocates and copies the full row.
-   *
-   * A non-negative `_storeIndex` is trusted exactly as the sweep's `set` trusts it: it names a
-   * live row of `view3d._sceneBatch.storeBuffer`. That store is the only one that mints the
-   * index and is never swapped on its View; `View3D._detach` resets the index before this mesh
-   * can join another View, and a View destroys the store only after every mesh has left it.
-   * @internal
-   */
+  /** @internal */
   public override _storeWorldTransform(): void {
     const index = this._storeIndex;
 
     if (index < 0) {
-      this._storeDirty = true;
+      this._markStoreDirty();
 
       return;
     }
 
-    this._view3d!._sceneBatch.storeBuffer.writeWorldTransform(index, this.worldTransform.elements64);
+    const store = this._view3d!._sceneBatch.storeBuffer;
+    const worldTransform = this.worldTransform;
+    store.writeWorldTransform(index, worldTransform.elements64);
+    if (store.writesSpheres) {
+      const geometry = this._geometry;
+      store.writeBoundingSphere(
+        index,
+        worldTransform.elements,
+        0,
+        geometry,
+        this._morph ? geometry._morphBoundsExpansion : 0,
+      );
+    }
+  }
+
+  /** @internal */
+  public override _storeWorldVisible(): void {
+    if (this._worldVisible === this._lastWorldVisible) return;
+    this._lastWorldVisible = this._worldVisible;
+    const batch = this._view3d!._sceneBatch;
+    if (this._storeIndex < 0) this._markStoreDirty();
+    else batch.storeBuffer.writeVisibility(this._storeIndex, this._worldVisible);
+    batch._visibilityDirtyId++;
   }
 
   /**
@@ -680,11 +684,9 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    *
    * Geometry and material are often shared, so they stay unless you pass `geometry` or
    * `material`. `texture` then frees the destroyed material's textures, and `textureSource` their
-   * sources. The {@link Mesh3D#skeleton | skeleton} is never destroyed here: its {@link Model3D},
-   * or whoever built it, owns it.
-   *
-   * The base `destroy` runs first, so the view lets go of the mesh while its slots in the view's
-   * lists are still live.
+   * sources. The placeholders {@link Geometry3D.EMPTY} and {@link BaseMaterial3D.EMPTY} always
+   * stay. The {@link Mesh3D#skeleton | skeleton} is never destroyed here: its {@link Model3D}, or
+   * whoever built it, owns it.
    * @example
    * ```ts
    * mesh.destroy({ geometry: true, material: true });
@@ -699,6 +701,8 @@ export class Mesh3D extends Container3D implements Mesh3DData {
     this._passCache = Object.create(null);
     this._storeIndex = -1;
     this._allMeshIndex = -1;
+    this._geometry._meshes.remove(this);
+    this._material._meshes.remove(this);
     this._skinnedMeshIndex = -1;
     this._morphedMeshIndex = -1;
 
@@ -710,12 +714,7 @@ export class Mesh3D extends Container3D implements Mesh3DData {
     this._material = null!;
   }
 
-  /**
-   * Frees this mesh's geometry when `destroy` is asked for `geometry`
-   *
-   * A subclass whose geometry is never its to free overrides it as a no-op, as {@link Sprite3D}
-   * does for its shared quad, so the caller's flags still reach the children unchanged.
-   */
+  /** Frees the geometry for `destroy`; a subclass that doesn't own its geometry overrides it as a no-op */
   protected _destroyGeometry(): void {
     this._geometry.destroy(true);
   }

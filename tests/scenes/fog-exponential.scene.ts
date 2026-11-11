@@ -8,19 +8,12 @@ import { View3D } from '~/scene/View3D';
 
 const FOG_COLOR = 0xadb2ba;
 
-// Fully-fogged geometry converges on FOG_COLOR *after* the View's tone curve,
-// while the 2D clear is never tone-mapped, so the backdrop has to be the
-// post-curve value or a seam shows where distant geometry should dissolve.
-const FOGGED_BACKDROP = 0xb9bdc2;
-
 export const scene: TestScene = {
-  app: {
-    backgroundColor: FOGGED_BACKDROP,
-  },
   create: async (app) => {
     const view3d = new View3D({
       width: app.screen.width,
       height: app.screen.height,
+      background: FOG_COLOR,
       fog: { type: 'exponential', color: FOG_COLOR, density: 0.18 },
     });
 

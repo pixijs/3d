@@ -1,187 +1,129 @@
 import { DrawCommandList } from '../batcher/DrawCommandList';
-import type { Mesh3DData } from '../batcher/Mesh3DData';
+import type { Mesh3DData, MeshPassCache } from '../batcher/Mesh3DData';
 import { SortedMesh3DView } from '../batcher/SortedMesh3DView';
+import { pipelineState } from '../batcher/updateMesh3DKeys';
 import { DrawArgs } from '../buffers/DrawArgs';
 import { RenderInstanceBuffer } from '../buffers/RenderInstanceBuffer';
 import type { RenderInstanceTexture } from '../buffers/RenderInstanceTexture';
 
-/**
- * Options for constructing a {@link DrawList}
- * @internal
- */
 interface DrawListOptions {
-  /** The renderables backing the sorted view */
   items: Mesh3DData[];
-  /** Debug label applied to the GPU instance buffer */
   label: string;
-  /** Initial capacity of the sorted view */
+  bit: number;
   initialCapacity?: number;
 }
 
-/**
- * WebGL-specific state of a {@link DrawList}
- *
- * WebGL has nothing baked: the compaction runs on the CPU inside each draw and its output is
- * consumed by the GL calls that follow, so every pass drawing the list rewrites one shared index
- * texture in place. There is no per-pass record on this backend.
- */
 interface GlData {
-  /** The number of instance slots currently in use */
-  usedSlots: number;
-  /**
-   * The compaction output — one texel per *drawn* instance naming a mesh store row
-   *
-   * Survivors only, written contiguously from each command's stable base, rewritten before
-   * every draw that reads it. `null` until this list first builds for its batch.
-   */
   indexTexture: RenderInstanceTexture | null;
-  /**
-   * The build's output — one texel per instance in sorted order, before culling
-   *
-   * Kept separate from `indexTexture` so the build's output survives a frame's culling and every
-   * draw can compact from it afresh.
-   */
+  /** The records before culling, kept apart from `indexTexture` so every draw compacts from them afresh */
   indexStaging: Uint32Array | null;
-  /**
-   * Last `Mesh3DBatch._visibilityDirtyId` the in-place compaction consumed
-   *
-   * `-1` forces the walk on first use; a mismatch means visibility changed since the last walk,
-   * so a visibility-only draw re-runs it (frustum producers run every draw regardless).
-   */
   lastVisibilityDirtyId: number;
 }
 
-/**
- * WebGPU-specific state of a {@link DrawList}
- *
- * The build output every pass's cull reads from, and the counter that tells every pass's
- * bundle to re-record. What a pass bakes — its survivors, its counts, its bundle — lives on
- * that pass's `CullResult`.
- */
 interface GpuData {
-  /**
-   * Interleaved per-draw-order instance records `[storeIndex, packedTextureSlots]`
-   *
-   * The id half indirects into the store buffer; the texture-slot half feeds the
-   * batch-texture unpack. Written by `populateIds` (ids) + the batcher (slots). The
-   * compactions read it and write their survivors elsewhere, so it survives a frame's culling.
-   */
+  /** The records before culling; each pass's `CullResult` writes its survivors elsewhere */
   instanceBuffer: RenderInstanceBuffer;
-  /**
-   * Bumped when something a bundle baked at record time changes while the draw commands stay valid
-   *
-   * The render graph bumps it when a texture a pass samples swaps source, as a pooled texture does
-   * when the viewport crosses into another size bucket, or dies and gives way to a placeholder.
-   * `View3D._invalidateBundleCaches` bumps it
-   * when a global binding changes identity, such as the shadow map, and {@link DrawList.unload}
-   * bumps it too. A rebuild needs no bump: it moves the command list's dirty id, and every result
-   * re-syncs and drops its bundle on that (`CullResult.sync`). A camera swap is caught per result
-   * by the bind group {@link CullResult.isBundleStale} is handed, and a target changing attachment
-   * state or winding by the encoder's bundle stamp at replay. Every pass drawing this list keeps
-   * its own watermark of this one counter. WebGL never reads it, since it rebinds everything live.
-   */
+  /** Bumped when a bundle must re-record while the draw commands stay valid; each pass keeps its own watermark */
   bundleDirtyId: number;
 }
 
+/** Scratch every list's {@link DrawList.applyEdits} shares, since no two edits run at once */
+let editRecords = new Uint32Array(0);
+let editCursors = new Uint32Array(0);
+
+const NO_COMMAND = -1;
+
+/** `_rowCommand` holds `JOINING_BASE - k` for a row joining command `k`, so it isn't taken for one that stayed */
+const JOINING_BASE = -2;
+
+/** Tail commands a list holds before it rebuilds; each is a live draw outside the bundle on indirect WebGPU */
+const TAIL_COMMAND_CAP = 64;
+
+/** Scene updates a tail may stand with no new command before the list rebuilds it into the body */
+const TAIL_QUIET_FRAMES = 60;
+
+function kindHash(batchKey: number, textureSetId: number): number {
+  const h =
+    Math.imul(batchKey >>> 0, 0x9e3779b1) ^
+    Math.imul((batchKey / 0x1_0000_0000) >>> 0, 0x85ebca6b) ^
+    Math.imul(textureSetId, 0xc2b2ae35);
+
+  return h ^ (h >>> 15);
+}
+
 /**
- * The draw list of one pass bit on one batch: the renderables in draw order, the draw commands
- * built from them, and the build output the compactions read
+ * The meshes of one pass bit on one batch, the commands that draw them, and one record per mesh grouped by command
  *
- * Camera-independent, and built once per shape change. Every pass that draws this list
- * reads the same list; what a camera decides — which instances survive, how many each
- * command draws, and the bundle recorded for them — lives per pass, in a `CullResult` on
- * WebGPU, and is rewritten in place per draw on WebGL (see {@link GlData}).
- *
- * Rebuilds are gated by counter/watermark pairs. Anything that invalidates cached work
- * bumps a counter ({@link DrawList.drawDirtyId}, `GpuData.bundleDirtyId`); whoever owns that
- * work stores the value it last built from ({@link DrawList.lastDrawDirtyId},
- * `CullResult.lastBundleDirtyId`) and redoes it only when the two differ. The counters live on
- * the batch/pass slot rather than the View, so dirtying one mesh costs just the batch and pass
- * it belongs to — every other batch replays its cache untouched. That scoping is the whole
- * point; a View-wide flag would make one moving mesh rebuild the scene.
- *
- * Naming: a counter is `<thing>DirtyId` when it tracks content or shape changing
- * (draw work, visibility, a material's shader descriptor), and `<thing>Version` when
- * it tracks a resource's identity changing (a buffer reallocating under cached bind
- * state). A watermark is `last` + the counter's name — named for what it watches,
- * not the host it sits on — with the underscore applied to both halves or neither.
- *
- * Write a watermark only where the work it guards actually ran. Claiming one on a path
- * that skipped the build leaves the batch replaying a stale cache until some unrelated
- * change happens to bump the counter again. The stale check ({@link isDrawStale}) is pure
- * and safe to ask from any phase; the claims ({@link claimDrawBuilt}, {@link claimDrawEmpty})
- * write a pair atomically and are the only places the draw watermarks should move.
+ * Every pass on the bit shares it; what a camera's cull decides lives in each pass's `CullResult` on WebGPU.
  * @internal
  */
 export class DrawList {
-  /**
-   * Renderable count the current {@link commandList} was built from
-   *
-   * A second gate beside {@link drawDirtyId}, since adds and removes bump that too.
-   * Passes that deliberately build nothing park it at `0` so the next frame rebuilds;
-   * `-1` can never match a real count, so the first frame always builds. Written only
-   * by {@link claimDrawBuilt} / {@link claimDrawEmpty}.
-   */
-  public lastCount = -1;
-
-  /** The meshes this batch contributes to this pass, held in draw order */
+  /** Between rebuilds only its members are current: `view.indices` keeps the last rebuild's order */
   public view: SortedMesh3DView<Mesh3DData>;
 
-  /**
-   * Bumped when the *shape* of this batch's draw work for this pass changes: a renderable
-   * added or removed, a mesh rekeyed by `RenderPass.onRenderableDirty` (its shader,
-   * material or geometry changed), a shared store the recorded commands bind into
-   * growing and reallocating underneath them, or a resource the commands captured losing its
-   * GPU copy (`DrawCommandList.onCaptureLost`).
-   */
+  /** Bumped when a change needs a rebuild rather than an {@link applyEdits} */
   public drawDirtyId = 0;
 
-  /**
-   * The {@link drawDirtyId} the current {@link commandList} was built from
-   *
-   * `-1` forces the first build. Written only by {@link claimDrawBuilt} /
-   * {@link claimDrawEmpty}.
-   */
   public lastDrawDirtyId = -1;
+  public lastOrderDirtyId = -1;
 
   /**
-   * How this list is culled, chosen from its batch's `cull` mode and the instance count
-   *
-   * The forward draws (`prepareForwardBatchesGpu`, `renderForwardBatchesGl`) and the shadow passes
-   * set it. On WebGPU it picks what fills a pass's survivors: `'off'` the visibility-only walk,
-   * `'cpu'` and `'gpu'` the frustum compactions; bundles always bind the survivors. On WebGL it
-   * routes the batcher's in-place cull.
+   * Bumped when {@link applyEdits} moves the commands' ranges or adds a tail command; each `CullResult`
+   * re-copies its args on it
    */
-  public _cullProducer: 'off' | 'cpu' | 'gpu' = 'off';
+  public rangesDirtyId = 0;
 
-  /** Shared draw-command cache both backends replay */
+  public readonly bit: number = 0;
   public commandList = new DrawCommandList();
 
-  /**
-   * The draw args as the batcher built them: the static lanes (index counts, offsets,
-   * `firstInstance`) and each command's full instance count, CPU-side only
-   *
-   * WebGL draws straight from it, rewriting the `instanceCount` lanes in place per draw. On
-   * WebGPU it is the template every pass's `CullResult` copies its own GPU-backed args from on
-   * sync; the culls then rewrite the copies, never this.
-   */
+  /** The draw args; WebGL's draws rewrite its instance counts in place, and each WebGPU `CullResult` culls a copy */
   public drawData = new DrawArgs();
 
-  /** WebGPU state (the pre-cull instance buffer and the bundle invalidation counter) */
   public gpuData: GpuData;
-
-  /** WebGL state (index staging + the in-place compaction texture) */
   public glData: GlData;
 
+  /** The command drawing each store row, or `NO_COMMAND`; sized by the batch's store, not by every mesh ever met */
+  private _rowCommand: Int32Array = new Int32Array(0);
+
+  /** Members each command holds; the instance-count lane can't serve, since WebGL's draws rewrite it */
+  private _memberCounts = new Uint32Array(0);
+
+  /** 1 for each command a member left since the last {@link applyEdits} */
+  private _left = new Uint8Array(0);
+
+  /** Body commands with no member; the list rebuilds once they outnumber the rest */
+  private _deadCount = 0;
+
+  private _recordCount = 0;
+
+  /** Item indices of the members waiting for a command; indices, so a mesh destroyed meanwhile isn't kept */
+  private _joining = new Uint32Array(64);
+
+  private _joiningCount = 0;
+  private _firstEdited = Infinity;
+  private _readDirtyId = -1;
+
+  /** Set under `cache: 'never'`, whose list rebuilds every frame and takes no edits */
+  private _alwaysRebuilt = false;
+
+  /** The commands by kind: an open-addressed table of command index plus one, probed from `kindHash` */
+  private _kinds = new Int32Array(0);
+
+  /** Places of {@link _kinds} in use, or -1 when the table is stale */
+  private _kindsUsed = -1;
+
+  private _edited = false;
+  private _quietFrames = 0;
+  private _lastQuietTick = -1;
   private _destroyed = false;
 
   constructor(options: DrawListOptions) {
     this.view = new SortedMesh3DView<Mesh3DData>(options.items, options.initialCapacity);
+    this.bit = options.bit;
 
     this.glData = {
       indexTexture: null,
       indexStaging: null,
-      usedSlots: 0,
       lastVisibilityDirtyId: -1,
     };
 
@@ -195,51 +137,421 @@ export class DrawList {
     };
   }
 
-  /**
-   * Whether the cached draw work (command list / instance data) is stale for `count` renderables
-   *
-   * Pure — prepare, compute, and render may all ask in the same frame; claiming is
-   * separate ({@link claimDrawBuilt}). Callers OR in their own extra conditions (e.g.
-   * `alwaysRebuild`). Per batch-pass, not per item — don't call from instance walks.
-   * @param count - The renderable count the caller is about to draw
-   * @returns Whether the cached draw work must be rebuilt
-   */
-  public isDrawStale(count: number): boolean {
-    return this.drawDirtyId !== this.lastDrawDirtyId || count !== this.lastCount;
+  public get records(): Uint32Array {
+    return this.glData.indexStaging ?? this.gpuData.instanceBuffer.data;
+  }
+
+  /** Whether the commands must rebuild; pure, so any phase may ask, and {@link claimDrawBuilt} claims */
+  public isDrawStale(): boolean {
+    return this.drawDirtyId !== this.lastDrawDirtyId || this._edited;
   }
 
   /**
-   * Claims the draw watermarks after (re)building draw work for `count` renderables
-   *
-   * Call only where the build actually ran — claiming on a skipped path leaves a
-   * stale cache replaying (see the class doc).
-   * @param count - The renderable count the draw work was built for
+   * Whether a pass sorted by key must rebuild the list before it draws, sorting the view when it must
+   * @param updateTick - The view's `_updateTick`, so a standing tail counts each scene update once
+   * @param alwaysRebuild - Whether the pass rebuilds every frame (`cache: 'never'`)
    */
-  public claimDrawBuilt(count: number): void {
+  public nextBuild(updateTick: number, alwaysRebuild = false): boolean {
+    this._alwaysRebuilt = alwaysRebuild;
+    if (!alwaysRebuild && !this.isDrawStale()) {
+      const commandList = this.commandList;
+      if (commandList.count === commandList.bodyCount || updateTick === this._lastQuietTick) return false;
+      this._lastQuietTick = updateTick;
+      if (++this._quietFrames < TAIL_QUIET_FRAMES) return false;
+      this.drawDirtyId++;
+    }
+
+    this._quietFrames = 0;
+    this._edited = false;
+    this.view.sort();
+    return true;
+  }
+
+  public isOrderStale(): boolean {
+    return this.view.orderDirtyId !== this.lastOrderDirtyId;
+  }
+
+  /** Claims the draw watermarks; call only where the build ran, after the sort it used */
+  public claimDrawBuilt(): void {
     this.lastDrawDirtyId = this.drawDirtyId;
-    this.lastCount = count;
+    this.lastOrderDirtyId = this.view.orderDirtyId;
   }
 
-  /**
-   * Claims for a pass that deliberately built nothing (zero renderables): the id is
-   * consumed and the count parked at `0`, so the next non-empty frame rebuilds
-   */
+  /** Claims the draw watermark for a list that built nothing because it has no members */
   public claimDrawEmpty(): void {
     this.lastDrawDirtyId = this.drawDirtyId;
-    this.lastCount = 0;
+  }
+
+  /** Adds a mesh; {@link applyEdits} gives it a command */
+  public add(item: Mesh3DData, index: number): void {
+    const editable = this._editable();
+    this.view.add(item.uid, index, item._sortKey);
+    if (editable) this._queueJoin(index);
+    this._edited = true;
+  }
+
+  /** Removes a mesh; call while it still holds its store row */
+  public remove(item: Mesh3DData): void {
+    if (this._editable()) this._dropFromCommand(item._storeIndex);
+    this.view.remove(item.uid);
+    this._edited = true;
+  }
+
+  /** Takes a member whose kind may have changed out of its command, for {@link applyEdits} to place again */
+  public move(item: Mesh3DData): void {
+    if (this._editable() && this._dropFromCommand(item._storeIndex)) this._queueJoin(this.view.indexOf(item.uid));
+    this._edited = true;
   }
 
   /**
-   * Gives back everything this list holds on the GPU, keeping the CPU state that rebuilds it:
-   * the recorded draw program (and with it every capture its build took on textures and
-   * geometry buffers), the GPU copy of the instance buffer, and the WebGL instance-index
-   * texture
-   *
-   * The draw watermark is invalidated because the cleared command list must not be replayed
-   * as-is — the renderable count alone is unchanged, so nothing else would notice it went
-   * empty — and the bundle counter moves so every pass's `CullResult` re-records against the
-   * rebuild. Idempotent, and recoverable by construction: the next frame rebuilds.
+   * Brings the commands up to the view's members without a rebuild, or bumps {@link drawDirtyId}
+   * when they can't take the edit; runs once a frame, at the end of the scene update
    */
+  public applyEdits(): void {
+    if (!this._edited) return;
+    this._edited = false;
+    if (this.lastDrawDirtyId < 0) return;
+
+    if (!this._editable() || !this._repack()) {
+      this._joiningCount = 0;
+      this.drawDirtyId++;
+    }
+  }
+
+  /** Whether the commands can take an edit; ask before changing the view, so the records still match it */
+  private _editable(): boolean {
+    const commandList = this.commandList;
+    if (
+      this.drawDirtyId !== this.lastDrawDirtyId ||
+      commandList.count === 0 ||
+      this._alwaysRebuilt ||
+      this.view.orderForced
+    ) {
+      return false;
+    }
+    if (this._readDirtyId !== commandList.dirtyId) this._readBuild();
+    return true;
+  }
+
+  private _readBuild(): void {
+    const commandList = this.commandList;
+    const commandCount = commandList.count;
+    const drawCalls = this.drawData.drawCalls;
+    const records = this.records;
+    const total = this.view.count;
+
+    const capacity = commandCount + TAIL_COMMAND_CAP;
+    if (this._memberCounts.length < capacity) {
+      this._memberCounts = new Uint32Array(capacity * 2);
+      this._left = new Uint8Array(capacity * 2);
+    }
+    const counts = this._memberCounts;
+    this._left.fill(0);
+    let rowCommand = this._rowCommand.fill(NO_COMMAND);
+
+    for (let k = 0; k < commandCount; k++) {
+      const start = drawCalls[k * 5 + 4];
+      const end = k + 1 < commandCount ? drawCalls[(k + 1) * 5 + 4] : total;
+      counts[k] = end - start;
+      for (let i = start; i < end; i++) {
+        const row = records[i];
+        if (row >= rowCommand.length) rowCommand = this._growRows(row + 1);
+        rowCommand[row] = k;
+      }
+    }
+
+    this._recordCount = total;
+    this._deadCount = 0;
+    this._joiningCount = 0;
+    this._firstEdited = Infinity;
+    this._kindsUsed = -1;
+    this._readDirtyId = commandList.dirtyId;
+  }
+
+  /** Grows {@link _rowCommand}; it doubles, but past 256 rows never beyond what the batch's store can hold */
+  private _growRows(minLength: number): Int32Array {
+    const doubled = Math.min(this._rowCommand.length * 2, this.view.items.length + 1);
+    const grown = new Int32Array(Math.max(minLength, doubled, 256)).fill(NO_COMMAND);
+    grown.set(this._rowCommand);
+
+    return (this._rowCommand = grown);
+  }
+
+  private _queueJoin(index: number): void {
+    if (this._joiningCount === this._joining.length) {
+      if (this._joiningCount >= this.view.items.length) {
+        this._joiningCount = 0;
+        this.drawDirtyId++;
+        return;
+      }
+      const grown = new Uint32Array(this._joining.length * 2);
+      grown.set(this._joining);
+      this._joining = grown;
+    }
+    this._joining[this._joiningCount++] = index;
+  }
+
+  /**
+   * Drops a store row from its command; once dead body commands outnumber live ones the list
+   * rebuilds, since each costs a zero-instance draw in every bundle replay
+   * @returns Whether a command drew the row
+   */
+  private _dropFromCommand(row: number): boolean {
+    const rowCommand = this._rowCommand;
+    if (row < 0 || row >= rowCommand.length) return false;
+    const k = rowCommand[row];
+    if (k < 0) return false;
+
+    rowCommand[row] = NO_COMMAND;
+    this._left[k] = 1;
+    if (k < this._firstEdited) this._firstEdited = k;
+    if (--this._memberCounts[k] > 0) return true;
+
+    const commandList = this.commandList;
+    if (k >= commandList.bodyCount) commandList.releaseTail(commandList.commands[k]);
+    else if (++this._deadCount * 2 > commandList.bodyCount) this.drawDirtyId++;
+    return true;
+  }
+
+  /**
+   * Places the waiting members and lays the records out again; the body of {@link applyEdits}
+   * @returns `false` when the list must rebuild instead
+   */
+  private _repack(): boolean {
+    const view = this.view;
+    const items = view.items;
+    const bit = this.bit;
+    const joining = this._joining;
+    let rowCommand = this._rowCommand;
+    let first = this._firstEdited;
+    let joined = 0;
+
+    for (let p = 0; p < this._joiningCount; p++) {
+      const item = items[joining[p]] as Mesh3DData | null;
+      if (!item || (item._lastRenderPass & bit) === 0) continue;
+      const row = item._storeIndex;
+      if (row >= rowCommand.length) rowCommand = this._growRows(row + 1);
+      if (rowCommand[row] !== NO_COMMAND) continue;
+
+      const cache = item._passCache[bit];
+      if (!cache) return false;
+      let k = this._find(item, cache);
+      if (k < 0) {
+        k = this._record(item, cache);
+        if (k < 0) return false;
+      }
+      if (this._memberCounts[k]++ === 0 && k < this.commandList.bodyCount) this._deadCount--;
+      rowCommand[row] = JOINING_BASE - k;
+      joining[joined++] = row;
+      if (k < first) first = k;
+    }
+    this._joiningCount = 0;
+    this._firstEdited = Infinity;
+
+    const commandList = this.commandList;
+    const bodyCount = commandList.bodyCount;
+    const counts = this._memberCounts;
+    const builtCount = commandList.count;
+    while (commandList.count > bodyCount && counts[commandList.count - 1] === 0) commandList.count--;
+    const commandCount = commandList.count;
+    if (first === Infinity) return true;
+    if (first > commandCount) first = commandCount;
+
+    const count = view.count;
+    if (editRecords.length < count) editRecords = new Uint32Array(Math.ceil(count * 1.5));
+    if (editCursors.length < commandCount) editCursors = new Uint32Array(commandCount * 2);
+    const out = editRecords;
+    const cursors = editCursors;
+    const records = this.records;
+    const recordCount = this._recordCount;
+    const commands = commandList.commands;
+    const drawCalls = this.drawData.drawCalls;
+    const left = this._left;
+    const base = drawCalls[first * 5 + 4];
+    let at = base;
+    let revived = false;
+
+    for (let k = first; k < commandCount; k++) {
+      const command = commands[k];
+      const members = counts[k];
+      const start = drawCalls[k * 5 + 4];
+      const end = k + 1 < builtCount ? drawCalls[(k + 1) * 5 + 4] : recordCount;
+      drawCalls[k * 5 + 4] = at;
+      drawCalls[k * 5 + 1] = members;
+      if (left[k] === 0) {
+        for (let i = start; i < end; i++) out[at++] = records[i];
+      } else {
+        left[k] = 0;
+        for (let i = start; i < end; i++) {
+          const row = records[i];
+          if (rowCommand[row] >= 0) out[at++] = row;
+        }
+      }
+      cursors[k] = at;
+      at = drawCalls[k * 5 + 4] + members;
+      if (command.leftOut && members > 0 && k < bodyCount) {
+        revived = true;
+        command.leftOut = false;
+      }
+      command.dead = members === 0;
+    }
+    if (at !== count) return false;
+
+    for (let p = 0; p < joined; p++) {
+      const row = joining[p];
+      const k = JOINING_BASE - rowCommand[row];
+      rowCommand[row] = k;
+      out[cursors[k]++] = row;
+    }
+
+    const moved = out.subarray(base, count);
+    const glData = this.glData;
+    if (glData.indexStaging) {
+      const indexTexture = glData.indexTexture!;
+      indexTexture.ensureCapacity(count);
+      if (records.length < indexTexture.data.length) {
+        glData.indexStaging = new Uint32Array(indexTexture.data.length);
+        glData.indexStaging.set(records.subarray(0, base));
+      }
+      glData.indexStaging.set(moved, base);
+      glData.lastVisibilityDirtyId = -1;
+    } else {
+      if (count > base) {
+        const instanceBuffer = this.gpuData.instanceBuffer;
+        const grown = instanceBuffer.ensureSize(count);
+        if (grown !== records) grown.set(records.subarray(0, base));
+        grown.set(moved, base);
+        instanceBuffer.upload(count, grown !== records ? 0 : base);
+      }
+      if (revived) this.gpuData.bundleDirtyId++;
+    }
+
+    this._recordCount = count;
+    this.rangesDirtyId++;
+
+    return true;
+  }
+
+  /** The command that draws a member's kind, or -1 */
+  private _find(item: Mesh3DData, cache: MeshPassCache): number {
+    if (this._kindsUsed < 0) this._indexKinds();
+
+    const kinds = this._kinds;
+    const mask = kinds.length - 1;
+    const bound = this.commandList.commands[0].batchBindGroup ? item.material._textureSetId : 0;
+
+    for (let h = kindHash(cache.batchKey, bound) & mask; ; h = (h + 1) & mask) {
+      const entry = kinds[h];
+      if (entry === 0) return -1;
+      if (this._fits(entry - 1, item, cache)) return entry - 1;
+    }
+  }
+
+  /** Fills {@link _kinds} with every command, sized so at most half its places are in use */
+  private _indexKinds(): void {
+    const commandList = this.commandList;
+    const commandCount = commandList.count;
+    let size = 256;
+    while (size < (commandCount + TAIL_COMMAND_CAP) * 2) size *= 2;
+
+    if (this._kinds.length === size) this._kinds.fill(0);
+    else this._kinds = new Int32Array(size);
+
+    this._kindsUsed = 0;
+    for (let k = 0; k < commandCount; k++) this._indexKind(k);
+  }
+
+  /** Enters a command in {@link _kinds}; once half full it is refilled on the next {@link _find} */
+  private _indexKind(k: number): void {
+    const kinds = this._kinds;
+    const mask = kinds.length - 1;
+    const command = this.commandList.commands[k];
+    let h = kindHash(command.batchKey, command.textureSetId) & mask;
+    while (kinds[h] !== 0) h = (h + 1) & mask;
+    kinds[h] = k + 1;
+    if (++this._kindsUsed * 2 > kinds.length) this._kindsUsed = -1;
+  }
+
+  /**
+   * Whether command `k` draws `item`'s kind, compared exactly; an empty tail command has released its
+   * captures (`DrawCommandList.releaseTail`), and the atlas range keeps a mesh out of a command drawing
+   * the range its geometry left
+   */
+  private _fits(k: number, item: Mesh3DData, cache: MeshPassCache): boolean {
+    const commandList = this.commandList;
+    const command = commandList.commands[k];
+    if (cache.batchKey !== command.batchKey) return false;
+    if (k >= commandList.bodyCount && this._memberCounts[k] === 0) return false;
+
+    const alloc = item.geometry._geometryAtlasAllocation;
+    if (command.geometry !== (alloc ? alloc.atlas.geometry : item.geometry)) return false;
+    if (alloc) {
+      const drawCalls = this.drawData.drawCalls;
+      if (drawCalls[k * 5] !== alloc.indexCount || drawCalls[k * 5 + 2] !== alloc.firstIndex) return false;
+    }
+
+    const group = command.batchBindGroup;
+    if (!group) return true;
+
+    return command.merged
+      ? command.textureSetId === item.material._textureSetId
+      : group === item.material._getBindGroup();
+  }
+
+  /**
+   * Records a tail command for a kind no command draws; a list's commands all carry a material
+   * group or none do, as the batchers build them, so the first says which
+   * @returns The command's index, or -1 when the tail is full
+   */
+  private _record(item: Mesh3DData, cache: MeshPassCache): number {
+    const commandList = this.commandList;
+    const commands = commandList.commands;
+    let k = commandList.bodyCount;
+    while (k < commandList.count && this._memberCounts[k] > 0) k++;
+
+    if (k === commandList.count) {
+      if (k - commandList.bodyCount === TAIL_COMMAND_CAP) return -1;
+      commandList.next();
+      this._memberCounts[k] = 0;
+      this.drawData.ensureCapacity(k + 1)[k * 5 + 4] = this._recordCount;
+    }
+
+    const webgl = this.glData.indexStaging !== null;
+    const bindsMaterial = commands[0].batchBindGroup !== undefined;
+    const material = item.material;
+    const alloc = item.geometry._geometryAtlasAllocation;
+    const geometry = alloc ? alloc.atlas.geometry : item.geometry;
+    const command = commands[k];
+
+    commandList.captureTail(command, geometry, bindsMaterial ? material : null);
+    command.geometry = geometry;
+    command.shader = cache.shader;
+    command.globalBindGroup = commands[0].globalBindGroup;
+    command.batchBindGroup = bindsMaterial
+      ? webgl
+        ? material._getMergedBindGroup()
+        : material._getBindGroup()
+      : undefined;
+    command.state = pipelineState(cache.batchKey, cache.state);
+    command.topology = cache.topology;
+    command.batchKey = cache.batchKey;
+    command.textureSetId = bindsMaterial ? material._textureSetId : 0;
+    command.merged = bindsMaterial && webgl;
+    command.dead = false;
+    command.leftOut = false;
+
+    const drawCalls = this.drawData.drawCalls;
+    drawCalls[k * 5] = alloc ? alloc.indexCount : geometry.indexCount || geometry.indexBuffer.data.length;
+    drawCalls[k * 5 + 2] = alloc ? alloc.firstIndex : 0;
+    drawCalls[k * 5 + 3] = alloc && !webgl ? alloc.baseVertex : 0;
+
+    if (this._kindsUsed >= 0) this._indexKind(k);
+    this._quietFrames = 0;
+
+    return k;
+  }
+
+  /** Frees the GPU memory and the captures of the build, keeping the CPU state; the next frame rebuilds */
   public unload(): void {
     if (this._destroyed) return;
 
@@ -251,13 +563,7 @@ export class DrawList {
     this.glData.indexTexture?.unload();
   }
 
-  /**
-   * Releases the GPU resources this list exclusively owns: the instance buffer, the draw
-   * args and the WebGL index texture
-   *
-   * The cached shaders/geometry/bind groups referenced by recorded draw commands are
-   * shared and not destroyed here. Passes' `CullResult`s are theirs to release.
-   */
+  /** Releases what this list owns alone; the shaders, geometry and bind groups its commands use are shared */
   public destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
@@ -268,7 +574,7 @@ export class DrawList {
     this.glData.indexTexture = null;
     this.glData.indexStaging = null;
 
-    this.view.clear();
+    (this.view as SortedMesh3DView<Mesh3DData> | null) = null;
     this.commandList.destroy();
     this.drawData.destroy();
   }

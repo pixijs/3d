@@ -13,38 +13,20 @@ import { particleSizeOverLifeBit } from '../../../scene/particles/bits/particleS
 import { particleSpinBit } from '../../../scene/particles/bits/particleSpinBit';
 import type { ParticleSystem3DOptions } from '../ParticleSystem3D';
 
-/**
- * What the options resolve to before the container is built
- * @internal
- */
 interface DerivedSetup {
-  /** The behaviour bits the options imply, lifetime first */
+  /**
+   * Lifetime first, since the other bits read the age it computes. Motion is always there: `aVel`,
+   * `gravity` and `drag` need it on every system.
+   */
   bits: ShaderBit[];
-  /** What the container binds: the frames, or the whole sheet as one texture */
   texture: Texture | readonly Texture[] | undefined;
-  /** The sheet grid a shader flipbook reads, or `null` when frames are picked at spawn */
+  /** `null` without a shader flipbook */
   grid: [cols: number, rows: number, count: number] | null;
-  /** Whether `texture` is a wrapper made here, for the system to free, rather than the caller's own */
+  /** Whether `texture` was made here, for `ParticleSystem3D.destroy` to free */
   ownsTexture: boolean;
 }
 
-/**
- * Resolves what the options imply about the shader before the container is built
- *
- * The container derives its vertex layout from its bits in its own constructor, so
- * the system settles which behaviour bits to compose, in order, and what the
- * container should bind as its texture before calling it. Lifetime always leads
- * because every other bit reads the age it derives, and motion is always present
- * because a system with nothing but drift still integrates velocity. The rest
- * follow the options one for one.
- *
- * A shader flipbook, `'animate'` or `'overLife'` over several frames, binds the
- * whole sheet as one texture and works out each frame's cell from the grid, so
- * particles carry no frame attribute.
- * @param opts - The merged constructor options.
- * @returns The bits, the texture to bind and the flipbook grid, if any.
- * @internal
- */
+/** @internal */
 export function deriveSetup(opts: ParticleSystem3DOptions): DerivedSetup {
   const bits: ShaderBit[] = [particleLifetimeBit, particleMotionBit];
 

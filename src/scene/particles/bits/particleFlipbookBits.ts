@@ -1,17 +1,7 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
-/**
- * The one uniform both flipbook bits share: the sheet's grid as columns, rows
- * and frame count
- *
- * Frames are assumed to tile the sheet left to right, top to bottom, each cell
- * `1/columns` by `1/rows` of it. That is the one shape a uniform can describe;
- * a non-grid sheet can still pick a fixed frame per particle by writing
- * `aParticleUVFrame` at spawn.
- */
 const GRID_BINDING = { uFlipbookGrid: 'vec3<f32>' } as const;
 
-/** WGSL: the sampling window `(u0, v0, uScale, vScale)` of frame `frame` on the grid */
 const WINDOW_WGSL = /*wgsl*/ `
     let cols = material.uFlipbookGrid.x;
     let rows = material.uFlipbookGrid.y;
@@ -20,7 +10,6 @@ const WINDOW_WGSL = /*wgsl*/ `
     let window = vec4<f32>(col / cols, row / rows, 1.0 / cols, 1.0 / rows);
     uv = window.xy + uv * window.zw;`;
 
-/** GLSL counterpart of {@link WINDOW_WGSL} */
 const WINDOW_GLSL = /*glsl*/ `
     float cols = material.uFlipbookGrid.x;
     float rows = material.uFlipbookGrid.y;
@@ -30,12 +19,11 @@ const WINDOW_GLSL = /*glsl*/ `
     uv = window.xy + uv * window.zw;`;
 
 /**
- * Spreads the flipbook across a particle's lifetime: one pass, first frame
- * at birth, last frame at death
+ * Plays the flipbook once over a particle's life, first frame at birth and last at death
  *
- * Reads `particleProgress` from {@link particleLifetimeBit} and rewrites `uv`
- * from the corner id the particle bit kept, so the container is built with the
- * whole sheet as its one texture and carries no per-particle frame attribute.
+ * Give the container the whole sheet as its one texture, not an array of frames, and set its
+ * `uFlipbookGrid` uniform to `[columns, rows, frameCount]`. Frames run left to right, then top to
+ * bottom, in equal cells. Compose it after {@link particleLifetimeBit}.
  * @category scene
  * @advanced
  */
@@ -70,11 +58,10 @@ ${WINDOW_GLSL}
 } satisfies ShaderBit;
 
 /**
- * Plays the flipbook at `uFrameRate` frames per second from birth, wrapping at
- * the last frame
+ * Plays the flipbook at `uFrameRate` frames per second from birth, looping
  *
- * Reads `particleAge` from {@link particleLifetimeBit}. Same sheet contract as
- * {@link particleFlipbookOverLifeBit}.
+ * Set up the sheet as for {@link particleFlipbookOverLifeBit}, and compose it after
+ * {@link particleLifetimeBit}.
  * @category scene
  * @advanced
  */

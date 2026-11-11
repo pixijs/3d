@@ -12,9 +12,9 @@ import type { PixiStage } from './stage.ts';
 
 /**
  * Builds the field on the stage. `simulate` spins the objects in the data, untimed; the update is one quaternion
- * write per mesh, read straight out of the array the spin was written into.
+ * write per mesh, read straight out of the array the spin was written into, or nothing when `still` is set.
  */
-export function meshPerObject({ view }: PixiStage, data: FieldScene): FrameScene {
+export function meshPerObject({ view }: PixiStage, data: FieldScene, still = false): FrameScene {
   const geometries = data.geometries.map(toGeometry);
   const materials = data.materials.map(toMaterial);
   const meshes: Mesh3D[] = [];
@@ -33,6 +33,7 @@ export function meshPerObject({ view }: PixiStage, data: FieldScene): FrameScene
       data.update(seconds);
     },
     update() {
+      if (still) return;
       let at = 0;
       for (const mesh of meshes) {
         mesh.quaternion.fromArray(quat, at);

@@ -1,25 +1,8 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * `KHR_materials_specular`: scales and tints the dielectric part of the specular reflection
- *
- * `specularParams` holds the tint in `.rgb` and the factor in `.w`. The factor dims the dielectric
- * reflection, from 1 (standard PBR) to 0 (none at all), and the tint colours it. Metals keep
- * `baseColor` as their F0 and 1 as their F90. Following the spec
- * (https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_specular):
- *
- *     dielectricF0 = min(iorF0 * color * texture.rgb, 1) * factor * texture.a
- *     fresnelF0    = mix(dielectricF0, albedo, metallic)
- *     f90          = mix(factor * texture.a, 1, metallic)
- *
- * It runs in the `material` slot after `pbrMaterialBit`, which has already mixed the metal into
- * `fresnelF0`, so it rebuilds the F0 from IOR and mixes again. It must come before
- * `iridescenceBit`, which takes this F0 as its base, and before the lighting bits read it.
- *
- * One texture slot stands in for the spec's two textures: `.rgb` is the tint, sRGB-decoded in the
- * shader, and `.a` the factor. Assets pack them that way; when a glTF names two different images,
- * the loader warns and keeps the colour one. Alpha here is data, not coverage, so the shader undoes
- * pixi's premultiplied upload before decoding the colour, as `sheenBit` does.
+ * Rebuilds F0 from the IOR, as `pbrMaterialBit` has already mixed in the metal. The texture's alpha holds
+ * the factor, so the tint is divided by it to undo pixi's premultiplied upload before decoding
  * @internal
  */
 export const specularBit: ShaderBit = {

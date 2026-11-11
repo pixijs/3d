@@ -2,16 +2,15 @@ import type { BindGroup } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import type { Mesh3DBatch } from '~/core/batcher/Mesh3DBatch';
-import { CullResults } from '~/core/render-passes/CullResult';
+import { CullResults } from '~/core/render-passes/CullResults';
 import { DrawList } from '~/core/render-passes/DrawList';
 import type { View3D } from '~/scene/View3D';
 
 const groupA = {} as BindGroup;
 const groupB = {} as BindGroup;
 
-/** A draw list "built" with two commands of full counts, the way the batcher leaves it */
 function builtList(): DrawList {
-  const list = new DrawList({ items: [], label: 'test' });
+  const list = new DrawList({ items: [], label: 'test', bit: 1 });
   list.commandList.clear();
   list.commandList.next();
   list.commandList.next();
@@ -30,9 +29,9 @@ describe('CullResult', () => {
     const rb = b.ensure(batch(1));
 
     expect(ra).not.toBe(rb);
-    expect(ra.sync(list)).toBe(true);
-    expect(rb.sync(list)).toBe(true);
-    expect(ra.sync(list)).toBe(false);
+    expect(ra.sync(list, false)).toBe(true);
+    expect(rb.sync(list, false)).toBe(true);
+    expect(ra.sync(list, false)).toBe(false);
 
     expect(Array.from(rb.indirectDrawData.drawCalls.subarray(0, 10)), "each result carries the list's lanes").toEqual([
       6, 3, 0, 0, 0, 6, 2, 0, 0, 3,
@@ -49,7 +48,7 @@ describe('CullResult', () => {
     const list = builtList();
     const results = new CullResults();
     const result = results.ensure(batch(1));
-    result.sync(list);
+    result.sync(list, false);
     result.bundle = {} as never;
     result.lastVisibilityDirtyId = 7;
     list.gpuData.bundleDirtyId++;
@@ -62,7 +61,7 @@ describe('CullResult', () => {
     list.commandList.next();
     list.drawData.drawCalls.set([9, 5, 0, 0, 0]);
 
-    expect(result.sync(list)).toBe(true);
+    expect(result.sync(list, false)).toBe(true);
     expect(result.bundle).toBeNull();
     expect(result.lastVisibilityDirtyId).toBe(-1);
     expect(Array.from(result.indirectDrawData.drawCalls.subarray(0, 5))).toEqual([9, 5, 0, 0, 0]);

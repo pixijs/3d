@@ -1,20 +1,7 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Replaces the interpolated normal with the triangle's face normal, for
- * {@link BaseMaterial3DOptions.flatShading}
- *
- * It takes the face normal from the screen-space derivatives of the world position, so it needs
- * no extra attributes or split vertices: the same geometry draws smooth or faceted by material
- * alone.
- *
- * The derivatives' cross product points one way or the other depending on screen handedness, so it
- * is flipped to agree with the incoming `normal`. Back faces and mirrored transforms then light as
- * the smooth normal would, and the double-sided flip before it still works.
- *
- * The renderer adds it after the double-sided flip and before normal mapping, so a normal map bends
- * the face normal rather than being replaced by it. The template declares `normal`, so that
- * position is the same for every material, which is why the option is on {@link BaseMaterial3D}.
+ * The derivative normal's sign follows screen handedness, so it's flipped to agree with `normal`
  * @internal
  */
 export const flatShadingBit: ShaderBit = {

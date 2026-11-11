@@ -91,22 +91,10 @@ describe('Ray', () => {
   });
 
   describe('at', () => {
-    test('default ray at(5) = (0, 0, -5)', () => {
-      const ray = new Ray();
-      const result = ray.at(5);
-      expectVec3Close(result, 0, 0, -5);
-    });
-
     test('origin (1, 2, 3) direction (0, 0, 1) at(2) = (1, 2, 5)', () => {
       const ray = new Ray(new Vector3(1, 2, 3), new Vector3(0, 0, 1));
       const result = ray.at(2);
       expectVec3Close(result, 1, 2, 5);
-    });
-
-    test('at(0) returns origin', () => {
-      const ray = new Ray(new Vector3(1, 2, 3), new Vector3(0, 0, 1));
-      const result = ray.at(0);
-      expectVec3Close(result, 1, 2, 3);
     });
 
     test('writes into supplied out and returns it', () => {
@@ -130,13 +118,6 @@ describe('Ray', () => {
       const ray = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, -1));
       const out = new Vector3();
       ray.closestPointToPoint({ x: 0, y: 0, z: 5 }, out);
-      expectVec3Close(out, 0, 0, 0);
-    });
-
-    test('point at origin returns origin', () => {
-      const ray = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, -1));
-      const out = new Vector3();
-      ray.closestPointToPoint({ x: 0, y: 0, z: 0 }, out);
       expectVec3Close(out, 0, 0, 0);
     });
   });

@@ -7,7 +7,8 @@
  * verdict on either half alone could miss a change in the other.
  *
  * The ladder is 256 and 1024 Foxes, 6,144 and 24,576 bones. It starts at 256 because a host-time verdict needs the
- * host to set the frame, and with fewer characters the GPU's fixed cost of a frame can pace it.
+ * host to set the frame, and with fewer characters the GPU's fixed cost of a frame can pace it. `paused` is 1024 Foxes
+ * posed once and never updated again, the idle characters of a game, so the frame is only the render's fixed work.
  *
  * Needs the models `benchy assets` downloads.
  */
@@ -22,10 +23,14 @@ import { applyLook } from './stage.ts';
 import type { PixiStage } from './stage.ts';
 
 frame('skinned', {
-  variants: { c256: { count: 256 }, c1024: { count: 1024 } },
+  variants: {
+    c256: { count: 256, paused: false },
+    c1024: { count: 1024, paused: false },
+    paused: { count: 1024, paused: true },
+  },
   primary: 'cpu.frame',
   gate: 'strict',
-  async create(stage: PixiStage, { count }) {
+  async create(stage: PixiStage, { count, paused }) {
     const data = skinnedScene(await stage.asset('Fox'), count);
     applyLook(stage, data.look);
     const source = await Assets.load<Scene3DSource>(data.url);
@@ -46,8 +51,13 @@ frame('skinned', {
     // A ticker of the bench's own, never started: it only carries the step into `update`. Each player samples its
     // clip and writes the pose; the joints' world matrices, the bone matrices and their upload are the render's.
     const step = new Ticker();
+    if (paused) {
+      step.deltaMS = 0;
+      for (const player of players) player.update(step);
+    }
     return {
       update(dt) {
+        if (paused) return;
         step.deltaMS = dt * 1000;
         for (const player of players) player.update(step);
       },

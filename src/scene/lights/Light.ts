@@ -15,9 +15,6 @@ import type { Container3DOptions } from '../Container3D';
  * ```ts
  * const suns = view.lights.filter((light: Light) => light.type === 'directional');
  * ```
- * @see {@link Light.type} For the field that carries this tag.
- * @see {@link AmbientLight}, {@link DirectionalLight}, {@link PointLight}, {@link SpotLight}
- *      For the concrete subclasses.
  * @category scene
  * @standard
  */
@@ -59,9 +56,9 @@ export interface LightShadowCommonOptions {
  * Shadow options for one shadow map over a fixed world-space box, the default placement
  *
  * The box is fitted to the scene's shadow casters, or set with
- * {@link LightShadowBoundsOptions.bounds | bounds}. Suits a scene that fits in one view, such as
- * a room, an arena or a board. A spot light takes these options but ignores `bounds`: its shadow
- * covers its cone.
+ * {@link LightShadowBoundsOptions.bounds | bounds}. Suits a scene that fits in one box, such as a
+ * room, an arena, a board, or scenery an orbit camera circles. A spot light takes these options
+ * but ignores `bounds`: its shadow covers its cone.
  * @example
  * ```ts
  * const sun = new DirectionalLight({
@@ -187,9 +184,8 @@ export type LightShadowOptions = LightShadowBoundsOptions | LightShadowCascadesO
 /**
  * A light's shadow settings, as {@link Light.shadow} holds them
  *
- * The same fields as {@link LightShadowOptions}, with the defaults filled in. The shadow pass
- * reads them every frame, so a change shows on the next one. Nothing stops both `bounds` and
- * `cascades` being set here; cascades then win and a warning says so.
+ * The same fields as {@link LightShadowOptions}, with the defaults filled in. Setting both `bounds`
+ * and `cascades` here isn't a type error; cascades win and a warning says so.
  * @example
  * ```ts
  * sun.shadow.cascades = 3;
@@ -203,11 +199,10 @@ export interface LightShadow {
    * World-space box a directional light's shadow covers, or `undefined` to fit the box to the
    * scene's shadow casters
    *
-   * The fitted box is measured again every frame while the view has 256 shadow casters or fewer,
-   * so `castShadow: true` alone gives a well-sized shadow. Past 256, measuring would cost every
-   * frame, so the box is measured once and then kept; call {@link Light.fitShadowBounds} after
-   * the scene changes. Set a box to take control: it is read every frame, so moving it, say to
-   * follow the player, costs nothing extra. Ignored when {@link LightShadow.cascades} is set.
+   * The fitted box follows the scene, so `castShadow: true` alone gives a well-sized shadow; past
+   * 256 shadow casters, see {@link Light.fitShadowBounds}. A box you set is read each time the
+   * shadow redraws, so moving it, say to follow the player, costs nothing extra. Only surfaces
+   * inside the box are sure to get shadows from this light. Ignored when {@link LightShadow.cascades} is set.
    * @example
    * ```ts
    * sun.shadow.bounds = Box.fromCenterSize(player.position, 30);
@@ -229,10 +224,10 @@ export interface LightShadow {
   /**
    * How often the shadow redraws
    *
-   * `1` redraws every frame and `N` every Nth frame. `'manual'`, or `0`, redraws only when
-   * {@link Light.refreshShadows} asks. With cascades, an array gives each cascade its own rate,
-   * and a cascade the array leaves out redraws every frame. A shadow that doesn't redraw keeps
-   * the last one it drew, which suits a scene that doesn't move.
+   * `1` redraws every frame and `N` every Nth frame. `'manual'`, or `0`, draws once, then again
+   * each time {@link Light.refreshShadows} asks. With cascades, an array gives each cascade its own
+   * rate, and a cascade the array leaves out redraws every frame. Slower rates suit a scene that
+   * doesn't move.
    * @example
    * ```ts
    * sun.shadow.update = [1, 2, 8];
@@ -298,7 +293,6 @@ export interface LightShadow {
  * ```ts
  * const sun = new DirectionalLight({ color: 0xfff4e0, intensity: 3, castShadow: true, label: 'sun' });
  * ```
- * @see {@link Light} For the constructed instance and runtime accessors.
  * @category scene
  * @standard
  */
@@ -340,25 +334,11 @@ export interface LightOptions extends Container3DOptions {
   shadow?: LightShadowOptions;
 }
 
-/**
- * GPU-side state cached on every shadow-casting {@link Light}, populated by the shadow render pass
- * @internal
- */
+/** @internal */
 export interface ShadowData {
-  /** Inverse light world transform, scratch reused by every shadow path */
   inverseLightMatrix: Matrix4;
-  /** Light projection, scratch reused as the cascade or single-map projection out-param */
   lightProjectionMatrix: Matrix4;
-  /**
-   * Per-cascade slots (one per cascade), lazily grown. Cascade 0's
-   * `cameraData.viewProjection` is the light's primary view-projection.
-   */
   cascades?: CascadeSlot[];
-  /**
-   * The shadow pass's `targetVersion` this light's layers were last rendered into. When the pass
-   * discards its map, the mismatch is what makes this light re-rasterise its cascades instead of
-   * trusting depth that no longer exists.
-   */
   targetVersion?: number;
 }
 
@@ -394,9 +374,6 @@ export interface ShadowData {
  * // Cheap fill so shadowed areas aren't pitch black.
  * view.root.addChild(new AmbientLight({ intensity: 0.3 }));
  * ```
- * @see {@link View3D} For the scene root that hosts lights.
- * @see {@link Mesh3D} For the renderable type lit by these lights.
- * @see {@link Container3D} For the scene-graph base class.
  * @category scene
  * @standard
  */
@@ -405,25 +382,37 @@ export abstract class Light extends Container3D {
   public abstract readonly type: LightType;
 
   /**
-   * Colour of the light
+   * Colour of the light, multiplied by {@link Light.intensity}
    *
-   * Given in display space like every colour in the engine, and multiplied by
-   * {@link Light.intensity}. Change it at any time; the view reads it every frame.
+   * Assign any {@link ColorSource}, in display (sRGB) space as everywhere in pixi, or change the
+   * returned `Color` in place.
    * @default 0xffffff
    * @example
    * ```ts
-   * sun.color.setValue(0xff9a4d);
+   * sun.color = 0xff9a4d;
+   * sun.color.setValue('#ffd8a8');
    * ```
    */
-  public color: Color;
+  public get color(): Color {
+    return this._color;
+  }
+
+  /**
+   * Sets the colour, copying the value into the light's own `Color`
+   * @param value - Any colour pixi accepts.
+   */
+  public set color(value: ColorSource) {
+    this._color.setValue(value);
+  }
 
   /**
    * Brightness, multiplied into {@link Light.color}
    *
-   * Values above 1 are fine: the view's tone mapping (see {@link View3D.toneMapping}) brings
-   * bright light back into range. A point or spot light dims with the square of the distance, so
-   * it needs a higher intensity than a directional light to look as bright.
-   * @default 1
+   * Values above 1 are fine. A point or spot light dims with the square of the distance, so it
+   * needs a higher intensity than a directional light to look as bright. Lit colour brighter than 1
+   * clips under the default {@link View3D#toneMapping | toneMapping}; a filmic curve such as
+   * `'aces'` rolls it off instead.
+   * @default 1, or 0.5 on an `AmbientLight`
    * @example
    * ```ts
    * lamp.intensity = flicker ? 6 : 8;
@@ -434,9 +423,8 @@ export abstract class Light extends Container3D {
   /**
    * Whether this light casts shadows; only directional and spot lights can
    *
-   * A change takes effect on the next frame. The first time a light in a view casts, the view
-   * recompiles its lit materials to sample shadows. They keep that code after the light stops
-   * casting, so later toggles don't recompile anything.
+   * The first light in a view to cast a shadow makes the view recompile its lit materials, once;
+   * later toggles recompile nothing.
    * @default false
    * @example
    * ```ts
@@ -464,7 +452,7 @@ export abstract class Light extends Container3D {
   /**
    * This light's shadow settings; see {@link LightShadow}
    *
-   * Change a field at any time and the next frame uses it.
+   * Change a field at any time and the shadow's next redraw uses it.
    * @example
    * ```ts
    * sun.shadow.bias = 0.002;
@@ -472,62 +460,32 @@ export abstract class Light extends Container3D {
    */
   public shadow: LightShadow;
 
-  /**
-   * Lights face local -Z, unlike the +Z default `Container3D` gives meshes
-   * @internal
-   */
+  /** @internal */
   protected override _lookAtForwardIsPositiveZ = false;
 
-  /**
-   * GPU-side cached shadow state, populated by the shadow render pass; `null` until the light
-   * casts, and again after {@link Light._releaseShadowState}
-   * @internal
-   */
+  private readonly _color: Color;
+
+  /** @internal */
   public _gpuShadowData: ShadowData | null = null;
 
-  /**
-   * Slot index into the `uShadowData` uniform for the current frame, or `-1` when this light
-   * isn't writing a shadow this frame
-   * @internal
-   */
+  /** @internal */
   public _shadowDataIndex: number = -1;
 
-  /**
-   * Whether the shadow pass should redraw every cascade of this light once, whatever its
-   * `update` rate; it clears the flag after the redraw
-   *
-   * Starts `true` so a new light draws its shadow on its first frame. Set by
-   * {@link Light.refreshShadows}.
-   * @internal
-   */
+  /** @internal */
   public _shadowRefreshRequested = true;
 
-  /**
-   * The fitted shadow box of a directional light with no {@link LightShadow.bounds | bounds},
-   * or `null` until the shadow pass first measures the scene
-   * @internal
-   */
+  /** @internal */
   public _autoShadowBounds: Box | null = null;
 
-  /**
-   * Whether `_autoShadowBounds` is being kept rather than measured each frame, because the
-   * view has more shadow casters than the shadow pass measures every frame
-   *
-   * Cleared by {@link Light.fitShadowBounds}, and when the caster count drops back under the cap.
-   * @internal
-   */
+  /** @internal */
   public _autoShadowBoundsFrozen = false;
 
-  /**
-   * Called by the subclasses; `Light` itself is abstract
-   * @param options - Construction options; see {@link LightOptions}.
-   */
   constructor(options: LightOptions) {
     const { color, intensity, castShadow, shadow: s, ...rest } = options;
 
     super(rest);
 
-    this.color = new Color(color);
+    this._color = new Color(color);
     this.intensity = intensity ?? 1;
     this.castShadow = castShadow ?? false;
 
@@ -555,7 +513,7 @@ export abstract class Light extends Container3D {
   /**
    * Redraws this light's shadow on the next frame, whatever its {@link LightShadow.update} rate
    *
-   * With `update: 'manual'` this is the only thing that redraws the shadow. With a slower rate,
+   * With `update: 'manual'`, call it after each change the shadow should show. With a slower rate,
    * call it after a change that shouldn't wait for the next scheduled redraw.
    * @example
    * ```ts
@@ -571,7 +529,8 @@ export abstract class Light extends Container3D {
   /**
    * Measures the scene again for the fitted shadow box on the next frame, then redraws the shadow
    *
-   * A view with 256 shadow casters or fewer never needs this: the box is measured every frame.
+   * A view with 256 shadow casters or fewer never needs this: the box is measured each time the
+   * shadow redraws.
    * Past 256 it is measured once and kept, so call this after moving or spawning casters outside
    * the box. Instances of a `BatchedMesh3D` count one each. For a cascaded light, a spot light,
    * or a light with its own {@link LightShadow.bounds | bounds}, it only redraws the shadow, like
@@ -587,16 +546,7 @@ export abstract class Light extends Container3D {
     this._shadowRefreshRequested = true;
   }
 
-  /**
-   * Drops the cached per-cascade GPU state: each cascade's camera data and, on WebGPU, its cull
-   * results, whose bundles baked the shadow pass's bind group over the owning View's bone pit
-   *
-   * The shadow pass builds a fresh set the next time this light casts. Runs when the light
-   * leaves a View, when the View unloads, and on destroy, so no recorded bundle can outlive the
-   * bone pit it binds. The bone-pit buffer itself belongs to the View and is left intact.
-   * Idempotent.
-   * @internal
-   */
+  /** @internal */
   public _releaseShadowState(): void {
     if (!this._gpuShadowData) return;
 

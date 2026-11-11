@@ -8,7 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Regression: hidden shadow-casting mesh must not crash the pipe on the first frame.
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,
@@ -37,7 +36,6 @@ export const scene: TestScene = {
     visibleCube.position.set(0, 0, 0);
     view3d.root.addChild(visibleCube);
 
-    // Hidden shadow caster wrapped so `worldVisible` cascades from the parent.
     const hiddenWrap = new Container3D();
     hiddenWrap.visible = false;
     view3d.root.addChild(hiddenWrap);

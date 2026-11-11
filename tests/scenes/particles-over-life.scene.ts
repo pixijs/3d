@@ -2,13 +2,11 @@ import type { TestScene } from '@test-utils';
 
 import { ConeShape } from '~/extras/particles/emitterShapes/ConeShape';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { View3D } from '~/scene/View3D';
 
 import { puffTexture } from './helpers/particleTextures';
 
-// A ballistic fountain with every over-life ramp on at once: particles grow,
-// fade, shift from hot orange to cool blue, arc under gravity and slow under
-// drag. Deterministic — fixed seed, fixed steps, no ticker.
 export const scene: TestScene = {
   create: async (app) => {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
@@ -23,7 +21,7 @@ export const scene: TestScene = {
       texture: puffTexture(),
       blendMode: 'add',
       capacity: 300,
-      seed: 'over-life',
+      createRandom: () => seededRandom('over-life'),
       autoUpdate: false,
       emitRate: 90,
       shape: new ConeShape({ angle: 28, radius: 0.15 }),

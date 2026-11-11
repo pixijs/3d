@@ -14,3 +14,4 @@ export * from './TorusKnotGeometry';
 export * from './utils/buildCylinderBuffers';
 export * from './utils/clampSegments';
 export * from './utils/Geometry3DUtils';
+export * from './utils/getAttributeData';

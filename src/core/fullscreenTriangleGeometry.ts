@@ -10,18 +10,8 @@ GlobalResourceRegistry.register({
 });
 
 /**
- * The oversized clip-space triangle every fullscreen draw shares
- *
- * One primitive covers clip space [-1, 1]^2 with no diagonal seam; the viewport clips it to
- * the target rect. `aPosition` interpolates linearly, so anything a vertex stage derives from
- * it linearly (a UV, an unnormalised direction) is exact at every pixel.
- *
- * Kept alive rather than owned per draw or per pass: on WebGPU a draw is encoded into the
- * frame's command buffer and only submitted later, and a buffer destroyed before that submit
- * voids the whole frame. It is page-global, shared by every renderer, so only a full engine reset
- * (`renderer.destroy({ releaseGlobalResources: true })`) destroys it, along with pixi's shared
- * pools; the next call builds a new one.
- * @returns The shared triangle, created on first use
+ * The oversized clip-space triangle every fullscreen draw shares; it outlives every draw, since WebGPU submits draws
+ * later and a buffer destroyed first voids the frame, and only `releaseGlobalResources` on a renderer destroy frees it
  * @internal
  */
 export function fullscreenTriangleGeometry(): Geometry {

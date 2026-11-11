@@ -1,9 +1,7 @@
-/** The Draco glue that `importScripts` loads defines `DracoDecoderModule` on the worker global */
 declare const self: DedicatedWorkerGlobalScope & {
   DracoDecoderModule: (config?: { wasmBinary?: ArrayBuffer }) => Promise<DracoModule>;
 };
 
-/** The parts of Draco's decoder module the worker uses; the `DT_*` members are its data-type enum */
 interface DracoModule {
   Decoder: new () => DracoDecoder;
   DecoderBuffer: new () => DracoDecoderBuffer;
@@ -52,29 +50,18 @@ interface DracoStatus {
   error_msg(): string;
 }
 
-/** One attribute to decode; mirrors `DracoAttributeRequest` in `loadDracoOnWorker.ts` */
+/** Mirrors `DracoAttributeRequest` in `loadDracoOnWorker.ts` */
 interface AttributeRequest {
   dracoId: number;
   componentType: number;
 }
 
-/**
- * The decoder module, set by the `init` message
- *
- * A failed init stays here as a rejected promise, so each decode reports the real error, such as a
- * failed WASM fetch, rather than a missing decoder.
- */
+/** Holds a failed init as a rejected promise, so each decode reports the real error */
 let modulePromise: Promise<DracoModule> | undefined;
-/** Draco's decoder keeps no state between decodes, so one serves the worker's whole life */
+/** One decoder serves every decode, as Draco's keeps no state between them */
 let sharedDecoder: DracoDecoder | undefined;
 
-/**
- * Loads the Draco glue script and its WASM, then instantiates the module
- *
- * Relative URLs resolve against the page's origin, because the worker itself may run from a blob URL.
- * @param jsUrl - URL of Draco's JS glue
- * @param wasmUrl - URL of Draco's WASM decoder
- */
+/** Resolves relative URLs against the page's origin, as the worker may run from a blob URL */
 async function initDecoder(jsUrl: string, wasmUrl: string): Promise<DracoModule> {
   const absJsUrl = new URL(jsUrl, self.location.origin).href;
   const absWasmUrl = new URL(wasmUrl, self.location.origin).href;
@@ -89,7 +76,6 @@ async function initDecoder(jsUrl: string, wasmUrl: string): Promise<DracoModule>
   return await self.DracoDecoderModule({ wasmBinary });
 }
 
-/** Any typed-array constructor, written out because TypeScript has no single type for one */
 type TypedArrayCtor = new (
   buf: ArrayBufferLike,
   offset: number,
@@ -106,30 +92,18 @@ interface ComponentInfo {
   dtKey: DracoDtKey;
 }
 
-/** For each glTF component type: its typed array, its size in bytes, and the matching Draco data type */
 const COMPONENT_INFO: Record<number, ComponentInfo> = {
-  5120: { ctor: Int8Array as unknown as TypedArrayCtor, bytes: 1, dtKey: 'DT_INT8' },
-  5121: { ctor: Uint8Array as unknown as TypedArrayCtor, bytes: 1, dtKey: 'DT_UINT8' },
-  5122: { ctor: Int16Array as unknown as TypedArrayCtor, bytes: 2, dtKey: 'DT_INT16' },
-  5123: { ctor: Uint16Array as unknown as TypedArrayCtor, bytes: 2, dtKey: 'DT_UINT16' },
-  5125: { ctor: Uint32Array as unknown as TypedArrayCtor, bytes: 4, dtKey: 'DT_UINT32' },
-  5126: { ctor: Float32Array as unknown as TypedArrayCtor, bytes: 4, dtKey: 'DT_FLOAT32' },
+  5120: { ctor: Int8Array, bytes: 1, dtKey: 'DT_INT8' },
+  5121: { ctor: Uint8Array, bytes: 1, dtKey: 'DT_UINT8' },
+  5122: { ctor: Int16Array, bytes: 2, dtKey: 'DT_INT16' },
+  5123: { ctor: Uint16Array, bytes: 2, dtKey: 'DT_UINT16' },
+  5125: { ctor: Uint32Array, bytes: 4, dtKey: 'DT_UINT32' },
+  5126: { ctor: Float32Array, bytes: 4, dtKey: 'DT_FLOAT32' },
 };
 
 /**
- * Decodes one Draco-compressed primitive into typed arrays to post back to the main thread
- *
- * Every WASM allocation is released in the `finally` block, with `pendingPtr` holding whichever
- * `_malloc` is live, so a throw partway through leaks nothing. Data leaves the WASM heap through
- * `slice()`, which copies without zero-filling a new array first.
- *
- * Indices are 16-bit when there are at most 65,535 vertices. The largest index is then 65,534, clear
- * of 65,535, which graphics APIs can read as a primitive restart.
- *
- * `transferables` lets the caller post the arrays without copying them; they are detached in the
- * worker afterwards.
- * @param bufferViewBytes - Compressed bytes of the primitive's Draco bufferView
- * @param attributeIds - Attributes to decode, keyed by glTF semantic, with their Draco ids and component types
+ * `pendingPtr` holds the live `_malloc`, which `finally` frees, so a throw leaks nothing. Indices are
+ * 16-bit up to 65,535 vertices, so the largest, 65,534, stays clear of the primitive restart value
  */
 async function decodePrimitive(
   bufferViewBytes: ArrayBuffer,
@@ -173,7 +147,7 @@ async function decodePrimitive(
     pendingPtr = 0;
 
     const attributes: Record<string, ArrayBufferView> = {};
-    const transferables: ArrayBuffer[] = [indices.buffer as ArrayBuffer];
+    const transferables: ArrayBuffer[] = [indices.buffer];
 
     const semantics = Object.keys(attributeIds);
     for (let i = 0; i < semantics.length; i++) {
@@ -205,14 +179,7 @@ async function decodePrimitive(
   }
 }
 
-/**
- * Handles the messages `loadDracoOnWorker.ts` posts
- *
- * `{ type: 'init', jsUrl, wasmUrl }` starts loading the decoder. `{ type: 'decode', id,
- * bufferViewBytes, attributeIds }` decodes one primitive and replies with
- * `{ id, success, indices?, attributes?, error? }`.
- * @param event - The message from the main thread
- */
+/** Handles the `init` and `decode` messages `loadDracoOnWorker.ts` posts */
 async function handleMessage(event: MessageEvent): Promise<void> {
   const message = event.data;
 

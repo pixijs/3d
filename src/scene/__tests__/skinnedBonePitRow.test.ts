@@ -11,7 +11,6 @@ import { View3D } from '~/scene/View3D';
 const SIZE = 64;
 const JOINTS = 4;
 
-/** A unit quad bound entirely to joint 0, so posing that joint moves the whole mesh */
 function skinnedQuad(): Mesh3D {
   const geometry = new Geometry3D({
     positions: new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]),
@@ -38,7 +37,6 @@ function skinnedQuad(): Mesh3D {
   });
 }
 
-/** Counts the pixels brighter than the black clear colour, which is how much of the mesh is on screen */
 function drawnPixels(app: Application<Renderer>, view3d: View3D): number {
   const data = new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
   let n = 0;
@@ -95,10 +93,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.camera.position.set(0, 0, 3);
         view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-        /**
-         * Added first, so it takes the front of the bone pit and puts `subject` at a non-zero base;
-         * removing it slides `subject` to the front
-         */
         const sibling = skinnedQuad();
         sibling.position.set(-50, 0, 0);
         const subject = skinnedQuad();

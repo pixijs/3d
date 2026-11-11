@@ -10,11 +10,6 @@ import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Flushes denormals out of every float-texture `texelFetch`; integer textures pass through,
- * as they do on real hardware. The overloads are declared before the `#define`, so their
- * bodies keep the real `texelFetch`.
- */
 const FLUSH_DENORMALS = /* glsl */ `
 highp vec4 flushedTexelFetch(highp sampler2D s, ivec2 p, int l) {
   highp vec4 v = texelFetch(s, p, l);
@@ -24,15 +19,6 @@ highp uvec4 flushedTexelFetch(highp usampler2D s, ivec2 p, int l) { return texel
 #define texelFetch flushedTexelFetch
 `;
 
-/**
- * Injects {@link FLUSH_DENORMALS} after the `#version` line of every shader the renderer compiles
- *
- * Some GPUs flush denormal floats to zero when they fetch from a float texture. Every integer
- * below 2^23 has the bit pattern of a denormal float, so a store that ships integers through a
- * float texture reads them all back as 0 there. Desktop and Apple GPUs keep denormals, so no
- * visual scene can catch it; these tests simulate the flush and check each integer the engine
- * reads still arrives.
- */
 function simulateDenormalFlush(renderer: WebGLRenderer): void {
   const gl = renderer.gl;
   const shaderSource = gl.shaderSource.bind(gl);

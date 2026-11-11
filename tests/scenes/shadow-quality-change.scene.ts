@@ -7,16 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Changing {@link View3D#shadowQuality} at runtime. The setter drops the shadow-map
- * texture and the next frame mints a new one at the new resolution — which strands every
- * WebGPU render bundle that baked the old one into its bindings, unless the swap
- * invalidates them. Renders several frames at `'low'` so bundles are recorded against
- * that texture, then switches to `'high'` and settles.
- *
- * The reference is what the same scene looks like built at `'high'` from the start, so a
- * regression shows up as the whole view going black rather than as a subtle diff.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x11141c,
@@ -68,7 +58,6 @@ export const scene: TestScene = {
     view3d.camera.position.set(14, 18, 26);
     view3d.camera.lookAt({ x: 0, y: 2, z: 0 });
 
-    // Settle at 'low' so bundles bake that texture, then swap.
     for (let i = 0; i < 4; i++) {
       app.render();
       await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));

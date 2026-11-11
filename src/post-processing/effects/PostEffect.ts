@@ -3,35 +3,38 @@ import type { UniformGroup } from 'pixi.js';
 import type { RenderGraph } from '../../core/render-graph/RenderGraph';
 import type { ColorHandle } from '../../core/render-graph/ResourceHandle';
 import { Pass3D } from '../Pass3D';
-import type { Pass3DOptions, PassContext } from '../Pass3D';
+import type { EffectStage, Pass3DOptions, PassContext } from '../Pass3D';
 import { FullscreenPass } from './FullscreenPass';
 
+/** Must name each helper `depthReadBitGpu` in `fullscreenEffectShader.ts` defines, except `fxDepthContent` */
+const DEPTH_HELPER_CALL = /\b(?:sampleDepth|viewPos|depthTexel)\s*\(/;
+
 /**
- * Backend shader bodies for an effect pass, written against the standard effect header
- *
- * Each body defines the entry function the fullscreen template calls per pixel:
+ * Shader bodies for a post effect, one per backend, each defining the function run for every pixel
  *
  *  - WGSL: `fn effect(uv: vec2<f32>) -> vec4<f32>`
  *  - GLSL: `vec4 effect(vec2 uv)`
  *
- * `uv` is content space: `[0,1]` across the view's viewport, orientation-correct for the
- * pass's target. The sample helpers take content-space UV and map it onto each pooled
- * texture's sub-rect themselves, so effect code never sees pooling.
+ * `uv` runs from 0 to 1 across the view's viewport, the right way up for the pass's target. The
+ * fragment can call these helpers, the first three only when the pass has the matching read
+ * ({@link FullscreenPassOptions#reads}):
  *
- * The header provides, according to the pass's `reads`:
+ *  - `sampleColor(uv)` and `sampleColorLod(uv, lod)`: the colour input, the LOD form reading mips
+ *    when the input has them ({@link PostEffect#inputMips}); `inputTexel()`: one texel of that
+ *    input as a UV step
+ *  - `sampleColor2(uv)`: the second colour input, such as a scene output
+ *  - `sampleDepth(uv)`: raw scene depth; `viewPos(uv)`: the view-space position there;
+ *    `depthTexel()`: one depth texel as a UV step, coarser than `texel()` when the effect runs at a
+ *    finer resolution than the scene
+ *  - `linearDepth(d)`: linear depth from a raw depth value. It and `viewPos` assume a perspective
+ *    camera, and give wrong values under an orthographic one.
+ *  - `texel()`: one pixel of the pass's target as a UV step
+ *  - `viewTexel()`: one physical pixel of the view on screen as a UV step, for a size that has to
+ *    look the same at any `View3D.resolution` and in any pass of the effect
  *
- *  - `sampleColor(uv)` and `sampleColorLod(uv, lod)`: the chain input; the LOD form addresses
- *    the mip chain when the input is mip-chained (see {@link PostEffect#inputMips}); and
- *    `inputTexel()`: one texel of that input as a UV step, for kernels sized to the input
- *  - `sampleColor2(uv)`: the second colour input of a combine pass
- *  - `sampleDepth(uv)`: raw non-linear scene depth, and `viewPos(uv)`: the view-space position
- *    reconstructed from it
- *  - `linearDepth(d)`: linear depth from a raw depth value, and `texel()`: one content-space
- *    texel as a UV step
- *
- * Declared uniforms bind as `fx.<name>` in WGSL and plain `<name>` in GLSL. The camera clip
- * terms are also reachable as `fxh.uFxClip` in WGSL and `uFxClip` in GLSL (near, far,
- * projection[0], projection[5]) for effects that project their own samples.
+ * Declared uniforms are `fx.<name>` in WGSL and plain `<name>` in GLSL. To project samples of your
+ * own, `fxh.uFxClip` in WGSL and `uFxClip` in GLSL hold (near, far, projection[0], projection[5]),
+ * set so that `viewPos` and points projected with them are in view space, Y up, on both backends.
  * @category filters
  * @advanced
  */
@@ -43,22 +46,19 @@ export interface EffectFragment {
 }
 
 /**
- * What {@link PostEffect#build} receives: the shared {@link PassContext} plus this effect's input
- * and output in the chain
+ * What {@link PostEffect#build} receives: the {@link PassContext} plus this effect's input and output
  *
- * These are the only values the chain compiler decides per position; everything else (scene
- * depth, shared copies, new transients) comes off the graph itself. Handles are build-time
- * names; textures materialize per frame inside each pass's `render(session)`.
+ * Anything else, such as the scene depth, comes from the graph.
  * @category filters
  * @advanced
  */
 export interface EffectIO extends PassContext {
-  /** Chain image entering this effect */
+  /** The image this effect reads: the scene, or the result of the step before it */
   readonly input: ColorHandle;
   /**
-   * Where this effect's result must land: an intermediate transient, or `null` when the
-   * effect is elected presenter — pass it through as `writes` and the pass draws the View's
-   * default target directly
+   * Where this effect's final image must go; pass it as a {@link FullscreenPass}'s `writes`
+   *
+   * `null` when the effect is the last step and draws straight to the view's target.
    */
   readonly output: ColorHandle | null;
 }
@@ -74,46 +74,71 @@ export interface EffectIO extends PassContext {
  * @category filters
  * @standard
  */
-export type PostEffectOptions = Pass3DOptions;
+export interface PostEffectOptions extends Pass3DOptions {
+  /**
+   * Whether the effect reads the scene as light, before the tone curve, or the picture as it will
+   * show, after it
+   *
+   * Each effect class picks the right one by default, so set it only to move one instance, such as
+   * a tint meant for the light rather than the picture. See {@link PostEffect#stage}.
+   * @default 'beforeToneMapping', unless the effect's class says otherwise
+   * @example
+   * ```ts
+   * new TintEffect({ tint: 0xffaa66, stage: 'beforeToneMapping' });
+   * ```
+   */
+  stage?: EffectStage;
+}
 
 /**
- * Base class for fullscreen post effects stacked on a view via {@link View3D#passes}
+ * Base class for fullscreen post effects, added to a view through {@link View3D#passes}
  *
- * A {@link Pass3D} at the `'post'` stage: after every scene draw, the chain compiler wires
- * post effects together in array order, ping-ponging the frame through them, and elects the
- * last one to present. Any enabled post effect makes the view render its scene into a
- * transient first.
+ * After the scene draws, the view runs its `'beforeToneMapping'` effects in array order, then the
+ * tone curve, then its `'afterToneMapping'` effects, each reading the image the step before drew.
+ * Any enabled post effect makes the view draw its scene into a texture first, and a
+ * `'beforeToneMapping'` one also makes that texture float, holding linear light; see
+ * {@link View3D#toneMapping}.
  *
  * ## Authoring
  *
- * A single-shader effect is declarative: provide `fragment` (and optionally `uniforms`), and
- * expose plain property accessors that write into the uniform group. A property write is a
- * uniform update, visible next frame.
+ * A single-shader effect sets `fragment`, and `uniforms` if it has any, and exposes properties that
+ * write into those uniforms. A property write shows on the next frame.
  *
- * A multi-pass effect overrides {@link PostEffect#build} and adds its passes to the render graph
- * itself, through the same `graph.addPass` / `graph.createColor` every engine pass uses:
+ * An effect runs at `'beforeToneMapping'` unless it passes another stage to `super`. There it
+ * reads linear light, brightness above 1 included, which suits blur, glow, depth of field and
+ * occlusion. Pass `'afterToneMapping'` for an effect that judges the picture as it shows, such as
+ * edge detection or a final colour grade, or one that shows data rather than light, such as depth
+ * or normals, so the tone curve leaves its colours alone. Spread the caller's options after the
+ * stage, so one instance can still pick its own:
+ *
+ * ```ts
+ * class MyOutlineEffect extends PostEffect {
+ *   constructor(options: PostEffectOptions = {}) {
+ *     super({ stage: 'afterToneMapping', ...options });
+ *   }
+ * }
+ * ```
+ *
+ * A multi-pass effect overrides {@link PostEffect#build} and adds its own passes to the render
+ * graph. Its final image must go to `io.output`:
  *
  * ```ts
  * public override build(graph: RenderGraph, io: EffectIO): void {
  *   const ao = graph.createColor({ resolution: 1, format: 'rgba8unorm' });
  *   graph.addPass(new FullscreenPass({
  *     renderer: io.renderer,
- *     reads: { depth: graph.sceneDepth },   // grab scene resources off the graph
+ *     reads: { depth: graph.sceneDepth },
  *     writes: ao,
  *     fragment: AO_FRAGMENT,
  *   }));
  *   graph.addPass(new FullscreenPass({
  *     renderer: io.renderer,
  *     reads: { color: io.input, color2: ao },
- *     writes: io.output,                    // the one contract: results land here
+ *     writes: io.output,
  *     fragment: MERGE_FRAGMENT,
  *   }));
  * }
  * ```
- *
- * Two contracts to honour: the effect's final image goes to `io.output` (presenter election
- * depends on the compiler owning that handle), and handles resolve to textures only inside
- * `render(session)`, never at build time.
  *
  * Toggling, reordering and retiring an effect work as for any pass; {@link View3D#passes} has
  * the rules.
@@ -145,43 +170,41 @@ export type PostEffectOptions = Pass3DOptions;
  */
 export abstract class PostEffect extends Pass3D {
   /**
-   * Post effects always run in the post chain
+   * The stage the effect runs at, set by the {@link PostEffectOptions.stage | stage} option
    * @advanced
    */
-  public readonly stage = 'post';
+  public readonly stage: EffectStage;
 
   /**
-   * Declare that `io.input` must carry a mip chain
+   * Whether the effect's input has mips, for an effect that reads coarse levels with
+   * `sampleColorLod`, such as a blur
    *
-   * For blur/bokeh effects sampling coarse LODs via `sampleColorLod`. The chain compiler
-   * allocates the input transient mip-chained and generates its levels after the producer —
-   * the one input fact an effect cannot arrange from `build()`, since its input is allocated
-   * before `build()` runs. Costs a mipmap generation and ~33% extra transient memory; leave `false`
-   * unless the effect samples LODs.
+   * Costs a mip generation every frame and about a third more memory for the input, so leave it
+   * `false` unless the effect samples levels above 0.
    * @advanced
    */
   public readonly inputMips: boolean = false;
 
-  /** Fragment for the declarative single-pass path — see {@link EffectFragment} */
+  /** The shader the default {@link PostEffect#build} draws; see {@link EffectFragment} */
   protected readonly fragment?: EffectFragment;
 
   /**
-   * Uniforms consumed by {@link PostEffect#fragment}, or `null` for none
+   * Uniforms the {@link PostEffect#fragment} declares, or `null` for none
    *
-   * Owned by the effect — passes reference it, rebuilds reuse it.
+   * They outlive graph rebuilds, so values set on them stay.
    */
   protected readonly uniforms: UniformGroup | null = null;
 
   constructor(options: PostEffectOptions = {}) {
     super(options);
+    this.stage = options.stage ?? 'beforeToneMapping';
   }
 
   /**
-   * Write one lane of a vector uniform and mark its group dirty
-   *
-   * The building block of a live property: a setter writes its lane, the next frame reads it.
+   * Writes one component of a vector uniform from a property setter, and marks the group changed
+   * so the GPU copy updates
    * @param group - Uniform group the lane belongs to.
-   * @param name - Uniform name inside the group.
+   * @param name - Uniform name inside the group; its value must be a `Float32Array`.
    * @param lane - Component index within the uniform.
    * @param value - New value for that lane.
    */
@@ -191,13 +214,15 @@ export abstract class PostEffect extends Pass3D {
   }
 
   /**
-   * Contribute this effect's passes at graph build time — see the class docs for the contract
+   * Adds this effect's passes to the graph
    *
-   * The default implementation compiles the declarative `fragment` into one
-   * {@link FullscreenPass} reading the chain input and scene depth (both helpers always
-   * available; unused ones cost nothing) and writing `io.output`.
+   * The default adds one {@link FullscreenPass} that draws `fragment`, binding the
+   * scene depth only when the fragment calls `sampleDepth`, `viewPos` or `depthTexel` by name. On an
+   * antialiased canvas, reading the depth costs a copy of it each frame, shared by every effect that
+   * reads it. Override it for a multi-pass effect, as the class docs show; {@link Pass3D#build} says
+   * when handles become textures.
    * @param graph - Render graph being built; add passes and transients to it.
-   * @param io - Per-slot input/output handles for this position in the chain.
+   * @param io - This effect's input and output, plus the renderer and opaque copies
    * @advanced
    */
   public override build(graph: RenderGraph, io: EffectIO): void {
@@ -206,13 +231,14 @@ export abstract class PostEffect extends Pass3D {
       throw new Error(`${this.constructor.name}: provide a \`fragment\` or override \`build()\`.`);
     }
 
+    const readsDepth = DEPTH_HELPER_CALL.test(fragment.gpu) || DEPTH_HELPER_CALL.test(fragment.gl);
     graph.addPass(
       new FullscreenPass({
         renderer: io.renderer,
         label: this.constructor.name,
         fragment,
         uniforms: this.uniforms,
-        reads: { color: io.input, depth: graph.sceneDepth },
+        reads: { color: io.input, depth: readsDepth ? graph.sceneDepth : undefined },
         writes: io.output,
       }),
     );

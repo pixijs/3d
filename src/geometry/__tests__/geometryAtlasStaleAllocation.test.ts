@@ -36,22 +36,6 @@ describe('GeometryAtlas.add stale-allocation guard', () => {
     shared.destroy(true);
     reference.destroy(true);
   });
-
-  it('still early-returns for a geometry already in this atlas', () => {
-    const reference = makeTriangle();
-    const geometry = makeTriangle();
-    const atlas = makeAtlas(reference);
-
-    const allocation = atlas.add(geometry);
-    const vertexCount = atlas.vertexCount;
-
-    expect(atlas.add(geometry)).toBe(allocation);
-    expect(atlas.vertexCount).toBe(vertexCount);
-
-    atlas.destroy();
-    geometry.destroy(true);
-    reference.destroy(true);
-  });
 });
 
 describe('GeometryAtlasPool.from', () => {

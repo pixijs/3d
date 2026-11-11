@@ -7,11 +7,9 @@ type CubemapFaceKey = (typeof FACE_KEYS)[number];
 type CubemapJson = Record<CubemapFaceKey, string>;
 
 /**
- * Loads a `.cubemap` JSON file and returns a {@link CubeTexture}
+ * Loads a `.cubemap` JSON file as a {@link CubeTexture}
  *
- * The JSON contains six face keys (`right`, `left`, `top`, `bottom`,
- * `front`, `back`) whose values are image paths resolved relative to
- * the `.cubemap` file:
+ * The JSON names an image for each of the six faces, relative to the `.cubemap` file:
  *
  * ```json
  * {
@@ -24,9 +22,8 @@ type CubemapJson = Record<CubemapFaceKey, string>;
  * }
  * ```
  *
- * `@pixi/3d` registers it with pixi's `Assets` on import. `Assets.unload(url)` destroys the cube
- * texture and unloads its six face images from the loader's cache, as pixi's spritesheets do with
- * their image, even when another loaded asset still uses one.
+ * `@pixi/3d` registers it with `Assets` on import. `Assets.unload(url)` destroys the cube and
+ * unloads its six images from the loader's cache, even when another loaded asset still uses one.
  * @example
  * ```ts
  * import { Assets } from 'pixi.js';
@@ -43,6 +40,7 @@ export const loadCubemap = {
     type: ExtensionType.LoadParser,
     name: 'loadCubemap',
   },
+  // oxlint-disable-next-line typescript/no-deprecated -- pixi's Loader._validateParsers keys parsers by name too, and reports an id conflict for each parser after the first that leaves it out
   name: 'loadCubemap',
   id: 'cubemap',
 
@@ -72,9 +70,7 @@ export const loadCubemap = {
   },
 
   /**
-   * Destroys the cube texture, then unloads its faces
-   *
-   * In that order the cube has stopped listening to its faces by the time the loader destroys them.
+   * Destroys the cube before unloading its faces, so it has stopped listening to them by then
    * @param cubeTexture - The cube texture `load` returned
    * @param _resolvedAsset - Unused
    * @param loader - The loader that cached the face textures

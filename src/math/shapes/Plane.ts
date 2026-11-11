@@ -9,13 +9,9 @@ import type { Sphere } from './Sphere';
 /**
  * An infinite flat plane: the points `p` where `normal · p + constant = 0`
  *
- * `constant` is the origin's signed distance from the plane, so the ground `y = 0` is
- * `new Plane(new Vector3(0, 1, 0), 0)` and the plane `y = 2` has a constant of `-2`. The side
- * `normal` points to is the positive side.
- *
- * Keep `normal` unit length so distances come out in world units; {@link Plane#normalize} fixes
- * one that isn't. Methods that change the plane do so in place, or write into an `out` plane when
- * you pass one and leave this plane as it is.
+ * The ground `y = 0` is `new Plane(new Vector3(0, 1, 0), 0)`, and the upward-facing plane `y = 2`
+ * has a constant of `-2`. Keep `normal` unit length, or distances come out scaled;
+ * {@link Plane#normalize} fixes one that isn't.
  * @example
  * ```ts
  * const water = new Plane(new Vector3(0, 1, 0), -waterLevel);
@@ -24,9 +20,7 @@ import type { Sphere } from './Sphere';
  *   underwaterFilter.enabled = water.distanceToPoint(camera.position) < 0;
  * });
  * ```
- * @see {@link Box} For the axis-aligned bounding box counterpart
- * @see {@link Sphere} For the bounding-sphere counterpart
- * @see {@link Ray} For ray-plane hit tests
+ * @see {@link Ray#intersectPlane} For the point where a ray hits the plane
  * @category maths
  * @standard
  */
@@ -60,7 +54,7 @@ export class Plane {
    * Creates a new `Plane`
    *
    * Left out, the plane is `x = 0` facing +X. A normal passed in becomes the plane's own; it is
-   * not copied, and it is assumed to be normalized.
+   * not copied.
    * @param normal - The unit-length normal of the plane
    * @param constant - The origin's signed distance from the plane
    */
@@ -89,8 +83,8 @@ export class Plane {
   /**
    * Sets the normal to `(x, y, z)` and the constant to `w`, the four numbers of a plane equation
    *
-   * Same as `set({ x, y, z }, w)`. Equations from elsewhere, such as rows of a projection matrix,
-   * rarely have a unit-length normal, so normalize after.
+   * Equations from elsewhere, such as rows of a projection matrix, rarely have a unit-length
+   * normal, so call {@link Plane#normalize} after.
    * @example
    * ```ts
    * clipPlane.setComponents(equation[0], equation[1], equation[2], equation[3]).normalize();
@@ -185,8 +179,7 @@ export class Plane {
   /**
    * Scales the plane so `normal` has unit length
    *
-   * The constant is scaled by the same factor so the plane equation is preserved. Calling on a
-   * zero-length normal produces NaN.
+   * The constant scales with it, so the plane stays in place. A zero-length normal gives `NaN`.
    * @example
    * ```ts
    * const slope = new Plane(new Vector3(0, 2, 1), 0).normalize();
@@ -277,13 +270,9 @@ export class Plane {
   /**
    * Transforms this plane by an affine `matrix`, so points on it stay on it
    *
-   * The normal goes through the cofactor matrix of the matrix's 3x3 part, which is the inverse
-   * transpose scaled by the determinant, then is normalized. That keeps it at right angles to the
-   * plane under non-uniform scale without inverting anything. The determinant's sign survives:
-   * a mirroring matrix also swaps which side of the plane is positive.
-   *
-   * Needs a unit-length `normal`. `matrix` must be affine (bottom row `[0, 0, 0, 1]`), as a
-   * {@link Container3D#worldTransform} always is.
+   * Non-uniform scale is fine, and the normal comes out unit length. A mirroring matrix swaps
+   * which side of the plane is positive. Needs a unit-length `normal`, and `matrix` must be affine
+   * (bottom row `[0, 0, 0, 1]`), as a {@link Container3D#worldTransform} always is.
    * @example
    * ```ts
    * const worldMirror = new Plane();

@@ -20,11 +20,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { assetEntries, MIRROR_ROUTE, models } from '../../examples/assets/manifest.ts';
+import {
+  assetEntries,
+  environments,
+  MIRROR_ROUTE,
+  models,
+  sounds,
+  textures,
+  videos,
+} from '../../examples/assets/manifest.ts';
 import type { AssetCategory, AssetEntry } from '../../examples/assets/manifest.ts';
 
 /** Every manifest category to mirror; new categories join this list. */
-const categories: AssetCategory[] = [models];
+const categories: AssetCategory[] = [models, environments, textures, sounds, videos];
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
 
@@ -129,7 +137,8 @@ async function ensureStoreLink(store: string): Promise<void> {
   } else if (stat) {
     throw new Error(`${MIRROR_PATH} exists but is neither a directory nor a symlink`);
   }
-  await fs.symlink(store, MIRROR_PATH, 'dir');
+  // A junction needs no admin rights or Developer Mode on Windows; other platforms ignore the type.
+  await fs.symlink(store, MIRROR_PATH, 'junction');
 }
 
 /** In `--local` mode the mirror is a real repo-local directory, never a symlink. */

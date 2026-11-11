@@ -8,13 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Wide-kernel shadow filtering: `view.shadowFilter = 'pcf-high'` compiles the
- * 3×3 (9-tap) shadow sampler — the softest of the filter tiers. Paired with
- * `shadow-pcf-hard` (identical scene, single tap) to verify the tiers produce
- * visibly different edge softness. `shadowQuality: 'low'` enlarges texels so the
- * wider kernel's softening is unambiguous. Static scene for determinism.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,

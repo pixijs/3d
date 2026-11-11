@@ -2,7 +2,7 @@ import { captureWarnings } from '@test-utils';
 import { describe, expect, it } from 'vitest';
 
 import { compileGlslSource } from '~/core/gl/codegen/compileGlslSource';
-import { texturesPluginGl } from '~/core/gl/shader/texturesPluginGl';
+import { createTexturesPluginGl } from '~/core/gl/shader/texturesPluginGl';
 import { compileWgslSource } from '~/core/gpu/codegen/compileWgslSource';
 import { buildWgslBindingMap, collectBindings, emitBindingsWgsl } from '~/core/gpu/codegen/wgslBindingsPlugin';
 import { createTexturesPluginGpu } from '~/core/gpu/shader/texturesPluginGpu';
@@ -15,8 +15,8 @@ import type { Material3DOptions } from '~/materials/pbr/Material3D';
 import { collectTextureNames } from '~/materials/utils/validateMaterialTextureSlots';
 import { View3D } from '~/scene/View3D';
 
-/** The binding layout doesn't depend on the sampler form, so these checks use the default `'branch'` */
-const texturesPluginGpu = createTexturesPluginGpu('branch');
+const texturesPluginGpu = createTexturesPluginGpu('direct');
+const texturesPluginGl = createTexturesPluginGl('direct');
 
 const parityTemplate: ShaderBitTemplate = {
   bindGroups: ['global', 'batch'],
@@ -24,10 +24,6 @@ const parityTemplate: ShaderBitTemplate = {
   gl: { vertex: '{{header}}\nvoid main() {}', fragment: '{{header}}\nvoid main() {}' },
 };
 
-/**
- * Two bits covering both groups and every binding kind; `parityBatch` redeclares `uParityView`,
- * which must not take a second slot
- */
 const parityBits: ShaderBit[] = [
   {
     name: 'parityGlobals',
@@ -38,6 +34,7 @@ const parityBits: ShaderBit[] = [
         uParityEnv: 'texture_cube<f32>',
         uParitySampler: 'sampler',
         uParityLights: 'storage<ParityLight>',
+        uParityKey: 'uniform<ParityLight>',
       },
     },
   },
@@ -47,13 +44,16 @@ const parityBits: ShaderBit[] = [
       batch: { uParityTexture: 'texture_2d<f32>' },
       global: {
         uParityView: 'mat4x4<f32>',
-        uParityExposure: 'f32',
+        uParityExposure: { type: 'f32', visibility: 'fragment' },
+        parityDraw: {
+          uParityModel: 'mat4x4<f32>',
+          uParityTint: { type: 'vec4<f32>', visibility: 'vertex' },
+        },
       },
     },
   },
 ];
 
-/** One group's names from the GL group map, in binding order */
 function glGroupNames(map: Record<number, Record<number, string>>, groupIndex: number): string[] {
   const group = map[groupIndex] ?? {};
   return Object.keys(group)
@@ -71,6 +71,18 @@ describe('generateGroupMap (GL) and buildWgslBindingMap (WGSL), two separate pat
       const wgslNames = entries.map((e) => e.name);
       expect(glGroupNames(gl, groupIndex), `group '${groupName}'`).toEqual(wgslNames);
     }
+  });
+
+  it('gives a uniform buffer one binding after the storage buffers, and a uniform group declared inside a bind group one after that, with its own WGSL struct', () => {
+    const collected = collectBindings(parityBits, parityTemplate);
+    const names = buildWgslBindingMap(collected).global.entries.map((e) => e.name);
+    const source = emitBindingsWgsl(collected);
+
+    expect(names).toEqual(['global', 'uParityEnv', 'uParitySampler', 'uParityLights', 'uParityKey', 'parityDraw']);
+    expect(source).toContain('@group(0) @binding(4) var<uniform> uParityKey: ParityLight;');
+    expect(source).toContain('struct ParityDraw {\n  uParityModel: mat4x4<f32>,\n  uParityTint: vec4<f32>,\n}');
+    expect(source).toContain('@group(0) @binding(5) var<uniform> parityDraw: ParityDraw;');
+    expect(collected.structs.Global).toEqual({ uParityView: 'mat4x4<f32>', uParityExposure: 'f32' });
   });
 
   it('skips a group the template does not bind, without warning', () => {
@@ -112,7 +124,7 @@ describe('generateGroupMap (GL) and buildWgslBindingMap (WGSL), two separate pat
         bindings: { global: { uParityStore: 'texture_2d<u32>', uParitySigned: 'texture_2d<i32>' } },
       },
     ];
-    const gl = compileGlslSource({ bits, template: parityTemplate, uboGroups: [], useLocations: false });
+    const gl = compileGlslSource({ bits, template: parityTemplate, useLocations: false });
     const gpu = compileWgslSource({ bits, template: parityTemplate });
 
     expect(gl.fragment).toContain('uniform usampler2D uParityStore;');
@@ -169,7 +181,6 @@ describe('material-layer parity across the feature matrix', () => {
         bits: descriptor.bitsGl,
         template: glslTemplate,
         extraPlugins: [materialStructPackPlugin, texturesPluginGl],
-        uboGroups: [],
         useLocations: false,
       });
 

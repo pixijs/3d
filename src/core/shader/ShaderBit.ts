@@ -1,16 +1,5 @@
 import type { UNIFORM_TYPES, VertexFormat } from 'pixi.js';
 
-/** One stage's code, keyed by the template slot it fills */
-type ShaderSlots<Slots extends readonly string[]> = Partial<Record<Slots[number], string>>;
-
-/** One backend's code for a bit: a shared header plus each stage's slots */
-type ShaderStages<VERTEX_TAGS extends readonly string[], FRAGMENT_TAGS extends readonly string[]> = {
-  /** Code for the template's `{{header}}` slot, such as functions and constants; GLSL puts it in both stages */
-  header?: string;
-  vertex?: ShaderSlots<VERTEX_TAGS>;
-  fragment?: ShaderSlots<FRAGMENT_TAGS>;
-};
-
 /**
  * The WGSL types a varying can have; integer types are flat-interpolated on both backends
  * @category rendering
@@ -30,43 +19,53 @@ export type InterStageType =
   | 'vec3<u32>'
   | 'vec4<u32>';
 
-/** Varyings a bit names itself; the `never` members keep the builtin names out */
-type UserInterStage = {
-  [K: string]: InterStageType;
-} & {
+/**
+ * The varyings a bit declares, keyed by name
+ *
+ * `position`, `frontFacing`, `sampleIndex` and `sampleMask` are reserved. WGSL fragment code reads
+ * `input.position` and `input.frontFacing` without declaring them; GLSL reads `gl_FragCoord` and
+ * `gl_FrontFacing`.
+ * @category rendering
+ * @advanced
+ */
+export type InterStage = { [K: string]: InterStageType } & {
+  /** Reserved for `@builtin(position)`, which the compiler declares */
   position?: never;
+  /** Reserved for `@builtin(front_facing)`, which the compiler declares */
   frontFacing?: never;
+  /** Reserved for `@builtin(sample_index)` */
   sampleIndex?: never;
+  /** Reserved for `@builtin(sample_mask)` */
   sampleMask?: never;
 };
 
 /**
- * The varyings a bit declares, keyed by name
+ * The WGSL types a fragment output can have: the same scalars and vectors a varying can have
  *
- * The builtin names `position`, `frontFacing`, `sampleIndex` and `sampleMask` are reserved, and the
- * type rejects them. The compiler declares `input.position` and `input.frontFacing` in every WGSL
- * fragment input itself; GLSL reads `gl_FragCoord` and `gl_FrontFacing` instead.
+ * A blended draw blends every float output with its blend mode, and on WebGPU a blend mode that
+ * reads alpha, such as `'normal'`, needs the output written as a `vec4<f32>`. Integer outputs never
+ * blend.
  * @category rendering
  * @advanced
  */
-export type InterStage = {
-  /** Reserved for `@builtin(position)`, which the compiler declares */
-  position?: 'vec4<f32>';
-  /** Reserved for `@builtin(front_facing)`, which the compiler declares */
-  frontFacing?: 'bool';
-  /** Reserved for `@builtin(sample_index)` */
-  sampleIndex?: 'u32';
-  /** Reserved for `@builtin(sample_mask)` */
-  sampleMask?: 'u32';
-} & UserInterStage;
+export type FragmentOutputType = InterStageType;
 
 /**
- * The texture half of {@link ResourceType}
+ * WGSL texture or sampler resource type usable in a binding
  *
- * `RESOURCE_TYPES` in `codegen/parseBindingType.ts` lists these and the sampler types, and must stay
- * in step with them.
+ * The type in angle brackets is what a read returns, and it has to match the bound texture's format:
+ *
+ * - `texture_2d<f32>` for float and normalised formats, such as `rgba8unorm` or `rgba16float`
+ * - `texture_2d<u32>` for unsigned integer formats, such as `rgba32uint`
+ * - `texture_2d<i32>` for signed integer formats, such as `rgba32sint`
+ *
+ * A wrong kind fails the draw on WebGL and the bind group on WebGPU. WebGPU also rejects a 32-bit
+ * float format such as `rgba32float`, which can't be filtered. Integer textures can't be filtered
+ * either: read them with `textureLoad` in WGSL and `texelFetch` in GLSL.
+ * @category rendering
+ * @advanced
  */
-type TextureResourceType =
+export type ResourceType =
   | 'texture_2d<f32>'
   | 'texture_2d<u32>'
   | 'texture_2d<i32>'
@@ -77,57 +76,52 @@ type TextureResourceType =
   | 'texture_depth_2d'
   | 'texture_depth_2d_array'
   | 'texture_depth_cube'
-  | 'texture_depth_cube_array';
-
-type SamplerResourceType = 'sampler' | 'sampler_comparison';
-
-/**
- * WGSL texture or sampler resource type usable in a binding
- *
- * The type in angle brackets is what a read returns. It has to match the format of the texture
- * bound to the slot:
- *
- * - `texture_2d<f32>` for float and normalised formats, such as `rgba8unorm` or `rgba16float`
- * - `texture_2d<u32>` for unsigned integer formats, such as `rgba32uint`
- * - `texture_2d<i32>` for signed integer formats, such as `rgba32sint`
- *
- * A 32-bit float format such as `rgba32float` binds to `texture_2d<f32>` on WebGL only. WebGPU
- * rejects it, because the binding asks for a filterable texture.
- *
- * An integer texture returns the exact integers that were stored, and it can't be filtered. Read
- * it with `textureLoad` in WGSL and `texelFetch` in GLSL.
- *
- * With a texture of the wrong kind bound, WebGL fails the draw and WebGPU rejects the bind group.
- * @category rendering
- * @advanced
- */
-export type ResourceType = TextureResourceType | SamplerResourceType;
+  | 'texture_depth_cube_array'
+  | 'sampler'
+  | 'sampler_comparison';
 
 /**
  * A struct's fields, name to WGSL type, in memory order
- *
- * The `Material` struct is the exception: the compiler reorders its fields to pack them tightly.
  * @category rendering
  * @advanced
  */
 export type StructDefinition = Record<string, UNIFORM_TYPES | 'u32'>;
 
-type StorageType<StructName extends string> = `storage<${StructName}>`;
-
 /**
- * The WGSL type of one binding: a uniform field, a texture or sampler, or a `storage<StructName>`
- * buffer
+ * A uniform buffer holding one struct, `uniform<StructName>`, bound as a `BufferResource` range
+ *
+ * The struct comes from the bits' `structs`, or from the fields of a group the template doesn't
+ * bind. WGSL reads a `wind` binding as `wind.<field>` and GLSL as `uWind.<field>`, except that
+ * GLSL splits a `mat2x2<f32>` field into `<field>_0` and `<field>_1`. Fill the buffer in WGSL's
+ * layout. GLSL's `std140` matches it for scalars, vectors, `mat2x2<f32>`, matrices of `vec3` or
+ * `vec4` columns, and arrays of 16-byte elements, and the GLSL compile refuses any other field.
+ *
+ * Only a bind group your own pass builds can hold one. One declared in the engine's `global`,
+ * `camera` or `batch` group is never bound: WebGL skips the draw and WebGPU throws at the first
+ * draw. Put per-material values in the bit's `material` fields instead, and read them through the
+ * `material` local, never `uMaterial`, which a draw that merges materials doesn't declare.
  * @category rendering
  * @advanced
  */
-export type BindingType = UNIFORM_TYPES | ResourceType | StorageType<string>;
+export type UniformBufferType<StructName extends string> = `uniform<${StructName}>`;
 
 /**
- * The shader stages a binding is visible to in the WebGPU pipeline layout
+ * The WGSL type of one binding: a uniform field, a texture or sampler, a storage buffer, or a
+ * uniform buffer
+ *
+ * A storage buffer is `storage<ElementType>`, an array of a struct, a scalar or a vector, such as
+ * `storage<Renderable>` or `storage<vec4<u32>>`. A uniform buffer is {@link UniformBufferType}.
+ * @category rendering
+ * @advanced
+ */
+export type BindingType = UNIFORM_TYPES | ResourceType | `storage<${string}>` | UniformBufferType<string>;
+
+/**
+ * The shader stages a binding is visible to on WebGPU
  *
  * WebGPU limits storage buffers per stage (`maxStorageBuffersPerShaderStage`), and a buffer visible
- * to both stages counts against both limits. Tag a buffer that only one stage reads with that
- * stage. WebGL has no such limit and ignores this.
+ * to both stages counts against both limits, so tag a buffer that one stage reads with that stage.
+ * WebGL ignores it.
  * @category rendering
  * @advanced
  */
@@ -149,21 +143,38 @@ export type BindingSpec =
     };
 
 /**
- * One bind group's bindings, keyed by name, such as `{ uTime: 'f32', uTexture: 'texture_2d<f32>' }`
+ * A uniform group of its own inside a bind group: its uniform fields, keyed by name
  *
- * A group's uniform fields share one uniform struct, which takes the group's first binding.
- * Textures and samplers follow, then storage buffers.
+ * It binds to a `UniformGroup` apart from the bind group's own. Use one for values that change at a
+ * different rate, since a write to them uploads nothing else. Bits that declare the same name add
+ * to one group. WGSL reads a field as `<group>.<field>`, and GLSL as a plain uniform, `<field>`,
+ * whatever the template's `ubo` says.
+ *
+ * Only a bind group your own pass builds can hold one. One declared in the engine's `global`,
+ * `camera` or `batch` group is never bound: WebGL reads zeros and WebGPU throws at the first draw.
  * @category rendering
  * @advanced
  */
-export type BindingGroup = Record<string, BindingSpec>;
+export type UniformGroupBindings = Record<string, BindingSpec>;
+
+/**
+ * One bind group's bindings, keyed by name, such as `{ uTime: 'f32', uTexture: 'texture_2d<f32>' }`
+ *
+ * A group's uniform fields share one uniform struct, which takes the group's first binding.
+ * Textures and samplers follow, then storage buffers, then uniform buffers, then the
+ * {@link UniformGroupBindings} declared inside it, one binding each, as in
+ * `{ batchTransform: { uBatchWorldMatrix: 'mat4x4<f32>' } }`.
+ * @category rendering
+ * @advanced
+ */
+export type BindingGroup = Record<string, BindingSpec | UniformGroupBindings>;
 
 /**
  * The scalar type of a specialization constant
  *
- * WebGPU declares the constant with WGSL `override` and sets it through the pipeline's
- * `constants`. WebGL has no specialization constants, so the value is baked into the GLSL as a
- * `#define`.
+ * WebGPU declares the constant as a WGSL `override`. WebGL bakes the value into the GLSL as a
+ * `#define`, where a `u32` reads as an `int`, so compare a `u32` constant with a bare literal such
+ * as `== 1`, which both languages accept.
  * @category rendering
  * @advanced
  */
@@ -172,8 +183,8 @@ export type ShaderOverrideType = 'f32' | 'i32' | 'u32';
 /**
  * A specialization constant a bit declares: a `default`, or `required: true`
  *
- * The value comes from the descriptor's `overrides`. Bits that declare the same constant must
- * agree on its type and default, or the compile throws.
+ * The value comes from {@link ShaderDescriptorOptions#overrides}. Bits that declare the same
+ * constant must agree on its type, whether it's required, and its default, or the compile throws.
  * @category rendering
  * @advanced
  */
@@ -189,14 +200,11 @@ export type ShaderOverrideDef<T extends ShaderOverrideType = ShaderOverrideType>
   | {
       /** The constant's scalar type */
       type: T;
-      /** The descriptor's `overrides` must give a value; WebGL compilation throws without one */
+      /** The descriptor's `overrides` must give a value, or the shader fails to build */
       required: true;
       /** Not allowed alongside `required` */
       default?: never;
     };
-
-/** A bit's bindings, keyed by bind group name */
-type ShaderBindings<BIND_GROUPS extends readonly string[]> = Partial<Record<BIND_GROUPS[number], BindingGroup>>;
 
 /**
  * One piece of a shader: the attributes, varyings, bindings and code it adds to a template
@@ -225,11 +233,11 @@ type ShaderBindings<BIND_GROUPS extends readonly string[]> = Partial<Record<BIND
  *   },
  *   gpu: {
  *     vertex: { input: "output.vColor = input.aColor;" },
- *     fragment: { end: "return input.vColor * material.uColor;" },
+ *     fragment: { material: "albedo *= input.vColor.rgb * material.uColor.rgb;" },
  *   },
  *   gl: {
  *     vertex: { input: "vColor = aColor;" },
- *     fragment: { end: "fragColor = vColor * material.uColor;" },
+ *     fragment: { material: "albedo *= vColor.rgb * material.uColor.rgb;" },
  *   },
  * };
  * ```
@@ -241,50 +249,79 @@ export type ShaderBit<
   FRAGMENT_TAGS extends readonly string[] = readonly string[],
   BIND_GROUPS extends readonly string[] = readonly string[],
 > = {
-  /**
-   * A unique name
-   *
-   * Compiled shaders are cached by the names of their bits, so two different bits that share a
-   * name throw rather than share a shader.
-   */
+  /** A unique name; shaders are cached by their bits' names, so two different bits with one name throw */
   name: string;
   /** The vertex attributes this bit reads; a name redeclared with another format warns, and the first wins */
   attributes?: Record<string, VertexFormat>;
   /** The varyings this bit declares; a name redeclared with another type warns, and the first wins */
   interStage?: InterStage;
   /**
+   * The fragment outputs this bit declares, keyed by name, such as `{ normal: 'vec4<f32>' }`
+   *
+   * The fragment stage writes one as `outputs.normal`, and every field starts at zero.
+   * {@link ShaderDescriptorOptions#outputLocations} says which output each location writes, and an
+   * output with no location is dropped, so a bit can write one without knowing which passes use it.
+   * In a view with scene outputs, a material on the engine's template can write any
+   * {@link SceneOutput} by its name.
+   *
+   * The engine's template declares `color` as `vec4<f32>` and fills it from `finalColor` and
+   * `alpha` after the `end` slot, so set those rather than `outputs.color`. Two bits that declare
+   * one name with different types throw. A custom template needs the output slots: in WGSL
+   * `{{fragmentDeclareOutputs}}` and `{{fragmentWriteOutputs}}`, returning `FragmentOutput`, and in
+   * the GLSL fragment template `{{declareOutputs}}` and `{{writeOutputs}}`.
+   * @example
+   * ```ts
+   * const depthOutputBit: ShaderBit = {
+   *   name: 'myDepthOutput',
+   *   outputs: { depth: 'f32' },
+   *   gpu: { fragment: { end: 'outputs.depth = input.position.z;' } },
+   *   gl: { fragment: { end: 'outputs.depth = gl_FragCoord.z;' } },
+   * };
+   * ```
+   */
+  outputs?: Record<string, FragmentOutputType>;
+  /**
    * WGSL structs this bit declares, keyed by struct name
    *
-   * The first bit to declare a name wins, and later declarations are dropped without a warning,
-   * so bits that share a struct should import one definition.
+   * The first bit to declare a name wins and later ones are dropped without a warning, so bits that
+   * share a struct should import one definition.
    */
   structs?: Record<string, StructDefinition>;
   /**
    * The bindings this bit adds, keyed by bind group name
    *
-   * Fields in the `material` group become fields of the `Material` struct, read as
-   * `material.<name>`. The group isn't bound; each material's values live in a row of a shared
-   * store, so texture and sampler types in it are dropped. Declare textures in `textures`.
-   */
-  bindings?: ShaderBindings<BIND_GROUPS>;
-  /**
-   * Specialization constants, keyed by name
+   * Fields in the `material` group are per-material values, read as `material.<name>` in every
+   * stage slot but the vertex `input` slot, which WebGL runs before declaring `material`. A
+   * `header` helper can't see `material`, so pass it the values as arguments. A field is `f32`,
+   * `i32`, `u32`, `mat2x2<f32>` or a `vec2`, `vec3` or `vec4` of `f32`, and other value types
+   * throw. Texture and sampler types there are dropped; declare textures in `textures`. A material
+   * can have any number of fields, but a write to one uploads them all, and a draw that merges
+   * materials reads all of them in each stage, one texel per 16 bytes.
    *
-   * WebGPU declares them as WGSL `override` constants and sets them per pipeline. WebGL bakes the
-   * value into the GLSL as a `#define`. The values come from the descriptor's `overrides`.
+   * Fields in the `instance` group are the per-slot values of a {@link BatchedMesh3D}, read as
+   * `instance.<name>` in the same slots. Each must match a field of the batch's `instanceData`
+   * option by name and type. A custom template adds `{{vertexStoreAccess}}` and
+   * `{{fragmentStoreAccess}}` to its WGSL, the vertex one after it declares `inst` as the engine's
+   * template does, and `{{storeAccess}}` to each GLSL stage, after the vertex `{{input}}`. A pass's
+   * descriptor also lists {@link instanceFetchBitGl} in its `bitsGl`.
+   *
+   * Don't add fields of your own to `global` or `camera`, which the engine fills from fixed
+   * buffers, or the draw can fail. A material's shader always has the engine's fields there, so
+   * a bit reads them without declaring them, as `camera.uCameraPosition` in WGSL or
+   * `uCameraPosition` in GLSL.
    */
+  bindings?: Partial<Record<BIND_GROUPS[number], BindingGroup>>;
+  /** Specialization constants, keyed by name; see {@link ShaderOverrideType} */
   overrideDefs?: Record<string, ShaderOverrideDef>;
   /**
    * The textures this bit samples, as camelCase names such as `'transmission'`
    *
-   * Each name gets two generated WGSL and GLSL helpers. `sampleX(uv)`, such as
-   * `sampleTransmission(uv)`, takes its mip level from the fragment's derivatives, so it works in
-   * the fragment stage only. `sampleXDirect(uv)` reads mip level 0 and works in either stage, so a
-   * vertex displacement bit can use it.
-   *
-   * A material binds its textures in the order its bits declare them, and each draw packs their
-   * batch slots four bits apiece into one 32-bit word. That caps a material at eight textures
-   * across all of its bits.
+   * In a material's shader, each name gets two helpers in both languages, which
+   * {@link BaseMaterial3DOptions#textures} fills by name. `sampleX(uv)`, such as
+   * `sampleTransmission(uv)`, picks its mip level from the fragment's derivatives, so it works in
+   * the fragment stage only, and `sampleXDirect(uv)` reads mip 0 in either stage. Pixi uploads
+   * images with their alpha premultiplied by default, so divide a sample's `rgb` by its `a`, as in
+   * `c.rgb / max(c.a, 0.001)`, to read the colour the image stores.
    * @example
    * ```ts
    * const myBit: ShaderBit = {
@@ -296,33 +333,58 @@ export type ShaderBit<
    */
   textures?: string[];
   /**
-   * The WGSL code for the WebGPU backend
+   * Other bits this bit needs in the shader, such as one that declares a helper function it calls
    *
-   * The template names each stage slot with the stage prefix, so `vertex.input` fills
-   * `{{vertexInput}}` and `fragment.end` fills `{{fragmentEnd}}`.
+   * The compiler adds each required bit once, just ahead of the first bit that requires it, so two
+   * bits can share a helper without declaring it twice. A material need not list them.
    *
-   * Every compiled module turns off WGSL's `derivative_uniformity` diagnostic, which the batch
-   * texture samplers need. So the compiler won't reject a `textureSample`, `dpdx` or `dpdy` in a
-   * branch it can't prove uniform. Keep them in uniform control flow yourself: in a non-uniform
-   * branch the derivative, and so the mip level, is undefined.
+   * A required bit should hold only shader code, such as helpers and constants: one the material
+   * doesn't list can't add texture slots, `material` fields or `instance` fields. Declare those on
+   * a listed bit, and list it ahead of any bit that requires it.
+   * @example
+   * ```ts
+   * const luminanceBit: ShaderBit = {
+   *   name: 'luminance',
+   *   gpu: { header: 'fn luminance(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)); }' },
+   *   gl: { fragment: { header: 'float luminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }' } },
+   * };
+   *
+   * const desaturateBit: ShaderBit = {
+   *   name: 'desaturate',
+   *   requires: [luminanceBit],
+   *   gpu: { fragment: { material: 'albedo = vec3<f32>(luminance(albedo));' } },
+   *   gl: { fragment: { material: 'albedo = vec3(luminance(albedo));' } },
+   * };
+   * ```
    */
-  gpu?: ShaderStages<VERTEX_TAGS, FRAGMENT_TAGS>;
+  requires?: ShaderBit[];
   /**
-   * The GLSL code for the WebGL backend
+   * The WGSL code for WebGPU; {@link ShaderBitTemplate} says which slot each key fills
    *
-   * Each stage compiles from its own template, so slot names carry no prefix: `vertex.input` fills
-   * the vertex template's `{{input}}`.
+   * The compiler doesn't check that a `textureSample`, `dpdx` or `dpdy` sits in uniform control
+   * flow, so keep it there yourself. A branch on a `material` value is uniform. Under a branch on a
+   * per-fragment value, the derivative, and so the mip level, is undefined.
    */
-  gl?: ShaderStages<VERTEX_TAGS, FRAGMENT_TAGS>;
+  gpu?: {
+    /** Code for the template's `{{header}}` slot, such as functions and constants */
+    header?: string;
+    /** Code for the vertex stage's slots, keyed by slot name */
+    vertex?: Partial<Record<VERTEX_TAGS[number], string>>;
+    /** Code for the fragment stage's slots, keyed by slot name */
+    fragment?: Partial<Record<FRAGMENT_TAGS[number], string>>;
+  };
+  /** The GLSL code for WebGL; {@link ShaderBitTemplate} says which slot each key fills */
+  gl?: {
+    /** Code for the `{{header}}` slot of both stages' templates, such as functions and constants */
+    header?: string;
+    /** Code for the vertex stage's slots, keyed by slot name */
+    vertex?: Partial<Record<VERTEX_TAGS[number], string>>;
+    /** Code for the fragment stage's slots, keyed by slot name */
+    fragment?: Partial<Record<FRAGMENT_TAGS[number], string>>;
+  };
 
-  /**
-   * Set by `assertBitIdentity` once this bit owns its name, so later checks are one read
-   * @internal
-   */
+  /** @internal */
   _identityChecked?: boolean;
-  /**
-   * This bit's serialized content, built only when another bit claims the same name
-   * @internal
-   */
+  /** @internal */
   _contentSnapshot?: string;
 };

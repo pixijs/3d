@@ -5,11 +5,11 @@ import { renderGltfModel } from './frameModel';
 
 const URL = model('gltf.VirtualCity');
 
-// Skipped: The auto-framed camera sits outside the sky box, so the city can't be judged.
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },
   skip: true,
+  skipReason: "The auto-framed camera sits outside the sky box, so the city can't be judged",
   create: async (app) => {
     await renderGltfModel(app, { url: URL });
   },

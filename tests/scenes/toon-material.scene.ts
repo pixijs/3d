@@ -8,13 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * The shipped toon recipe end to end: {@link ToonMaterial} on the meshes (banded diffuse, rim,
- * sharp specular, and an opt-in to the `outline` pass) with {@link OutlinePass} on the view.
- * Band count rises left to right so the quantisation reads directly; the right-most sphere
- * opts out of the outline to prove the per-material switch.
- */
-
 const SIZE = 220;
 
 export const scene: TestScene = {

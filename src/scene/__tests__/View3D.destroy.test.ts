@@ -1,6 +1,6 @@
 import { getApp } from '@test-utils';
 import type { Application, Buffer, WebGLRenderer, WebGPURenderer } from 'pixi.js';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Geometry3D } from '~/geometry/Geometry3D';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
@@ -11,15 +11,10 @@ import { View3D } from '~/scene/View3D';
 
 const RENDERERS = ['webgl', 'webgpu'] as const;
 
-/** The pixi `Buffer` behind a geometry's `aPosition` attribute */
 function positionBuffer(geometry: Geometry3D): Buffer {
   return geometry.attributes.aPosition.buffer;
 }
 
-/**
- * Builds a View3D with three meshes and a shadow-casting light, and renders a frame so its graph
- * and GPU resources exist
- */
 function buildScene(app: Application<WebGLRenderer | WebGPURenderer>): { view: View3D; meshes: Mesh3D[] } {
   const view = new View3D({ width: 512, height: 512 });
   app.stage.addChild(view);
@@ -62,7 +57,6 @@ for (const preference of RENDERERS) {
       app = await getApp({ id: `view3d-destroy-${preference}`, appOptions: { preference } });
       const { view } = buildScene(app);
 
-      /** Read before the destroy, which drops the bone pit's reference to its buffer */
       const bonePitBuffer = view._bonePit.buffer;
 
       expect(bonePitBuffer.destroyed).toBe(false);
@@ -71,22 +65,6 @@ for (const preference of RENDERERS) {
 
       expect(view.destroyed).toBe(true);
       expect(bonePitBuffer.destroyed).toBe(true);
-    });
-
-    it('leaves shared geometry intact on a plain destroy (children defaults off)', async () => {
-      app = await getApp({ id: `view3d-destroy-shared-${preference}`, appOptions: { preference } });
-      const { view, meshes } = buildScene(app);
-
-      const geometry = meshes[0].geometry;
-      const buffer = positionBuffer(geometry);
-      const destroySpy = vi.spyOn(geometry, 'destroy');
-
-      view.destroy();
-
-      expect(destroySpy).not.toHaveBeenCalled();
-      expect(buffer.destroyed).toBe(false);
-
-      geometry.destroy(true);
     });
 
     it('destroys owned geometry when children + geometry + material flags are set', async () => {

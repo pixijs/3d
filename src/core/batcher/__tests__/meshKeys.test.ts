@@ -2,23 +2,32 @@ import { describe, expect, it } from 'vitest';
 
 import type { AlphaMode } from '~/materials/BaseMaterial3D';
 
+import { textureSetId } from '../textureSetId';
 import { updateMesh3DKeys } from '../updateMesh3DKeys';
 
-/** 16 alone would set the cutout bit, and 17 is the first count to carry into it */
 const OVERFLOWING_TEXTURE_COUNTS = [16, 17, 40];
 
-/** `updateMesh3DKeys` reads only the uid and the atlas allocation off a geometry. */
 function geometry(uid: number, atlasUid?: number) {
   return { uid, _geometryAtlasAllocation: atlasUid === undefined ? null : { atlas: { uid: atlasUid } } };
 }
 
 type FakeGeometry = ReturnType<typeof geometry>;
 
-function renderable(geom: FakeGeometry, textureCount = 1, textureCacheKey = 0, alphaMode: AlphaMode = 'opaque') {
+function material(uid: number, sourceUids: number[], alphaMode: AlphaMode = 'opaque') {
+  const _textures = sourceUids.map((sourceUid) => ({ source: { uid: sourceUid } }));
+
+  return { uid, _textures, _textureSetId: textureSetId(_textures), alphaMode };
+}
+
+function renderable(geom: FakeGeometry, textureCount = 1, alphaMode: AlphaMode = 'opaque', materialUid = 0) {
   return {
     _sortKey: 0,
     geometry: geom,
-    material: { textureCacheKey, _textures: { length: textureCount }, alphaMode },
+    material: material(
+      materialUid,
+      Array.from({ length: textureCount }, () => 1),
+      alphaMode,
+    ),
   };
 }
 
@@ -29,8 +38,14 @@ function batchKeyFor(pipelineKey: number, geom: FakeGeometry): number {
   return cache.batchKey;
 }
 
-function sortKeyFor(pipelineKey: number, ...args: Parameters<typeof renderable>): number {
-  const item = renderable(...args);
+function sortKeyFor(
+  pipelineKey: number,
+  geom: FakeGeometry,
+  textureCount = 1,
+  materialUid = 0,
+  alphaMode: AlphaMode = 'opaque',
+): number {
+  const item = renderable(geom, textureCount, alphaMode, materialUid);
   updateMesh3DKeys(item, { batchKey: 0 }, pipelineKey);
 
   return item._sortKey;
@@ -57,16 +72,10 @@ describe('updateMesh3DKeys batch key', () => {
 
     expect(new Set(keys).size).toBe(pipelineKeys.length);
   });
-
-  it('separates the same geometry across different pipelines', () => {
-    const geom = geometry(77, 1);
-
-    expect(batchKeyFor(500, geom)).not.toBe(batchKeyFor(501, geom));
-  });
 });
 
 describe('updateMesh3DKeys sort key', () => {
-  it('orders by texture layout, then pipeline, then geometry, then texture, each field outranking all below it', () => {
+  it('orders by texture layout, then pipeline, then texture set, then geometry, then material, each field outranking all below it', () => {
     const pipeLow = 900_001;
     const pipeHigh = 900_002;
     const geomLow = geometry(10);
@@ -83,22 +92,92 @@ describe('updateMesh3DKeys sort key', () => {
     expect(Number.isSafeInteger(sortKeyFor(pipeHigh, geomHigh, 4, 0xffff))).toBe(true);
   });
 
+  it('puts the pipeline above the texture set, so a set drawn by two pipelines sorts by pipeline first', () => {
+    const geom = geometry(5);
+    const key = (pipelineKey: number, sourceUid: number) => {
+      const item = { _sortKey: 0, geometry: geom, material: material(0, [sourceUid]) };
+      const cache = { batchKey: 0 };
+      updateMesh3DKeys(item, cache, pipelineKey);
+
+      return { sortKey: item._sortKey, pipelineId: Math.floor(cache.batchKey / 0x1_0000_0000) };
+    };
+    let pipeLow = 930_001;
+    while ((key(pipeLow, 939).pipelineId & 0xff) === 0xff) pipeLow += 2;
+    const pipeHigh = pipeLow + 1;
+
+    const lowPipeEarlySet = key(pipeLow, 940).sortKey;
+    const lowPipeLateSet = key(pipeLow, 941).sortKey;
+    const highPipeEarlySet = key(pipeHigh, 940).sortKey;
+
+    expect(lowPipeEarlySet, 'the set seen first gets the lower counted id').toBeLessThan(lowPipeLateSet);
+    expect(lowPipeLateSet, 'a later set on the lower pipeline still sorts first').toBeLessThan(highPipeEarlySet);
+  });
+
   it('groups atlased geometry by its atlas ahead of the geometry uid', () => {
     const pipelineKey = 910_001;
 
     expect(sortKeyFor(pipelineKey, geometry(5, 1))).toBeLessThan(sortKeyFor(pipelineKey, geometry(4, 2)));
   });
+
+  it('puts the texture set above geometry, so meshes sampling the same sources sort together across geometries', () => {
+    const pipelineKey = 3;
+    const sharedSources = [10, 11];
+    const otherSources = [12, 11];
+    const key = (geom: FakeGeometry, sourceUids: number[], uid: number) => {
+      const item = { _sortKey: 0, geometry: geom, material: material(uid, sourceUids) };
+      updateMesh3DKeys(item, { batchKey: 0 }, pipelineKey);
+
+      return item._sortKey;
+    };
+    const a = key(geometry(1), sharedSources, 1);
+    const b = key(geometry(2), sharedSources, 2);
+    const c = key(geometry(1), otherSources, 3);
+
+    expect(Math.abs(a - b), 'same set, different geometry: differ below the texture-set field').toBeLessThan(2 ** 24);
+    expect(Math.abs(a - c), 'different set, same geometry: differ at or above it').toBeGreaterThanOrEqual(2 ** 24);
+    expect(key(geometry(1), [11, 10], 4), 'slot order is part of the set').not.toBe(a);
+  });
+
+  it('gives every distinct texture set its own field value, whatever the map count or the uid spacing', () => {
+    const pipelineKey = 3;
+    const materialCount = 1024;
+    const textureSetField = (sortKey: number) => Math.floor(sortKey / 2 ** 24) & 0xffff;
+    const fieldsFor = (mapCount: number) => {
+      const fields = new Set<number>();
+      for (let i = 0; i < materialCount; i++) {
+        const item = {
+          _sortKey: 0,
+          geometry: geometry(1),
+          material: material(
+            i,
+            Array.from({ length: mapCount }, (_, t) => 10 + mapCount * i + t),
+          ),
+        };
+        updateMesh3DKeys(item, { batchKey: 0 }, pipelineKey);
+        fields.add(textureSetField(item._sortKey));
+      }
+
+      return fields;
+    };
+
+    for (const mapCount of [1, 2, 3, 4]) {
+      expect(fieldsFor(mapCount).size, `${mapCount} maps: counted ids never collide below 65536 sets`).toBe(
+        materialCount,
+      );
+    }
+  });
+
+  it('keeps only the low 12 bits of the material uid, so a uid past 4095 still sorts within its geometry', () => {
+    const pipelineKey = 920_001;
+    const geom = geometry(5);
+
+    expect(sortKeyFor(pipelineKey, geom, 1, 0x1_0007)).toBe(sortKeyFor(pipelineKey, geom, 1, 7));
+    expect(sortKeyFor(pipelineKey, geom, 1, 7)).toBeLessThan(sortKeyFor(pipelineKey, geom, 1, 8));
+    expect(sortKeyFor(pipelineKey, geom, 1, 0xffff)).toBeLessThan(sortKeyFor(pipelineKey, geometry(6), 1, 0));
+  });
 });
 
 describe('updateMesh3DKeys cutout ordering', () => {
-  it('sorts alpha-masked meshes after every opaque one, whatever their layout or pipeline', () => {
-    const geom = geometry(5);
-    const opaque = sortKeyFor(0xffff, geom, 15, 0xffff);
-    const cutout = sortKeyFor(1, geom, 1, 0, 'mask');
-
-    expect(cutout).toBeGreaterThan(opaque);
-  });
-
   it('keeps a material out of the cutout group when it has more textures than the layout field holds', () => {
     const geom = geometry(5);
     const cutout = sortKeyFor(1, geom, 1, 0, 'mask');
@@ -113,13 +192,6 @@ describe('updateMesh3DKeys cutout ordering', () => {
     const bigCutout = sortKeyFor(0xffff, geom, 40, 0xffff, 'mask');
     expect(bigCutout).toBeGreaterThan(cutout);
     expect(Number.isSafeInteger(bigCutout)).toBe(true);
-  });
-
-  it('groups every count past the field with 15 rather than wrapping round to 0', () => {
-    const geom = geometry(5);
-
-    expect(sortKeyFor(1, geom, 16)).toBe(sortKeyFor(1, geom, 15));
-    expect(sortKeyFor(1, geom, 40)).toBe(sortKeyFor(1, geom, 15));
   });
 
   it('keeps the pipeline grouping within the cutout group', () => {

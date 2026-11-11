@@ -7,41 +7,16 @@ import type { ReadonlyRect, RenderSession } from '../render-passes/RenderSession
 
 const _tempRect = new Rectangle();
 
-/** Bounds handed to `placeViewport` for a whole render target */
 const _sourceBounds = { x: 0, y: 0, width: 0, height: 0 };
 
 /**
- * Rounds a pixel coordinate the way pixi rounds one
- *
- * Adding a half and truncating is pixi's own idiom in `RenderTargetSystem.bind()`. It is not
- * `Math.round`: truncation goes toward zero, so -1.2 lands on 0 here and on -1 there. That case
- * is real — a view scrolled off the left or top edge has a negative frame — and a viewport one
- * pixel out of step with the bind that set it shows up as a seam.
- * @param value - The coordinate, in fractional pixels.
- * @returns The coordinate as a whole number of pixels.
+ * Pixi's rounding in `RenderTargetSystem.bind()`, which truncates toward zero; `Math.round` differs on
+ * the negative frame of a view scrolled off the left or top edge, and leaves a one-pixel seam
  */
 function roundLikePixi(value: number): number {
   return (value + 0.5) | 0;
 }
 
-/**
- * Places a logical rect as a GPU viewport inside `bounds`
- *
- * Shared by both callers below, which differ only in what they measure against: a whole render
- * target, or the content rect a camera's image is placed inside. The rect is scaled into
- * physical pixels, shifted so `origin` becomes zero, rounded, then trimmed to fit. A rect that
- * starts outside is pulled to the edge and loses the overhang, so what is left is the part that
- * was inside. A viewport running past its bounds is clamped rather than dropped, and never
- * shrinks below one pixel.
- * @param frame - The rect to place, in logical pixels.
- * @param scale - Logical pixels to physical pixels.
- * @param originX - Logical x that maps to the left edge of `bounds`.
- * @param originY - Logical y that maps to the top edge of `bounds`.
- * @param bounds - The region to place inside, in physical pixels.
- * @param flipY - Measure y up from the bottom of `bounds` instead of down from the top.
- * @param out - Receives the viewport.
- * @returns `out`, for inline use.
- */
 function placeViewport(
   frame: Rectangle,
   scale: number,
@@ -81,21 +56,12 @@ function placeViewport(
 }
 
 /**
- * Convert a logical-pixel rect to a physical-pixel viewport for `target`, matching the
- * rounding/clamping that Pixi's `RenderTargetSystem.bind()` performs when given a `frame`
- *
- * The math is repeated here so the graph can narrow the viewport with the pipe's `setViewport`
- * instead of binding again, which on WebGPU would end the render pass and begin a new one.
- *
- * Only the WebGL canvas needs a y flip: `gl.viewport` measures y up from the bottom, and pixi
- * draws into every other WebGL framebuffer upside down, which already lines y up. Pixi's GL
- * adaptor applies that flip inside `startRenderPass`, but `setViewport` bypasses it, so the
- * result carries it.
- * @param frame - The logical-pixel rect to convert.
- * @param target - The render target the viewport applies to.
- * @param renderer - The active renderer (drives the WebGL root Y-flip).
- * @param out - Receives the physical-pixel viewport.
- * @returns `out`, for inline use.
+ * Matches pixi's `RenderTargetSystem.bind()` viewport, so the graph can narrow with `setViewport` and skip a rebind,
+ * which on WebGPU ends the render pass; adds the WebGL canvas's y flip, which a bind applies and `setViewport` skips
+ * @param frame - In logical pixels.
+ * @param target - The target the viewport applies to.
+ * @param renderer - The renderer.
+ * @param out - Receives the viewport, in physical pixels.
  * @internal
  */
 export function frameToPhysicalViewport(
@@ -115,30 +81,24 @@ export function frameToPhysicalViewport(
 }
 
 /**
- * The GPU viewport of a pass drawing from `camera`, inside the target's content rect
- *
- * A texture camera's frame is already in its texture's pixels. A view-space camera's is in
- * the view's screen space, so it is shifted by the view frame's origin and scaled to the
- * target's resolution. Rounded the way pixi's bind rounds, clamped so the pass never draws
- * outside the bound content. On WebGL to the root canvas, the view's image is bottom-up, so
- * a view-space rect flips within the frame — the same flip `frameToPhysicalViewport`
- * applies. A texture camera's image is never bottom-up.
+ * `null` when the camera's frame is empty; flips y on the WebGL canvas as `frameToPhysicalViewport` does
  * @param camera - The pass's camera.
  * @param session - The frame's render session.
- * @param bounds - The target content the camera's image is placed inside, in physical pixels.
- * @returns The viewport, or `null` when the camera lands nowhere.
+ * @param bounds - The target's content rect, in its texels.
+ * @param sceneResolution - `RenderGraph.resolution`.
  * @internal
  */
 export function cameraFrameToPhysicalViewport(
   camera: Camera3D,
   session: RenderSession,
   bounds: ReadonlyRect,
+  sceneResolution: number,
 ): Rectangle | null {
   const frame = getCameraData(camera).frame;
   if (frame.width <= 0 || frame.height <= 0) return null;
 
   const inTexture = camera.renderTexture !== null;
-  const scale = inTexture ? 1 : session.defaultTarget.colorTexture.source.resolution;
+  const scale = inTexture ? 1 : sceneResolution;
   const viewFrame = getCameraData(session.view3d.camera).frame;
   const originX = inTexture ? 0 : viewFrame.x;
   const originY = inTexture ? 0 : viewFrame.y;

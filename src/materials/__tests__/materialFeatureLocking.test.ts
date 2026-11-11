@@ -8,12 +8,6 @@ import { View3D } from '~/scene/View3D';
 const makeView = () => new View3D({ width: 64, height: 64 });
 const makeTexture = () => new Texture({ source: new TextureSource({ width: 1, height: 1 }) });
 
-/**
- * Sequential shader slot of each texture name declared across `bits` —
- * mirrors texturesPluginGpu/Gl assignment (`shift = position * 4`). The
- * batcher packs nibble `t` from `material._textures[t]`, so for every
- * declared name: `slots[name]` must equal the texture's `_textures` index.
- */
 function shaderSlots(bits: ShaderBit[]): Record<string, number> {
   const slots: Record<string, number> = {};
   let next = 0;

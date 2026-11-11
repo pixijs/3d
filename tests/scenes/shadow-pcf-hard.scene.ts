@@ -8,14 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Hard shadow filtering: `view.shadowFilter = 'hard'` compiles the single-tap
- * shadow sampler — crisp, unfiltered (aliased) shadow edges. Paired with
- * `shadow-pcf-high` (identical scene, wider kernel) to verify the filter tiers
- * produce visibly different edge softness. `shadowQuality: 'low'` enlarges
- * texels so the single-tap vs multi-tap difference is unambiguous. Static scene
- * for determinism.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,

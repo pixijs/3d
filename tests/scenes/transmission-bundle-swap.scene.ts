@@ -8,27 +8,10 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Deterministic repro of the case the WebGPU bundle-rebuild fix targets: a cached
- * render bundle baking a *stale* opaque-copy texture instance after the pooled
- * transient swaps instances across a power-of-two bucket boundary (the same thing
- * the pulse-scaled views-in-2d card does, made single-shot).
- *
- * A transmissive cube's View3D renders a few frames at size 200 (→ 256 bucket,
- * instance X) — recording its WebGPU transmission bundle against X — then jumps
- * to size 300 (→ 512 bucket, instance Y) while the 2D backdrop shifts. With the
- * rebuild fix the bundle re-records against Y and refracts the *current* (shifted)
- * backdrop; without it the bundle keeps sampling X (prior, unshifted content at
- * the wrong scale). Invisible on WebGL (rebinds live every draw); visible on WebGPU.
- *
- * 600px canvas so 200 and 300 land in different buckets (256 vs 512); at 256px
- * both cap to 256 and no swap occurs.
- */
 export const scene: TestScene = {
   app: { width: 600, height: 600, backgroundColor: 0x10202a, useBackBuffer: true },
   delay: 250,
   create: async (app) => {
-    // Two-tone + grid backdrop so a stale (unshifted) refraction is obvious.
     const backdrop = new Graphics();
     backdrop.rect(0, 0, 300, 600).fill(0xff5566);
     backdrop.rect(300, 0, 300, 600).fill(0x3a7ca5);
@@ -66,8 +49,6 @@ export const scene: TestScene = {
     cube.rotation.set(-0.5, 0.7, 0.0);
     view3d.root.addChild(cube);
 
-    // Frames 0–2 at size 200 (bucket 256) record the bundle against instance X;
-    // frame 3 jumps to size 300 (bucket 512, instance Y) and shifts the backdrop.
     let frame = 0;
     app.ticker.add(() => {
       frame++;

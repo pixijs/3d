@@ -5,18 +5,12 @@ import { PointShape } from '~/extras/particles/emitterShapes/PointShape';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
 import { puffTexture } from './helpers/particleTextures';
 
-// The "write your own behaviour" path, end to end: a user bit declared with
-// `satisfies ShaderBit`, composed into a ParticleSystem3D through extraBits,
-// reading a uniform set through `system.uniforms`, a local the built-ins
-// expose, and an attribute of its own written per particle by a spawn
-// override. Particles are spawned at staggered clock values and the clock is
-// then pinned, so the capture is one rising column bent into an S by the sway
-// and split into two by the phase, with no stepping and no ticker involved.
 const sway = {
   name: 'scene-sway',
   attributes: { aSwayPhase: 'float32' },
@@ -61,7 +55,7 @@ export const scene: TestScene = {
       capacity: 32,
       autoUpdate: false,
       emitRate: 0,
-      seed: 'custom-behaviour',
+      createRandom: () => seededRandom('custom-behaviour'),
       shape: new PointShape(),
       life: 10,
       speed: 1.6,
@@ -75,9 +69,6 @@ export const scene: TestScene = {
     system.uniforms.uSwayFreq = 2.4;
     view3d.root.addChild(system);
 
-    // One particle every 0.15s of clock, then the clock pinned at 3s: ages run
-    // from 3s down to 0.15s up the column. Every other particle sways in
-    // antiphase, through the attribute the bit declared.
     for (let i = 0; i < 20; i++) {
       system.time = i * 0.15;
       system.spawn(1, { aSwayPhase: i % 2 === 0 ? 0 : Math.PI });

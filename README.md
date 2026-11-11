@@ -5,8 +5,8 @@
 > [release](../../releases):
 >
 > ```sh
-> npm install pixi.js
-> npm install ./pixi-3d-0.1.0-beta.2.tgz
+> npm install pixi.js@^8.23.0
+> npm install ./pixi-3d-0.1.0-beta.3.tgz
 > ```
 >
 > **Show us what you make.** Screenshots, clips, half-finished experiments: post them in
@@ -28,74 +28,86 @@
   <a href="https://opencollective.com/pixijs"><img src="https://opencollective.com/pixijs/tiers/badge.svg" alt="open collective"></a>
 </p>
 <p align="center">
- <a href="https://pixijs.com/8.x/guides">Guides</a> | <a href="https://pixijs.com/8.x/tutorials">Tutorials</a> | <a href="https://pixijs.com/8.x/examples">Examples</a> | <a href="https://pixijs.download/release/docs/index.html">API Docs</a> | <a href="https://discord.gg/QrnxmQUPGV">Discord</a> | <a href="https://bsky.app/profile/pixijs.com">Bluesky</a> | <a href="https://x.com/pixijs">𝕏</a>
+ <a href="https://discord.gg/QrnxmQUPGV">Discord</a> | <a href="https://bsky.app/profile/pixijs.com">Bluesky</a> | <a href="https://x.com/pixijs">𝕏</a>
 </p>
 
 # PixiJS 3D
 
-> A 3D extension for PixiJS
+> Combine 2D and 3D in one place, the PixiJS way.
 
-## Usage
+- 🚀 [WebGL2](https://en.wikipedia.org/wiki/WebGL) & [WebGPU](https://en.wikipedia.org/wiki/WebGPU) Renderers
+- 🧩 A 3D View You Add to the Stage Like a Sprite
+- 📦 glTF Models, with Draco and meshopt Compression
+- 🎨 PBR, Phong and Toon Materials
+- 💡 Lights and Shadows
+- 🏃 Skinned and Morph-Target Animation
+- ✨ Particles
+- 🪄 Post-Processing Effects such as Bloom and Ambient Occlusion
+- ✋ Pointer Events on 3D Objects
 
-```sh
+### Setup
+
+It's easy to get started with PixiJS 3D! Just use our [PixiJS Create](https://pixijs.io/create-pixi/) CLI and get set up in just one command:
+
+<p align="center">
+  <img width="500" style="border-radius: 10px; filter: drop-shadow(0px 2px 5px #000);;" alt="Screenshot from terminal" src="https://pixijs.io/create-pixi/img/demo.gif">
+</p>
+
+```
+npm create pixi.js@latest
+```
+
+or to add it to an existing project:
+
+```
 npm install pixi.js @pixi/3d
 ```
 
+`@pixi/3d` needs `pixi.js` 8.23.0 or later. [Installation](src/__docs__/getting-started/installation.md) covers the CDN build.
+
+### Usage
+
 ```ts
-import { DirectionalLight, Model3D, View3D } from '@pixi/3d';
-import type { Scene3DSource } from '@pixi/3d';
+import { CubeGeometry, DirectionalLight, Material3D, Mesh3D, View3D } from '@pixi/3d';
 import { OrbitCamera } from '@pixi/3d/extras';
-import { Application, Assets } from 'pixi.js';
+import { Application } from 'pixi.js';
 
-const app = new Application();
-await app.init({ preference: 'webgpu', resizeTo: window });
-document.body.appendChild(app.canvas);
+(async () => {
+  // Create a new application
+  const app = new Application();
 
-// A View3D is a 2D container that renders a 3D scene into its rectangle;
-// autoResize makes it fill the canvas and follow resizes
-const view3d = new View3D({ autoResize: true, environment: { skyColor: 0xdde8ff, groundColor: 0x443322 } });
-app.stage.addChild(view3d);
+  await app.init({ preference: 'webgpu', background: '#1a1a2e', resizeTo: window, antialias: true });
+  document.body.appendChild(app.canvas);
 
-const sun = new DirectionalLight({ intensity: 3 });
-sun.rotation.set(-Math.PI / 4, Math.PI / 6, 0);
-view3d.root.addChild(sun);
+  // A View3D draws a 3D scene; its environment lights it from above and below
+  const view3d = new View3D({ autoResize: true, environment: { skyColor: 0xc9d6ff, groundColor: 0x3a2f45 } });
 
-const source = await Assets.load<Scene3DSource>(
-  'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/DamagedHelmet/glTF-Binary/DamagedHelmet.glb',
-);
-view3d.root.addChild(new Model3D(source));
+  app.stage.addChild(view3d);
 
-view3d.camera.position.set(0, 0, 3);
-new OrbitCamera({ view: view3d, enableDamping: true });
+  // A red cube, and a sun shining on it
+  const cube = new Mesh3D({ geometry: new CubeGeometry(), material: new Material3D({ baseColor: 0xdd4444 }) });
+  const sun = new DirectionalLight({ intensity: 3 });
+
+  sun.position.set(-3, 5, 2);
+  view3d.root.addChild(cube, sun);
+  sun.lookAt(cube.position);
+
+  // Move the camera back; drag to orbit it around the cube
+  view3d.camera.position.set(0, 1.5, 4);
+  new OrbitCamera({ view: view3d });
+
+  // Spin the cube
+  app.ticker.add((time) => {
+    cube.rotation.y += 0.01 * time.deltaTime;
+  });
+})();
 ```
 
-Without `autoResize` a View keeps the size you give it, an inset you can place anywhere on the stage:
-
-```ts
-const inset = new View3D({ width: 320, height: 240 });
-inset.position.set(24, 24);
-```
-
-Importing `@pixi/3d` registers the asset loaders and a loader hook for each renderer backend. When `Application.init` picks WebGL or WebGPU, the renderer pulls in that backend's systems and pipes as a separate chunk, so a page only downloads the backend it uses.
-
-To bundle a backend statically instead, import it yourself:
-
-```ts
-import '@pixi/3d';
-import '@pixi/3d/webgl'; // or '@pixi/3d/webgpu'
-```
-
-The static import is required when the renderer is initialised with `skipExtensionImports: true`, which turns the lazy hook off.
-
-Optional pieces sit on their own subpath: the `OrbitCamera` and `FPSCamera` controllers, the debug tools, `ToonMaterial`, `ParticleSystem3D`, and extra post-processing effects.
-
-```ts
-import { FPSCamera, OrbitCamera } from '@pixi/3d/extras';
-```
+The [Quick start](src/__docs__/getting-started/quick-start.md) builds a scene step by step, and the [Introduction](src/__docs__/getting-started/introduction.md) points to the guide for each part.
 
 ### TypeScript
 
-`@pixi/3d` ships its own type declarations. Its WebGPU types come from `pixi.js`, so the setup is the same as in the [PixiJS TypeScript guide](https://pixijs.download/release/docs/core-concepts-8.html).
+PixiJS 3D ships its own type declarations. Like PixiJS, they depend on the WebGPU types, and where those come from depends on your TypeScript version.
 
 **TypeScript 5:** no WebGPU types are built in, so `pixi.js` adds [`@webgpu/types`](https://github.com/gpuweb/types) for you. No additional setup required.
 
@@ -114,25 +126,31 @@ npm install --save-dev @types/web
 }
 ```
 
-## CDN
+The types for `@pixi/3d/extras` come through the package's `exports`, so use a `moduleResolution` that reads them, such as `"bundler"`.
 
-The CDN build ships inside the npm package under `dist/`, so jsdelivr serves it. The files import `pixi.js` bare, so a page maps that name and the package in an import map, then writes the same code as with npm:
+### Contribute
 
-```html
-<script type="importmap">
-  {
-    "imports": {
-      "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.mjs",
-      "@pixi/3d": "https://cdn.jsdelivr.net/npm/@pixi/3d@1.0.0/dist/pixi-3d.min.mjs",
-      "@pixi/3d/extras": "https://cdn.jsdelivr.net/npm/@pixi/3d@1.0.0/dist/pixi-3d-extras.min.mjs"
-    }
-  }
-</script>
-<script type="module">
-  import { DirectionalLight, Model3D, View3D } from '@pixi/3d';
-  import { OrbitCamera } from '@pixi/3d/extras';
-  import { Application, Assets } from 'pixi.js';
+Read the [Contributing Guide](.github/CONTRIBUTING.md) before submitting changes.
 
-  // ...the same code as the npm example above
-</script>
-```
+### License
+
+This content is released under the [MIT License](LICENSE).
+
+<br/>
+
+<h2 align="center">PixiJS Sponsors</h2>
+
+<p align="center">
+  We're passionate about making PixiJS the best graphics library possible. Our dedication comes from our love for the project and community.
+</p>
+<br/>
+<p align="center">
+  <a href="https://pixijs.com/sponsor"><img src="https://pixijs.com/sponsors-readme.svg" alt="PixiJS sponsors"></a>
+</p>
+<p align="center">
+  <a href="https://namespace.so/github-actions/?utm_source=oss&utm_campaign=pixijs"><img alt="CI powered by Namespace" src="https://namespace.so/oss/badge.svg" height="32" /></a>
+</p>
+<br/>
+<p align="center">
+  If you'd like to support our efforts, please consider <a href="https://pixijs.com/sponsor"><b>becoming a sponsor</b></a>.
+</p>

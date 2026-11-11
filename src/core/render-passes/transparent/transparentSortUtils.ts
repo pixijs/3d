@@ -5,17 +5,9 @@ import type { SortedMesh3DView } from '../../batcher/SortedMesh3DView';
 import { MESH3D_STORE_STRIDE } from '../../buffers/Mesh3DDataStoreBuffer';
 
 /**
- * Sorts a batch's blended meshes back to front by their squared distance from the camera, for
- * WebGPU
+ * Sorts back to front: keys are negated squared distances, so the ascending sort puts the farthest first
  *
- * Each mesh's position is lanes 12 to 14 of its store row, the translation of the matrix that
- * starts the row: a world matrix in the scene batch, but a batch-local one in a
- * {@link BatchedMesh3D}'s. The key is the negated distance, so the ascending sort puts the
- * farthest first, and the sort is forced because the keys change every frame. It doesn't cull:
- * the passes run their usual compaction on the draw data afterwards.
- * @param renderables - The pass view of transparent meshes to sort.
- * @param transformData - The batch's store buffer data, one matrix per row.
- * @param cameraPos - The position of the camera in world space.
+ * Positions are store-row lanes 12 to 14: world space in the scene batch, batch-local in a {@link BatchedMesh3D}'s.
  * @internal
  */
 export function calculateTransparentDistances(
@@ -32,7 +24,7 @@ export function calculateTransparentDistances(
   const count = renderables.count;
 
   for (let i = 0; i < count; i++) {
-    const renderable = items[renderableIndices[i]]!;
+    const renderable = items[renderableIndices[i]];
 
     const matrixOffset = renderable._storeIndex * MESH3D_STORE_STRIDE;
 
@@ -49,12 +41,7 @@ export function calculateTransparentDistances(
 }
 
 /**
- * Sorts the scene batch's blended meshes back to front, on WebGL
- *
- * Reads each mesh's world matrix translation, and keys it as {@link calculateTransparentDistances}
- * does.
- * @param renderables - The meshes to sort back to front
- * @param cameraPos - World-space camera position
+ * Sorts back to front, keyed as {@link calculateTransparentDistances}
  * @internal
  */
 export function calculateDistancesFromWorldMatrix(renderables: SortedMesh3DView<Mesh3DData>, cameraPos: Vector3): void {
@@ -67,7 +54,7 @@ export function calculateDistancesFromWorldMatrix(renderables: SortedMesh3DView<
   const count = renderables.count;
 
   for (let i = 0; i < count; i++) {
-    const renderable = items[renderableIndices[i]]! as any;
+    const renderable = items[renderableIndices[i]] as Mesh3DData & { worldTransform: Matrix4 };
     const e = renderable.worldTransform.elements;
 
     const dx = e[12] - camX;
@@ -81,14 +68,7 @@ export function calculateDistancesFromWorldMatrix(renderables: SortedMesh3DView<
 }
 
 /**
- * Sorts a {@link BatchedMesh3D}'s blended items back to front, on WebGL
- *
- * Reads each item's local position from its store row and moves it into the world by the batch's
- * world matrix, then keys it as {@link calculateTransparentDistances} does.
- * @param renderables - The batch items to sort back to front
- * @param cameraPos - World-space camera position
- * @param storeF32 - The batch's store buffer, holding each item's local matrix
- * @param batchMatrix - The batch's world matrix
+ * Sorts back to front, keyed as {@link calculateTransparentDistances}
  * @internal
  */
 export function calculateDistancesFromStore(
@@ -107,7 +87,7 @@ export function calculateDistancesFromStore(
   const count = renderables.count;
 
   for (let i = 0; i < count; i++) {
-    const renderable = items[renderableIndices[i]]!;
+    const renderable = items[renderableIndices[i]];
     const s = renderable._storeIndex * MESH3D_STORE_STRIDE;
     const tx = storeF32[s + 12];
     const ty = storeF32[s + 13];

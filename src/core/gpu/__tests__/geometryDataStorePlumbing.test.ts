@@ -13,7 +13,7 @@ import { View3D } from '~/scene/View3D';
 const getPipe = (app: Application<WebGPURenderer>): View3DPipeGpu => app.renderer.renderPipes.view3d;
 
 describe('geometry-data plumbing the GPU cull reads (bounds sphere + geometry lane), checked in the CPU-staged buffers', () => {
-  it('mints an index, stages the sphere from bounds3D, and writes it into the geometry lane', async () => {
+  it('mints an index, stages the bounding sphere, and writes it into the geometry lane', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'geom-data',
       appOptions: { preference: 'webgpu', width: 128, height: 128 },
@@ -37,18 +37,12 @@ describe('geometry-data plumbing the GPU cull reads (bounds sphere + geometry la
         geometry._geometryDataIndex,
       );
 
-      const b = geometry.bounds3D;
-      const cx = (b.min.x + b.max.x) / 2;
-      const cy = (b.min.y + b.max.y) / 2;
-      const cz = (b.min.z + b.max.z) / 2;
-      const r = Math.hypot(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) / 2;
-
       const base = geometry._geometryDataIndex * GEOMETRY_DATA_STRIDE;
       const s = pipe.geometryDataStoreBuffer.data;
-      expect(s[base]).toBeCloseTo(cx, 4);
-      expect(s[base + 1]).toBeCloseTo(cy, 4);
-      expect(s[base + 2]).toBeCloseTo(cz, 4);
-      expect(s[base + 3]).toBeCloseTo(r, 4);
+      expect(s[base], 'centre x').toBeCloseTo(0, 4);
+      expect(s[base + 1], 'centre y').toBeCloseTo(0, 4);
+      expect(s[base + 2], 'centre z').toBeCloseTo(0, 4);
+      expect(s[base + 3], 'a 2x2x2 cube reaches its corners at sqrt(3)').toBeCloseTo(Math.sqrt(3), 4);
     } finally {
       app.destroy();
     }

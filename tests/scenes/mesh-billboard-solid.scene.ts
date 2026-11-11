@@ -9,26 +9,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// `billboardMode` on solid geometry, not just flat cards. The shader rebuilds all
-// three local axes in a camera-facing basis, so a mesh with depth turns to face
-// the camera instead of collapsing onto the billboard plane.
-//
-// Two rows of cubes, camera raised so it looks down on them at an angle.
-//
-//  - Top, `'none'`: the reference. Each cube keeps its authored yaw, so the row
-//    reads as three differently-turned boxes.
-//  - Bottom, `'cylindrical'`: each cube yaws to face the camera. They should all
-//    present the same face, and — the point of the scene — they should still be
-//    boxes, with lit top faces and visible volume.
-//
-// The elevated camera is what makes this discriminating. Cylindrical billboarding
-// compensates yaw but not pitch, so a solid cube keeps a top face in view. If the
-// mesh were flattened onto the billboard plane, the bottom row would be three thin
-// upright cards with no top face at all.
-//
-// Pass condition: bottom row is three identically-turned solid cubes, each showing
-// a shaded top face.
-
 const COLUMNS = [-3.2, 0, 3.2];
 const YAWS = [0.9, 0, -0.6];
 
@@ -43,8 +23,6 @@ export const scene: TestScene = {
 
     view3d.root.addChild(new AmbientLight({ color: 0x2a3040, intensity: 1 }));
 
-    // Key light high and to one side, so top faces read distinctly from front
-    // faces — that contrast is what shows the cubes still have depth.
     const key = new DirectionalLight({ color: 0xffffff, intensity: 3.5 });
     key.position.set(4, 8, 6);
     key.lookAt({ x: 0, y: 0, z: 0 });

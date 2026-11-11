@@ -1,14 +1,6 @@
 import type { ShaderBit } from '../ShaderBit';
 
-/**
- * The environment for a {@link Hemisphere}: `sampleEnvironment(dir, roughness)` blends the ground
- * colour into the sky colour by `dot(dir, up) * 0.5 + 0.5`
- *
- * The view picks it when `view3d.environment` is a `Hemisphere`. It ignores roughness, since a
- * smooth gradient has no detail to blur, and reads no texture. The CPU uploads the colours decoded
- * to linear and multiplied by the intensity, and `up` normalized, so the shader does neither.
- * @internal
- */
+/** @internal */
 export const envSourceHemisphereBit: ShaderBit = {
   name: 'envSourceHemisphere',
 

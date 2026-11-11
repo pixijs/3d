@@ -8,7 +8,6 @@ import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** Colours the surface with a `mat2x2<f32>` material field times an `f32` gain, with blue at zero */
 const tintBit: ShaderBit = {
   name: 'mat2x2TintTest',
   bindings: { material: { tint: 'mat2x2<f32>', gain: 'f32' } },
@@ -28,10 +27,6 @@ const tintBit: ShaderBit = {
   },
 };
 
-/**
- * Columns (0.5, 0) and (0.5, 0.5), so `tintBit` draws (1, 0.5) at a gain of 1. A transposed read
- * draws (0.5, 1) and a gain read from the wrong texel draws (0.5, 0.25), so both fail the check.
- */
 const TINT_COLUMNS = [0.5, 0, 0.5, 0.5];
 
 describe('mat2x2 material field', () => {
@@ -43,7 +38,7 @@ describe('mat2x2 material field', () => {
         appOptions: { preference, width: 32, height: 32, resolution: 1 },
       });
       try {
-        const view3d = new View3D({ width: 32, height: 32 });
+        const view3d = new View3D({ toneMapping: 'none', width: 32, height: 32 });
         app.stage.addChild(view3d);
         const material = new FlatMaterial({ extraBits: [tintBit] });
         material.data.tint = TINT_COLUMNS;

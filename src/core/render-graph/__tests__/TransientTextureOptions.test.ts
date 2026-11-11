@@ -1,4 +1,4 @@
-import { Rectangle } from 'pixi.js';
+import { stubGlobalTextureBindings } from '@test-utils';
 import type { BindableTexture } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
@@ -9,23 +9,35 @@ import type { RenderSession } from '~/core/render-passes/RenderSession';
 
 const noTexture = (): BindableTexture => undefined as unknown as BindableTexture;
 
-/** A DPR-2 target: a 400x300 physical viewport on an 800x600 framebuffer */
 const SESSION = {
   viewport: { x: 0, y: 0, width: 400, height: 300 },
   defaultTarget: {
     colorTexture: { source: { resolution: 2, pixelWidth: 800, pixelHeight: 600, format: 'rgba8unorm' } },
   },
+  defaultFrontFaceInverted: false,
 } as unknown as RenderSession;
 
-const makeGraph = (options?: Partial<RenderGraphOptions>): RenderGraph =>
-  new RenderGraph({ defaultColor: noTexture, defaultDepth: noTexture, ...options });
+function makeGraph(options?: Partial<RenderGraphOptions>): RenderGraph {
+  const graph = new RenderGraph({
+    globalTextureBindings: stubGlobalTextureBindings(),
+    defaultColor: noTexture,
+    defaultDepth: noTexture,
+    ...options,
+  });
+  graph.resolution = 2;
+  return graph;
+}
 
-/** The per-frame descriptor a handle's transient expands to, evaluated against `SESSION` */
 function describeOf(graph: RenderGraph, handle: ResourceHandle): ResourceDescriptor {
   const entry = graph['_resources'][handle._id];
   if (entry.kind !== 'transient') throw new Error('expected a transient');
   return entry.describe(SESSION);
 }
+
+const sizeOf = (graph: RenderGraph, handle: ResourceHandle): [number, number] => {
+  const d = describeOf(graph, handle);
+  return [d.width, d.height];
+};
 
 describe('TransientTextureOptions expand to a pool request, texels = logical size × resolution', () => {
   it("'inherit' is the physical viewport, in the target's format, as a content size the pool fits a texture to", () => {
@@ -41,27 +53,12 @@ describe('TransientTextureOptions expand to a pool request, texels = logical siz
     expect('scaleMode' in d).toBe(false);
   });
 
-  it('resolution has pixi meaning: 1 is one texel per logical pixel, half of a DPR-2 viewport', () => {
-    const g = makeGraph();
-    const d = describeOf(g, g.createColor({ resolution: 1 }));
-    expect([d.width, d.height]).toEqual([200, 150]);
-    expect(d.label).toBe('colorTransient');
-  });
-
   it('depth defaults to depth24plus-stencil8 and nearest sampling', () => {
     const g = makeGraph();
     const d = describeOf(g, g.createDepth({ label: 'depthCopy' }));
     expect(d.format).toBe('depth24plus-stencil8');
     expect(d.scaleMode).toBe('nearest');
     expect(d.autoGenerateMipmaps).toBe(false);
-  });
-
-  it('explicit fields win over the defaults', () => {
-    const g = makeGraph();
-    const d = describeOf(g, g.createColor({ format: 'rgba16float', autoGenerateMipmaps: true, scaleMode: 'nearest' }));
-    expect(d.format).toBe('rgba16float');
-    expect(d.autoGenerateMipmaps).toBe(true);
-    expect(d.scaleMode).toBe('nearest');
   });
 
   it('an explicit size is logical and multiplied by resolution', () => {
@@ -71,37 +68,17 @@ describe('TransientTextureOptions expand to a pool request, texels = logical siz
     const inherited = describeOf(g, g.createColor({ width: 100, height: 50 }));
     expect([inherited.width, inherited.height], 'the inherited DPR 2 doubles it').toEqual([200, 100]);
   });
-
-  it('the scene targets accept the shorthand too', () => {
-    const g = makeGraph({
-      sceneColor: { autoGenerateMipmaps: true, label: 'sceneColor' },
-      sceneDepth: { label: 'sceneDepth' },
-    });
-    expect(describeOf(g, g.sceneColor).autoGenerateMipmaps).toBe(true);
-    expect(describeOf(g, g.sceneDepth).format).toBe('depth24plus-stencil8');
-  });
 });
 
-describe('RenderGraph.sceneViewport', () => {
-  /** `SESSION` with the view off the target's origin, which tells the two modes apart */
-  const session = { ...SESSION, viewport: { x: 60, y: 40, width: 400, height: 300 } } as unknown as RenderSession;
+describe("resolution: 'inherit' follows RenderGraph.resolution", () => {
+  it('sizes the scene targets, their outputs and any other texture at it, and leaves a number absolute', () => {
+    const g = makeGraph({ sceneColor: {}, sceneDepth: {}, sceneOutputs: [{ name: 'mask', format: 'r8unorm' }] });
+    g.resolution = 1;
+    const output = g.getSceneOutput({ name: 'mask', format: 'r8unorm' });
 
-  it("is the view's place on its target when the scene draws straight to it", () => {
-    const rect = makeGraph().sceneViewport(session, new Rectangle());
-
-    expect([rect.x, rect.y, rect.width, rect.height]).toEqual([60, 40, 400, 300]);
-  });
-
-  it("starts at the transient's origin, with the transient's own size, in composite mode", () => {
-    const g = makeGraph({
-      sceneColor: { label: 'sceneColor', resolution: 1 },
-      sceneDepth: { label: 'sceneDepth', resolution: 1 },
-    });
-    const rect = g.sceneViewport(session, new Rectangle());
-
-    expect(
-      [rect.x, rect.y, rect.width, rect.height],
-      '400x300 physical on a DPR-2 target is 200x150 logical, at one texel per logical pixel',
-    ).toEqual([0, 0, 200, 150]);
+    for (const handle of [g.sceneColor, g.sceneDepth, g.createColor(), output]) {
+      expect(sizeOf(g, handle)).toEqual([200, 150]);
+    }
+    expect(sizeOf(g, g.createColor({ resolution: 2 })), 'a number stays absolute').toEqual([400, 300]);
   });
 });

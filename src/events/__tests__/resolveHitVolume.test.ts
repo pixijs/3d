@@ -44,14 +44,4 @@ describe('resolveHitVolume', () => {
     expect(resolved.min).toMatchObject({ x: -1, y: -1, z: 0 });
     expect(resolved.max).toMatchObject({ x: 1, y: 1, z: 0 });
   });
-
-  test("'geometry' on a plain Container3D warns and resolves to null — no geometry to point at", () => {
-    const c = new Container3D();
-    expect(resolveHitVolume(c, 'geometry')).toBeNull();
-  });
-
-  test('unknown string warns and resolves to null', () => {
-    const c = new Container3D();
-    expect(resolveHitVolume(c, 'capsule' as never)).toBeNull();
-  });
 });

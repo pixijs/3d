@@ -1,10 +1,8 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * A `calculateShadow` that always returns 1, fully lit
- *
- * The renderer gives a lit material this in place of the shadow-sampling bit when the mesh doesn't
- * receive shadows or no light has cast any, so the light loop calls `calculateShadow` either way.
+ * `calculateShadow` here must match the shadow bits' signature and the call in `createLightingBit`,
+ * on each backend
  * @internal
  */
 export const noShadowBit: ShaderBit = {

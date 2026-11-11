@@ -36,4 +36,18 @@ describe('Track', () => {
     track.evaluate(5, 0, end);
     expect(Array.from(end)).toEqual([1, 1, 1]);
   });
+
+  it('finds the same keyframe from a hint ahead of the time as from 0', () => {
+    const times = Array.from({ length: 101 }, (_, key) => key / 10);
+    const track = new Track({ label: 'n.x', times, values: times.map((time) => time * 2) });
+    const fromHint = new Float32Array(1);
+    const fromStart = new Float32Array(1);
+
+    for (let hint = 1; hint < 100; hint++) {
+      for (const time of [0.05, 2.5, 3, 4.95, hint / 10 - 0.01]) {
+        expect(track.evaluate(time, hint, fromHint)).toBe(track.evaluate(time, 0, fromStart));
+        expect(fromHint[0]).toBe(fromStart[0]);
+      }
+    }
+  });
 });

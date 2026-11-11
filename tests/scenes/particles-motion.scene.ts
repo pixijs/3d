@@ -10,12 +10,6 @@ import { View3D } from '~/scene/View3D';
 
 import { puffTexture } from './helpers/particleTextures';
 
-// Two containers, drag off on the left and on on the right, each launching
-// the same particle at staggered births so one capture shows its whole arc.
-// The left arc is a clean parabola under gravity; the right one starts the
-// same, then curls short as drag bleeds the launch velocity away. Every
-// position comes from the closed form in the vertex shader, evaluated at one
-// pinned system time.
 export const scene: TestScene = {
   create: async (app) => {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
@@ -28,7 +22,7 @@ export const scene: TestScene = {
 
     const wall = new Mesh3D({
       geometry: new PlaneGeometry({ width: 14, height: 10 }),
-      material: new FlatMaterial({ baseColor: 0xd8dce4 }),
+      material: new FlatMaterial({ baseColor: 0xafb7c6 }),
     });
 
     wall.position.set(0, 1, -2);

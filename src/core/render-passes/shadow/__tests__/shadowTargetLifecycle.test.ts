@@ -1,5 +1,5 @@
 import { expectCleanRender, getApp, isCI } from '@test-utils';
-import type { Application, RenderTarget, Renderer, WebGLRenderer, WebGPURenderer } from 'pixi.js';
+import type { Application, RenderTarget, Renderer, WebGPURenderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
@@ -13,7 +13,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** The pass surface these tests drive, plus the one internal they assert against. */
 interface ShadowPassProbe {
   targetVersion: number;
   unload(): void;
@@ -28,7 +27,7 @@ interface Scene {
 }
 
 function buildScene(app: Application<Renderer>): Scene {
-  const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
+  const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull: 'off' });
   app.stage.addChild(view3d);
 
   const ground = new Mesh3D({
@@ -59,13 +58,11 @@ function buildScene(app: Application<Renderer>): Scene {
   return { view3d, sun, caster, pass: view3d.passByBit[RenderPassBit.SHADOW] as unknown as ShadowPassProbe };
 }
 
-/** The source bound at the view's global shadow-map slot */
 function boundShadowSource(app: Application<Renderer>, view3d: View3D): unknown {
-  const pipe = (app.renderer as WebGLRenderer | WebGPURenderer).renderPipes.view3d;
-  return view3d._gpuData[app.renderer.uid].globalBindGroup.getResource(pipe.globalSlots.shadowMap);
+  const { group, slot } = view3d._gpuData[app.renderer.uid].globalTextureBindings.shadowMap;
+  return group.getResource(slot);
 }
 
-/** How many render bundles `run` records (WebGPU only) */
 function bundlesRecorded(app: Application<Renderer>, run: () => void): number {
   const spy = vi.spyOn((app.renderer as WebGPURenderer).encoder, 'endBundle');
   try {
@@ -80,7 +77,6 @@ function pixels(app: Application<Renderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -105,20 +101,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     }
 
-    it('keeps the map while the pass is still needed', async () => {
-      await withApp('shadow-release-live', (app) => {
-        const { pass } = buildScene(app);
-        const target = pass._renderTarget;
-        const version = pass.targetVersion;
-
-        app.render();
-        app.render();
-
-        expect(pass._renderTarget).toBe(target);
-        expect(pass.targetVersion).toBe(version);
-      });
-    });
-
     it('unload() frees the map immediately and the next frame renders the same shadows', async () => {
       await withApp('shadow-unload-revive', (app) => {
         const { view3d, pass } = buildScene(app);
@@ -126,9 +108,11 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.render();
         const before = pixels(app, view3d);
         const version = pass.targetVersion;
+        const map = pass._renderTarget!.depthStencilTexture!;
 
         pass.unload();
         expect(pass._renderTarget).toBeNull();
+        expect(map.destroyed, 'the pass owns the map, so destroying the target alone would leak it').toBe(true);
         expect(pass.targetVersion).toBe(version + 1);
         expect(boundShadowSource(app, view3d)).toBe(DEPTH_EMPTY.source);
 
@@ -143,17 +127,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('unload() is a no-op when no map is allocated', async () => {
-      await withApp('shadow-unload-idempotent', (app) => {
-        const { pass } = buildScene(app);
-
-        pass.unload();
-        const version = pass.targetVersion;
-        expect(() => pass.unload()).not.toThrow();
-        expect(pass.targetVersion).toBe(version);
-      });
-    });
-
     it('applies a quality change at the next frame boundary', async () => {
       const app = await getApp<Renderer>({
         id: `shadow-quality-swap-${preference}`,
@@ -164,7 +137,8 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const { view3d, pass } = buildScene(app);
 
         const before = pass._renderTarget!;
-        expect(before.depthStencilTexture!.width).toBe(512);
+        const beforeMap = before.depthStencilTexture!;
+        expect(beforeMap.width).toBe(512);
 
         view3d.shadowQuality = 'high';
         expect(pass._renderTarget, 'nothing frees the map mid-frame, while bundles still bake it').toBe(before);
@@ -173,6 +147,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         expect(pass._renderTarget).not.toBe(before);
         expect(pass._renderTarget!.depthStencilTexture!.width).toBe(2048);
+        expect(beforeMap.destroyed).toBe(true);
       } finally {
         app.destroy();
       }

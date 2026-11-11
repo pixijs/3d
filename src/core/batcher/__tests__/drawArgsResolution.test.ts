@@ -32,7 +32,7 @@ describe('draw-args buffer resolves dynamic (non-atlased) geometry counts', () =
       }
 
       expect(drawCalls).toBeDefined();
-      expect(drawCalls![0]).toBe(geom.indexBuffer!.data.length);
+      expect(drawCalls![0]).toBe(geom.indexBuffer.data.length);
       expect(drawCalls![1]).toBe(1);
     } finally {
       app.destroy();

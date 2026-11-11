@@ -1,15 +1,16 @@
 import { Buffer, BufferUsage, warn } from 'pixi.js';
-import type { Topology, TypedArray } from 'pixi.js';
+import type { Attribute, Topology, TypedArray } from 'pixi.js';
 
 import { Geometry3D } from '../../../../geometry/Geometry3D';
 import type { Geometry3DOptions } from '../../../../geometry/Geometry3D';
+import { padTo4Components } from '../../../../geometry/utils/Geometry3DUtils';
 import { Box } from '../../../../math/shapes/Box';
 import { Vector3 } from '../../../../math/vector/Vector3';
 import { warnOnce } from '../../../../utils/warnOnce';
 import type { Scene3DSource } from '../../../Scene3DSource';
 import { decodeDracoPrimitive } from '../draco/decodeDracoPrimitive';
-import type { GltfFormat, MeshPrimitive } from '../GltfFormat';
-import { accessorToVertexFormat } from '../utils/accessorToVertexFormat';
+import type { GltfFormat } from '../GltfFormat';
+import { accessorToVertexFormat, NORMALIZED_SCALE } from '../utils/accessorToVertexFormat';
 import { getBuffer } from '../utils/getBuffer';
 import { GLTF_SEMANTIC_TO_ATTRIBUTE } from '../utils/gltfAttributeMap';
 import { widenColorToRgba } from '../utils/widenColorToRgba';
@@ -17,11 +18,8 @@ import { widenColorToRgba } from '../utils/widenColorToRgba';
 const GL_FLOAT = 5126;
 
 /**
- * The topology for each glTF primitive `mode`
- *
- * WebGPU has no line loop or triangle fan. A line loop (2) draws as a line strip, without its
- * closing segment. A triangle fan (6) draws as a triangle list with its indices unconverted, so it
- * renders wrong.
+ * Pixi's `Topology` has no line loop (2) or triangle fan (6), as WebGPU lacks them: a loop loses its
+ * closing segment, and a fan draws wrong
  */
 const topologyMap: Record<number, Topology> = {
   0: 'point-list',
@@ -33,27 +31,10 @@ const topologyMap: Record<number, Topology> = {
   6: 'triangle-list',
 };
 
-/**
- * Builds the geometry for one primitive, decoding Draco first when the primitive uses it
- *
- * Some attributes need adapting for `Geometry3D`:
- * - 8-bit indices widen to 16-bit, as neither `Geometry3D` nor WebGPU takes 8-bit indices.
- * - Integer UVs get an explicit vertex format. Without one, `Geometry3D` reads any integer array
- *   as normalized, which would squash unnormalized quantized UVs (`KHR_mesh_quantization`) into
- *   0 to 1.
- * - VEC3 colours widen to RGBA.
- * - An attribute with no `Geometry3D` field is skipped with a warning.
- *
- * The bounds come from the `POSITION` accessor's `min` and `max`. For quantized positions those are
- * in integer space, the space `computeBoundsFromPositions` describes, so they are used as they are.
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers holding the vertex and index data
- * @param primitiveRaw - The primitive to build
- */
 async function processPrimitive(
   gltfRaw: GltfFormat,
   buffers: ArrayBuffer[],
-  primitiveRaw: MeshPrimitive,
+  primitiveRaw: GltfFormat.MeshPrimitive,
 ): Promise<Geometry3D> {
   const options: Geometry3DOptions = {};
   const dracoExt = primitiveRaw.extensions?.KHR_draco_mesh_compression;
@@ -81,17 +62,7 @@ async function processPrimitive(
           continue;
         }
 
-        if (attributeName === 'uvs' && accessor && accessor.componentType !== GL_FLOAT) {
-          options.uvs = {
-            buffer: new Buffer({
-              data: data as Uint16Array,
-              usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
-            }),
-            format: accessorToVertexFormat(accessor),
-          };
-        } else {
-          (options as Record<string, unknown>)[attributeName] = data;
-        }
+        (options as Record<string, unknown>)[attributeName] = data;
       } else {
         warnOnce(`pixi3d-custom-attribute-${i}`, `[pixi-3d] custom attribute ${i} skipped`);
       }
@@ -103,13 +74,27 @@ async function processPrimitive(
     }
   }
 
+  const uvAccessorIndex = primitiveRaw.attributes.TEXCOORD_0;
+  if (uvAccessorIndex !== undefined && gltfRaw.accessors) {
+    options.uvs = accessorToAttribute(options.uvs, gltfRaw.accessors[uvAccessorIndex]);
+  }
+
   const positionAccessorIndex = primitiveRaw.attributes.POSITION;
   if (positionAccessorIndex !== undefined && gltfRaw.accessors) {
     const positionAccessor = gltfRaw.accessors[positionAccessorIndex];
-    if (positionAccessor.min && positionAccessor.max) {
+    options.positions = accessorToAttribute(options.positions, positionAccessor);
+
+    const { min, max } = positionAccessor;
+    if (min && max) {
+      const scale = positionAccessor.normalized ? NORMALIZED_SCALE[positionAccessor.componentType] : 1;
       options.bounds3D = new Box(
-        new Vector3(positionAccessor.min[0], positionAccessor.min[1], positionAccessor.min[2]),
-        new Vector3(positionAccessor.max[0], positionAccessor.max[1], positionAccessor.max[2]),
+        new Vector3(min[0] * scale, min[1] * scale, min[2] * scale),
+        new Vector3(max[0] * scale, max[1] * scale, max[2] * scale),
+      );
+    } else if (positionAccessor.componentType !== GL_FLOAT) {
+      throw new Error(
+        `[pixi-3d] POSITION accessor ${positionAccessorIndex} stores integers but has no min and max, ` +
+          'which glTF requires and the bounds come from.',
       );
     }
   }
@@ -120,17 +105,24 @@ async function processPrimitive(
 }
 
 /**
- * Reads a primitive's morph-target offsets: `POSITION` always, `NORMAL` when present
- *
- * The renderer needs float `POSITION` offsets for every target, so if a target lacks them or stores
- * them as integers this returns `undefined` and the mesh keeps its base pose. Normal offsets come for
- * every target or none, as every target is packed with the same stride, so integer or missing
- * normals on some targets fall back to morphing positions only. The offsets are copied out of the
- * file's buffers, since the geometry keeps them.
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers holding the delta accessors
- * @param targets - The primitive's morph targets, each mapping an attribute semantic to an accessor index
+ * Pads integer VEC3 data to the `x4` format `accessorToVertexFormat` gives it. Draco data comes
+ * through here too, as `draco.worker.ts` decodes into the accessor's component type
  */
+function accessorToAttribute(
+  data: Float32Array | Attribute | undefined,
+  accessor: GltfFormat.Accessor,
+): Float32Array | Attribute | undefined {
+  if (accessor.componentType === GL_FLOAT || !ArrayBuffer.isView(data)) return data;
+
+  return {
+    buffer: new Buffer({
+      data: accessor.type === 'VEC3' ? padTo4Components(data) : data,
+      usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+    }),
+    format: accessorToVertexFormat(accessor),
+  };
+}
+
 function decodeMorphTargets(
   gltfRaw: GltfFormat,
   buffers: ArrayBuffer[],
@@ -178,15 +170,7 @@ function decodeMorphTargets(
   return morphTargets.length > 0 ? morphTargets : undefined;
 }
 
-/**
- * Converts every glTF mesh's primitives into `Geometry3D` instances on the source
- *
- * A mesh's primitives share one set of morph weights, so it warns when their target counts differ.
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers holding the vertex and index data
- * @param source - Receives the geometries
- * @internal
- */
+/** @internal */
 export async function processMeshes(gltfRaw: GltfFormat, buffers: ArrayBuffer[], source: Scene3DSource): Promise<void> {
   if (!gltfRaw.meshes) return;
 

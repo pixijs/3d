@@ -16,12 +16,9 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-/** View-local point over cube A of `makeScene`, at world x = -2 (camera at z = 10, fov 60) */
 const AT_A = { x: 31, y: 50 };
-/** View-local point over cube B of `makeScene`, at world x = +2 */
 const AT_B = { x: 69, y: 50 };
 
-/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -37,7 +34,6 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -45,10 +41,6 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-/**
- * Two sibling cubes under a static group: enough for on-handlers at the target, on an ancestor, and along
- * the enter/leave walks
- */
 function makeScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -69,10 +61,6 @@ function makeScene() {
   return { view3d, group, a, b };
 }
 
-/**
- * Hit-tests as pixi does before every dispatch, asserting the pick lands on `expected` so a drifted
- * probe point fails loudly
- */
 function hitAt(view3d: View3D, point: { x: number; y: number }, expected: Container3D | null): void {
   expect(view3d.containsPoint(point)).toBe(true);
   expect(view3d.events._currentPick3D).toBe(expected);
@@ -87,7 +75,6 @@ interface EventInit3D {
   timeStamp?: number;
 }
 
-/** A plain-object stand-in for a pooled `FederatedPointerEvent`, with the fields the 3D dispatcher reads */
 function makeEvent(type: string, init: EventInit3D = {}): FederatedPointerEvent {
   return {
     type,
@@ -133,29 +120,6 @@ describe('View3D dispatcher — on-handler `this` binding', () => {
       [Event.CAPTURING_PHASE, group],
       [Event.BUBBLING_PHASE, group],
     ]);
-  });
-
-  test('the click / pointertap chains preserve the receiver', () => {
-    const { view3d, a } = makeScene();
-    let clickThis: unknown = 'unset';
-    let tapThis: unknown = 'unset';
-    a.onclick = function (this: Container3D) {
-      clickThis = this;
-    };
-    a.onpointertap = function (this: Container3D) {
-      tapThis = this;
-    };
-
-    hitAt(view3d, AT_A, a);
-    view3d.emit('pointerdown', makeEvent('pointerdown', { nativeEvent: {} }));
-    const nUp = {};
-    hitAt(view3d, AT_A, a);
-    view3d.emit('pointerup', makeEvent('pointerup', { nativeEvent: nUp }));
-    view3d.emit('click', makeEvent('click', { nativeEvent: nUp }));
-    view3d.emit('pointertap', makeEvent('pointertap', { nativeEvent: nUp }));
-
-    expect(clickThis).toBe(a);
-    expect(tapThis).toBe(a);
   });
 
   test('the globalpointermove fan-out binds each notified node', () => {

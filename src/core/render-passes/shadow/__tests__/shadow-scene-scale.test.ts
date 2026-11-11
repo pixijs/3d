@@ -10,19 +10,8 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 200;
 
-/** Unit scales spanning six orders of magnitude — millimetre-ish content through to kilometre-ish. */
 const SCALES = [0.001, 0.01, 0.1, 1, 10, 100, 1000] as const;
 
-/**
- * Builds one scene where every length is `k` times the last, renders it, and counts the
- * ground pixels in shadow.
- *
- * Caster and ground are both white and the count is taken from the whole frame, so nothing
- * but a genuine shadow reads dark — a caster tinted to look like a shadow would make this
- * pass while measuring the wrong thing. The app is destroyed as soon as it is read: test files
- * share a page, so an app left running keeps rendering into other files and eventually draws
- * through resources they have torn down.
- */
 async function shadowPixels(k: number, cascades: 1 | 2 | 3 | 4 | undefined): Promise<number> {
   const app = await getApp({ id: `shadow-scale-${k}`, appOptions: { preference: 'webgl', width: SIZE, height: SIZE } });
 

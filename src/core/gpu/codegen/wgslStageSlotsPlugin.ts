@@ -7,16 +7,7 @@ import { prefixSlotName } from './prefixSlotName';
 
 const NESTED_MARKER_PATTERN = /\{\{(.*?)\}\}/g;
 
-/**
- * Collects slot names that appear as `{{name}}` markers inside any of the values about to be
- * injected
- *
- * The template doesn't name these slots, but another slot's code does, and `fillTemplateSlots`
- * fills them on a later pass. That is how the light loop `createLightingBit` emits into
- * `fragment.lighting` can hold `{{fragmentLobePerLight}}` for lobe bits to fill without tripping
- * the unused-slot warning.
- * @param values - Slot bodies about to be injected
- */
+/** Slots that other slots' code names; `fillTemplateSlots` fills them on a later pass, so they don't count as unused */
 function collectIndirectSlots(values: Iterable<string>): Set<string> {
   const indirect = new Set<string>();
   for (const value of values) {
@@ -41,11 +32,7 @@ function warnUnusedSlots(templateSource: string, result: Record<string, string>)
   }
 }
 
-/**
- * Collects vertex/fragment slot code and prefixes slot names for the single-source WGSL template
- * format
- * @internal
- */
+/** @internal */
 export const wgslStageSlotsPlugin: ShaderCompilerPlugin = {
   collectData(context) {
     context.data.vertexSlots = collectSlotCode(context.bits, 'gpu', 'vertex');

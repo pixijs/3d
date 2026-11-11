@@ -1,13 +1,8 @@
 import type { ShaderBit } from '../../ShaderBit';
 
 /**
- * John Hable's filmic curve from Uncharted 2, then the display encode `srgbEncodeBit` describes
- *
- * The curve is `(x(Ax + CB) + DE) / (x(Ax + B) + DF) - E/F`, with Hable's constants: shoulder
- * strength A = 0.15, linear strength B = 0.50, linear angle C = 0.10, toe strength D = 0.20, toe
- * numerator E = 0.02 and toe denominator F = 0.30 (Hable 2010, "Filmic Tonemapping Operators").
- * The input is doubled first, and the result is divided by the curve's value at the white point,
- * 11.2, so that input maps to 1. It gives strong contrast.
+ * John Hable's Uncharted 2 curve (Hable 2010, "Filmic Tonemapping Operators"), then the display
+ * encode, which must match `srgbEncodeBit`
  * @internal
  */
 export const uncharted2ToneMappingBit: ShaderBit = {

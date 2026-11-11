@@ -42,14 +42,6 @@ const wgslSource = (bit: ShaderBit): string =>
 const glSource = (bit: ShaderBit): string =>
   compileGlslSource({ bits: [hostLighting, bit], template: glslTemplate }).fragment;
 
-/**
- * The lobe contract both variants keep: one light loop, setup before it, the coat GGX inside it and
- * the composite after it
- *
- * The composite dims the base by the coat's Fresnel, then adds the coat's direct and environment
- * light. The environment lookup takes the coat roughness without the direct term's floor, so a
- * mirror coat reads mip 0, and occlusion doesn't touch the coat, which sits above it.
- */
 function expectSharedLobeContract(src: string, lang: 'wgsl' | 'glsl'): void {
   const loopRe = lang === 'wgsl' ? /for \(var n: i32 = 0;/g : /for \(int n = 0;/g;
   expect((src.match(loopRe) ?? []).length).toBe(1);
@@ -116,9 +108,7 @@ describe('clearcoatNormalMapBit, which samples a coat normal map', () => {
     });
 
     it('builds the TBN on the geometric normal, flipped on back faces, so each back face reflects its own side', () => {
-      expect(src).toContain(
-        'calculateClearcoatTBN(normalize(select(-input.vNormal, input.vNormal, input.frontFacing))',
-      );
+      expect(src).toContain('calculateTBN(normalize(select(-input.vNormal, input.vNormal, input.frontFacing))');
     });
   });
 
@@ -131,7 +121,7 @@ describe('clearcoatNormalMapBit, which samples a coat normal map', () => {
     });
 
     it('builds the TBN on the geometric normal, flipped on back faces, so each back face reflects its own side', () => {
-      expect(src).toContain('calculateClearcoatTBN(normalize(gl_FrontFacing ? vNormal : -vNormal)');
+      expect(src).toContain('calculateTBN(normalize(gl_FrontFacing ? vNormal : -vNormal)');
     });
   });
 });

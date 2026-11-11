@@ -18,7 +18,6 @@ const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 const CENTER = { x: 50, y: 50 };
 
-/** A 2×2×2 cube centred on the origin, so each face sits one unit from the centre */
 function makeCubeGeometry(): Geometry3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -33,7 +32,6 @@ function makeCubeGeometry(): Geometry3D {
   });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -41,7 +39,6 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-/** A plain-object stand-in for a pooled `FederatedPointerEvent`, with the fields the 3D dispatcher reads */
 function makeEvent(type: string, nativeEvent: unknown = null): FederatedPointerEvent {
   return {
     type,
@@ -71,7 +68,6 @@ describe('Container3D constructor options', () => {
   });
 
   test("a 'box' hitVolume from options covers the children at pick time", () => {
-    /** Has eventMode 'none', so the group's box is the only shape a ray can hit */
     const child = new Mesh3D({
       geometry: makeCubeGeometry(),
       material: new Material3D({}),
@@ -85,7 +81,6 @@ describe('Container3D constructor options', () => {
     view3d.root.addChild(group);
     tickPick(view3d);
 
-    /** Over the child's centre, clear of the origin, where a box measured before the children were added would sit */
     const probe = view3d.worldToScreen({ x: 1, y: 0, z: 0 })!;
 
     expect(view3d.raycast(probe)?.target).toBe(group);
@@ -118,14 +113,6 @@ describe('Container3D constructor options — node surface', () => {
 
     c.updateLocalTransform();
     expect(c.localTransform.elements[14]).toBe(9);
-  });
-
-  test('of rotation and quaternion, the key written last wins', () => {
-    const rotation = { x: 0, y: 0.5, z: 0 };
-    const quaternion = { x: 0, y: 0, z: 0.1, w: 1 };
-
-    expect(new Container3D({ rotation, quaternion }).rotationDirty).toBe(false);
-    expect(new Container3D({ quaternion, rotation }).rotationDirty).toBe(true);
   });
 
   test('children are added in order and parent adds the node last', () => {

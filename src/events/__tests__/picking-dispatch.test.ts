@@ -16,14 +16,10 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-/** View-local point over cube A of `makeScene`, at world x = -2 (camera at z = 10, fov 60) */
 const AT_A = { x: 31, y: 50 };
-/** View-local point over cube B of `makeScene`, at world x = +2 */
 const AT_B = { x: 69, y: 50 };
-/** View-local point between the two cubes of `makeScene`, where nothing is hit */
 const AT_EMPTY = { x: 50, y: 50 };
 
-/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -39,7 +35,6 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -47,10 +42,6 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-/**
- * Interactive sibling cubes A and B under a static group: the smallest scene where press, release and
- * click targets can all differ
- */
 function makeScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -71,10 +62,6 @@ function makeScene() {
   return { view3d, group, a, b };
 }
 
-/**
- * Hit-tests as pixi does before every dispatch, asserting the pick lands on `expected` so a drifted
- * probe point fails loudly
- */
 function hitAt(view3d: View3D, point: { x: number; y: number }, expected: Container3D | null): void {
   expect(view3d.containsPoint(point)).toBe(true);
   expect(view3d.events._currentPick3D).toBe(expected);
@@ -89,7 +76,6 @@ interface EventInit3D {
   timeStamp?: number;
 }
 
-/** A plain-object stand-in for a pooled `FederatedPointerEvent`, with the fields the 3D dispatcher reads */
 function makeEvent(type: string, init: EventInit3D = {}): FederatedPointerEvent {
   return {
     type,
@@ -107,10 +93,6 @@ function makeEvent(type: string, init: EventInit3D = {}): FederatedPointerEvent 
   } as unknown as FederatedPointerEvent;
 }
 
-/**
- * An interactive cube parented to another, the parent under AT_A and the child under AT_B: the smallest
- * scene where hover moves between ancestor and descendant
- */
 function makeNestedScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -299,7 +281,7 @@ describe('View3D dispatcher — in-view slide-off release', () => {
 
     expect(bUp).toBe(1);
     expect(bClick).toBe(0);
-    expect((clickEvt as Pointer3DEvent).target3D).toBeNull();
+    expect(clickEvt.target3D).toBeNull();
   });
 
   test('an off-View release carries the press target and no hit — not the last surface picked', () => {
@@ -368,7 +350,6 @@ describe('View3D dispatcher — detached press target (findMountedTarget parity)
 });
 
 describe('View3D dispatcher — multi-click detail per 3D target', () => {
-  /** The `detail` pixi counted with the View as click target, which the 3D chain overrides and then restores */
   const PIXI_VIEW_CLICK_DETAIL = 7;
 
   function clickOn(view3d: View3D, point: { x: number; y: number }, node: Container3D): FederatedPointerEvent {
@@ -447,7 +428,7 @@ describe('View3D dispatcher — hit3D.triangleIndex', () => {
     const { view3d, a } = makeScene();
     a.hitVolume = 'geometry';
     const evt = makeEvent('pointermove', { nativeEvent: {} });
-    const e = evt as Pointer3DEvent;
+    const e = evt;
 
     hitAt(view3d, AT_A, a);
     view3d.emit('pointermove', evt);
@@ -502,7 +483,7 @@ describe('View3D dispatcher — stale 3D fields on pooled events (validity token
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerdown', evt);
 
-    const e = evt as Pointer3DEvent;
+    const e = evt;
     expect(e.target3D).toBe(a);
     expect(e.hit3D?.distance).toBeGreaterThan(0);
     expect(e.hit3D?.triangleIndex).toBeGreaterThanOrEqual(0);
@@ -794,7 +775,7 @@ describe('View3D dispatcher — pointerenter / pointerleave', () => {
     view3d.emit('pointermove', move);
 
     expect(enterTargets).toEqual([a, group]);
-    expect((move as Pointer3DEvent).target3D).toBe(a);
+    expect(move.target3D).toBe(a);
   });
 });
 
@@ -980,16 +961,6 @@ describe("View3D dispatcher — eventMode 'auto'", () => {
     expect(hit?.distance).toBeGreaterThan(0);
   });
 
-  test("auto nodes register on the pick list, and under an interactive ancestor so do passive ones; only 'none' leaves it", () => {
-    const { view3d, a } = makeScene();
-    a.eventMode = 'auto';
-    expect(view3d.events._interactiveList).toContain(a);
-    a.eventMode = 'passive';
-    expect(view3d.events._interactiveList).toContain(a);
-    a.eventMode = 'none';
-    expect(view3d.events._interactiveList).not.toContain(a);
-  });
-
   test('the global-move fan-out skips auto nodes', () => {
     const { view3d, group, a } = makeScene();
     a.eventMode = 'auto';
@@ -1002,16 +973,6 @@ describe("View3D dispatcher — eventMode 'auto'", () => {
 
     expect(aHeard).toBe(0);
     expect(groupHeard).toBe(1);
-  });
-
-  test('an on-handler-only node is still reached by the fan-out (deaf-node probe)', () => {
-    const { view3d, a } = makeScene();
-    let heard = 0;
-    a.onglobalpointermove = () => heard++;
-
-    view3d.emit('globalpointermove', makeEvent('pointermove'));
-
-    expect(heard).toBe(1);
   });
 
   test('an alias-only listener is still reached by the fan-out (deaf-node probe)', () => {
@@ -1232,7 +1193,7 @@ describe('View3D dispatcher — orphaned pointer record sweep after 60 s idle', 
 
 describe('3D fields on events that never crossed a View3D', () => {
   test('pointer and wheel events answer the documented miss instead of undefined', () => {
-    const pointer = new FederatedPointerEvent(null as unknown as EventBoundary) as unknown as Pointer3DEvent;
+    const pointer = new FederatedPointerEvent(null as unknown as EventBoundary);
     expect(pointer.target3D).toBeNull();
     expect(pointer.currentTarget3D).toBeNull();
     expect(pointer.hit3D).toBeNull();

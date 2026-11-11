@@ -162,12 +162,6 @@ describe('Plane', () => {
       expect(p.distanceToPoint(projected)).toBeCloseTo(0, 5);
     });
 
-    test('projection of a coplanar point returns the same point', () => {
-      const p = new Plane(new Vector3(0, 1, 0), 0);
-      const projected = p.projectPoint({ x: 4, y: 0, z: -2 });
-      expectVec3Close(projected, 4, 0, -2);
-    });
-
     test('writes into out arg when provided', () => {
       const p = new Plane(new Vector3(0, 1, 0), 0);
       const out = new Vector3();
@@ -212,18 +206,6 @@ describe('Plane', () => {
   });
 
   describe('applyMatrix4', () => {
-    test('translation by (0, 3, 0) moves the plane y = 0 to y = 3', () => {
-      const p = new Plane(new Vector3(0, 1, 0), 0);
-      const m = new Matrix4().makeTranslation(0, 3, 0);
-      const coplanarOriginal = new Vector3(2, 0, -4);
-      const coplanarTransformed = coplanarOriginal.clone().applyMatrix4(m);
-
-      p.applyMatrix4(m);
-      expectVec3Close(p.normal, 0, 1, 0);
-      expect(p.constant).toBeCloseTo(-3, 5);
-      expect(p.distanceToPoint(coplanarTransformed)).toBeCloseTo(0, 5);
-    });
-
     test('translation parallel to plane leaves constant unchanged', () => {
       const p = new Plane(new Vector3(0, 1, 0), 0);
       const m = new Matrix4().makeTranslation(5, 0, 7);

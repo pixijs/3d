@@ -35,15 +35,12 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           if (buffer.autoGarbageCollect) collectable.push(label);
         };
 
-        /** Null on WebGL, which reads the store through its data texture */
         const sceneStore = (view3d._sceneBatch.storeBuffer as unknown as { _buffer: Buffer | null })._buffer;
         if (sceneStore) check('scene store', sceneStore);
         const opaque = view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass;
-        /** Undefined on WebGL, which draws from the draw list's CPU args and owns no args buffer */
         const result = opaque.cullResults.get(view3d._sceneBatch);
         if (result) check('draw calls', result.indirectDrawData.drawCallsBuffer);
-        /** The atlas the mesh was packed into, whose buffers are the ones it draws from */
-        const atlas = geometry._geometryAtlasAllocation!.atlas!;
+        const atlas = geometry._geometryAtlasAllocation!.atlas;
         atlas.geometry.buffers.forEach((buffer, i) => check(`atlas buffer ${i}`, buffer));
 
         expect(collectable).toEqual([]);
@@ -65,7 +62,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const geometry = new CubeGeometry({ width: 0.2, height: 0.2, depth: 0.2 });
         const material = new Material3D({ baseColor: 0x8899aa });
 
-        /** Past the store's initial 100 slots, so its block grows the store and retires the first buffer */
         const batched = new BatchedMesh3D({ size: 400 });
         const storeBuffer = batched.batch.storeBuffer;
         expect(
@@ -80,7 +76,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
             i,
             new Matrix4().makeTranslation(((i % 20) - 10) * 0.1, (Math.floor(i / 20) - 10) * 0.1, -6),
           );
-          batched.setItemActive(i, RenderPassBit.OPAQUE);
+          batched.setPassesAt(i, RenderPassBit.OPAQUE);
         }
         view3d.root.addChild(batched);
 

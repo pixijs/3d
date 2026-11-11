@@ -59,7 +59,7 @@ jobs:
           Download \`$FILE\`, then install it next to PixiJS:
 
           \`\`\`sh
-          npm install pixi.js
+          npm install pixi.js@^8.23.0
           npm install ./$FILE
           \`\`\`
 

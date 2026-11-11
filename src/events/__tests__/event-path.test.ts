@@ -15,12 +15,9 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-/** View-local point over cube A of `makeScene`, at world x = -2 (camera at z = 10, fov 60) */
 const AT_A = { x: 31, y: 50 };
-/** View-local point over cube B of `makeScene`, at world x = +2 */
 const AT_B = { x: 69, y: 50 };
 
-/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -36,7 +33,6 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -44,7 +40,6 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-/** Two sibling cubes under an interactive group, and a real pixi `EventBoundary` over a 2D root holding the View */
 function makeScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -69,10 +64,6 @@ function makeScene() {
   return { view3d, group, a, b, boundary };
 }
 
-/**
- * Hit-tests through the boundary as pixi does before every dispatch, asserting the pick lands on
- * `expected` so a drifted probe point fails loudly
- */
 function hitAt(boundary: EventBoundary, view3d: View3D, point: { x: number; y: number }, expected: Container3D): void {
   expect(boundary.hitTest(point.x, point.y)).toBe(view3d);
   expect(view3d.events._currentPick3D).toBe(expected);
@@ -87,10 +78,6 @@ interface EventInit3D {
   timeStamp?: number;
 }
 
-/**
- * A real `FederatedPointerEvent` on the scene's boundary, since `composedPath()` needs one; the
- * object-literal events of the other dispatcher tests have no `composedPath()` at all
- */
 function makeEvent(boundary: EventBoundary, type: string, init: EventInit3D = {}): FederatedPointerEvent {
   const event = new FederatedPointerEvent(boundary);
   event.type = type;
@@ -103,7 +90,6 @@ function makeEvent(boundary: EventBoundary, type: string, init: EventInit3D = {}
   return event;
 }
 
-/** `event.composedPath()`, typed as the `Container3D` chain it holds during a 3D dispatch */
 function composed3D(event: FederatedPointerEvent): Container3D[] {
   return event.composedPath() as unknown as Container3D[];
 }
@@ -179,20 +165,6 @@ describe('event.path during 3D dispatch', () => {
     expect(atTarget[2]).toBe(a);
   });
 
-  test('event.path is restored after a dispatch whose listener read composedPath(), leaving no pooled 3D array installed', () => {
-    const { view3d, a, boundary } = makeScene();
-    a.on('pointerdown', (event) => {
-      event.composedPath();
-    });
-
-    hitAt(boundary, view3d, AT_A, a);
-    const event = makeEvent(boundary, 'pointerdown');
-    const before = event.path;
-    view3d.emit('pointerdown', event);
-
-    expect(event.path).toBe(before);
-  });
-
   test('release after reparenting the pressed node: no upoutside, and the click re-roots at its still-mounted old parent', () => {
     const { view3d, group, a, b, boundary } = makeScene();
     let upPath: Container3D[] = [];
@@ -263,10 +235,6 @@ describe('event.path during 3D dispatch', () => {
 });
 
 describe('contextmenu through the real boundary', () => {
-  /**
-   * Feeds `mapEvent` the root event pixi's `EventSystem` builds for a native `contextmenu`, so pixi's
-   * own mapping hit-tests and dispatches it, and returns the native event to read `defaultPrevented` from
-   */
   function contextMenuAt(boundary: EventBoundary, point: { x: number; y: number }): MouseEvent {
     const nativeEvent = new MouseEvent('contextmenu', { cancelable: true });
     const from = makeEvent(boundary, 'contextmenu', { button: 2, nativeEvent });

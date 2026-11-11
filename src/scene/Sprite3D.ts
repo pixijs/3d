@@ -12,7 +12,6 @@ import type { Size3D } from './Container3D';
 import { Mesh3D } from './Mesh3D';
 import type { BillboardMode, Mesh3DOptions } from './Mesh3D';
 
-/** Warns, once, that a size in world units was dropped because the texture has no pixel size to divide by */
 function warnUnsizedTexture(): void {
   warnOnce(
     'pixi3d-sprite3d-size-unloaded',
@@ -23,146 +22,45 @@ function warnUnsizedTexture(): void {
 }
 
 /**
- * Options both {@link Sprite3D} constructor forms take: the node's own, which never touch the
- * material
+ * Constructor options for {@link Sprite3D}
  *
- * The {@link Mesh3DOptions} apply too (label, position, parent, eventMode, ...), except what the
- * sprite builds itself: the quad `geometry`, plus the `skeleton` and `weights` a flat quad has no
- * use for. `material` belongs to {@link Sprite3DMaterialOptions}. `label` defaults to
- * `'Sprite3D'`.
+ * `texture`, `tint`, `alpha`, `alphaMode` and `alphaCutoff` shape the sprite's material. Without
+ * `material` they build the unlit {@link FlatMaterial} the sprite makes; with one, those you set
+ * are written into it, `texture` into its `baseColor` slot. The other {@link Mesh3DOptions} apply
+ * too, and `label` defaults to `'Sprite3D'`.
  * @example
  * ```ts
- * const marker = new Sprite3D({ texture, label: 'marker', eventMode: 'static', parent: view.root });
- * ```
- * @see {@link Sprite3DTextureOptions} For the self-contained form.
- * @see {@link Sprite3DMaterialOptions} For the shared-material form.
- * @category scene
- * @standard
- */
-export interface Sprite3DSharedOptions extends Omit<Mesh3DOptions, 'geometry' | 'material' | 'skeleton' | 'weights'> {
-  /**
-   * How the quad turns to face the camera; see {@link BillboardMode}
-   *
-   * It picks the shader, so sprites with different modes don't share a draw. The {@link Sprite3D}
-   * class notes say when that costs draw calls.
-   * @default 'spherical'
-   * @example
-   * ```ts
-   * const tree = new Sprite3D({ texture: treeTexture, billboardMode: 'cylindrical' });
-   * ```
-   */
-  billboardMode?: BillboardMode;
-  /**
-   * Which point of the image sits on the node's origin, as a fraction of its size, with `y`
-   * measured down from the top edge
-   *
-   * A single number sets both axes. `0.5` centres the image, and `{ x: 0.5, y: 1 }` stands it on
-   * the origin. Left out, the texture's `defaultAnchor` applies, as on pixi's 2D `Sprite`. Without
-   * one it's centred, unlike the 2D `Sprite`'s `(0, 0)`, because a billboard turns around its
-   * centre. It's exact in `'none'` mode, and for `y` in `'cylindrical'` mode; the {@link Sprite3D}
-   * class notes cover `'spherical'`.
-   * @default 0.5
-   * @example
-   * ```ts
-   * const tree = new Sprite3D({ texture: treeTexture, anchor: { x: 0.5, y: 1 } });
-   * ```
-   */
-  anchor?: PointData | number;
-  /**
-   * World units per texture pixel, which sets the sprite's size
-   *
-   * At the default 0.01 a 512 px texture is 5.12 units across, which suits a scene measured in
-   * metres.
-   * @default 0.01
-   * @example
-   * ```ts
-   * const tile = new Sprite3D({ texture: tileTexture, pixelSize: 1 / 32 });
-   * ```
-   */
-  pixelSize?: number;
-  /**
-   * The sprite's width in world units, in place of
-   * {@link Sprite3DSharedOptions.pixelSize | pixelSize} on this axis
-   *
-   * Pass only `width` or only `height` and the other follows the texture's aspect ratio:
-   * `{ height: 4 }` on a 128×200 texture gives 2.56 × 4. Pass both to stretch the image to that
-   * box. Like pixi's 2D `Sprite`, it ends up in `scale`. Unlike it, a lone `width` or `height`
-   * keeps the aspect ratio; the {@link Sprite3D#width} and {@link Sprite3D#height} accessors set
-   * one axis each, as pixi's do.
-   *
-   * It's measured against the texture once, at construction. A texture still loading has no size
-   * to fit against, so the value is dropped with a warning; size the sprite once it loads.
-   * @example
-   * ```ts
-   * const sign = new Sprite3D({ texture: signTexture, width: 2 });
-   * ```
-   */
-  width?: number;
-  /**
-   * The sprite's height in world units, in place of
-   * {@link Sprite3DSharedOptions.pixelSize | pixelSize} on this axis; see
-   * {@link Sprite3DSharedOptions.width} for how it combines with `width`
-   * @example
-   * ```ts
-   * const tree = new Sprite3D({ texture: treeTexture, height: 4 });
-   * ```
-   */
-  height?: number;
-  /**
-   * Whether the sprite casts shadows
-   *
-   * Off by default for a reason: the shadow pass doesn't turn meshes to face the camera, so a
-   * billboarded sprite would cast the shadow of its unturned quad, an edge-on sliver that follows
-   * the light rather than the camera. It's safe for quads in `'none'` mode.
-   * @default false
-   * @example
-   * ```ts
-   * const sign = new Sprite3D({ texture: signTexture, billboardMode: 'none', castShadow: true });
-   * ```
-   */
-  castShadow?: boolean;
-  /**
-   * Whether the sprite is shadowed
-   *
-   * It does nothing with the default unlit material, which has no lighting to shadow, and it's
-   * what you want with a lit one.
-   * @default true
-   * @example
-   * ```ts
-   * const card = new Sprite3D({ material: litLeaves, receiveShadow: false });
-   * ```
-   */
-  receiveShadow?: boolean;
-}
-
-/**
- * The self-contained {@link Sprite3D} constructor form: the sprite makes an unlit
- * {@link FlatMaterial} of its own from these options, and {@link Sprite3D#destroy} frees it
- *
- * The material it makes is double-sided, since a billboard can turn either face to the camera.
- * `material` isn't allowed here: passing one is the other form, {@link Sprite3DMaterialOptions}.
- * The two don't mix, because these options shape a material and a material you pass has its own
- * values.
- * @example
- * ```ts
- * const tree = new Sprite3D({
- *   texture: treeTexture,
- *   billboardMode: 'cylindrical',
- *   anchor: { x: 0.5, y: 1 },   // stand it on the ground
+ * const markerMaterial = new Material3D({ roughness: 0.8 });
+ * const marker = new Sprite3D({
+ *   material: markerMaterial,
+ *   texture: markerTexture,
  *   alphaMode: 'mask',
+ *   label: 'marker',
+ *   parent: view.root,
  * });
  * ```
- * @see {@link Sprite3D} For the constructed scene node.
  * @category scene
  * @standard
  */
-export interface Sprite3DTextureOptions extends Sprite3DSharedOptions {
+export interface Sprite3DOptions extends Omit<Mesh3DOptions, 'geometry' | 'material' | 'skeleton' | 'weights'> {
+  /**
+   * The material to draw the quad with; it needs a `baseColor` texture slot
+   *
+   * It can be shared between sprites. Left out, the sprite makes an unlit, double-sided
+   * {@link FlatMaterial} of its own and frees it on destroy.
+   * @example
+   * ```ts
+   * const leaves = new Material3D({ baseColorTexture: leafTexture, alphaMode: 'mask' });
+   * const card = new Sprite3D({ material: leaves, billboardMode: 'cylindrical' });
+   * ```
+   */
+  material?: BaseMaterial3D;
   /**
    * The image on the quad
    *
-   * Its untrimmed pixel size times {@link Sprite3DSharedOptions.pixelSize | pixelSize} sets the
-   * sprite's world size.
-   * @default Texture.WHITE
+   * Its untrimmed pixel size times {@link Sprite3DOptions.pixelSize | pixelSize} sets the sprite's
+   * world size.
+   * @default a passed material's `baseColor` texture, else `Texture.WHITE`
    * @example
    * ```ts
    * const tree = new Sprite3D({ texture: await Assets.load('tree.png') });
@@ -192,8 +90,8 @@ export interface Sprite3DTextureOptions extends Sprite3DSharedOptions {
    *
    * `'blend'` draws the sprite in the transparent pass, which sorts back to front every frame: the
    * right default for soft edges. `'mask'` cuts away pixels below
-   * {@link Sprite3DTextureOptions.alphaCutoff | alphaCutoff} in the opaque pass, with depth writes
-   * and no sorting. That's the fastest on mobile and the usual pick for foliage. `'opaque'` draws
+   * {@link Sprite3DOptions.alphaCutoff | alphaCutoff} in the opaque pass, with depth writes and no
+   * sorting, so it batches better than `'blend'`; it's the usual pick for foliage. `'opaque'` draws
    * the whole quad solid.
    * @default 'blend'
    * @example
@@ -212,166 +110,148 @@ export interface Sprite3DTextureOptions extends Sprite3DSharedOptions {
    */
   alphaCutoff?: number;
   /**
-   * Not available in this form; see {@link Sprite3DMaterialOptions}
-   * @hidden
-   */
-  material?: never;
-}
-
-/**
- * The shared-material {@link Sprite3D} constructor form: the material is in charge, and the
- * sprite writes nothing into it
- *
- * That makes one material safe to share between many sprites, which keeps the material count
- * down when there are lots of them. A lit material such as {@link Material3D} makes a lit
- * billboard, so a flat stand-in matches the lighting of the model it replaces: the turning comes
- * from {@link Sprite3D#billboardMode}, not the material.
- *
- * The material needs a `baseColor` texture slot, since the sprite reads its image, and so its
- * size, from there. `texture`, `tint`, `alpha`, `alphaMode` and `alphaCutoff` aren't allowed; set
- * them on the material, where they live. `doubleSided` is the material's choice too.
- * @example
- * ```ts
- * // One material, many sprites; nothing is written into it.
- * const leaves = new Material3D({ baseColorTexture: leafTexture, alphaMode: 'mask' });
- * for (const p of points) {
- *   const card = new Sprite3D({ material: leaves, billboardMode: 'cylindrical' });
- *   card.position.copyFrom(p);
- * }
- * ```
- * @see {@link Sprite3D} For the constructed scene node.
- * @category scene
- * @standard
- */
-export interface Sprite3DMaterialOptions extends Sprite3DSharedOptions {
-  /**
-   * The material to draw the quad with; it must have a `baseColor` texture slot
+   * How the quad turns to face the camera; see {@link BillboardMode}
+   *
+   * Sprites with different modes don't share a draw; the {@link Sprite3D} class notes say when
+   * that costs draw calls.
+   * @default 'spherical'
    * @example
    * ```ts
-   * const card = new Sprite3D({ material: leaves, billboardMode: 'cylindrical' });
+   * const tree = new Sprite3D({ texture: treeTexture, billboardMode: 'cylindrical' });
    * ```
    */
-  material: BaseMaterial3D;
+  billboardMode?: BillboardMode;
   /**
-   * Not available in this form; the material's `baseColor` texture is the image
-   * @hidden
+   * Which point of the image sits on the node's origin, as a fraction of its size, with `y`
+   * measured down from the top edge
+   *
+   * A single number sets both axes. `0.5` centres the image, and `{ x: 0.5, y: 1 }` stands it on
+   * the origin. Left out, the texture's `defaultAnchor` applies, as on pixi's 2D `Sprite`; without
+   * one it's centred, unlike the 2D `Sprite`'s `(0, 0)`. The {@link Sprite3D} class notes cover how
+   * it behaves in each billboard mode.
+   * @default 0.5
+   * @example
+   * ```ts
+   * const tree = new Sprite3D({ texture: treeTexture, anchor: { x: 0.5, y: 1 } });
+   * ```
    */
-  texture?: never;
+  anchor?: PointData | number;
   /**
-   * Not available in this form; set `baseColor` on the material
-   * @hidden
+   * World units per texture pixel, which sets the sprite's size
+   *
+   * At the default 0.01 a 512 px texture is 5.12 units across, which suits a scene measured in
+   * metres.
+   * @default 0.01
+   * @example
+   * ```ts
+   * const tile = new Sprite3D({ texture: tileTexture, pixelSize: 1 / 32 });
+   * ```
    */
-  tint?: never;
+  pixelSize?: number;
   /**
-   * Not available in this form; set `alpha` on the material
-   * @hidden
+   * The sprite's width in world units, in place of
+   * {@link Sprite3DOptions.pixelSize | pixelSize} on this axis
+   *
+   * Pass only `width` or only `height` and the other follows the texture's aspect ratio:
+   * `{ height: 4 }` on a 128×200 texture gives 2.56 × 4. Pass both to stretch the image to that
+   * box. It ends up in `scale`, as on pixi's 2D `Sprite`, but unlike there a lone `width` or
+   * `height` keeps the aspect ratio; the {@link Sprite3D#width} and {@link Sprite3D#height}
+   * accessors set one axis each.
+   *
+   * It's measured against the texture once, at construction. A texture still loading has no size,
+   * so the value is dropped with a warning; size the sprite once it loads.
+   * @example
+   * ```ts
+   * const sign = new Sprite3D({ texture: signTexture, width: 2 });
+   * ```
    */
-  alpha?: never;
+  width?: number;
   /**
-   * Not available in this form; set `alphaMode` on the material
-   * @hidden
+   * The sprite's height in world units, in place of
+   * {@link Sprite3DOptions.pixelSize | pixelSize} on this axis; see
+   * {@link Sprite3DOptions.width} for how it combines with `width`
+   * @example
+   * ```ts
+   * const tree = new Sprite3D({ texture: treeTexture, height: 4 });
+   * ```
    */
-  alphaMode?: never;
+  height?: number;
   /**
-   * Not available in this form; set `alphaCutoff` on the material
-   * @hidden
+   * Whether the sprite casts shadows
+   *
+   * Off by default because a billboarded sprite casts the shadow of its unturned quad, which
+   * doesn't turn with the camera and can thin to a sliver. In `'none'` mode a sprite casts once it's
+   * `'opaque'` or `'mask'` and its front faces the light, though a masked one's shadow doesn't show
+   * its holes yet. A blended one, the default, casts nothing.
+   * @default false
+   * @example
+   * ```ts
+   * const sign = new Sprite3D({
+   *   texture: signTexture,
+   *   billboardMode: 'none',
+   *   alphaMode: 'opaque',
+   *   castShadow: true,
+   * });
+   * ```
    */
-  alphaCutoff?: never;
+  castShadow?: boolean;
+  /**
+   * Whether the sprite is shadowed
+   *
+   * Only a lit material takes shadows, so it does nothing with the default {@link FlatMaterial}.
+   * @default true
+   * @example
+   * ```ts
+   * const card = new Sprite3D({ material: litLeaves, receiveShadow: false });
+   * ```
+   */
+  receiveShadow?: boolean;
 }
-
-/**
- * Constructor options for {@link Sprite3D}: one form or the other, never a mix
- *
- * The `?: never` members of each form keep the two apart, even for option objects built ahead of
- * time. The constructor takes each form through its own overload, so narrow a value of this union
- * before passing it, such as by checking `options.material`.
- * @example
- * ```ts
- * function makeSprite(options: Sprite3DOptions): Sprite3D {
- *   return options.material ? new Sprite3D(options) : new Sprite3D(options);
- * }
- * ```
- * @see {@link Sprite3DTextureOptions} For the self-contained form.
- * @see {@link Sprite3DMaterialOptions} For the shared-material form.
- * @category scene
- * @standard
- */
-export type Sprite3DOptions = Sprite3DTextureOptions | Sprite3DMaterialOptions;
 
 /**
  * A textured quad in the 3D scene, sized from its texture and, by default, turned to face the
- * camera by the vertex shader
+ * camera
  *
- * Give it a texture and it's `texture pixels × pixelSize` world units across. The rest is the
- * familiar sprite API: `anchor`, `tint`, `alpha`, `width` and `height`, plus `alphaMode` for
- * cutouts.
- *
- * It draws with an unlit {@link FlatMaterial} unless you give it another material. The turning
- * comes from {@link Mesh3D#billboardMode}, not the material, so a {@link Material3D} gives you a
- * **lit** billboard, which a flat stand-in needs to match the lighting of the model it replaces.
+ * It's `texture pixels × pixelSize` world units across, with the familiar sprite API: `anchor`,
+ * `tint`, `alpha`, `width` and `height`, plus `alphaMode` for cutouts. It draws with an unlit
+ * {@link FlatMaterial} unless you give it another material; a {@link Material3D} gives a lit
+ * billboard, which a flat stand-in needs to match the lighting of the model it replaces.
  *
  * ## Batching
  *
- * Every sprite draws the same shared quad, and draws batch by shader and geometry, not by
- * material. So any number of sprites that share a billboard mode and blending become **one
- * instanced draw**, with up to ten texture sources per draw. Switching to another frame of the
- * same sprite sheet uploads one 256-byte material row and keeps the batch as it is, so sprite
- * sheet animation costs almost nothing.
+ * Sprites that share a material type, billboard mode, alpha mode and image source, such as the
+ * frames of one sprite sheet, draw together as one instanced draw. On WebGPU, sprites with
+ * materials of their own, as each sprite makes by default, need more than 16 in a row for that;
+ * 16 or fewer draw one each. Switching frames within a sheet costs almost nothing. The opaque pass
+ * (`'mask'` and `'opaque'`) groups mixed modes and sources well. The transparent pass (`'blend'`)
+ * sorts back to front, so every change of mode or source along that order starts a new draw: give
+ * each blended effect one mode and one sprite sheet. Tint, alpha, size and position can vary
+ * freely.
  *
- * A sprite that doesn't move costs no CPU time per frame: the vertex shader turns it.
+ * Turning to face the camera costs no CPU time; the GPU does it. Hundreds to a few thousand
+ * sprites is what it's built for. For tens of thousands that you set and forget, fill
+ * {@link BatchedMesh3D} slots instead: give each one {@link PlaneGeometry.spriteQuad}, a matrix
+ * whose X and Y scale carry the texture's world size, and a `billboardMode`.
  *
- * What limits the count is the scene node: the transform update, the transparent pass's sort and
- * the batcher's bookkeeping. Hundreds to a few thousand sprites is what it's built for. For tens of
- * thousands that you set and forget, fill {@link BatchedMesh3D} slots instead: give each one
- * {@link PlaneGeometry.spriteQuad}, a matrix whose X and Y scale carry the texture's world size,
- * and a `billboardMode`.
+ * ## Anchor and origin
  *
- * ### Keep one billboard mode per blended effect
+ * - `'none'`: the anchor is exact, as on a 2D sprite.
+ * - `'cylindrical'`: `anchor.y` is exact, so a tree anchored at its feet turns around its base.
+ *   `anchor.x` swings around the spin axis.
+ * - `'spherical'`: an off-centre anchor drifts as the camera orbits. The centred default is exact.
  *
- * {@link Sprite3DSharedOptions.billboardMode | billboardMode} picks the shader, so sprites with
- * different modes can't share a draw. In the opaque pass (`'mask'` and `'opaque'`) that costs one
- * draw per mode, however many sprites there are, because the pass groups by shader. With
- * `'blend'` it costs more: the transparent pass sorts back to front, so mixed modes interleave,
- * and every change of mode along that order starts a new draw.
- *
- * So give each family of blended sprites one mode: spherical for glows and flashes, cylindrical
- * for rising smoke. Texture, tint, alpha, size and position are all free to vary, since they live
- * in the material row or the transform and never split a draw.
- *
- * ## Origin
- *
- * `origin` is in world size units, as pixels are on a 2D sprite: texture pixels × `pixelSize`,
- * before `scale`. A 200×400 px texture at the default `pixelSize` is 2 × 4 units, so with the
- * centred anchor `origin = { x: 1, y: 2, z: 0 }` turns the sprite around its top-right corner. It
- * applies after `anchor`, which stays a fraction of the image. Children and `toLocal` still work
- * in quad units, where the image spans -0.5 to 0.5.
- *
- * ## Anchor, per mode
- *
- * - `'none'`: exact, as on a 2D sprite.
- * - `'cylindrical'`: `anchor.y` is exact, which is the case that matters: a tree anchored at its
- *   feet turns around its base from every angle. `anchor.x` swings around the spin axis.
- * - `'spherical'`: the offset is applied in the node's space, so an off-centre anchor drifts as
- *   the camera orbits. The centred default is exact.
- *
- * `origin` uses the node's own rotation the same way, so under a billboard mode it acts like an
- * off-centre anchor: `'cylindrical'` keeps its vertical part exact, and `'spherical'` drifts as
- * the camera orbits.
+ * `origin` is in world size units, texture pixels × `pixelSize` before `scale`, and applies after
+ * `anchor`. A 200×400 px texture at the default `pixelSize` is 2 × 4 units, so with the centred
+ * anchor `origin = { x: 1, y: 2, z: 0 }` turns the sprite around its top-right corner. Under a
+ * billboard mode it behaves like an off-centre anchor.
  *
  * ## Limitations
  *
- * - Children inherit the texture size, since it's part of the sprite's local matrix. Treat a
- *   sprite as a leaf node.
- * - {@link Container3D#reparentChild | reparentChild} splits the world matrix back into
- *   `position`, `quaternion` and `scale`, which would fold the texture size and anchor into them
- *   and apply them twice. Reparenting a sprite while keeping its world transform isn't supported;
- *   plain `addChild` and `removeChild` are fine.
- * - A `ContainerTexture` draws upside down on a sprite: it's flipped for the other 3D primitives,
- *   whose V axis runs up the image, and the sprite quad's runs down.
- * - A normal map on a sprite needs its **green channel pointing down** the image, the opposite of
- *   a mesh whose V runs up. The cause is the same: the quad's V runs down the image so images come
- *   out upright, and the tangent frame, built from screen-space derivatives, follows V. With green
- *   the other way round, a lit sprite looks lit from below.
+ * - Children inherit the texture size, so children and `toLocal` work in quad units, where the
+ *   image spans -0.5 to 0.5. Treat a sprite as a leaf node.
+ * - {@link Container3D#reparentChild | reparentChild} would apply the texture size and anchor
+ *   twice, so it isn't supported; plain `addChild` and `removeChild` are fine.
+ * - A `ContainerTexture` draws upside down on a sprite.
  * @example
  * ```ts
  * import { Sprite3D, View3D } from '@pixi/3d';
@@ -394,18 +274,15 @@ export type Sprite3DOptions = Sprite3DTextureOptions | Sprite3DMaterialOptions;
  * tree.height = 6;
  * ```
  * @see {@link Sprite3DOptions} For the constructor options.
- * @see {@link Mesh3D} For the scene-graph base class.
- * @see {@link Sprite3D#updateLocalTransform} For how size and anchor reach the matrix.
  * @category scene
  * @standard
  */
 export class Sprite3D extends Mesh3D {
   /**
-   * Default options merged under every constructor call
+   * Defaults for every new `Sprite3D`; an option passed as `undefined` keeps its default
    *
-   * `new Sprite3D(opts)` resolves as `{ ...Sprite3D.defaultOptions, ...opts }`, ignoring options
-   * set to `undefined`. Mutate to change the defaults process-wide. The material options apply
-   * only to the self-contained form; a material you pass keeps its own values.
+   * `tint`, `alpha`, `alphaMode` and `alphaCutoff` apply only to the {@link FlatMaterial} the
+   * sprite makes, never to a material you pass.
    * @example
    * ```ts
    * // Author against a 32px-per-unit tile set:
@@ -413,7 +290,7 @@ export class Sprite3D extends Mesh3D {
    * ```
    */
   public static defaultOptions: Pick<
-    Required<Sprite3DTextureOptions>,
+    Required<Sprite3DOptions>,
     'billboardMode' | 'tint' | 'alpha' | 'alphaMode' | 'alphaCutoff' | 'pixelSize' | 'castShadow' | 'receiveShadow'
   > = {
     billboardMode: 'spherical',
@@ -430,17 +307,16 @@ export class Sprite3D extends Mesh3D {
    * Creates a self-contained sprite from a texture, or from anything `Texture.from` accepts: an
    * asset alias or URL already in the cache, an image, a canvas or a `TextureSource`
    *
-   * The 3D counterpart of pixi's `Sprite.from`. An alias the cache doesn't have gives
-   * `Texture.EMPTY`, and pixi warns, so the sprite draws nothing; load the asset first. That
-   * matches 2D `Sprite.from`, where a typo draws nothing rather than the white quad
-   * `new Sprite3D()` gives.
+   * The 3D counterpart of pixi's `Sprite.from`. An alias the cache doesn't have draws nothing, and
+   * pixi warns; load the asset first.
    * @example
    * ```ts
    * await Assets.load('tree.png');
    * const tree = Sprite3D.from('tree.png');
    * ```
    * @param source - The texture, or the source to build one from.
-   * @param skipCache - Build a fresh texture instead of reusing a cached one for `source`.
+   * @param skipCache - Build a fresh texture instead of reusing a cached one for `source`; an alias
+   * or URL always comes from the cache.
    * @returns A sprite drawing that texture on its own {@link FlatMaterial}.
    */
   public static from(source: Texture | TextureSourceLike, skipCache = false): Sprite3D {
@@ -451,68 +327,37 @@ export class Sprite3D extends Mesh3D {
 
   private _texture: Texture;
   private _pixelSize = 0;
-  /**
-   * Observed on its own rather than alongside `position`, `scale` and `quaternion`, since the
-   * anchor isn't a transform component; any change re-runs the transform update, as on 2D `Sprite`
-   */
   private readonly _anchor: ObservablePoint;
-  /**
-   * Whether the sprite made its material rather than being given it, which decides whether
-   * {@link Sprite3D#destroy} frees it unasked: a material it was given may be shared
-   */
   private readonly _ownsMaterial: boolean;
 
-  /**
-   * Re-sizes the sprite when its texture changes shape in place: a frame edited, or a source that
-   * resized once its image loaded
-   *
-   * It derives the UV frame again too, since no texture slot write happened to do it. Bound per
-   * instance so it can be added to and removed from whichever texture the sprite holds.
-   *
-   * Only {@link Texture.dynamic} textures get it, as on pixi's 2D `Sprite`. A listener on every
-   * texture would cost every sprite one, and adding and removing it on each swap would make frame
-   * animation expensive. A change to a texture that isn't dynamic goes unseen.
-   */
+  /** Only `dynamic` textures get it, as on pixi's 2D `Sprite`, so frame swaps stay cheap */
   private readonly _onTextureUpdate = (): void => {
     this.material._deriveUvFrame();
     this._onUpdate();
   };
 
   /**
-   * Creates a self-contained `Sprite3D`, which makes an unlit {@link FlatMaterial} of its own from
-   * the options and owns it; add it under {@link View3D.root | view.root} to draw it
+   * Creates a `Sprite3D`; add it under {@link View3D.root | view.root} to draw it
    *
-   * A bare `Texture` is short for `{ texture }`, as with pixi's 2D `Sprite`.
+   * A bare `Texture` is short for `{ texture }`, as with pixi's 2D `Sprite`. Throws when a
+   * `material` you pass has no `baseColor` slot.
    * @example
    * ```ts
    * const glow = new Sprite3D(glowTexture);
    * ```
-   * @param options - Construction options, or the texture to draw; see {@link Sprite3DTextureOptions}.
+   * @param options - Construction options, or the texture to draw; see {@link Sprite3DOptions}.
    */
-  constructor(options?: Sprite3DTextureOptions | Texture);
-  /**
-   * Creates a `Sprite3D` on a material you give it
-   *
-   * The material is in charge: the sprite reads its image, and so its size, from the `baseColor`
-   * slot and writes nothing, so the material is safe to share between sprites. Throws when the
-   * material has no `baseColor` slot. Given material options as well, which plain JavaScript
-   * allows, the sprite keeps the material, ignores the options and warns once.
-   * @param options - Construction options; see {@link Sprite3DMaterialOptions}.
-   */
-  constructor(options: Sprite3DMaterialOptions);
   constructor(options: Sprite3DOptions | Texture = {}) {
     if (options instanceof Texture) options = { texture: options };
 
     const explicit = definedProps(options);
     /**
-     * The sprite's own options, pulled out so the base constructor never assigns them
-     *
-     * `width`, `height` and `parent` wait until the sprite is built: sizing measures the texture,
-     * and attaching to a view must see a finished sprite.
+     * `width`, `height` and `parent` stay out of `Mesh3D`'s constructor, which would apply them
+     * before the sprite has its texture
      */
     const {
       material: supplied,
-      texture: textureOption,
+      texture,
       tint,
       alpha,
       alphaMode,
@@ -536,25 +381,6 @@ export class Sprite3D extends Mesh3D {
       );
     }
 
-    if (
-      supplied &&
-      (explicit.texture !== undefined ||
-        explicit.tint !== undefined ||
-        explicit.alpha !== undefined ||
-        explicit.alphaMode !== undefined ||
-        explicit.alphaCutoff !== undefined)
-    ) {
-      warnOnce(
-        'pixi3d-sprite3d-two-forms',
-        '[pixi-3d] Sprite3D was given `material` alongside material-shaping options (texture / ' +
-          'tint / alpha / alphaMode / alphaCutoff). The two constructor forms are exclusive; the ' +
-          'material is authoritative and the extras were ignored — set them on the material itself.',
-      );
-    }
-
-    /** The image to size from: a supplied material's `baseColor`, which the sprite measures but doesn't own */
-    const texture = supplied ? (supplied.textures.baseColor ?? Texture.WHITE) : (textureOption ?? Texture.WHITE);
-
     super({
       label: 'Sprite3D',
       ...rest,
@@ -562,7 +388,7 @@ export class Sprite3D extends Mesh3D {
       material:
         supplied ??
         new FlatMaterial({
-          baseColorTexture: texture,
+          baseColorTexture: texture ?? Texture.WHITE,
           baseColor: tint,
           alpha,
           alphaMode,
@@ -576,29 +402,26 @@ export class Sprite3D extends Mesh3D {
 
     this._ownsMaterial = supplied === undefined;
 
-    if (supplied) this.updateShadow();
-
     this._pixelSize = pixelSize;
-    this._texture = texture;
-    if (texture.dynamic) texture.on('update', this._onTextureUpdate);
+    this._texture = this.material.textures.baseColor ?? Texture.WHITE;
+    if (this._texture.dynamic) this._texture.on('update', this._onTextureUpdate);
+
+    if (supplied) {
+      if (texture) this.texture = texture;
+      if (explicit.tint !== undefined) this.tint = explicit.tint;
+      if (explicit.alpha !== undefined) this.alpha = explicit.alpha;
+      if (explicit.alphaMode !== undefined) this.alphaMode = explicit.alphaMode;
+      if (explicit.alphaCutoff !== undefined) this.alphaCutoff = explicit.alphaCutoff;
+    }
 
     this._anchor = new ObservablePoint({ _onUpdate: () => this._onUpdate() }, 0.5, 0.5);
-    const initialAnchor = anchor ?? texture.defaultAnchor;
+    const initialAnchor = anchor ?? this._texture.defaultAnchor;
     if (initialAnchor !== undefined) this.anchor = initialAnchor;
 
     if (width !== undefined || height !== undefined) this._fitSize(width, height);
     parent?.addChild(this);
   }
 
-  /**
-   * Resolves the construction `width` and `height` onto `scale`
-   *
-   * A missing axis follows the texture's pixel aspect ratio, from `orig` so a sprite sheet frame
-   * fits its own frame rather than the whole sheet. Both axes then get the same scale factor and
-   * the image isn't distorted.
-   * @param width - Target width in world units, or `undefined` to derive it from `height`.
-   * @param height - Target height in world units, or `undefined` to derive it from `width`.
-   */
   private _fitSize(width: number | undefined, height: number | undefined): void {
     const { width: pixelWidth, height: pixelHeight } = this._texture.orig;
     if (pixelWidth === 0 || pixelHeight === 0) {
@@ -613,16 +436,10 @@ export class Sprite3D extends Mesh3D {
   /**
    * The image on the quad
    *
-   * Assigning another sizes the sprite from it. Switching to another frame of the **same** source,
-   * as sprite sheet animation does, only uploads the material row and keeps the batch as it is. A
-   * frame from another source moves the sprite to another batch but reuses compiled shaders.
-   *
-   * The image lives in the material's `baseColor` slot, so assigning writes there. That's safe on
-   * a material the sprite made. On a material you gave it and share, it changes every sprite using
-   * it, so animate frames only on sprites with their own material.
-   *
-   * To change a texture's frame in place later, mark it `dynamic` before handing it over: like
-   * pixi's 2D `Sprite`, a sprite only follows changes to dynamic textures.
+   * Assigning another re-sizes the sprite; switching frames within one sprite sheet is cheap. It
+   * writes the material's `baseColor` slot, so on a shared material it changes every sprite using
+   * it. A sprite follows in-place changes only to a texture that was `dynamic` when it got it, as
+   * pixi's 2D `Sprite` does.
    * @example
    * ```ts
    * coin.texture = sheet.textures[`coin_${frame}.png`];
@@ -633,8 +450,7 @@ export class Sprite3D extends Mesh3D {
   }
 
   /**
-   * Swaps the image and re-sizes the sprite; the material's texture slot derives the UV frame,
-   * rotated frames included, and moves the sprite to another batch for a new source
+   * Swaps the image and re-sizes the sprite; rotated sprite sheet frames work too
    * @param value - Image to draw on the quad.
    */
   set texture(value: Texture) {
@@ -653,9 +469,8 @@ export class Sprite3D extends Mesh3D {
    * measured down from the top edge
    *
    * `(0.5, 0.5)` is centred, and `y = 1` stands the sprite on the origin. Assign a point or a
-   * single number for both axes, or change it in place. The
-   * {@link Sprite3DSharedOptions.anchor | anchor} option covers how it behaves in each billboard
-   * mode.
+   * single number for both axes, or change it in place. The {@link Sprite3D} class notes cover
+   * how it behaves in each billboard mode.
    * @example
    * ```ts
    * tree.anchor.set(0.5, 1);
@@ -715,7 +530,7 @@ export class Sprite3D extends Mesh3D {
 
   /**
    * Sets the colour multiplied into the texture
-   * @param value - Colour to multiply by; writes through to the material's `baseColor`.
+   * @param value - Colour to multiply by.
    */
   set tint(value: ColorSource) {
     this.material.baseColor = value;
@@ -736,20 +551,17 @@ export class Sprite3D extends Mesh3D {
 
   /**
    * Sets the opacity multiplied into the texture's alpha
-   * @param value - Opacity from 0 to 1; writes through to the material.
+   * @param value - Opacity from 0 to 1.
    */
   set alpha(value: number) {
     this.material.alpha = value;
   }
 
   /**
-   * How the texture's alpha is used: `'blend'` sorts the sprite with the transparent pass, `'mask'`
-   * cuts it out in the opaque pass, and `'opaque'` draws the quad solid
+   * How the texture's alpha is used; see {@link Sprite3DOptions.alphaMode}
    *
-   * A change moves the sprite between passes on the next frame. It writes the material, so on a
-   * shared material it moves every sprite using it, but only this sprite checks again whether it
-   * casts shadows. Shadow-casting sprites that share the material need their own
-   * {@link Mesh3D#updateShadow} call.
+   * A blended sprite casts no shadow. It writes the material, so on a shared material it changes
+   * every sprite using it.
    * @example
    * ```ts
    * leaf.alphaMode = 'mask';
@@ -760,14 +572,12 @@ export class Sprite3D extends Mesh3D {
   }
 
   /**
-   * Moves the sprite between passes and checks its shadow casting again, which the material can't
-   * do since it doesn't know its meshes
-   * @param value - How alpha is used; changes every sprite sharing the material.
+   * Sets how the texture's alpha is used
+   * @param value - How alpha is used.
    */
   set alphaMode(value: AlphaMode) {
     if (this.material.alphaMode === value) return;
     this.material.alphaMode = value;
-    this.updateShadow();
   }
 
   /**
@@ -783,7 +593,7 @@ export class Sprite3D extends Mesh3D {
 
   /**
    * Sets the alpha below which `'mask'` mode cuts a pixel away
-   * @param value - Alpha below which `'mask'` mode discards a fragment, 0 to 1.
+   * @param value - Alpha from 0 to 1.
    */
   set alphaCutoff(value: number) {
     this.material.alphaCutoff = value;
@@ -792,10 +602,8 @@ export class Sprite3D extends Mesh3D {
   /**
    * The sprite's width in world units: `|scale.x| × texture width × pixelSize`
    *
-   * Assigning writes `scale.x`, so `scale` holds only your own values and the texture size stays
-   * out of it. It sets one axis, as on pixi's 2D `Sprite`, and leaves {@link Sprite3D#height}
-   * alone; to keep the aspect ratio, pass {@link Sprite3DSharedOptions.width | width} at
-   * construction.
+   * Assigning writes `scale.x` and leaves {@link Sprite3D#height} alone, as on pixi's 2D `Sprite`;
+   * to keep the aspect ratio, pass {@link Sprite3DOptions.width | width} at construction.
    * @example
    * ```ts
    * sign.width = 2;
@@ -885,13 +693,6 @@ export class Sprite3D extends Mesh3D {
     this.height = height;
   }
 
-  /**
-   * Scale on one axis that makes it `size` world units wide, keeping the axis's sign
-   * @param size - Target extent in world units
-   * @param pixels - Texture extent on that axis
-   * @param currentScale - Current scale on the axis, for its sign
-   * @returns The new scale, or `null` (after a warning) when the texture has no size yet
-   */
   private _scaleForWorldSize(size: number, pixels: number, currentScale: number): number | null {
     if (pixels === 0) {
       warnUnsizedTexture();
@@ -904,19 +705,9 @@ export class Sprite3D extends Mesh3D {
 
   /**
    * Rebuilds {@link Container3D.localTransform | localTransform} with the texture's world size and
-   * the anchor offset already in it
+   * the anchor offset in it
    *
-   * The size scales the X and Y axes. It comes from the texture's untrimmed frame, `orig`, so a
-   * sprite sheet sprite measures its own frame, and a texture with no size yet shrinks the quad to
-   * a point. The anchor offset is a fraction of those scaled axes, so it stays a fraction of the
-   * sprite and follows the node's rotation.
-   *
-   * It writes every element itself rather than calling the base method and scaling afterwards:
-   * folding the size in costs two multiplies, where a second pass would read and write six
-   * elements again, and this runs for every sprite on every transform update. Each call rebuilds
-   * the matrix from the components alone, so the size never compounds. It reads and writes the
-   * components' fields directly, skipping their change notifications and getters, since it is the
-   * update those notifications would queue.
+   * A texture with no size yet, such as one still loading, shrinks the quad to a point.
    * @advanced
    */
   public override updateLocalTransform(): void {
@@ -990,14 +781,8 @@ export class Sprite3D extends Mesh3D {
   }
 
   /**
-   * The base class's offset, with the origin in world size units: texture pixels × `pixelSize`,
-   * before `scale`, as pixels are on a 2D sprite
-   *
-   * The local matrix carries the texture size, so the basis is rebuilt from `quaternion` and
-   * `scale` alone rather than read back, which would divide by a size that can be 0. Call it once
-   * {@link Sprite3D#updateLocalTransform} has synced the quaternion.
-   * @param out - Receives the offset
-   * @returns `out`
+   * Reads `quaternion` and `scale` rather than the matrix, whose basis carries a size that can be 0
+   * @param out - Receives the offset.
    */
   protected override _getOriginOffset(out: Vector3): Vector3 {
     const origin = this._origin!;
@@ -1039,17 +824,10 @@ export class Sprite3D extends Mesh3D {
   /**
    * Destroys the sprite; the shared quad geometry always survives, even `destroy(true)`
    *
-   * A {@link FlatMaterial} the sprite made for itself is always destroyed: nothing else can hold
-   * it, so keeping it would leak. A material you gave it follows {@link Destroy3DOptions} instead
-   * and stays unless you pass `material`, since you may be sharing it between sprites.
-   *
-   * `texture` frees the sprite's texture, as on pixi's 2D `Sprite`: through the material when this
-   * call destroys it, and directly otherwise, so a material destroyed earlier doesn't leave the
-   * texture behind. `textureSource` extends that to the texture's source and frees nothing on its
-   * own.
-   *
-   * Children destroyed under `children` get your options unchanged, so a child mesh's geometry
-   * follows `geometry` as it would anywhere else.
+   * A material the sprite made is always destroyed; one you gave it stays unless you pass
+   * `material`. `texture` frees the sprite's texture, as on pixi's 2D `Sprite`, and
+   * `textureSource` its source too; `textureSource` alone frees nothing. Children get your options
+   * unchanged.
    * @example
    * ```ts
    * sprite.destroy({ texture: true, textureSource: true });
@@ -1066,12 +844,6 @@ export class Sprite3D extends Mesh3D {
 
     super.destroy(options);
 
-    /**
-     * Whether the base destroy just destroyed the material, which already freed the textures the
-     * caller asked for, so they aren't destroyed twice
-     *
-     * A material destroyed before this call freed nothing now, so then the texture is freed here.
-     */
     const cascadeFreedMaterial = materialWasLive && material.destroyed;
     if (!cascadeFreedMaterial) {
       if (this._ownsMaterial && materialWasLive) {
@@ -1084,11 +856,6 @@ export class Sprite3D extends Mesh3D {
     this._texture = null!;
   }
 
-  /**
-   * Does nothing: the quad is shared by every sprite, so no `geometry` flag may free it
-   *
-   * Sparing the quad here, rather than changing the flags, is what lets the caller's options reach
-   * the sprite's children unchanged.
-   */
+  /** Spares the quad every sprite shares, while children still get the caller's `geometry` flag */
   protected override _destroyGeometry(): void {}
 }

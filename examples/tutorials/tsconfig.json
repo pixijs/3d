@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  // A step's starting code leaves gaps for the reader to fill, so what it imports or declares can go unused
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["."],
+  "exclude": []
+}

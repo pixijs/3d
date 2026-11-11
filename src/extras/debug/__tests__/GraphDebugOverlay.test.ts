@@ -156,7 +156,9 @@ describe('GraphDebugOverlay', () => {
           {
             ...opaque,
             passIdx: 2,
-            accesses: [{ mode: 'sample', handleId: 1, handleKind: 'depth', slot: 2, effectiveLoadOp: null }],
+            accesses: [
+              { mode: 'sample', handleId: 1, handleKind: 'depth', slot: 'uOpaqueDepthTexture', effectiveLoadOp: null },
+            ],
             dependsOn: [2],
             releases: [1],
           },
@@ -744,7 +746,7 @@ const SNAPSHOT: GraphDebugSnapshot = {
         active: true,
         passIdx: 0,
         isAnchored: true,
-        mipmapHandles: [],
+        finishedColors: [],
         dependsOn: [],
         accesses: [
           {
@@ -822,6 +824,8 @@ const SNAPSHOT: GraphDebugSnapshot = {
               textureIds: [30],
               renderGeometryId: 10,
               topology: 'triangle-list',
+              batchKey: 3 * 2 ** 32 + 10,
+              form: 'merged',
               indexCount: 6,
               firstIndex: 0,
               baseVertex: 0,

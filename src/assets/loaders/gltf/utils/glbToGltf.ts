@@ -8,11 +8,7 @@ const GLB_MAGIC = 0x46546c67;
 const GLB_HEADER_BYTES = 12;
 
 /**
- * Splits a GLB file into its glTF JSON and its binary chunk
- *
- * `buffers` holds the binary chunk, which the JSON addresses as buffer 0, or nothing when the file
- * has none.
- * @param arrayBuffer - The raw GLB file
+ * `buffers` holds the BIN chunk as buffer 0, or is empty when the file has none
  * @internal
  */
 export function glbToGltf(arrayBuffer: ArrayBuffer): {

@@ -1,46 +1,15 @@
+import { mathConstantsBit } from '../../../core/shader/bits/mathConstantsBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * `KHR_materials_sheen`: the soft glow at grazing angles on velvet, satin and other cloth
- *
- * Uses the Charlie distribution with Ashikhmin visibility, as the glTF spec's appendix recommends,
- * and no Fresnel. It is a lobe in `pbrLightingBit`'s light loop (see {@link createLightingBit}), so
- * a sheen material still runs one loop and samples each shadow once:
- *
- * - `lobePreLighting` reads the sheen colour and roughness and hoists the light-independent parts
- *   of the Charlie distribution, `(2 + 1/α) / 2π` and `1 / 2α`, so each light costs one `pow` and
- *   a multiply.
- * - `lobePerLight` adds this light's sheen. It reuses `pbrLightingBit`'s `halfVector`, `nDotH` and
- *   `nDotV`, since both lobes share the normal; another host lighting bit has to provide them under
- *   those names.
- * - `lobePostLighting` dims the base layer under the sheen and adds the direct and environment
- *   sheen.
- *
- * Roughness comes in two tiers. The environment lookup and `sheenE` take the raw value. The direct
- * Charlie term floors it at 0.07, because `pow(sin²θh, 1 / 2α)` with a tiny α sends the exponent
- * huge and underflows on mobile GPUs with 16-bit floats. `charlieD` also floors `sin²θh` at
- * 0.0078125, as Filament's `D_Charlie` does, so `pow` never sees 0. `ashikhminV`'s `1e-5` covers
- * `N·L = N·V = 0`, where its denominator is zero.
- *
- * The base layer is multiplied by `1 - max(sheenColor) * E` so a bright sheen doesn't add energy,
- * and the environment sheen is `sheenColor * sampleEnvironment(R, roughness) * E`, from the shared
- * environment with no separate prefilter. `E` is `sheenE`, clamped to [0, 1]. Its constants are
- * the ones Estevez & Kulla 2017 fit for the `L(x)` curve inside the Charlie visibility term, not a
- * directional-albedo fit, so after the clamp `E` is 1 at grazing angles and falls to 0 toward
- * head-on. Like clearcoat, the environment sheen isn't multiplied by occlusion: occlusion shadows
- * the base surface, and the fibres sit on top of it.
- *
- * `sheenParams` holds the colour in `.rgb` and the roughness in `.w`. One texture slot stands in
- * for the spec's two, colour in `.rgb` and roughness in `.a`, the way assets pack them; when a glTF
- * names two different images, the loader warns and keeps the colour one. Alpha here is data, so
- * the shader undoes pixi's premultiplied upload before sRGB-decoding the colour, as `pbrMaterialBit`
- * does for the base colour. An unset slot holds `Texture.WHITE`, so the multiplies change nothing.
- *
- * Spec: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_sheen
+ * Reads `pbrLightingBit`'s `nDotH` and `nDotV`. The 0.07 roughness and 0.0078125 `sin2h` floors stop `pow`
+ * underflowing on mobile GPUs with 16-bit floats. The colour is divided by alpha to undo pixi's premultiplied upload
  * @internal
  */
 export const sheenBit: ShaderBit = {
   name: 'sheen',
+
+  requires: [mathConstantsBit],
 
   textures: ['sheen'],
 
@@ -111,8 +80,6 @@ fn sheenE(NdotV: f32, sheenRoughness: f32) -> f32 {
   gl: {
     fragment: {
       header: /*glsl*/ `
-#ifndef PIXI3D_SHEEN_HELPERS_DEFINED
-#define PIXI3D_SHEEN_HELPERS_DEFINED
 float charlieD(float charlieScale, float invAlphaHalf, float NdotH) {
   float cos2h = NdotH * NdotH;
   float sin2h = max(1.0 - cos2h, 0.0078125);
@@ -132,7 +99,6 @@ float sheenE(float NdotV, float sheenRoughness) {
   float e = mix(-4.32054, -4.85967, r);
   return a / (1.0 + b * pow(NdotV, c)) + d * NdotV + e;
 }
-#endif
 `,
       lobePreLighting: /*glsl*/ `
   vec4 sheenTex = sampleSheen(vUV);

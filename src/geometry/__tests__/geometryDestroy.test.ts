@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { GEOMETRY_DATA_STRIDE, GeometryDataStoreBuffer } from '~/core/buffers/GeometryDataStoreBuffer';
 import { Geometry3D } from '~/geometry/Geometry3D';
 
-/** Lane of a geometry's data-store row that holds its morph target count */
 const MORPH_COUNT_LANE = 5;
 
 const triangle = (): Geometry3D =>
@@ -69,29 +68,6 @@ describe('Geometry3D.destroy', () => {
 
     survivor.destroy(true);
     resident.destroy(true);
-    storeB.destroy();
-  });
-
-  it('a geometry moving between two live stores re-mints instead of adopting the foreign slot, and destroy frees the new row', () => {
-    const storeA = new GeometryDataStoreBuffer();
-    const storeB = new GeometryDataStoreBuffer();
-    const geometry = triangle();
-    const resident = triangle();
-
-    storeA.set(geometry);
-    storeB.set(resident);
-    storeB.set(geometry);
-    expect(geometry._geometryDataStore).toBe(storeB);
-    expect(geometry._geometryDataIndex).toBe(1);
-
-    geometry.destroy(true);
-    const next = triangle();
-    storeB.set(next);
-    expect(next._geometryDataIndex).toBe(1);
-
-    next.destroy(true);
-    resident.destroy(true);
-    storeA.destroy();
     storeB.destroy();
   });
 

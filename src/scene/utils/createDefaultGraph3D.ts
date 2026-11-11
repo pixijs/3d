@@ -4,55 +4,41 @@ import type { ShadowRenderPassGl } from '../../core/gl/ShadowRenderPassGl';
 import type { ShadowRenderPassGpu } from '../../core/gpu/ShadowRenderPassGpu';
 import { RenderGraph } from '../../core/render-graph/RenderGraph';
 import type { ColorHandle, DepthHandle } from '../../core/render-graph/ResourceHandle';
+import type { SceneOutput } from '../../core/render-graph/SceneOutput';
+import { collectSceneOutputs } from '../../core/render-graph/sceneOutputs';
+import type { GlobalTextureBindings } from '../../core/render-graph/TextureBinding';
 import { BackgroundPass } from '../../core/render-passes/background/BackgroundPass';
 import { BlendedRefractionPass } from '../../core/render-passes/blended-refraction/BlendedRefractionPass';
 import { CopyDepthPass } from '../../core/render-passes/copy-depth/CopyDepthPass';
 import { CopyOpaquePass } from '../../core/render-passes/copy-opaque/CopyOpaquePass';
 import { DepthClearPass } from '../../core/render-passes/depth-clear/DepthClearPass';
 import { OpaqueRenderPass } from '../../core/render-passes/opaque/OpaqueRenderPass';
-import { OutputPass } from '../../core/render-passes/output/OutputPass';
 import type { RenderSession } from '../../core/render-passes/RenderSession';
 import { TransmissionRenderPass } from '../../core/render-passes/transmission/TransmissionRenderPass';
 import { TransparentRenderPass } from '../../core/render-passes/transparent/TransparentRenderPass';
+import { assertFloatRenderable } from '../../core/textures/floatRenderTargets';
+import { isResolvableFormat } from '../../core/textures/isResolvableFormat';
+import { OutputPass } from '../../post-processing/effects/OutputPass';
 import { PostEffect } from '../../post-processing/effects/PostEffect';
 import type { Pass3D, PassContext } from '../../post-processing/Pass3D';
+import type { ToneMapping } from '../View3D';
 
 /**
- * Handles to the textures {@link createDefaultGraph3D} shares between its passes
+ * Handles to the textures {@link createDefaultGraph3D} shares between its passes, so a pass added
+ * on top can sample them instead of copying the scene again
  *
- * Returned with the graph, so passes added on top of the defaults can sample the same textures
- * instead of copying the scene again.
- *
- * The opaque copies are pooled textures that can be larger than the view, so many views of
- * different sizes can share one. The view's content fills a sub-rect starting at the texture's
- * origin, and a shader maps view UV onto it through the camera's `uViewportUVScale`. A depth
- * lookup at the same UV lands on the matching texel.
+ * The opaque copies can be larger than the view. The view fills a sub-rect at the texture's origin,
+ * so scale view UVs by the camera's `uViewportUVScale` before sampling. They match the scene's
+ * resolution texel for texel.
  * @category rendering
  * @advanced
  */
 export interface DefaultGraph3DHandles {
-  /**
-   * Copy of the opaque scene's colour, taken by {@link CopyOpaquePass} and read by
-   * {@link TransmissionRenderPass} and {@link BlendedRefractionPass}
-   *
-   * It has mipmaps, generated right after the copy, before any transmissive pass samples a
-   * blurred level.
-   */
+  /** Copy of the opaque scene's colour, with mipmaps, as transmissive and refractive materials see it */
   opaqueColor: ColorHandle;
-  /**
-   * Copy of the opaque scene's depth, taken by {@link CopyDepthPass} and read by
-   * {@link BlendedRefractionPass} and by effects that read depth
-   *
-   * {@link TransmissionRenderPass} doesn't read it, so a scene whose only see-through materials
-   * are transmissive skips the copy.
-   */
+  /** Copy of the opaque scene's depth; {@link CopyDepthPass} says when it's taken */
   opaqueDepth: DepthHandle;
-  /**
-   * The shadow pass's shadow-map array, one layer per light or cascade
-   *
-   * The pass owns the texture and reallocates it when the shadow quality changes, so the graph
-   * imports it rather than allocating it.
-   */
+  /** The shadow-map array, one layer per light or cascade */
   shadowMap: DepthHandle;
 }
 
@@ -66,12 +52,28 @@ export interface DefaultGraph3DOptions {
   /**
    * Draw the scene into its own texture, then onto the screen, instead of straight to the screen
    *
-   * Any enabled post effect in `passes` turns it on, because effects sample the scene as a
-   * texture. Set it yourself to alpha-composite an inset over 2D content without an effect.
+   * Any enabled post effect in `passes`, or entry in `sceneOutputs`, turns it on. A {@link View3D}
+   * sets it from {@link View3DOptions#composite}, and while its {@link View3D#resolution} differs
+   * from its target's, so a custom builder that drops it draws at the target's resolution.
    */
   composite?: boolean;
-  /** The view's user passes; each contributes at its own stage, post effects in array order */
+  /** The view's user passes; each contributes at its own stage, post effects in array order within their stage */
   passes?: readonly Pass3D[];
+  /**
+   * Scene outputs to attach besides the ones the enabled `passes`
+   * {@link Pass3D#requiredOutputs | require}; see {@link SceneOutput}
+   *
+   * Set it in a custom graph builder whose own passes use outputs. An output in both lists is
+   * attached once. Any entry turns `composite` on.
+   */
+  sceneOutputs?: readonly SceneOutput[];
+  /**
+   * The view's tone mapping, which the output pass applies when an enabled `'beforeToneMapping'`
+   * effect keeps the scene linear
+   */
+  toneMapping: ToneMapping;
+  /** The view's global texture bindings; forward the value the view passes in */
+  globalTextureBindings: GlobalTextureBindings;
 }
 
 /**
@@ -80,26 +82,30 @@ export interface DefaultGraph3DOptions {
  * Start from it in a custom `graph` builder to add passes the {@link Pass3D} stages can't
  * express. The passes run in this order, with each user pass built at its {@link PassStage}:
  *
- * 1. The shadow pass, the one pass that differs by backend.
+ * 1. The shadow pass.
  * 2. `'beforeOpaque'` user passes.
- * 3. A depth reset over the view's rect, then the background and the opaque scene. A view shares
- *    its depth buffer with the 2D scene around it and with other views drawn to the same
- *    target, so it resets depth before it draws.
+ * 3. A depth reset over the view's rect, which clears each scene output but keeps any colour drawn
+ *    before it, then the background and the opaque scene.
  * 4. `'afterOpaque'` user passes.
  * 5. Copies of the opaque depth and colour, then the transmissive, blended-refraction and
- *    transparent scene.
+ *    transparent scene. Blended-refraction draws don't write scene outputs.
  * 6. `'afterTransparent'` user passes.
- * 7. The post effects, in array order.
+ * 7. The `'beforeToneMapping'` effects, in array order, then the tone curve, then the
+ *    `'afterToneMapping'` effects. Unless the tone mapping is `'custom'`, an output pass applies the
+ *    curve after a `'beforeToneMapping'` effect, and the scene draw applies it otherwise.
  *
- * In composite mode the scene draws into a view-sized colour and depth texture. Each post effect
- * reads the image the one before it wrote, through pooled textures, and the last effect draws
- * straight to the screen. Composite mode with no effects ends with an output pass that draws
- * the scene texture to the screen. An effect whose `inputMips` is set gets an input with
- * mipmaps, generated after that input's last writer, so the effect needs no copy of it.
+ * In composite mode the scene draws into textures at {@link View3D#resolution}, which the graph's
+ * other textures inherit unless an effect sets its own. The scene's textures are multisampled when
+ * the canvas has `antialias`, unless a scene output's format can't be (see {@link SceneOutput}).
+ * Each effect reads what the one before it wrote, and the last step stretches the image onto the
+ * view's rect.
  *
- * Passes that share a texture are handed the same handle when they are created, so neither has
- * to find the other. The graph comes back compiled, so authoring mistakes throw here rather than
- * on the first frame. `graph.passes` lists every pass.
+ * With a `'beforeToneMapping'` effect enabled, the scene colour and every colour texture made
+ * without a format are `rgba16float`, so brightness above 1 reaches each of those effects. Unless
+ * the tone mapping is `'custom'`, the `'afterToneMapping'` effects read `rgba8unorm`. An effect
+ * whose `inputMips` is set gets an input with mipmaps.
+ *
+ * The graph comes back compiled, so authoring mistakes throw here rather than on the first frame.
  * @example
  * ```ts
  * new View3D({
@@ -110,46 +116,63 @@ export interface DefaultGraph3DOptions {
  *   },
  * });
  * ```
- * @param renderer - renderer whose backend selects the pass implementations.
- * @param options - composite mode and the user pass list; see {@link DefaultGraph3DOptions}.
- * @returns The compiled graph and its {@link DefaultGraph3DHandles} shared transients.
- * @throws If a pass that isn't a {@link PostEffect} claims the `'post'` stage, which is reserved
- *   for effects because each one owns its input and output in the chain.
+ * @param renderer - The renderer the graph draws with.
+ * @param options - What the view hands its `graph` builder; see {@link DefaultGraph3DOptions}.
+ * @returns The compiled graph and the {@link DefaultGraph3DHandles} its passes share.
+ * @throws If a pass that isn't a {@link PostEffect} claims the `'beforeToneMapping'` or
+ *   `'afterToneMapping'` stage.
+ * @throws If a `'beforeToneMapping'` effect is enabled on WebGL 2 without
+ *   `EXT_color_buffer_float`, which the float scene needs.
  * @category rendering
  * @advanced
  */
 export function createDefaultGraph3D(
   renderer: WebGLRenderer | WebGPURenderer,
-  options: DefaultGraph3DOptions = {},
+  options: DefaultGraph3DOptions,
 ): {
-  /** The compiled render graph, ready to execute */
+  /** The compiled render graph */
   graph: RenderGraph;
-  /** Shared transient handles threaded through the graph's passes */
+  /** Textures the default passes share */
   handles: DefaultGraph3DHandles;
 } {
   const enabled = options.passes?.filter((p) => p.enabled) ?? [];
   const beforeOpaque = enabled.filter((p) => p.stage === 'beforeOpaque');
   const afterOpaque = enabled.filter((p) => p.stage === 'afterOpaque');
   const afterTransparent = enabled.filter((p) => p.stage === 'afterTransparent');
-  const effects: PostEffect[] = [];
-  for (const pass of enabled) {
-    if (pass.stage !== 'post') continue;
-    if (!(pass instanceof PostEffect)) {
-      throw new Error(
-        `${pass.constructor.name}: the 'post' stage is reserved for PostEffect subclasses (extend PostEffect, or use a scene stage).`,
-      );
-    }
-    effects.push(pass);
-  }
+  const beforeToneMapping = enabled.filter((p): p is PostEffect => p.stage === 'beforeToneMapping');
+  const afterToneMapping = enabled.filter((p): p is PostEffect => p.stage === 'afterToneMapping');
+  assertPostEffects(renderer, beforeToneMapping, afterToneMapping);
 
-  const composite = (options.composite ?? false) || effects.length > 0;
-  const sceneColorMips = effects[0]?.inputMips === true;
+  const sceneIsLinear = beforeToneMapping.length > 0;
+  const toneMapping = options.toneMapping;
+  const outputToneMapping = sceneIsLinear && toneMapping !== 'custom' ? toneMapping : undefined;
+
+  const sceneOutputs = collectSceneOutputs(options.passes ?? [], options.sceneOutputs);
+  const effectCount = beforeToneMapping.length + afterToneMapping.length;
+  const composite = (options.composite ?? false) || effectCount > 0 || sceneOutputs.length > 0;
+
+  const copiesScene = composite && effectCount === 0;
+  const outputStep: 'outputPass'[] = outputToneMapping || copiesScene ? ['outputPass'] : [];
+  const chain: (PostEffect | 'outputPass')[] = [...beforeToneMapping, ...outputStep, ...afterToneMapping];
+  const firstStep = chain[0];
+  const sceneColorNeedsMips = firstStep instanceof PostEffect && firstStep.inputMips;
+  const antialias =
+    renderer.view.antialias && sceneOutputs.every((output) => isResolvableFormat(renderer, output.format));
 
   const graph = new RenderGraph({
+    globalTextureBindings: options.globalTextureBindings,
     defaultColor: (s: RenderSession) => s.defaultTarget.colorTexture,
     defaultDepth: (s: RenderSession) => s.defaultTarget.depthStencilTexture!,
-    sceneColor: composite ? { autoGenerateMipmaps: sceneColorMips, label: 'sceneColor' } : undefined,
-    sceneDepth: composite ? { label: 'sceneDepth' } : undefined,
+    sceneColor: composite
+      ? {
+          antialias,
+          autoGenerateMipmaps: sceneColorNeedsMips,
+          format: sceneIsLinear ? 'rgba16float' : undefined,
+          label: 'sceneColor',
+        }
+      : undefined,
+    sceneDepth: composite ? { antialias, label: 'sceneDepth' } : undefined,
+    sceneOutputs,
   });
 
   const opaqueColorHandle = graph.createColor({ autoGenerateMipmaps: true, label: 'opaqueColorCopy' });
@@ -161,33 +184,39 @@ export function createDefaultGraph3D(
 
   for (const pass of beforeOpaque) pass.build(graph, ctx);
 
-  graph.addPass(new DepthClearPass({ renderer }));
-  graph.addPass(new BackgroundPass({ renderer }));
-  graph.addPass(new OpaqueRenderPass({ renderer }));
+  graph.addPass(new DepthClearPass({ renderer, attachedOutputs: sceneOutputs }));
+  graph.addPass(new BackgroundPass({ renderer, attachedOutputs: sceneOutputs }));
+  graph.addPass(new OpaqueRenderPass({ renderer, attachedOutputs: sceneOutputs }));
 
   for (const pass of afterOpaque) pass.build(graph, ctx);
 
   graph.addPass(new CopyDepthPass({ renderer, opaqueDepthHandle }));
   graph.addPass(new CopyOpaquePass({ renderer, opaqueColorHandle }));
 
-  graph.addPass(new TransmissionRenderPass({ renderer, opaqueColorHandle }));
+  graph.addPass(new TransmissionRenderPass({ renderer, opaqueColorHandle, attachedOutputs: sceneOutputs }));
   graph.addPass(new BlendedRefractionPass({ renderer, opaqueColorHandle, opaqueDepthHandle }));
-  graph.addPass(new TransparentRenderPass({ renderer }));
+  graph.addPass(new TransparentRenderPass({ renderer, attachedOutputs: sceneOutputs }));
 
   for (const pass of afterTransparent) pass.build(graph, ctx);
 
-  if (effects.length > 0) {
-    let current = graph.sceneColor;
-    for (let i = 0; i < effects.length; i++) {
-      const output =
-        i === effects.length - 1
-          ? null
-          : graph.createColor({ autoGenerateMipmaps: effects[i + 1].inputMips, label: 'effectChain' });
-      effects[i].build(graph, { ...ctx, input: current, output });
-      if (output) current = output;
+  let input = graph.sceneColor;
+  for (let i = 0; i < chain.length; i++) {
+    const step = chain[i];
+    const next = chain[i + 1];
+    const output =
+      next === undefined
+        ? null
+        : graph.createColor({
+            autoGenerateMipmaps: next !== 'outputPass' && next.inputMips,
+            format: outputToneMapping && i >= beforeToneMapping.length ? 'rgba8unorm' : undefined,
+            label: 'effectChain',
+          });
+    if (step === 'outputPass') {
+      graph.addPass(new OutputPass({ renderer, source: input, toneMapping: outputToneMapping, writes: output }));
+    } else {
+      step.build(graph, { ...ctx, input, output });
     }
-  } else if (composite) {
-    graph.addPass(new OutputPass({ renderer, source: graph.sceneColor }));
+    if (output) input = output;
   }
 
   graph.compile();
@@ -202,15 +231,26 @@ export function createDefaultGraph3D(
   };
 }
 
+function assertPostEffects(
+  renderer: WebGLRenderer | WebGPURenderer,
+  beforeToneMapping: readonly Pass3D[],
+  afterToneMapping: readonly Pass3D[],
+): void {
+  for (const pass of [...beforeToneMapping, ...afterToneMapping]) {
+    if (!(pass instanceof PostEffect)) {
+      throw new Error(
+        `${pass.constructor.name}: the '${pass.stage}' stage is reserved for PostEffect subclasses (extend PostEffect, or use a scene stage).`,
+      );
+    }
+  }
+  if (beforeToneMapping.length > 0) {
+    assertFloatRenderable(renderer, `View3D, for the float scene that ${beforeToneMapping[0].constructor.name} reads`);
+  }
+}
+
 /**
- * Adds the backend's shadow pass and returns the handle the graph tracks its shadow map by
- *
- * The pass creates its shadow map on first use and replaces it when the shadow quality changes,
- * so the graph imports it through a getter that reads the pass's live target each frame. The pass
- * takes the handle in its constructor, so the getter is registered before the pass exists; it
- * only runs at execute time.
- * @param graph - Graph to add the pass to
- * @param renderer - Renderer whose View3D pipe creates the backend's shadow pass
+ * Imports the shadow map through a getter, since a shadow quality change replaces the pass's target; the getter
+ * first runs at execute time, after `shadowPass` is set
  */
 function addShadowPass(graph: RenderGraph, renderer: WebGLRenderer | WebGPURenderer): DepthHandle {
   let shadowPass: ShadowRenderPassGpu | ShadowRenderPassGl;

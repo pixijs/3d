@@ -1,10 +1,22 @@
+/**
+ * Type-checks every `ts` code fence in the JSDoc under `src`, in the Markdown under `src` and
+ * `examples/tutorials` (the guides and tutorial steps) and in `README.md` against the source, so an
+ * example breaks when the API it shows changes. `npm run test:docs` runs it on everything; pass a
+ * file or folder to check part of it, as in `node scripts/typedoc/check-examples.mts src/scene`.
+ *
+ * Each example compiles as its own module, importing the names it uses from `@pixi/3d`,
+ * `@pixi/3d/extras`, `pixi.js` and the file it documents. Context the example assumes rather than
+ * shows, such as `app`, `view3d` or `model`, is declared `any`, and so is a stand-in user class named
+ * `My…`. Examples on file-private functions can't import what they document, so they aren't checked.
+ * Runs on the TypeScript 5.9 that the `scripts/typedoc` workspace installs.
+ */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { globSync } from 'glob';
 import ts from 'typescript';
 
-/** A `ts` code fence from a JSDoc block, with the source line its first code line sits on */
+/** A `ts` code fence from a JSDoc block or a Markdown guide, with the source line its first code line sits on */
 interface Example {
   file: string;
   line: number;
@@ -70,29 +82,43 @@ const REAL_GLOBALS = new Set([
 const MEMBER_SNIPPET = /^\s*(?:public|protected|private|static|override|readonly|abstract|async|get|set)\b/;
 
 /**
- * Every `ts` code fence inside a JSDoc block of the file.
- * @param file - Absolute path of a source file
+ * Every `ts` code fence in the lines, as examples whose line numbers count from `firstLine`.
+ * @param file - Absolute path of the file the lines come from
+ * @param lines - The text to search, one entry per line
+ * @param firstLine - Source line of `lines[0]`
+ */
+function fencedExamples(file: string, lines: string[], firstLine: number): Example[] {
+  const examples: Example[] = [];
+  let start = -1;
+
+  lines.forEach((line, index) => {
+    if (start === -1 && /^```ts\s*$/.test(line)) {
+      start = index + 1;
+    } else if (start !== -1 && /^```\s*$/.test(line)) {
+      examples.push({ file, line: firstLine + start, code: lines.slice(start, index).join('\n') });
+      start = -1;
+    }
+  });
+
+  return examples;
+}
+
+/**
+ * Every `ts` code fence in a Markdown guide, or inside a JSDoc block of a source file.
+ * @param file - Absolute path of a source file or guide
  */
 function extractExamples(file: string): Example[] {
   const text = fs.readFileSync(file, 'utf8');
-  const examples: Example[] = [];
 
-  for (const block of text.matchAll(/\/\*\*[\s\S]*?\*\//g)) {
-    const blockLine = text.slice(0, block.index).split('\n').length;
-    const lines = block[0].split('\n').map((line) => line.replace(/^\s*\*(?!\/) ?/, ''));
-    let start = -1;
+  if (file.endsWith('.md')) return fencedExamples(file, text.split('\n'), 1);
 
-    lines.forEach((line, index) => {
-      if (start === -1 && /^```ts\s*$/.test(line)) {
-        start = index + 1;
-      } else if (start !== -1 && /^```\s*$/.test(line)) {
-        examples.push({ file, line: blockLine + start, code: lines.slice(start, index).join('\n') });
-        start = -1;
-      }
-    });
-  }
-
-  return examples;
+  return [...text.matchAll(/\/\*\*[\s\S]*?\*\//g)].flatMap((block) =>
+    fencedExamples(
+      file,
+      block[0].split('\n').map((line) => line.replace(/^\s*\*(?!\/) ?/, '')),
+      text.slice(0, block.index).split('\n').length,
+    ),
+  );
 }
 
 /**
@@ -286,8 +312,8 @@ function isAssumedName(diagnostic: ts.Diagnostic): boolean {
 }
 
 const targets = process.argv.slice(2);
-const patterns = (targets.length > 0 ? targets : ['src']).map((target) =>
-  target.endsWith('.ts') ? target : `${target.replace(/\/$/, '')}/**/*.ts`,
+const patterns = (targets.length > 0 ? targets : ['src', 'examples/tutorials', 'README.md']).map((target) =>
+  /\.(?:ts|md)$/.test(target) ? target : `${target.replace(/\/$/, '')}/**/*.{ts,md}`,
 );
 const sourceFiles = globSync(patterns, {
   cwd: root,
@@ -297,7 +323,10 @@ const sourceFiles = globSync(patterns, {
 
 const options = compilerOptions();
 const extracted = sourceFiles.flatMap(extractExamples);
-const exports = indexExports([...new Set(extracted.map((example) => example.file))], options);
+const exports = indexExports(
+  [...new Set(extracted.map((example) => example.file))].filter((file) => file.endsWith('.ts')),
+  options,
+);
 const examples = extracted.map((example, index) => toVirtual(example, exports, index));
 const program = createProgram(
   examples.map((example) => example.path),
@@ -319,8 +348,11 @@ for (const example of examples) {
     const { line } = source.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
     const sourceLine = example.line + Math.max(0, line - example.codeStart);
     const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
+    const hint = UNKNOWN_NAME_CODES.has(diagnostic.code)
+      ? ' (a package symbol was renamed or removed, or a stand-in user class needs a `My` prefix)'
+      : '';
 
-    console.log(`${path.relative(root, example.file)}:${sourceLine} TS${diagnostic.code}: ${message}`);
+    console.log(`${path.relative(root, example.file)}:${sourceLine} TS${diagnostic.code}: ${message}${hint}`);
     errors++;
   }
 }

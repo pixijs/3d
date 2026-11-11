@@ -7,10 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Close-up of an alphaMode:'mask' cutout boundary. Locks in alphaMaskBit's
-// alpha-reset: surviving fragments must be fully opaque (glTF MASK spec).
-// Drop the `alpha = 1.0` and the anti-aliased boundary fades to a dark ring
-// through the premultiplied output — this snapshot will diff.
 function createCutoutCanvas(size: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;

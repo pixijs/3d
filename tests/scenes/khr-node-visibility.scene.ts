@@ -6,21 +6,22 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
+import { model } from '../../examples/assets/manifest';
+
+const AVOCADO = model('gltf.Avocado');
+
 export const scene: TestScene = {
-  assets: ['avocado.glb'],
+  assets: [AVOCADO],
   create: async (app, _context) => {
     const container = new Container();
     app.stage.addChild(container);
 
-    const source = Assets.get<Scene3DSource>('avocado.glb');
+    const source = Assets.get<Scene3DSource>(AVOCADO);
 
-    // Visible instance on the left.
     const shown = new Model3D(source);
     shown.scale.set(10, 10, 10);
     shown.position.set(-0.3, -0.21, 0);
 
-    // Hidden instance on the right — must not appear in the snapshot.
-    // Exercises the `worldVisible` propagation + render-side gate.
     const hidden = new Model3D(source);
     hidden.scale.set(10, 10, 10);
     hidden.position.set(0.3, -0.21, 0);

@@ -10,10 +10,6 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * A view with an entry and an exit 40 apart along x, both facing `+Z`, a block in the far room for the
- * portal camera to draw, and the view camera in front of the entry looking at it
- */
 function buildPortal(): { view3d: View3D; portal: PortalPass; entry: Mesh3D } {
   const view3d = new View3D({ width: 128, height: 128 });
   const surface = new Material3D({ baseColor: 0x8899aa });

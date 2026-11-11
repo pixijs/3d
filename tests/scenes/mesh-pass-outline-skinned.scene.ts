@@ -5,7 +5,6 @@ import type { Scene3DSource } from '~/assets/Scene3DSource';
 import { OutlinePass } from '~/extras/post-processing/passes/OutlinePass';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
-import type { Container3D } from '~/scene/Container3D';
 import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
@@ -16,12 +15,6 @@ import { model } from '../../examples/assets/manifest';
 
 const SKINNED = model('gltf.CesiumMan');
 
-/**
- * A skinned mesh through {@link OutlinePass}. The hull is drawn by the engine's forward path, so
- * the skinning bit deforms the extruded shell exactly as it deforms the surface: the ink must
- * hug the posed figure, not its bind pose. The model is pinned at a fixed animation time so
- * the pose is deterministic, and its loaded materials join the pass with `enablePass`.
- */
 export const scene: TestScene = {
   assets: [SKINNED],
   app: {
@@ -58,19 +51,15 @@ export const scene: TestScene = {
     figure.position.set(0, 0, 0);
     view.root.addChild(figure);
 
-    // Pin a clip mid-way so the deformed pose, and therefore the hull, is reproducible.
     const [label] = figure.player?.animationLabels ?? [];
     if (figure.player && label) {
       const state = figure.player.getState(label);
       state.gotoAndStop(state.animation.duration * 0.35);
     }
 
-    // Loaded materials join the pass after the fact, the same lever a user has on any material.
-    const join = (node: Container3D): void => {
-      if (node instanceof Mesh3D) node.material.enablePass('outline');
-      for (const child of node.children) join(child);
-    };
-    join(figure);
+    figure.traverse((container) => {
+      if (container instanceof Mesh3D) container.material.enablePass('outline');
+    });
 
     view.camera.fov = 40;
     view.camera.position.set(1.6, 1.5, 3.2);

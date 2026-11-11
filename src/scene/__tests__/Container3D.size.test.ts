@@ -8,7 +8,6 @@ import { Vector3 } from '~/math/vector/Vector3';
 import { Container3D } from '~/scene/Container3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 
-/** A container holding one 2×4×6 cube */
 function makeBoxHolder(): Container3D {
   const holder = new Container3D();
 

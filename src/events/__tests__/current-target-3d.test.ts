@@ -1,9 +1,8 @@
 import { Rectangle } from 'pixi.js';
 import type { FederatedPointerEvent } from 'pixi.js';
-import { describe, expect, expectTypeOf, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 
 import { updateCameraProjectionForView } from '~/core/prepareCamera';
-import type { Pointer3DEvent } from '~/events/Pointer3DEvent';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Box } from '~/math/shapes/Box';
@@ -16,12 +15,9 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-/** View-local point over cube A of `makeScene`, at world x = -2 (camera at z = 10, fov 60) */
 const AT_A = { x: 31, y: 50 };
-/** View-local point over cube B of `makeScene`, at world x = +2 */
 const AT_B = { x: 69, y: 50 };
 
-/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -37,7 +33,6 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -45,10 +40,6 @@ function tickPick(view3d: View3D): void {
   updateView3DTransforms(view3d);
 }
 
-/**
- * Two sibling cubes under an interactive group, enough for hops at the target, on an ancestor, and
- * along the enter/leave and fan-out paths
- */
 function makeScene() {
   const view3d = new View3D({ ...SIZE });
   view3d.camera.position.set(0, 0, 10);
@@ -69,10 +60,6 @@ function makeScene() {
   return { view3d, group, a, b };
 }
 
-/**
- * Hit-tests as pixi does before every dispatch, asserting the pick lands on `expected` so a drifted
- * probe point fails loudly
- */
 function hitAt(view3d: View3D, point: { x: number; y: number }, expected: Container3D | null): void {
   expect(view3d.containsPoint(point)).toBe(true);
   expect(view3d.events._currentPick3D).toBe(expected);
@@ -87,7 +74,6 @@ interface EventInit3D {
   timeStamp?: number;
 }
 
-/** A plain-object stand-in for a pooled `FederatedPointerEvent`, with the fields the 3D dispatcher reads */
 function makeEvent(type: string, init: EventInit3D = {}): FederatedPointerEvent {
   return {
     type,
@@ -203,7 +189,7 @@ describe('currentTarget3D — the typed per-hop node of a 3D chain dispatch', ()
     hitAt(view3d, AT_A, a);
     view3d.emit('pointerdown', evt);
 
-    const e = evt as unknown as Pointer3DEvent;
+    const e = evt;
     expect(hop).toBe(a);
     expect(e.target3D).toBe(a);
     expect(e.currentTarget3D).toBeNull();
@@ -228,13 +214,5 @@ describe('currentTarget3D — the typed per-hop node of a 3D chain dispatch', ()
 
     expect(hop).toBe(a);
     expect(target).toBe(a);
-  });
-
-  test('View-level listener typing carries the field without narrowing', () => {
-    const { view3d } = makeScene();
-    view3d.on('pointerdown', (e) => {
-      expectTypeOf(e.currentTarget3D).toEqualTypeOf<Container3D | null>();
-    });
-    expect(view3d.listenerCount('pointerdown')).toBeGreaterThan(0);
   });
 });

@@ -10,10 +10,6 @@ function expectVec3Close(actual: { x: number; y: number; z: number }, x: number,
   expect(actual.z).toBeCloseTo(z, 5);
 }
 
-/**
- * A parent at (1, 2, 3) holding a child at (4, 5, 6), before any transform pass, so both cached
- * world matrices are identity
- */
 function makeNested() {
   const parent = new Container3D();
   parent.position.set(1, 2, 3);

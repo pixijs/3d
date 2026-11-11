@@ -15,6 +15,20 @@ describe('Light options', () => {
     expect(spot.label).toBe('SpotLight');
   });
 
+  test('color takes any ColorSource and keeps its Color', () => {
+    const lamp = new PointLight({ color: 'red' });
+    const color = lamp.color;
+
+    lamp.color = 0x00ff00;
+    expect(lamp.color).toBe(color);
+    expect(lamp.color.toNumber()).toBe(0x00ff00);
+
+    lamp.color = '#0000ff';
+    expect(lamp.color.toNumber()).toBe(0x0000ff);
+
+    expect(new PointLight({}).color.toNumber()).toBe(0xffffff);
+  });
+
   test('glTF lights get light options only, and their label from the node', () => {
     const source = new Scene3DSource({
       scenes: [{ name: 'Scene', children: [0] }],
@@ -63,5 +77,12 @@ describe('Light options', () => {
     expect(spot).toBeInstanceOf(SpotLight);
     expect(spot.range).toBe(5);
     expect(spot.penumbra).toBe(0.2);
+  });
+
+  test('point and spot lights take a radius, 0.1 by default', () => {
+    expect(new PointLight().radius).toBe(0.1);
+    expect(new SpotLight().radius).toBe(0.1);
+    expect(new PointLight({ radius: 0.3 }).radius).toBe(0.3);
+    expect(new SpotLight({ radius: 0.4 }).radius).toBe(0.4);
   });
 });

@@ -1,9 +1,9 @@
 import { expectCleanRender, getApp } from '@test-utils';
 import { CanvasSource, Texture } from 'pixi.js';
-import type { Application, BindGroup, Renderer } from 'pixi.js';
+import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
-import { MAX_BATCH_TEXTURES } from '~/core/batcher/batchConstants';
+import { MERGE_THRESHOLD } from '~/core/batcher/batchConstants';
 import type { DrawCommandList } from '~/core/batcher/DrawCommandList';
 import type { Mesh3DBatch } from '~/core/batcher/Mesh3DBatch';
 import { getCameraData } from '~/core/CameraData';
@@ -24,7 +24,6 @@ import type { View3DGlobalData } from '~/scene/View3DGlobalData';
 
 const SIZE = 128;
 
-/** pixi keeps one GPU copy per renderer of a buffer or texture source, keyed by renderer uid. */
 interface GpuResident {
   _gpuData: Record<string, unknown>;
 }
@@ -37,11 +36,6 @@ function gpuCopyCount(...resources: (GpuResident | null | undefined)[]): number 
   return n;
 }
 
-/**
- * Everything a view's mesh stores and bone pit keep on the GPU. Each has a storage buffer
- * (what WebGPU binds) and a data texture (how WebGL reads it), both created on first read, so
- * a backend-agnostic assertion has to count whichever exist.
- */
 function storeResidency(view3d: View3D, batches: Mesh3DBatch[]): number {
   const stores = [view3d._bonePit, ...batches.map((batch) => batch.storeBuffer)];
 
@@ -57,45 +51,21 @@ function storeResidency(view3d: View3D, batches: Mesh3DBatch[]): number {
   );
 }
 
-/**
- * The GPU copies one cull result holds: its survivor records and its indirect draw args. Both are
- * `Buffer3D`s, exempt from pixi's GC, so nothing but an explicit unload ever frees them. Only WebGPU
- * culls into a result; on WebGL there is none, which counts as 0.
- */
 function resultResidency(result: CullResult | undefined): number {
   if (!result) return 0;
-  return gpuCopyCount(
-    result.survivors.buffer as unknown as GpuResident,
-    result.indirectDrawData.drawCallsBuffer as unknown as GpuResident,
-  );
+  return gpuCopyCount(result.survivors.buffer, result.indirectDrawData.drawCallsBuffer);
 }
 
-/** The resources a pass's recorded build bakes — the list's capture map, by membership and size. */
 function captures(list: DrawCommandList): Map<unknown, unknown> {
   return (list as unknown as { _captures: Map<unknown, unknown> })._captures;
 }
 
-/** The renderer's global data on the View, minted by the first `execute` that drew it. */
 function globalData(view3d: View3D, uid: number): View3DGlobalData {
   const data: View3DGlobalData | null = view3d._gpuData[uid] ?? null;
   expect(data).not.toBeNull();
-  return data!;
+  return data;
 }
 
-/** The distinct real sources the list's pooled texture bind groups still hold. */
-function boundSources(list: DrawCommandList): Set<unknown> {
-  const groups = (list as unknown as { _bindGroups: BindGroup[] })._bindGroups;
-  const bound = new Set<unknown>();
-  for (const bg of groups) {
-    for (let s = 0; s < MAX_BATCH_TEXTURES; s++) {
-      const resource = bg.getResource(s);
-      if (resource !== Texture.EMPTY.source) bound.add(resource);
-    }
-  }
-  return bound;
-}
-
-/** A collectable texture — pixi only auto-collects sources that opt in. */
 function makeCollectableTexture(color: string): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 4;
@@ -108,7 +78,6 @@ function makeCollectableTexture(color: string): Texture {
   return texture;
 }
 
-/** A skinned quad with `jointCount` joints, so the scene fills the bone pit and its WebGL data texture. */
 function skinnedMesh(jointCount = 1): Mesh3D {
   const geometry = new Geometry3D({
     positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]),
@@ -138,16 +107,10 @@ function skinnedMesh(jointCount = 1): Mesh3D {
   return mesh;
 }
 
-/** The one shadow-pass internal these tests assert against. */
 interface ShadowPassProbe {
   _renderTarget: unknown;
 }
 
-/**
- * Pushes the mesh store past its 100-slot capacity and the bone pit past its 256-bone one, so
- * growth retires something for the unload to free. Each backend only made the view it binds:
- * WebGPU retires buffers, and WebGL the store's texture.
- */
 function growStores(view3d: View3D): void {
   const geometry = new CubeGeometry({ width: 0.2, height: 0.2, depth: 0.2 });
   const material = new Material3D({ baseColor: 0x333333 });
@@ -169,10 +132,6 @@ interface Scene {
   textured: Mesh3D;
 }
 
-/**
- * A view holding one of everything the unload has to give back: a captured batch texture,
- * a self-owned (non-atlased) geometry, bone-pit content, a user batch, and a shadow caster.
- */
 function buildScene(app: Application<Renderer>): Scene {
   const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
   app.stage.addChild(view3d);
@@ -209,7 +168,7 @@ function buildScene(app: Application<Renderer>): Scene {
   batched.setGeometryAt(0, new CubeGeometry({ width: 1, height: 1, depth: 1 }));
   batched.setMaterialAt(0, new Material3D({ baseColor: 0xdd4444, metallic: 0, roughness: 0.5 }));
   batched.setMatrixAt(0, new Matrix4());
-  batched.setItemActive(0, RenderPassBit.OPAQUE);
+  batched.setPassesAt(0, RenderPassBit.OPAQUE);
   batched.position.set(0, 1.8, 2);
   view3d.root.addChild(batched);
 
@@ -229,7 +188,6 @@ function pixels(app: Application<Renderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -254,15 +212,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     }
 
-    /**
-     * Asserts that pixi's GC hash destroyed this renderer's global data: the bind group's slots are
-     * gone, then the uniform buffer it bound. Only WebGPU realises that buffer (the WebGL group
-     * syncs through `uniform*` calls and never owns one), so on WebGL there is no buffer to free.
-     */
     function expectDestroyed(data: View3DGlobalData): void {
       expect(data.globalBindGroup.resources).toBeNull();
       const buffer = data.globalUniformGroup.buffer;
-      expect(buffer ? buffer.destroyed : preference === 'webgl').toBe(true);
+      expect(buffer?.destroyed).toBe(true);
     }
 
     it('frees the GPU copies of the stores the view owns', async () => {
@@ -278,45 +231,92 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('renders the same frame again after an unload', async () => {
-      await withApp('view-unload-revive', async (app) => {
-        const { view3d, sun } = buildScene(app);
-
-        sun.refreshShadows();
-        app.render();
-        const before = pixels(app, view3d);
-        expect(before.some((channel) => channel > 0)).toBe(true);
-
-        view3d.unload();
-
-        await expectCleanRender(app);
-        expect(differingPixels(before, pixels(app, view3d))).toBe(0);
-      });
-    });
-
-    it('drops the captures its builds took and empties the bind groups that held their textures', async () => {
+    it('drops the captures its builds took, with the textures bound through the materials’ groups', async () => {
       await withApp('view-unload-captures', (app) => {
-        const { view3d, texture, dynamicGeometry, batched } = buildScene(app);
-        app.render();
+        const { view3d, texture, textured, dynamicGeometry, batched } = buildScene(app);
         const opaque = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE].commandList;
         const shadow = view3d._sceneBatch.drawLists[RenderPassBit.SHADOW].commandList;
         const batchedOpaque = batched.batch.drawLists[RenderPassBit.OPAQUE].commandList;
         const buffers = dynamicGeometry.buffers;
 
-        expect(captures(opaque).has(texture.source)).toBe(true);
-        expect(boundSources(opaque).has(texture.source)).toBe(true);
+        expect(captures(opaque).has(texture.source), 'the list captures what the material binds').toBe(true);
+        const materialGroup =
+          preference === 'webgl' ? textured.material._getMergedBindGroup() : textured.material._getBindGroup();
+        const commands = opaque.commands.slice(0, opaque.count);
+        expect(commands.some((cmd) => cmd.batchBindGroup === materialGroup)).toBe(true);
         expect(buffers.map((b) => captures(opaque).has(b))).toEqual(buffers.map(() => true));
         expect(buffers.map((b) => captures(shadow).has(b))).toEqual(buffers.map(() => true));
 
         view3d.unload();
 
-        for (const list of [opaque, shadow, batchedOpaque]) {
-          expect(captures(list).size).toBe(0);
-          expect(boundSources(list).size).toBe(0);
-        }
+        for (const list of [opaque, shadow, batchedOpaque]) expect(captures(list).size).toBe(0);
         buffers.forEach((b) => b.unload());
         texture.source.unload();
         expect(opaque.count).toBe(0);
+      });
+    });
+
+    it('drops a merged run’s captures and commands, and draws the run merged again afterwards', async () => {
+      await withApp('view-unload-merged', async (app) => {
+        const { view3d, sun } = buildScene(app);
+        const geometry = new CubeGeometry({ width: 0.4, height: 0.4, depth: 0.4 });
+        const texture = makeCollectableTexture('#3388ff');
+        const meshes = Array.from({ length: MERGE_THRESHOLD + 1 }, (_, i) => {
+          const mesh = new Mesh3D({
+            geometry,
+            material: new Material3D({ baseColorTexture: texture, metallic: 0, roughness: i / MERGE_THRESHOLD }),
+          });
+          mesh.position.set(i - 3, 3, 0);
+          view3d.root.addChild(mesh);
+          return mesh;
+        });
+        app.render();
+        const bit = RenderPassBit.OPAQUE;
+        const opaque = view3d._sceneBatch.drawLists[bit].commandList;
+        expect(opaque.count, 'added after the first build, the run draws from tail commands').toBeGreaterThan(
+          opaque.bodyCount,
+        );
+        view3d._sceneBatch.invalidateDrawCaches();
+        sun.refreshShadows();
+        app.render();
+        expect(opaque.count, 'until a rebuild, as a scene built before its first frame gets').toBe(opaque.bodyCount);
+
+        const commands = opaque.commands.slice(0, opaque.count);
+        const bound = meshes.find((mesh) =>
+          commands.some((cmd) => cmd.batchBindGroup === mesh.material._getMergedBindGroup()),
+        );
+        expect(bound, 'the run draws merged, bound to one of its materials’ merged groups').toBeDefined();
+        const mergedShader =
+          preference === 'webgl' ? bound!._passCache[bit].shader : bound!._passCache[bit].mergedShader;
+        expect(mergedShader).not.toBeNull();
+        expect(commands.some((cmd) => cmd.shader === mergedShader)).toBe(true);
+        expect(captures(opaque).has(texture.source), 'the list captures what the merged draw binds').toBe(true);
+        const before = pixels(app, view3d);
+
+        view3d.unload();
+
+        expect(captures(opaque).size).toBe(0);
+        expect(opaque.count).toBe(0);
+        texture.source.unload();
+
+        await expectCleanRender(app);
+        expect(differingPixels(before, pixels(app, view3d))).toBe(0);
+        const rebuilt = opaque.commands.slice(0, opaque.count);
+        const group = bound!.material._getMergedBindGroup();
+        expect(group.resources, 'the merged group is the material’s, and it is still live').not.toBeNull();
+        expect(
+          rebuilt.some((cmd) => cmd.batchBindGroup === group),
+          'the run draws merged again',
+        ).toBe(true);
+        expect(
+          rebuilt.some(
+            (cmd) =>
+              cmd.shader ===
+              (preference === 'webgl' ? bound!._passCache[bit].shader : bound!._passCache[bit].mergedShader),
+          ),
+          'the merged shader comes back from the renderer’s cache',
+        ).toBe(true);
+        expect(captures(opaque).has(texture.source)).toBe(true);
       });
     });
 
@@ -339,7 +339,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         expect(pass._renderTarget).toBeNull();
         expect(opaque.commandList.count).toBe(0);
-        expect(opaque.isDrawStale(opaque.view.count)).toBe(true);
+        expect(opaque.isDrawStale()).toBe(true);
         expect(result?.bundle ?? null).toBeNull();
         expect(result?.isBundleStale(opaque, getCameraData(view3d.camera).bindGroup) ?? true).toBe(true);
         expect(resultResidency(result)).toBe(0);
@@ -348,13 +348,14 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         app.render();
         const reminted = globalData(view3d, uid);
-        expect(reminted, 'the next render mints new global data instead of reviving the old').not.toBe(data);
-        expect(reminted.globalBindGroup.resources).not.toBeNull();
+        expect(reminted, 'the next render makes new global data').not.toBe(data);
+        expect(view3d._gpuData[uid]).toBe(reminted);
         expect(reminted.globalUniformGroup.buffer?.destroyed ?? false).toBe(false);
 
-        const revived = forward.cullResults.get(view3d._sceneBatch);
-        expect(revived, 'the pass keeps its cull result and refills the same buffers').toBe(result);
-        expect(resultResidency(revived)).toBe(result ? 2 : 0);
+        const revivedPass = view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass;
+        const revived = revivedPass.cullResults.get(view3d._sceneBatch);
+        expect(revived === undefined).toBe(preference !== 'webgpu');
+        expect(resultResidency(revived)).toBe(revived ? 2 : 0);
       });
     });
 
@@ -433,7 +434,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('emits one `unload` event, which frees the global data and its GC listener', async () => {
+    it('emits one `unload` event, which unloads the global data and frees its GC listener', async () => {
       await withApp('view-unload-event', (app) => {
         const { view3d } = buildScene(app);
         const uid = app.renderer.uid;
@@ -452,7 +453,8 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(view3d.listenerCount('unload')).toBe(0);
 
         app.render();
-        expect(globalData(view3d, uid)).not.toBe(data);
+        expect(globalData(view3d, uid), 'the next render makes new global data').not.toBe(data);
+        expect(view3d._gpuData[uid] ?? null, 'the GC slot is filled again').not.toBe(null);
         expect(view3d.listenerCount('unload'), 'the next render re-enrols the view').toBe(1);
       });
     });

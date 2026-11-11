@@ -16,8 +16,6 @@ import type { PointData3D } from '../vector/PointData3D';
  *   stairs[i].position.setFromCylindrical(step);
  * }
  * ```
- * @see {@link Vector3#setFromCylindrical} For converting back to Cartesian
- * @see {@link Spherical} For spherical coordinates
  * @category maths
  * @standard
  */
@@ -147,8 +145,6 @@ export class Cylindrical {
 
   /**
    * Sets this instance from the Cartesian point `v`
-   *
-   * Equivalent to `setFromCartesianCoords(v.x, v.y, v.z)`.
    * @example
    * ```ts
    * const around = new Cylindrical().setFromPoint3D(player.position);

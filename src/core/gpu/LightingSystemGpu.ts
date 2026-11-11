@@ -11,18 +11,7 @@ import type { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderP
 import { writeHemisphere } from '../writeHemisphere';
 import { getGlobalGpuData } from './shader/globalBitGpu';
 
-/**
- * Packs a view's lights into its global uniforms each frame, and has the view's shadow pass
- * prepare the shadow of each light that casts one
- *
- * Per frame, packs into the global uniform group:
- *   - Per-light data (directional / point / spot) into `view3d._lightDataList`, whose array is the `uLightData` uniform.
- *   - Ambient summed from any `AmbientLight` instances.
- *   - Hemisphere uniforms when `view3d.environment` is a hemisphere.
- *
- * Registered as a WebGPU renderer system (`renderer.lighting3d`).
- * @internal
- */
+/** @internal */
 export class LightingSystemGpu {
   /** @ignore */
   public static extension = {
@@ -36,17 +25,7 @@ export class LightingSystemGpu {
     this._renderer = renderer;
   }
 
-  /**
-   * Pack this frame's light + shadow data into the view's global uniforms
-   *
-   * The shadow pass's `beginFrame` runs first, every frame, even when the pass is culled. Hidden
-   * lights are skipped, ambient lights add to `uGlobalLightParams`, and every other light, up to
-   * `MAX_LIGHTS`, has its shadow prepared and is packed into the light list. The hemisphere
-   * members are written only while the environment is a hemisphere; `uHemisphereSky` says why
-   * that is safe.
-   * @param view3d - The view whose global uniforms receive the packed data.
-   * @param lights - The view's collected lights, in render order.
-   */
+  /** Calls the shadow pass's `beginFrame` first, every frame, even when the pass is culled */
   public update(view3d: View3D, lights: Light[]): void {
     const shadowPass = view3d.passByBit[RenderPassBit.SHADOW] as ShadowRenderPassBase | undefined;
 
@@ -101,7 +80,7 @@ export class LightingSystemGpu {
 declare global {
   namespace PixiMixins {
     interface WebGPUSystems {
-      /** Per-frame light/shadow data packing for 3D scenes */
+      /** Packs each 3D view's lights and shadows for its shaders, on every frame the view draws */
       lighting3d: LightingSystemGpu;
     }
   }

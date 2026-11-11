@@ -8,20 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// A cube and a sphere, built so their geometry uids sit exactly 0x1000 apart.
-//
-// That gap is what a batch key folding the uid into 12 bits collapses to nothing: the two
-// meshes compare equal, the batcher merges them into a single draw, and the second renders
-// from the first's index range — a second *cube* where the sphere should be. They share an
-// attribute layout (so one atlas, one pipeline) and one material, which leaves the batch
-// key as the only thing separating them.
-//
-// Uids are handed out in order and never recycled, so this is reachable by any session
-// creating enough geometry; burning uids just makes it land on the first two meshes.
-//
-// WebGPU is the backend at risk — it is the one that breaks batches on the packed key. The
-// WebGL batcher compares the full geometry uid and the shader by reference, so it never
-// fused these; it renders here as the second pair of eyes on the same scene.
 const UID_GAP = 0x1000;
 
 export const scene: TestScene = {

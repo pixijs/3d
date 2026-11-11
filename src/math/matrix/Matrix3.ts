@@ -22,7 +22,6 @@ import type { Matrix4 } from './Matrix4';
  * const normalMatrix = new Matrix3().getNormalMatrix(mesh.worldTransform);
  * const uniforms = new UniformGroup({ uNormalMatrix: { value: normalMatrix, type: 'mat3x3<f32>' } });
  * ```
- * @see {@link Matrix4} For the 4x4 counterpart
  * @category maths
  * @standard
  */
@@ -77,16 +76,14 @@ export class Matrix3 {
 
   /**
    * Creates a new `Matrix3`, defaulting to the identity matrix
-   * @param elements - Optional column-major 9-element backing array; kept, not copied
+   * @param elements - Optional column-major backing array of 9 floats, used as is rather than copied
    */
   constructor(elements?: TypedFixedArray<9>) {
     this.elements = elements || (new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]) as TypedFixedArray<9>);
   }
 
   /**
-   * Sets the 9 elements from row-major arguments (`nRC` = row R, column C)
-   *
-   * The arguments read like the matrix written out on paper; they are stored column by column.
+   * Sets the 9 elements from arguments given row by row, as the matrix is written on paper
    * @example
    * ```ts
    * const skew = new Matrix3().set(
@@ -221,7 +218,7 @@ export class Matrix3 {
   }
 
   /**
-   * Checks whether all 9 elements of this matrix match `m` exactly (no epsilon tolerance)
+   * Checks whether all 9 elements of this matrix match `m` exactly, with no tolerance
    * @example
    * ```ts
    * if (!uvTransform.equals(previousUvTransform)) material.update();
@@ -298,14 +295,14 @@ export class Matrix3 {
   /**
    * Writes this matrix's elements into a Float32Array
    *
-   * Without `out`, writes into and returns {@link Matrix3#array}, allocated on the first call.
+   * Without `out`, writes into and returns {@link Matrix3#array}.
    * @example
    * ```ts
    * const rowMajor = new Float32Array(9);
    *
    * uvTransform.toArray(true, rowMajor);
    * ```
-   * @param transpose - When `true`, writes row-major; default writes column-major (matching {@link Matrix3#elements})
+   * @param transpose - `true` writes row-major instead of column-major
    * @param out - Optional destination array
    * @returns The populated array
    */
@@ -443,7 +440,7 @@ export class Matrix3 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix3#multiplyMatrices}: this matrix becomes `a * b`
+   * Alias for {@link Matrix3#multiplyMatrices}: this matrix becomes `a * b`
    * @example
    * ```ts
    * atlasUv.appendFrom(frameTransform, tileTransform);
@@ -524,14 +521,14 @@ export class Matrix3 {
   /**
    * Sets this matrix to the inverse of `m`
    *
-   * When `m` is non-invertible (determinant is 0) the matrix is reset to identity. By default this
-   * also logs a warning; pass `throwOnDegenerate = true` to throw instead.
+   * When `m` can't be inverted (its determinant is 0), the result is the identity and a warning is
+   * logged.
    * @example
    * ```ts
    * const screenToUv = new Matrix3().getInverse(uvToScreen);
    * ```
    * @param m - Matrix to invert
-   * @param throwOnDegenerate - When `true`, throws on a non-invertible matrix instead of warning
+   * @param throwOnDegenerate - `true` throws instead of warning when `m` can't be inverted
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
    */
@@ -748,8 +745,8 @@ export class Matrix3 {
    * 3x3 block
    *
    * Normals transformed by it stay at right angles to the surface when the model has non-uniform
-   * scale; renormalize them after. A matrix with zero scale on an axis can't be inverted, so the
-   * result is identity and a warning is logged.
+   * scale; renormalize them after. A matrix with zero scale on an axis gives the identity and logs
+   * a warning.
    * @example
    * ```ts
    * const normalMatrix = new Matrix3().getNormalMatrix(mesh.worldTransform);

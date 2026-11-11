@@ -11,13 +11,8 @@ import { View3D } from '~/scene/View3D';
 
 const VERTS = 400;
 
-/**
- * The geometry-row lane caching `baseVertex`, which the morph bits subtract from the atlas-wide
- * vertex id; a stale one deforms the surface from the wrong vertices
- */
 const BASE_VERTEX_LANE = 6;
 
-/** A strip of `VERTS` vertices — positions + normals + indices, so plain and morphed share an atlas. */
 function makeGeometry(morphed: boolean): Geometry3D {
   const positions = new Float32Array(VERTS * 3);
   const normals = new Float32Array(VERTS * 3);
@@ -53,7 +48,6 @@ describe('morph geometry rows across an atlas compaction, which moves baseVertex
 
       const pipe = getPipe(app);
 
-      /** Packed first, so the morphed geometry lands above it and a later compaction can slide it down */
       const filler = makeGeometry(false);
       pipe.atlasPool.allocate(filler);
 
@@ -73,7 +67,6 @@ describe('morph geometry rows across an atlas compaction, which moves baseVertex
       expect(geomStore.u32Data[rowBase + BASE_VERTEX_LANE]).toBe(VERTS);
 
       filler.destroy();
-      /** Past the high watermark, but the live set still fits, so the pool compacts instead of growing */
       const pastHighWatermark = makeGeometry(false);
       pipe.atlasPool.allocate(pastHighWatermark);
 

@@ -6,19 +6,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Clearcoat and sheen in a view with no environment
- *
- * With no environment the PBR shader is composed without its IBL block and the BRDF lookup is
- * never made, yet the coat still fetches it: from the slot's placeholder, multiplied by zero
- * radiance. What is left in the picture is each layer's response to the light: the coat's
- * highlight and the dimming of the base under it, and the sheen's soft rim. The coat is rough on
- * purpose: its highlight has to cover more pixels than a scene is allowed to differ by, or
- * losing it would go unnoticed.
- *
- * Left to right: a bare dielectric, the same with a clearcoat, the same with sheen, and one
- * carrying both.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x101216,

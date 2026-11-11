@@ -1,7 +1,7 @@
 import type { Texture } from 'pixi.js';
 
 import { BaseMaterial3D } from '../../../materials/BaseMaterial3D';
-import type { BaseMaterial3DOptions } from '../../../materials/BaseMaterial3D';
+import type { BaseMaterial3DOptions, ColorSpace } from '../../../materials/BaseMaterial3D';
 import type { MaterialData } from '../../../materials/utils/createMaterialDataClass';
 import type { MaterialTextures } from '../../../materials/utils/createMaterialTexturesClass';
 import { portalBit } from './portalBit';
@@ -20,13 +20,19 @@ import { portalBit } from './portalBit';
  */
 export interface PortalMaterialOptions extends BaseMaterial3DOptions {
   /**
-   * The feed this portal shows, a render texture the size of the view
+   * The feed the portal shows, a render texture the size of the view
    *
-   * Swap it later through `material.textures.portal`. Left out, the slot starts on
-   * `Texture.WHITE` and the quad reads as a flat white panel until a feed arrives.
+   * Another aspect ratio stretches the far side, and matching the view's pixel size keeps it sharp.
+   * In a view with a `'beforeToneMapping'` effect, give it an `rgba16float` format; see
+   * {@link PortalPass}. The feed's alpha is ignored. Left out, the portal shows plain `baseColor`
+   * until you set `material.textures.portal`.
    * @example
    * ```ts
-   * const feed = RenderTexture.create({ width: view3d.width, height: view3d.height });
+   * const feed = RenderTexture.create({
+   *   width: view3d.width,
+   *   height: view3d.height,
+   *   format: 'rgba16float',
+   * });
    * const material = new PortalMaterial({ texture: feed });
    * ```
    */
@@ -34,12 +40,12 @@ export interface PortalMaterialOptions extends BaseMaterial3DOptions {
 }
 
 /**
- * The packed data shape {@link portalBit} produces
+ * The fields of {@link PortalMaterial#data}
  * @category extras:materials
  * @advanced
  */
 export interface PortalData extends MaterialData {
-  /** Tint applied to the feed, linear RGBA; the alpha lane is the opening's own opacity */
+  /** The feed's tint in linear light, opacity in the last lane; set it with the material's `baseColor` and `alpha` */
   baseColor: Float32Array;
 }
 
@@ -69,22 +75,25 @@ export interface PortalMaterialTextures extends MaterialTextures {
 /**
  * Unlit surface that shows a render-texture feed at the viewer's own screen position
  *
- * The quad reads as an opening rather than a picture. Each fragment samples the feed where it
- * sits on screen, so the far side stays put as the viewer moves and lines up with the frame. Pair
- * it with a {@link PortalPass}, which renders the feed from a camera mirrored through the portal
- * pair. The material needs nothing from that pass but a texture, so a planar mirror's feed works
- * just as well.
+ * Each fragment samples the feed where it sits on screen, so the far side holds still as the
+ * viewer moves and the quad reads as an opening rather than a picture. Pair it with a
+ * {@link PortalPass}, which draws the feed from behind the exit portal. The material needs nothing
+ * from that pass but the texture, so a planar mirror's feed works too.
  *
- * It skips lighting and tone mapping, because the feed is a finished frame that the view already
- * lit and tone-mapped. It is single-sided on purpose: a portal is only an opening from the side
- * it faces, and back-face culling enforces that.
+ * The feed shows as the view drew it: unlit, and not tone mapped a second time as long as its
+ * format suits the view (see {@link PortalMaterialOptions#texture}). The view's `exposure` still
+ * scales it, on top of the exposure in the feed. A portal is an opening only from the side it
+ * faces, so leave `doubleSided` off.
  *
- * It draws the right way up on the canvas on both backends. One known gap: a View3D drawn into a
- * render texture on WebGL (inside a pixi filter, or `renderer.extract`) shows the far side upside
- * down. {@link portalBit} explains why.
+ * On WebGL, a View3D drawn into a render texture, inside a pixi filter or by `renderer.extract`,
+ * shows the far side upside down.
  * @example
  * ```ts
- * const feed = RenderTexture.create({ width: view3d.width, height: view3d.height });
+ * const feed = RenderTexture.create({
+ *   width: view3d.width,
+ *   height: view3d.height,
+ *   format: 'rgba16float',
+ * });
  * const entry = new Mesh3D({
  *   geometry: new PlaneGeometry({ width: 3, height: 4 }),
  *   material: new PortalMaterial({ texture: feed }),
@@ -92,20 +101,21 @@ export interface PortalMaterialTextures extends MaterialTextures {
  *
  * view3d.passes = [new PortalPass({ entry, exit, texture: feed })];
  * ```
- * @see {@link portalBit} For the screen-position sampling and its per-backend Y handling.
  * @category extras:materials
  * @standard
  */
-export class PortalMaterial extends BaseMaterial3D<PortalData, PortalMaterialTextures> {
-  /**
-   * Off, because the feed already went through the view's tone curve and a second pass would
-   * crush its highlights
-   * @advanced
-   */
-  public override toneMapped = false;
+export class PortalMaterial extends BaseMaterial3D<PortalData, PortalMaterialTextures, PortalMaterialOptions> {
+  /** @internal */
+  public override _skipsToneCurve = true;
 
   /**
-   * Off, because the surface is a window onto a frame that is already lit
+   * `'display'`: the portal only multiplies its feed by its tint, so it can skip the decode and encode
+   * @advanced
+   */
+  public override colorSpace: ColorSpace = 'display';
+
+  /**
+   * `false`: the feed is a frame the view has already lit
    * @advanced
    */
   public override lit = false;
@@ -116,5 +126,13 @@ export class PortalMaterial extends BaseMaterial3D<PortalData, PortalMaterialTex
       descriptor: { bitsGpu: [portalBit], bitsGl: [portalBit] },
       textures: { portal: options.texture, ...options.textures },
     });
+  }
+
+  /**
+   * The base options plus the feed texture
+   * @advanced
+   */
+  protected override _toOptions(): PortalMaterialOptions {
+    return { ...super._toOptions(), texture: this.textures.portal };
   }
 }

@@ -1,15 +1,6 @@
 import type { ShaderBit } from '../../ShaderBit';
 
-/**
- * Exponential-squared distance fog, `factor = 1 - exp(-(density * depth)²)`
- *
- * `depth` is the fragment's view-space depth and `density` is `uFogParams.z`. Squaring keeps the
- * fog thinner than `exponentialFogBit`'s while `density * depth` is below 1 and thicker past it,
- * so the camera's surroundings stay clear and the distance fades out.
- *
- * It runs after exposure and before tone mapping, as `linearFogBit` describes.
- * @internal
- */
+/** @internal */
 export const exp2FogBit: ShaderBit = {
   name: 'exp2Fog',
 

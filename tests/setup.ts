@@ -2,8 +2,16 @@
 // pipes/systems, applies the events mixins, installs the uniform parsers.
 // Without it, tests that deep-import `~/...` modules miss those side effects.
 import '../src/index';
-import { GlobalResourceRegistry } from 'pixi.js';
+import { GlobalResourceRegistry, setKTXTranscoderPath } from 'pixi.js';
 import { beforeAll } from 'vitest';
+
+// The tests load pixi's KTX2 transcoder from the local install, not the unpinned jsDelivr URL pixi
+// defaults to. pixi reads the paths once, when it first creates its KTX2 worker, and resolves them
+// against the page's origin.
+setKTXTranscoderPath({
+  jsUrl: '/node_modules/pixi.js/transcoders/ktx/libktx.js',
+  wasmUrl: '/node_modules/pixi.js/transcoders/ktx/libktx.wasm',
+});
 
 // Test files share a long-lived iframe (`isolate: false` in vitest.config.ts),
 // so module state persists across files. Start every file from a fresh world

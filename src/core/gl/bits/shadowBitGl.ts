@@ -6,21 +6,10 @@ import { SHADOW_TAPS } from '../../shader/bits/shadowTaps';
 import type { ShadowTap } from '../../shader/bits/shadowTaps';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
-/**
- * Format a tap-offset component as a GLSL float literal
- * @param n - Tap-offset component, in texels
- */
 function fmt(n: number): string {
   return Number.isInteger(n) ? `${n}.0` : `${n}`;
 }
 
-/**
- * Emit the PCF sampling body for a tap set (offsets in texel units)
- *
- * The comparison sampler (`sampler2DArrayShadow`) does the depth test per tap, and the results
- * are averaged. A single centre tap, as for `'hard'`, returns its one test.
- * @param taps - The filter's tap offsets, in texels
- */
 function pcfBody(taps: readonly ShadowTap[]): string {
   const spread = taps.some(([x, y]) => x !== 0 || y !== 0);
   const tap = ([x, y]: ShadowTap): string =>
@@ -41,18 +30,8 @@ function pcfBody(taps: readonly ShadowTap[]): string {
 }
 
 /**
- * Shadow mapping for WebGL using PCF (Percentage Closer Filtering), the GLSL twin of
- * `createShadowBitGpu`, which documents the algorithm: the slot layout, the normal-offset taper,
- * the cascade pick and the blend between cascades
- *
- * What differs on WebGL:
- *
- * - Light-space depth is in [-1, 1], because `ShadowRenderPassGl` keeps GL's native clip range, so
- *   the sampler maps it to the [0, 1] the depth texture holds. GL textures and clip space both put
- *   `y` up, so unlike WebGPU there's no flip.
- * - `calculateShadow` takes the whole `Light`. The WebGPU twin passes two of its fields instead, to
- *   avoid a driver bug seen with storage-buffer structs.
- * @param filter - The shadow filter whose PCF kernel the bit samples
+ * The GLSL twin of `createShadowBitGpu`. Light-space depth is in [-1, 1], since `ShadowRenderPassGl` keeps GL's
+ * clip range, so it maps to [0, 1]; GL's texture and clip `y` agree, so unlike WebGPU there's no flip.
  */
 function createShadowBitGl(filter: ShadowFilter): ShaderBit {
   return {
@@ -153,10 +132,7 @@ ${pcfBody(SHADOW_TAPS[filter])}
   };
 }
 
-/**
- * WebGL shadow sampler bits keyed by filter; `MaterialSystemGl` picks one by `View3D.shadowFilter`
- * @internal
- */
+/** @internal */
 export const shadowBitsGl: Record<ShadowFilter, ShaderBit> = {
   hard: createShadowBitGl('hard'),
   pcf: createShadowBitGl('pcf'),

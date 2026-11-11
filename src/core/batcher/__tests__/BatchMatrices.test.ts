@@ -8,7 +8,6 @@ import { Vector3 } from '~/math/vector/Vector3';
 
 const SIZE = 6;
 
-/** A distinct affine matrix per slot, varying rotation, non-uniform scale and translation */
 const matrixFor = (i: number, out = new Matrix4()) =>
   out.compose(
     new Vector3(i * 1.5 - 3, i * -0.25, i * i),
@@ -16,11 +15,9 @@ const matrixFor = (i: number, out = new Matrix4()) =>
     new Vector3(1 + i * 0.1, 2, 0.5 + i),
   );
 
-/** Every lane of every store row, the batch matrix row included, as raw bits */
 const storeBits = (batch: Mesh3DBatch) =>
   Array.from(batch.storeBuffer.u32Data.subarray(0, (SIZE + 1) * MESH3D_STORE_STRIDE));
 
-/** A batch written one slot at a time through `setMatrixAt`, which the bulk route must match bit for bit */
 const writtenPerSlot = (pairs: [slot: number, source: number][]) => {
   const batch = new Mesh3DBatch({ size: SIZE });
   const matrix = new Matrix4();
@@ -28,7 +25,7 @@ const writtenPerSlot = (pairs: [slot: number, source: number][]) => {
   return batch;
 };
 
-type DirtyRange = { _minDirty: number; _maxDirty: number; update(): void };
+type DirtyRange = { _dirty: { min: number; max: number }; update(): void };
 
 describe('BatchMatrices', () => {
   it('releases a retained matrix handle when the batch is destroyed', () => {
@@ -58,13 +55,13 @@ describe('BatchMatrices', () => {
       const batch = new Mesh3DBatch({ size: SIZE });
       const store = batch.storeBuffer as unknown as DirtyRange;
       store.update();
-      expect(store._minDirty, "the allocation's own dirty range is flushed").toBeGreaterThan(store._maxDirty);
+      expect(store._dirty.min, "the allocation's own dirty range is flushed").toBeGreaterThan(store._dirty.max);
 
       batch.matrices.update(2, 3);
 
       const firstRow = batch.matrices.offset / batch.matrices.stride;
-      expect(store._minDirty).toBe(firstRow + 2);
-      expect(store._maxDirty).toBe(firstRow + 4);
+      expect(store._dirty.min).toBe(firstRow + 2);
+      expect(store._dirty.max).toBe(firstRow + 4);
     });
 
     it('defaults to every slot from `first` on', () => {
@@ -75,8 +72,8 @@ describe('BatchMatrices', () => {
       batch.matrices.update(4);
 
       const firstRow = batch.matrices.offset / batch.matrices.stride;
-      expect(store._minDirty).toBe(firstRow + 4);
-      expect(store._maxDirty).toBe(firstRow + SIZE - 1);
+      expect(store._dirty.min).toBe(firstRow + 4);
+      expect(store._dirty.max).toBe(firstRow + SIZE - 1);
     });
 
     it('throws when the run does not fit the batch', () => {

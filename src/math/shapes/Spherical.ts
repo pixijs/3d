@@ -18,8 +18,6 @@ import type { PointData3D } from '../vector/PointData3D';
  * camera.position.setFromSpherical(orbit);
  * camera.lookAt({ x: 0, y: 0, z: 0 });
  * ```
- * @see {@link Vector3#setFromSpherical} For converting back to Cartesian
- * @see {@link Cylindrical} For cylindrical coordinates
  * @category maths
  * @standard
  */
@@ -151,8 +149,8 @@ export class Spherical {
   /**
    * Keeps `phi` a millionth of a radian away from both poles
    *
-   * A camera that looks at its target with +Y as up has no sideways direction exactly at a pole,
-   * so it flips there. Call this after changing `phi` and before converting back.
+   * A camera that looks at its target with +Y up flips at a pole, so call this after changing
+   * `phi` and before converting back.
    * @example
    * ```ts
    * orbit.phi -= pointerDeltaY * 0.01;
@@ -169,8 +167,6 @@ export class Spherical {
 
   /**
    * Sets this spherical from the Cartesian point `v`
-   *
-   * Equivalent to `setFromCartesianCoords(v.x, v.y, v.z)`.
    * @example
    * ```ts
    * const orbit = new Spherical().setFromPoint3D(camera.position);

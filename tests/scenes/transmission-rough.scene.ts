@@ -8,14 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * A rough (frosted) transmissive cube in an inset {@link View3D}. The inset
- * makes the shared opaque-colour copy a power-of-two bucket larger than the
- * viewport (content in a sub-rect), and the high roughness drives a non-zero
- * mip LOD — so this exercises the roughness blur reading the pooled texture's
- * mip chain and the LOD-aware clamp that keeps the blurred tap off the padding.
- * Companion to `transmission-inset` (smooth glass, the scale≠1 oracle).
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x10202a,
@@ -47,8 +39,6 @@ export const scene: TestScene = {
     keyLight.lookAt({ x: 0, y: 0, z: 0 });
     view3d.root.addChild(keyLight);
 
-    // Frosted glass: high roughness so transmission samples a blurred mip of
-    // the pooled opaque copy.
     const cube = new Mesh3D({
       geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
       material: new Material3D({

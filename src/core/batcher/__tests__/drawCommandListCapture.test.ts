@@ -1,10 +1,8 @@
-import { Buffer, BufferUsage, Geometry, Texture, TextureSource } from 'pixi.js';
+import { Buffer, BufferUsage, Geometry, Texture, TextureSource, TextureStyle } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { MAX_BATCH_TEXTURES } from '~/core/batcher/batchConstants';
 import { DrawCommandList } from '~/core/batcher/DrawCommandList';
-import { Buffer3D } from '~/core/buffers/Buffer3D';
-import { Geometry3D } from '~/geometry/Geometry3D';
+import type { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 
 const VERTEX = BufferUsage.VERTEX | BufferUsage.COPY_DST;
 
@@ -16,105 +14,77 @@ function makeGeometry(buffer: Buffer = new Buffer({ data: new Float32Array(9), u
   return new Geometry({ attributes: { aPosition: { buffer, format: 'float32x3' } } });
 }
 
-/** The list's capture map, reached for its size and membership. */
 function captures(list: DrawCommandList): Map<unknown, unknown> {
   return (list as unknown as { _captures: Map<unknown, unknown> })._captures;
 }
 
+function materialOf(...textures: Texture[]): BaseMaterial3D {
+  return { _textures: textures, _refreshTextureBindings: () => {} } as unknown as BaseMaterial3D;
+}
+
 describe('DrawCommandList captures', () => {
-  it('captures a batch texture with one change listener and stamps it on touch', () => {
+  it('captures a material’s own textures, skipping the shared defaults, and sweeps them like any capture', () => {
     const list = new DrawCommandList();
+    const onCaptureLost = vi.fn<() => void>();
+    list.onCaptureLost = onCaptureLost;
     const source = makeSource();
     const listeners = source.listenerCount('change');
+    const styleListeners = source.listenerCount('styleChange');
+    const material = materialOf(new Texture({ source }), Texture.WHITE, Texture.EMPTY);
 
-    const bg = list.nextBatchBindGroup([source], 1);
+    list.captureMaterialTextures(material);
     list.endBuild();
 
-    expect(bg.getResource(0)).toBe(source);
-    expect(bg.getResource(MAX_BATCH_TEXTURES - 1), 'unused slots hold the empty texture').toBe(Texture.EMPTY.source);
-    expect(source.listenerCount('change'), "one from the list, one from the bind group's slot").toBe(listeners + 2);
     expect(captures(list).has(source)).toBe(true);
+    expect(source.listenerCount('styleChange'), 'and watches its style through it').toBe(styleListeners + 1);
+    expect(captures(list).size, 'Texture.WHITE and Texture.EMPTY are never captured').toBe(1);
+    expect(source.listenerCount('change')).toBe(listeners + 1);
 
     source._gcLastUsed = 5;
     list.touch(42);
     expect(source._gcLastUsed).toBe(42);
 
+    list.clear();
+    list.captureMaterialTextures(material);
+    list.endBuild();
+    expect(source.listenerCount('change'), 'recording it again adds no listener').toBe(listeners + 1);
+
+    source.unload();
+    expect(onCaptureLost).toHaveBeenCalledTimes(1);
+
+    list.clear();
+    list.endBuild();
+    expect(captures(list).size, 'a build that no longer samples it sweeps the capture').toBe(0);
+    expect(source.listenerCount('change')).toBe(listeners);
+    expect(source.listenerCount('styleChange')).toBe(styleListeners);
+
     list.destroy();
     source.destroy();
   });
 
-  it('never captures an engine-owned Buffer3D', () => {
+  it('keeps watching a style shared by two sources after one of them is swept', () => {
     const list = new DrawCommandList();
     const onCaptureLost = vi.fn<() => void>();
     list.onCaptureLost = onCaptureLost;
-    const buffer = new Buffer3D({ data: new Float32Array(9), usage: VERTEX });
-    const geometry = makeGeometry(buffer);
+    const a = makeSource();
+    const b = makeSource();
+    b.style = a.style;
 
-    list.captureGeometry(geometry);
+    list.captureMaterialTextures(materialOf(new Texture({ source: a })));
+    list.captureMaterialTextures(materialOf(new Texture({ source: b })));
     list.endBuild();
-    expect(captures(list).size).toBe(0);
-
-    buffer._gcLastUsed = 5;
-    list.touch(42);
-    expect(buffer._gcLastUsed).toBe(5);
-
-    buffer.unload();
-    expect(onCaptureLost).not.toHaveBeenCalled();
-
-    list.destroy();
-    geometry.destroy(true);
-  });
-
-  it('drops only the recorded GPU layout of the geometries that used a lost buffer', () => {
-    const list = new DrawCommandList();
-    const onCaptureLost = vi.fn<() => void>();
-    list.onCaptureLost = onCaptureLost;
-
-    const geometry = new Geometry3D({ positions: new Float32Array(9) });
-    const fullUnload = vi.spyOn(geometry, 'unload');
-    const layoutDropped = vi.fn<() => void>();
-    geometry.on('unload', layoutDropped);
-
-    list.captureGeometry(geometry);
-    list.endBuild();
-    geometry.buffers[0].unload();
-
-    expect(onCaptureLost).toHaveBeenCalledTimes(1);
-    expect(layoutDropped).toHaveBeenCalledTimes(1);
-    expect(
-      fullUnload,
-      "Geometry3D's own unload would also vacate its atlas range and unload every buffer",
-    ).not.toHaveBeenCalled();
-
-    list.destroy();
-    geometry.destroy(true);
-  });
-
-  it('sweeps the captures a rebuild did not record again', () => {
-    const list = new DrawCommandList();
-    const onCaptureLost = vi.fn<() => void>();
-    list.onCaptureLost = onCaptureLost;
-    const kept = makeGeometry();
-    const dropped = makeGeometry();
-
-    list.captureGeometry(kept);
-    list.captureGeometry(dropped);
-    list.endBuild();
-    expect(captures(list).size).toBe(2);
 
     list.clear();
-    list.captureGeometry(kept);
+    list.captureMaterialTextures(materialOf(new Texture({ source: b })));
     list.endBuild();
-    expect(captures(list).size).toBe(1);
+    onCaptureLost.mockClear();
 
-    dropped.buffers[0].unload();
-    expect(onCaptureLost).not.toHaveBeenCalled();
-    kept.buffers[0].unload();
-    expect(onCaptureLost).toHaveBeenCalledTimes(1);
+    a.style.update();
+    expect(onCaptureLost, 'b still hears its style').toHaveBeenCalled();
 
     list.destroy();
-    kept.destroy(true);
-    dropped.destroy(true);
+    a.destroy();
+    b.destroy();
   });
 
   it('keeps the captures through a clear until the rebuild ends', () => {
@@ -137,63 +107,66 @@ describe('DrawCommandList captures', () => {
     geometry.destroy(true);
   });
 
-  it('re-recording the same resources adds no listeners and no captures', () => {
+  it('reports a captured texture whose style changes, and stops once the capture is swept or released', () => {
     const list = new DrawCommandList();
+    const onCaptureLost = vi.fn<() => void>();
+    list.onCaptureLost = onCaptureLost;
     const source = makeSource();
+    const material = materialOf(new Texture({ source }));
+    const styleListeners = source.listenerCount('styleChange');
+
+    list.captureMaterialTextures(material);
+    list.endBuild();
+
+    source.style.scaleMode = 'nearest';
+    source.style.update();
+    expect(onCaptureLost, 'a WebGPU bundle replays the sampler it recorded').toHaveBeenCalledTimes(1);
+
+    source.style = new TextureStyle({ addressMode: 'repeat' });
+    expect(onCaptureLost, 'a new style object is reported too').toHaveBeenCalledTimes(2);
+
+    list.clear();
+    list.endBuild();
+    source.style.update();
+    expect(onCaptureLost, 'a rebuild that no longer samples it stops listening').toHaveBeenCalledTimes(2);
+
+    list.captureMaterialTextures(material);
+    list.endBuild();
+    list.releaseCaptures();
+    source.style.update();
+    expect(onCaptureLost, 'a released build stops listening').toHaveBeenCalledTimes(2);
+
+    list.captureMaterialTextures(material);
+    list.endBuild();
+    list.destroy();
+    source.style.update();
+    expect(onCaptureLost, 'a destroyed list stops listening').toHaveBeenCalledTimes(2);
+    expect(source.listenerCount('styleChange')).toBe(styleListeners);
+
+    source.destroy();
+  });
+
+  it('captures a geometry another list ticked, and one recorded again after a release', () => {
+    const first = new DrawCommandList();
+    const second = new DrawCommandList();
     const geometry = makeGeometry();
     const buffer = geometry.buffers[0];
 
-    list.nextBatchBindGroup([source], 1);
-    list.captureGeometry(geometry);
-    list.endBuild();
-    const sourceListeners = source.listenerCount('change');
-    const bufferListeners = buffer.listenerCount('change');
+    first.captureGeometry(geometry);
+    second.captureGeometry(geometry);
+    expect(captures(first).has(buffer)).toBe(true);
+    expect(captures(second).has(buffer), 'another list’s tick never matches this one’s build').toBe(true);
 
-    for (let i = 0; i < 3; i++) {
-      list.clear();
-      list.nextBatchBindGroup([source], 1);
-      list.captureGeometry(geometry);
-      list.endBuild();
-    }
+    second.releaseCaptures();
+    second.captureGeometry(geometry);
+    expect(captures(second).has(buffer), 'a release takes a fresh tick, so the next record captures').toBe(true);
 
-    expect(source.listenerCount('change')).toBe(sourceListeners);
-    expect(buffer.listenerCount('change')).toBe(bufferListeners);
-    expect(captures(list).size).toBe(2);
-
-    list.destroy();
-    source.destroy();
+    first.destroy();
+    second.destroy();
     geometry.destroy(true);
   });
 
-  it('pools bind groups by flush order and empties the ones a smaller rebuild leaves unused', () => {
-    const list = new DrawCommandList();
-    const a = makeSource();
-    const b = makeSource();
-
-    const first = list.nextBatchBindGroup([a], 1);
-    const second = list.nextBatchBindGroup([b], 1);
-    list.endBuild();
-    expect(second).not.toBe(first);
-
-    list.clear();
-    expect(list.nextBatchBindGroup([a], 1)).toBe(first);
-    list.endBuild();
-
-    expect(second.getResource(0), 'the unused second group lets go of b').toBe(Texture.EMPTY.source);
-    expect(captures(list).has(b)).toBe(false);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      b.destroy();
-      expect(warn.mock.calls.filter((call) => String(call[1]).includes('BindGroup'))).toEqual([]);
-    } finally {
-      warn.mockRestore();
-    }
-
-    list.destroy();
-    a.destroy();
-  });
-
-  it('releases every capture and empties every pooled group when a build is not coming back', () => {
+  it('releases every capture when a build is not coming back', () => {
     const list = new DrawCommandList();
     const onCaptureLost = vi.fn<() => void>();
     list.onCaptureLost = onCaptureLost;
@@ -202,7 +175,7 @@ describe('DrawCommandList captures', () => {
     const sourceListeners = source.listenerCount('change');
 
     list.next();
-    const bg = list.nextBatchBindGroup([source], 1);
+    list.captureMaterialTextures(materialOf(new Texture({ source })));
     list.captureGeometry(geometry);
     list.endBuild();
     expect(list.count).toBe(1);
@@ -211,7 +184,6 @@ describe('DrawCommandList captures', () => {
 
     expect(list.count).toBe(0);
     expect(captures(list).size).toBe(0);
-    expect(bg.getResource(0)).toBe(Texture.EMPTY.source);
     expect(source.listenerCount('change')).toBe(sourceListeners);
     source.unload();
     geometry.buffers[0].unload();

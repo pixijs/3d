@@ -1,4 +1,5 @@
 import type { TestScene } from '../../tests/test-utils';
+import { forcePreference } from './scenes/forcePreference';
 import type { RenderType } from './types';
 
 const playgroundGlobs = import.meta.glob('../**/*.playground.ts');
@@ -7,6 +8,8 @@ const exampleGlobs = import.meta.glob([
   '../../examples/*.ts',
   '../../examples/*/index.ts',
   '../../examples/**/*.example.ts',
+  '../../src/**/__docs__/examples/*.ts',
+  '../../src/**/__docs__/examples/*/index.ts',
 ]);
 
 function basename(path: string): string {
@@ -34,6 +37,7 @@ for (const [path, loader] of Object.entries(visualTestGlobs)) {
 }
 
 const exampleById: Map<string, () => Promise<unknown>> = new Map();
+const docsExampleIds = new Set<string>();
 
 for (const [path, loader] of Object.entries(exampleGlobs)) {
   const filename = basename(path);
@@ -49,6 +53,7 @@ for (const [path, loader] of Object.entries(exampleGlobs)) {
   }
 
   exampleById.set(id, loader as () => Promise<unknown>);
+  if (path.includes('/__docs__/examples/')) docsExampleIds.add(id);
 }
 
 const params = new URLSearchParams(location.search);
@@ -69,6 +74,7 @@ try {
     const loader = exampleById.get(id);
 
     if (loader) {
+      if (docsExampleIds.has(id)) forcePreference(rendererType);
       await loader();
     }
   } else if (type === 'visual-test' && id) {

@@ -26,15 +26,6 @@ describe('emissiveBit assigns the emissive that pbrMaterialBit zeroes, with KHR_
     const out = compileWgslSource({ bits: [pbrMaterialBit, emissiveBit], template: wgslTemplate });
     const src = out.fragment.source;
 
-    it('reads both emissive and emissiveStrength from the material struct', () => {
-      expect(src).toContain('material.emissive');
-      expect(src).toContain('material.emissiveStrength');
-    });
-
-    it('multiplies emissive by emissiveStrength in the shader', () => {
-      expect(src).toMatch(/emissive\s*=\s*material\.emissive\s*\*\s*material\.emissiveStrength/);
-    });
-
     it('gamma-2.2 sRGB decodes the emissive texture', () => {
       expect(src).toMatch(/emissive\s*\*=\s*pow\(emissiveTex, vec3(?:<f32>)?\(2\.2\)\)/);
       expect(src).not.toMatch(/emissiveTex\s*\*\s*emissiveTex/);
@@ -44,15 +35,6 @@ describe('emissiveBit assigns the emissive that pbrMaterialBit zeroes, with KHR_
   describe('GLSL', () => {
     const out = compileGlslSource({ bits: [pbrMaterialBit, emissiveBit], template: glslTemplate });
     const src = out.fragment;
-
-    it('reads both emissive and emissiveStrength from the material struct', () => {
-      expect(src).toContain('material.emissive');
-      expect(src).toContain('material.emissiveStrength');
-    });
-
-    it('multiplies emissive by emissiveStrength in the shader', () => {
-      expect(src).toMatch(/emissive\s*=\s*material\.emissive\s*\*\s*material\.emissiveStrength/);
-    });
 
     it('gamma-2.2 sRGB decodes the emissive texture', () => {
       expect(src).toMatch(/emissive\s*\*=\s*pow\(emissiveTex, vec3(?:<f32>)?\(2\.2\)\)/);

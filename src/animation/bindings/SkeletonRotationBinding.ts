@@ -2,8 +2,7 @@ import type { Skeleton } from '../../scene/Skeleton';
 import { Binding } from './Binding';
 
 /**
- * Writes four-component quaternion samples into a skeleton's local rotation buffer, renormalised
- * as {@link QuaternionBinding} explains
+ * Renormalises each sample, as {@link QuaternionBinding} does
  * @internal
  */
 export class SkeletonRotationBinding extends Binding {

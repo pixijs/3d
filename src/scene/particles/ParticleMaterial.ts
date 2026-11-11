@@ -5,17 +5,16 @@ import { uvTransformBit } from '../../core/shader/bits/uvTransformBit';
 import type { ShaderBit } from '../../core/shader/ShaderBit';
 import { ShaderDescriptor } from '../../core/shader/ShaderDescriptor';
 import { BaseMaterial3D } from '../../materials/BaseMaterial3D';
-import type { AlphaMode } from '../../materials/BaseMaterial3D';
+import type { AlphaMode, ColorSpace } from '../../materials/BaseMaterial3D';
 import { flatMaterialBit } from '../../materials/flat/bits/flatMaterialBit';
+import type { MaterialData } from '../../materials/utils/createMaterialDataClass';
+import type { MaterialTextures } from '../../materials/utils/createMaterialTexturesClass';
 import type { View3D } from '../View3D';
 import { getParticleBit } from './bits/particleBit';
 import type { ParticleBillboardMode } from './bits/particleBit';
 
 /**
- * How particles blend over the scene
- *
- * The pixi blend modes the GPU can do directly. The advanced 2D modes, such as `'overlay'` and
- * `'color-dodge'`, need filters and aren't available.
+ * How particles blend over the scene; pixi's advanced modes, such as `'overlay'`, aren't available
  *
  * - `'normal'` covers what's behind: smoke, dust, debris
  * - `'add'` only brightens: fire, sparks, magic, anything that glows
@@ -37,6 +36,14 @@ export type ParticleBlendMode = Extract<BLEND_MODES, 'normal' | 'add' | 'multipl
  * @advanced
  */
 export interface ParticleMaterialOptions {
+  /**
+   * Name for debugging and for finding the material
+   * @example
+   * ```ts
+   * new ParticleMaterial({ label: 'sparks' });
+   * ```
+   */
+  label?: string;
   /** The sprite (or whole sprite sheet, for flipbooks) every particle samples */
   texture?: Texture;
   /**
@@ -47,9 +54,7 @@ export interface ParticleMaterialOptions {
   /**
    * Whether the geometry carries a per-particle `aParticleUVFrame` flipbook window
    *
-   * Must match the geometry. `texture` must then be the whole sheet, not one frame of it, so the
-   * material's UV transform is identity and the per-particle windows do all the UV mapping;
-   * `ParticleContainer3D` binds such a whole-sheet texture for a flipbook.
+   * `texture` must then be the whole sheet, not one frame of it, or the constructor throws.
    * @default false
    */
   useFrames?: boolean;
@@ -61,8 +66,7 @@ export interface ParticleMaterialOptions {
   /**
    * How particles blend over the scene; see {@link ParticleBlendMode}
    *
-   * Ignored unless `alphaMode` is `'blend'`: pixi turns blending on for any blend mode but
-   * `'none'`, which `'mask'` and `'opaque'` must keep off.
+   * Ignored unless `alphaMode` is `'blend'`.
    * @default 'normal'
    */
   blendMode?: ParticleBlendMode;
@@ -83,43 +87,38 @@ export interface ParticleMaterialOptions {
   /**
    * Whether the view's fog reaches these particles
    *
-   * Defaults to `true` for `'normal'` blending only. Fog fades a particle toward the fog colour,
-   * but an added or screened particle has to fade toward black to vanish, and a multiplied one
-   * toward white, so fogged quads would show as glowing or staining rectangles.
+   * Defaults to `true` for `'normal'` blending only, since fog would show other blend modes' quads
+   * as glowing or staining rectangles.
    */
   fog?: boolean;
 }
 
 /**
- * The material half of a particle system: unlit, flat shading with the particle bit composed in
+ * The unlit material {@link ParticleContainer3D} builds for its particles
  *
- * Billboarding, and each particle's size, rotation, tint and flipbook frame, all come from the
- * particle vertex layout. Every `alphaMode` works; `'mask'` adds the cutoff to the shader.
- *
- * {@link ParticleContainer3D} builds and owns one, passing `useFrames` and `localSpace` to
- * match its own geometry. Use it on its own only with geometry that has the same particle
- * attributes. The blend mode lives on pixi's `material.state.blendMode`, and changing it on a
- * mesh that is already drawing needs that mesh invalidated, which
+ * Use it yourself only on geometry with the same particle attributes, and `useFrames` and
+ * `localSpace` to match. Its blend mode is `material.state.blendMode`; after changing that on a
+ * mesh that's already drawing, call the mesh's `invalidate()`, which
  * {@link ParticleContainer3D#blendMode} does for you.
  * @category scene
  * @advanced
  */
-export class ParticleMaterial extends BaseMaterial3D {
-  /** Unlit, so the view's tone mapping is skipped */
-  public override toneMapped = false;
+export class ParticleMaterial extends BaseMaterial3D<MaterialData, MaterialTextures, ParticleMaterialOptions> {
+  /** `'display'`, since particles only multiply their colours */
+  public override colorSpace: ColorSpace = 'display';
 
-  /** Unlit, so the view's environment and shadow bits are skipped */
+  /** `false`: lights and shadows don't reach particles */
   public override lit = false;
 
   /**
-   * The shader bits, fixed for the material's lifetime so the material data layout never shifts
-   *
-   * `FlatMaterial`'s composition plus the particle bit: base colour sample, UV transform, the
-   * particle attributes, then the extra bits, which see the sampled `albedo` and `alpha`.
-   * `ParticleContainer3D` builds its vertex layout from the particle bit and the extra bits
-   * alone, since the first two declare no attributes; one that did would need adding there too.
+   * Never changes, so the data layout can't shift; `ParticleContainer3D._attributes` lays out the
+   * attributes of all but the first two, which declare none
    */
   private readonly _bits: readonly ShaderBit[];
+
+  private readonly _billboard: ParticleBillboardMode;
+  private readonly _useFrames: boolean;
+  private readonly _localSpace: boolean;
 
   constructor(options: ParticleMaterialOptions = {}) {
     const billboard = options.billboard ?? 'spherical';
@@ -127,6 +126,7 @@ export class ParticleMaterial extends BaseMaterial3D {
     const localSpace = options.localSpace ?? false;
 
     super({
+      label: options.label,
       baseColorTexture: options.texture,
       alphaMode: options.alphaMode ?? 'blend',
       alphaCutoff: options.alphaCutoff,
@@ -143,13 +143,16 @@ export class ParticleMaterial extends BaseMaterial3D {
       }
     }
 
+    this._billboard = billboard;
+    this._useFrames = useFrames;
+    this._localSpace = localSpace;
     this._descriptor = new ShaderDescriptor({});
 
     this._bits = [
       flatMaterialBit,
       uvTransformBit,
       getParticleBit({ billboard, frames: useFrames, localSpace }),
-      ...this._extraBits,
+      ...this.extraBits,
     ];
     this._deriveLayoutFromBits(this._bits, { baseColor: options.texture, ...options.textures });
 
@@ -157,7 +160,7 @@ export class ParticleMaterial extends BaseMaterial3D {
   }
 
   /**
-   * The particle bit list, plus the cutoff discard when the mode is `'mask'`
+   * The particle shader, with the alpha cutoff under `alphaMode: 'mask'`
    * @param _view - Unused; the descriptor is the same in every view
    */
   public override getPrimaryDescriptor(_view: View3D): ShaderDescriptor {
@@ -171,5 +174,27 @@ export class ParticleMaterial extends BaseMaterial3D {
     this._variantDirty = false;
 
     return this._descriptor!;
+  }
+
+  /**
+   * The options a particle material takes, read back: its sheet, the three that pick the particle
+   * bit, the blend and alpha modes, fog and its extra bits' slots
+   * @advanced
+   */
+  protected override _toOptions(): ParticleMaterialOptions {
+    const { label, alphaMode, alphaCutoff, fog, textures } = super._toOptions();
+
+    return {
+      label,
+      texture: this.textures.baseColor,
+      billboard: this._billboard,
+      useFrames: this._useFrames,
+      localSpace: this._localSpace,
+      blendMode: this.state.blendMode as ParticleBlendMode,
+      alphaMode,
+      alphaCutoff,
+      fog,
+      textures,
+    };
   }
 }

@@ -7,3 +7,5 @@ import { MaterialSystemGpu } from './shader/MaterialSystemGpu';
 import { View3DPipeGpu } from './View3DPipeGpu';
 
 extensions.add(ComputeSystemGpu, LightingSystemGpu, MipChainSystemGpu, MaterialSystemGpu, View3DPipeGpu);
+
+export * from './index';

@@ -3,9 +3,8 @@ import type { Vector3 } from '../../../math/vector/Vector3';
 /**
  * Where a particle starts and which way it heads
  *
- * A shape is sampled once per particle, so it may allocate at construction but
- * never inside {@link EmitterShape.sample}. Positions are relative to the
- * emitter; the system moves them into world space when it needs to.
+ * Implement it for a shape of your own. {@link EmitterShape.sample | sample} runs once per
+ * particle, so allocate in the constructor, never in `sample`.
  * @example
  * ```ts
  * class MyRingShape implements EmitterShape {
@@ -34,8 +33,8 @@ export interface EmitterShape {
    *
    * emitter.shape.sample(seededRandom('preview'), preview, heading);
    * ```
-   * @param {() => number} rng - The system's random source; use it (not `Math.random`) so seeded runs stay reproducible.
-   * @param {Vector3} outPos - Receives the spawn offset, emitter-relative.
+   * @param {() => number} rng - The system's random source; use it, not `Math.random`, so seeded runs replay.
+   * @param {Vector3} outPos - Receives the spawn offset, relative to the emitter.
    * @param {Vector3} outDir - Receives a unit direction.
    */
   sample(rng: () => number, outPos: Vector3, outDir: Vector3): void;

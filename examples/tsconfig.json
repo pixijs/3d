@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitAny": false,
+    "noEmit": true
+  },
+  "include": [".", "../src/**/*.d.ts", "../src/**/__docs__/examples"],
+  // The tutorials check in their own program, which lets a step's starting code leave names unused
+  "exclude": ["tutorials", "../node_modules", "../dist", "../src/**/*.worker.ts"]
+}

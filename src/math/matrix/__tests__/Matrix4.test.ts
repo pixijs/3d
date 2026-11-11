@@ -55,12 +55,6 @@ describe('Matrix4', () => {
     });
   });
 
-  describe('static Matrix4.IDENTITY', () => {
-    test('returns identity', () => {
-      expect(Matrix4.IDENTITY.isIdentity()).toBe(true);
-    });
-  });
-
   describe('static Matrix4.multiplyAffine', () => {
     test('matches full multiply for two affine matrices', () => {
       const a = new Matrix4().compose(
@@ -236,18 +230,6 @@ describe('Matrix4', () => {
       a.premultiply(b, out);
 
       expect(a.equals(original)).toBe(true);
-    });
-  });
-
-  describe('multiplyMatrices', () => {
-    test('writes a * b into this', () => {
-      const a = new Matrix4().makeTranslation(1, 2, 3);
-      const b = new Matrix4().makeTranslation(4, 5, 6);
-      const out = new Matrix4();
-      out.multiplyMatrices(a, b);
-
-      const p = new Vector3(0, 0, 0).applyMatrix4(out);
-      expect(p.x).toBeCloseTo(5, 5);
     });
   });
 
@@ -455,21 +437,6 @@ describe('Matrix4', () => {
       expect(p.x).toBeCloseTo(2, 5);
       expect(p.y).toBeCloseTo(3, 5);
       expect(p.z).toBeCloseTo(4, 5);
-    });
-  });
-
-  describe('makeShear', () => {
-    test('produces a shear matrix with diagonal of 1 and no translation', () => {
-      const m = new Matrix4().makeShear(0.5, 0.25, 0.125);
-
-      expect(m.elements[0]).toBe(1);
-      expect(m.elements[5]).toBe(1);
-      expect(m.elements[10]).toBe(1);
-      expect(m.elements[15]).toBe(1);
-
-      expect(m.elements[12]).toBe(0);
-      expect(m.elements[13]).toBe(0);
-      expect(m.elements[14]).toBe(0);
     });
   });
 

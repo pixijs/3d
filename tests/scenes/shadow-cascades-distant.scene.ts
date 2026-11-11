@@ -7,14 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Cascaded shadows over a large world: identical pillars marching out to ~900
- * units, so the far ones land in cascades whose footprint is hundreds of units
- * across. Guards the texel snap's units — quantising the ortho matrix's
- * normalised XY offset by a *world* texel size steps the footprint by half a
- * frustum width at a time, sliding the outer cascades off their own casters and
- * dropping distant shadows entirely. Static scene for determinism.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,
@@ -35,8 +27,6 @@ export const scene: TestScene = {
     ground.rotation.set(-Math.PI / 2, 0, 0);
     view3d.root.addChild(ground);
 
-    // Same-sized pillars all the way out — a distant one is not meant to lose
-    // its shadow, only resolution.
     const colors = [0x4a7c59, 0xc06c4a, 0x4a6cc0, 0xc0a84a, 0x8a5cc0];
     for (let i = 0; i < 5; i++) {
       const d = 120 + i * 190;

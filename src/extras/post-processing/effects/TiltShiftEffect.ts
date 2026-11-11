@@ -5,28 +5,7 @@ import { FullscreenPass } from '../../../post-processing/effects/FullscreenPass'
 import { PostEffect } from '../../../post-processing/effects/PostEffect';
 import type { EffectFragment, EffectIO, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
 
-/**
- * The tilt-shift pass: a depth-driven bokeh blur
- *
- * Each pixel's distance from the focal plane sets its blur radius, and the pass gathers 16 taps
- * over a disk of that radius. The taps lie on a golden-angle spiral (2.3999632 radians apart),
- * which spreads them evenly. Each tap reads a mip level just coarse enough that the sparse disk
- * never leaves gaps, so the blur stays smooth instead of showing blocky texels. All four channels
- * are averaged, so premultiplied coverage blurs correctly on inset views.
- *
- * The gather is weighted by occlusion: a tap counts only if its own blur disk could reach the
- * shaded pixel. Taps at or behind the centre depth always can, since they are the surface being
- * blurred. Nearer taps count in proportion to their own blur radius, so a sharp object in focus
- * never smears into the blurred background around its silhouette, while a blurred foreground
- * keeps full weight and still bleeds over what is behind it. The weights are normalised, and the
- * centre sample seeds the sum with weight 1 so it never reaches zero, as it would for a sky pixel
- * ringed by sharp taps.
- *
- * `debugView` paints the depth field instead; {@link TiltShiftEffect#debug} has the colour key.
- *
- * Reads `uFocus` = (focalDepth, focalNear, focalFar, maxBlur) and `uTilt` = (debug, unused,
- * unused, unused).
- */
+/** The centre tap seeds the sum at weight 1, so a sky pixel ringed by sharp taps never divides by zero */
 const TILT_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 const TS_TAPS: i32 = 16;
@@ -54,14 +33,15 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
   let blur = smoothstep(fx.uFocus.y, fx.uFocus.z, abs(centerLz - fx.uFocus.x));
   let radiusPx = blur * fx.uFocus.w;
   if (radiusPx < 0.5) { return sampleColor(uv); }
-  let lod = max(0.0, log2(radiusPx / sqrt(f32(TS_TAPS))));
+  let viewStep = viewTexel();
+  let lod = max(0.0, log2(radiusPx * viewStep.x / inputTexel().x / sqrt(f32(TS_TAPS))));
   var sum = sampleColorLod(uv, lod);
   var wsum = 1.0;
   for (var i = 0; i < TS_TAPS; i = i + 1) {
     let t = (f32(i) + 0.5) / f32(TS_TAPS);
     let a = f32(i) * TS_GOLDEN;
     let distPx = sqrt(t) * radiusPx;
-    let tapUv = uv + vec2<f32>(cos(a), sin(a)) * distPx * texel();
+    let tapUv = uv + vec2<f32>(cos(a), sin(a)) * distPx * viewStep;
     let tapLz = linearDepth(sampleDepth(tapUv));
     let tapRadius = smoothstep(fx.uFocus.y, fx.uFocus.z, abs(tapLz - fx.uFocus.x)) * fx.uFocus.w;
     let w = select(clamp(tapRadius / max(distPx, 0.5), 0.0, 1.0), 1.0, tapLz >= centerLz);
@@ -96,14 +76,15 @@ vec4 effect(vec2 uv) {
   float blur = smoothstep(uFocus.y, uFocus.z, abs(centerLz - uFocus.x));
   float radiusPx = blur * uFocus.w;
   if (radiusPx < 0.5) { return sampleColor(uv); }
-  float lod = max(0.0, log2(radiusPx / sqrt(float(TS_TAPS))));
+  vec2 viewStep = viewTexel();
+  float lod = max(0.0, log2(radiusPx * viewStep.x / inputTexel().x / sqrt(float(TS_TAPS))));
   vec4 sum = sampleColorLod(uv, lod);
   float wsum = 1.0;
   for (int i = 0; i < TS_TAPS; i++) {
     float t = (float(i) + 0.5) / float(TS_TAPS);
     float a = float(i) * TS_GOLDEN;
     float distPx = sqrt(t) * radiusPx;
-    vec2 tapUv = uv + vec2(cos(a), sin(a)) * distPx * texel();
+    vec2 tapUv = uv + vec2(cos(a), sin(a)) * distPx * viewStep;
     float tapLz = linearDepth(sampleDepth(tapUv));
     float tapRadius = smoothstep(uFocus.y, uFocus.z, abs(tapLz - uFocus.x)) * uFocus.w;
     float w = tapLz >= centerLz ? 1.0 : clamp(tapRadius / max(distPx, 0.5), 0.0, 1.0);
@@ -127,7 +108,7 @@ vec4 effect(vec2 uv) {
  */
 export interface TiltShiftEffectOptions extends PostEffectOptions {
   /**
-   * Distance from the camera to the plane in focus, in view units
+   * Distance from the camera to the plane in focus, in world units
    *
    * The plane faces the camera, so it moves and turns with it.
    * @default 35
@@ -138,7 +119,9 @@ export interface TiltShiftEffectOptions extends PostEffectOptions {
    */
   focalDepth?: number;
   /**
-   * How far either side of the focal plane stays fully sharp, in view units
+   * How far either side of the focal plane stays fully sharp, in world units
+   *
+   * Keep it below {@link TiltShiftEffectOptions#focalFar | focalFar}.
    * @default 3
    * @example
    * ```ts
@@ -147,7 +130,7 @@ export interface TiltShiftEffectOptions extends PostEffectOptions {
    */
   focalNear?: number;
   /**
-   * Distance from the focal plane at which the blur is strongest, in view units
+   * Distance from the focal plane at which the blur is strongest, in world units
    * @default 14
    * @example
    * ```ts
@@ -156,7 +139,7 @@ export interface TiltShiftEffectOptions extends PostEffectOptions {
    */
   focalFar?: number;
   /**
-   * Blur radius at full strength, in device pixels
+   * Blur radius at full strength, in physical pixels on screen
    * @default 12
    * @example
    * ```ts
@@ -165,7 +148,7 @@ export interface TiltShiftEffectOptions extends PostEffectOptions {
    */
   maxBlur?: number;
   /**
-   * Paint the focus settings instead of blurring; {@link TiltShiftEffect#debug} has the colour key
+   * Whether to paint the focus settings instead of blurring; {@link TiltShiftEffect#debug} has the colour key
    * @default false
    * @example
    * ```ts
@@ -182,9 +165,8 @@ export interface TiltShiftEffectOptions extends PostEffectOptions {
  * macro lens sees a close-up, so a full-size scene reads as a tiny model. A high, angled camera
  * sells it best.
  *
- * One pass, which reads its input with mipmaps ({@link PostEffect#inputMips}): the input costs a
- * mipmap generation each frame and a third more memory. Every property is a plain uniform write,
- * so it can change every frame.
+ * One pass, but its input needs mipmaps, which cost a mipmap generation each frame and a third
+ * more memory. Every property can change every frame.
  * @example
  * ```ts
  * view.passes = [new TiltShiftEffect({ focalDepth: 35, maxBlur: 12 })];
@@ -194,10 +176,7 @@ export interface TiltShiftEffectOptions extends PostEffectOptions {
  */
 export class TiltShiftEffect extends PostEffect {
   /**
-   * Default {@link TiltShiftEffectOptions} merged under every constructor call
-   *
-   * `new TiltShiftEffect(opts)` resolves as `{ ...TiltShiftEffect.defaultOptions, ...opts }`. Mutate to change
-   * defaults process-wide.
+   * Defaults for every new `TiltShiftEffect`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * TiltShiftEffect.defaultOptions.maxBlur = 8;
@@ -238,7 +217,7 @@ export class TiltShiftEffect extends PostEffect {
   }
 
   /**
-   * Add the blur pass for this slot, reading the mip-chained input and the scene depth
+   * Adds the blur pass for this slot in the chain
    * @param graph - Render graph being built.
    * @param io - Input/output handles for this slot in the chain.
    * @example
@@ -262,7 +241,7 @@ export class TiltShiftEffect extends PostEffect {
   }
 
   /**
-   * Distance from the camera to the plane in focus, in view units
+   * Distance from the camera to the plane in focus, in world units
    * @example
    * ```ts
    * tiltShift.focalDepth = 20 + Math.sin(time) * 5;
@@ -273,14 +252,14 @@ export class TiltShiftEffect extends PostEffect {
   }
   /**
    * Sets the distance to the plane in focus
-   * @param value - Distance from the camera to the focal plane, in view units.
+   * @param value - Distance from the camera to the focal plane, in world units.
    */
   public set focalDepth(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 0, value);
   }
 
   /**
-   * How far either side of the focal plane stays fully sharp, in view units
+   * How far either side of the focal plane stays fully sharp, in world units
    * @example
    * ```ts
    * tiltShift.focalNear = 1;
@@ -291,14 +270,14 @@ export class TiltShiftEffect extends PostEffect {
   }
   /**
    * Sets how far either side of the focal plane stays fully sharp
-   * @param value - Distance from the focal plane, in view units.
+   * @param value - Distance from the focal plane, in world units.
    */
   public set focalNear(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 1, value);
   }
 
   /**
-   * Distance from the focal plane at which the blur is strongest, in view units
+   * Distance from the focal plane at which the blur is strongest, in world units
    * @example
    * ```ts
    * tiltShift.focalFar = 6;
@@ -309,14 +288,14 @@ export class TiltShiftEffect extends PostEffect {
   }
   /**
    * Sets the distance from the focal plane at which the blur is strongest
-   * @param value - Distance from the focal plane, in view units.
+   * @param value - Distance from the focal plane, in world units.
    */
   public set focalFar(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 2, value);
   }
 
   /**
-   * Blur radius at full strength, in device pixels
+   * Blur radius at full strength, in physical pixels on screen
    * @example
    * ```ts
    * tiltShift.maxBlur = 20;
@@ -327,14 +306,14 @@ export class TiltShiftEffect extends PostEffect {
   }
   /**
    * Sets the blur radius at full strength
-   * @param value - Radius in device pixels.
+   * @param value - Radius in physical pixels on screen.
    */
   public set maxBlur(value: number) {
     this.writeLane(this._uniforms, 'uFocus', 3, value);
   }
 
   /**
-   * Paint the focus settings instead of blurring, to tune them by eye
+   * Whether to paint the focus settings instead of blurring, to tune them by eye
    *
    * Over a dimmed grey copy of the frame, a white line marks the focal plane and green the sharp
    * band. Blurred areas shift toward orange in front of the plane and blue behind it, more so the
@@ -348,8 +327,8 @@ export class TiltShiftEffect extends PostEffect {
     return this._uniforms.uniforms.uTilt[0] > 0.5;
   }
   /**
-   * Toggles the focus visualisation
-   * @param value - Whether to paint the focus settings instead of blurring.
+   * Sets whether to paint the focus settings
+   * @param value - `true` to paint them instead of blurring.
    */
   public set debug(value: boolean) {
     this.writeLane(this._uniforms, 'uTilt', 0, value ? 1 : 0);

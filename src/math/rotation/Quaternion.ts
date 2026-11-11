@@ -72,8 +72,6 @@ export interface QuaternionData {
  *   coin.quaternion.multiply(spin);
  * });
  * ```
- * @see {@link QuaternionData} For the basic `(x, y, z, w)` interface
- * @see {@link ObservableQuaternion} For the observable counterpart
  * @see {@link Vector3#applyQuaternion} For applying a quaternion rotation to a point
  * @category maths
  * @standard
@@ -134,8 +132,8 @@ export class Quaternion implements QuaternionData {
    * Spherically interpolates between two quaternions stored in flat arrays, writing the result into
    * `dst` without creating a `Quaternion`
    *
-   * Animation tracks use it to blend keyframes stored back to back in one array. Like
-   * {@link Quaternion#slerp} it takes the shorter way round.
+   * Like {@link Quaternion#slerp}, it takes the shorter way round. It costs one `Math.sin` where the
+   * textbook form costs three, so it suits blending many rotations every frame.
    * @example
    * ```ts
    * Quaternion.slerpFlat(pose, boneIndex * 4, keyframes, frame * 4, keyframes, (frame + 1) * 4, blend);
@@ -183,11 +181,10 @@ export class Quaternion implements QuaternionData {
       let k1 = t;
 
       if (dot < 0.9995) {
-        const theta = Math.acos(dot);
-        const sin = Math.sin(theta);
+        const sinT = Math.sin(t * Math.acos(dot));
 
-        k0 = Math.sin(k0 * theta) / sin;
-        k1 = Math.sin(t * theta) / sin;
+        k1 = sinT / Math.sqrt(1 - dot * dot);
+        k0 = Math.sqrt(1 - sinT * sinT) - dot * k1;
 
         x0 = x0 * k0 + x1 * k1;
         y0 = y0 * k0 + y1 * k1;
@@ -314,7 +311,7 @@ export class Quaternion implements QuaternionData {
   }
 
   /**
-   * Returns true when `x`, `y`, `z` and `w` match `q` exactly (no epsilon tolerance)
+   * Returns true when `x`, `y`, `z` and `w` match `q` exactly, with no tolerance
    *
    * `q` and its negation are the same rotation but don't compare equal.
    * @example
@@ -370,7 +367,7 @@ export class Quaternion implements QuaternionData {
    * ```
    * @param axis - The unit-length rotation axis
    * @param angle - The rotation angle in radians
-   * @param out - Target to write the result into instead of this quaternion, such as a physics body's rotation
+   * @param out - Target to write the result into instead of this quaternion
    * @returns The result quaternion for chaining
    */
   public setFromAxisAngle(axis: PointData3D, angle: number, out: QuaternionData = this): this {
@@ -410,8 +407,8 @@ export class Quaternion implements QuaternionData {
   /**
    * Sets this quaternion to the rotation in `m`, a transform that may also scale each axis
    *
-   * Divides the scale out of each column before reading the rotation. A matrix with a zero scale has
-   * no rotation to read and gives `NaN`.
+   * A matrix with a zero scale has no rotation to read and gives `NaN`. A mirrored one (negative
+   * determinant) gives a quaternion that isn't a rotation; {@link Matrix4#decompose} handles it.
    * @example
    * ```ts
    * const worldRotation = new Quaternion().setFromScaledRotationMatrix(node.worldTransform);
@@ -596,8 +593,6 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Negates `x`, `y` and `z`, leaving `w`, which reverses a unit quaternion's turn
-   *
-   * The same as {@link Quaternion#inverse} for a unit quaternion.
    * @example
    * ```ts
    * recoil.conjugate(recovery);
@@ -746,8 +741,6 @@ export class Quaternion implements QuaternionData {
 
   /**
    * Writes this quaternion's values into `array` starting at `offset`
-   *
-   * Allocates a new array when one is not supplied.
    * @example
    * ```ts
    * rotation.toArray(instanceRotations, instanceIndex * 4);
@@ -821,10 +814,7 @@ function _setFromOrthonormalElements(
 }
 
 /**
- * Multiplies quaternion `a` by `b` (`a * b`) into `target`
- * @param a - Left operand
- * @param b - Right operand
- * @param target - Receives the product; may be `a` or `b`
+ * `target = a * b`; `target` may be `a` or `b`, so every input is read before any write
  * @internal
  */
 export function multiplyQuaternionData(a: QuaternionData, b: QuaternionData, target: QuaternionData): QuaternionData {

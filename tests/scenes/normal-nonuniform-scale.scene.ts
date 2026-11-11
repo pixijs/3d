@@ -6,21 +6,9 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Non-uniform scale and the normal transform.
- *
- * Both rows are the same ellipsoid — 3:1 along X — reached two ways. The top is
- * a unit sphere under `mesh.scale.set(3, 1, 1)`, so the shader derives its
- * normals from the model matrix. The bottom bakes the same stretch into the
- * vertices and carries correct normals with it.
- *
- * Identical silhouettes, so any shading difference is the normal transform
- * alone. They should match.
- */
 const SEGMENTS_W = 48;
 const SEGMENTS_H = 24;
 
-/** Builds an ellipsoid. `bakeNormals` writes the true surface normal for the stretch. */
 function ellipsoid(scale: [number, number, number], bakeNormals: boolean): Geometry3D {
   const [sx, sy, sz] = bakeNormals ? scale : [1, 1, 1];
   const count = (SEGMENTS_W + 1) * (SEGMENTS_H + 1);
@@ -36,7 +24,6 @@ function ellipsoid(scale: [number, number, number], bakeNormals: boolean): Geome
       const phi = (ix / SEGMENTS_W) * Math.PI * 2;
       const i = iy * (SEGMENTS_W + 1) + ix;
 
-      // Unit-sphere direction.
       const nx = -Math.cos(phi) * Math.sin(theta);
       const ny = Math.cos(theta);
       const nz = Math.sin(phi) * Math.sin(theta);
@@ -45,8 +32,6 @@ function ellipsoid(scale: [number, number, number], bakeNormals: boolean): Geome
       positions[i * 3 + 1] = ny * sy;
       positions[i * 3 + 2] = nz * sz;
 
-      // True normal of a stretched surface is the inverse-transpose direction:
-      // divide by the scale rather than multiply by it.
       const ex = nx / sx;
       const ey = ny / sy;
       const ez = nz / sz;
@@ -89,7 +74,6 @@ export const scene: TestScene = {
 
     const material = new Material3D({ baseColor: 0xcfd6de, metallic: 0.1, roughness: 0.28 });
 
-    // Top: unit sphere, stretched by the transform.
     const scaled = new Mesh3D({
       geometry: ellipsoid([1, 1, 1], false),
       material,
@@ -101,9 +85,6 @@ export const scene: TestScene = {
     scaled.position.set(0, 1.6, 0);
     view3d.root.addChild(scaled);
 
-    // Middle: same transform-driven stretch, but flat-shaded — the face normal
-    // comes from screen-space derivatives of world position, so the model
-    // matrix never touches it.
     const faceted = new Mesh3D({
       geometry: ellipsoid([1, 1, 1], false),
       material: new Material3D({ baseColor: 0xcfd6de, metallic: 0.1, roughness: 0.28, flatShading: true }),
@@ -115,7 +96,6 @@ export const scene: TestScene = {
     faceted.position.set(0, 0, 0);
     view3d.root.addChild(faceted);
 
-    // Bottom: same shape, stretch baked into the vertices with true normals.
     const baked = new Mesh3D({
       geometry: ellipsoid([3, 1, 1], true),
       material,

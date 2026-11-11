@@ -69,7 +69,13 @@ export const requireStandardExample: Rule = {
         const partner = accessorPartner(node);
         if (partner && (node.kind === 'set' || hasExample(context, partner))) return;
       }
-      context.report({ node, message: 'Standard API needs an @example showing typical use' });
+      context.report({
+        node,
+        message:
+          'Standard API needs an @example showing typical use. If no example would help, keep @standard and put ' +
+          '`// oxlint-disable-next-line pixi3d/require-standard-example -- <reason>` between the JSDoc and the ' +
+          'declaration; @advanced is only for API typical users never touch.',
+      });
     }
 
     function checkSignature(node: AstNode): void {

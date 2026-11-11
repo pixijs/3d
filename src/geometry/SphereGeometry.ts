@@ -36,7 +36,7 @@ export interface SphereGeometryOptions extends Geometry3DOptions {
   /**
    * The number of vertical segments (latitudes between the poles)
    *
-   * Floored, and clamped to a minimum of 2: a single band between the poles has no triangles.
+   * Floored, and clamped to a minimum of 2.
    * @default 16
    * @example
    * ```ts
@@ -52,8 +52,8 @@ export interface SphereGeometryOptions extends Geometry3DOptions {
  * UVs are equirectangular: `u` wraps once around the Y axis, starting at +X, and `v` runs from 0 at
  * the north pole (+Y) to 1 at the south pole, so an image's top row lands on the north pole.
  *
- * At each pole every segment ends in a single triangle, so triangles crowd together there and a
- * texture pinches. For even tessellation prefer {@link IcosahedronGeometry}.
+ * Triangles crowd together at the poles, where a texture pinches. For even triangles, use
+ * {@link IcosahedronGeometry}.
  * @example
  * ```ts
  * const sphere = new SphereGeometry({
@@ -62,15 +62,12 @@ export interface SphereGeometryOptions extends Geometry3DOptions {
  *   heightSegments: 16,
  * });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
- * @see {@link IcosahedronGeometry} For a geodesic sphere with uniform tessellation
  * @category geometry
  * @standard
  */
 export class SphereGeometry extends Geometry3D {
   /**
-   * Default options for {@link SphereGeometry}
+   * Defaults for every new `SphereGeometry`
    * @example
    * ```ts
    * SphereGeometry.defaultOptions.widthSegments = 16;

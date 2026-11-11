@@ -6,7 +6,6 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** Creates a high-frequency checker face that makes prefilter blur easy to see. */
 function checkerFace(r: number, g: number, b: number): Texture {
   const size = 64;
   const cell = 8;
@@ -32,14 +31,6 @@ function checkerFace(r: number, g: number, b: number): Texture {
   });
 }
 
-/**
- * Checks roughness-driven prefiltered mip selection
- *
- * Five metal spheres have roughness values from 0 to 1 and use only a checkerboard
- * cubemap for lighting. Every lit pixel comes from `sampleEnvironment`. A working
- * mip chain changes from sharp checkers to a flat colour across the row. A broken
- * chain produces five identical mirrors or black spheres.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x000000,

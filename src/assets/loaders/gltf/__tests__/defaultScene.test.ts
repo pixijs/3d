@@ -13,7 +13,7 @@ function twoSceneGltf(defaultScene?: number): GltfFormat {
       { name: 'Second', nodes: [1] },
     ],
     nodes: [{ name: 'inFirst' }, { name: 'inSecond' }],
-  } as GltfFormat;
+  };
 }
 
 describe('glTF default scene', () => {

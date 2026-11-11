@@ -5,11 +5,11 @@ import { renderGltfModel } from './frameModel';
 
 const URL = model('gltf.CompareDispersion');
 
-// Skipped on WebGL: transmissive surfaces render black; WebGPU refracts.
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },
   skip: ['webgl'],
+  skipReason: 'transmissive surfaces render black; WebGPU refracts',
   create: async (app) => {
     await renderGltfModel(app, { url: URL });
   },

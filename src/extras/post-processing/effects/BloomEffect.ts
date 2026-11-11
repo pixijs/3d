@@ -2,18 +2,11 @@ import { definedProps, UniformGroup } from 'pixi.js';
 
 import type { RenderGraph } from '../../../core/render-graph/RenderGraph';
 import type { ColorHandle } from '../../../core/render-graph/ResourceHandle';
+import { floatRgbFormat } from '../../../core/textures/floatRenderTargets';
 import { FullscreenPass } from '../../../post-processing/effects/FullscreenPass';
 import { PostEffect } from '../../../post-processing/effects/PostEffect';
 import type { EffectFragment, EffectIO, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
 
-/**
- * First pass: keeps what passes the threshold and writes it into level 0 of the pyramid
- *
- * A quadratic knee either side of the threshold fades the cut-off in, so it never shows as a hard
- * edge. Four diagonal taps one input texel out average the chain image down on the way, so a
- * single bright texel doesn't flicker as the camera moves. The pixel is scaled rather than
- * clipped, which keeps its hue. Reads `uBloom` = (threshold, knee, unused, unused).
- */
 const BRIGHT_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -45,13 +38,6 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-/**
- * Downsample pass: each pyramid level is the one above at half size, through a 13-tap kernel
- *
- * A 2×2 of bilinear taps at ±1 source texel carries half the weight, and a 3×3 grid at ±2 source
- * texels the rest. The overlapping footprints stop a single bright texel from flickering between
- * levels.
- */
 const DOWN_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -95,15 +81,7 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-/**
- * Upsample pass: walks back up the pyramid, blending each coarser level over the finer one in place
- *
- * Four bilinear taps at half-texel offsets make a 3×3 tent filter in four fetches. The output is
- * premultiplied with `radius` in alpha, so pixi's `'normal'` blend (`one`, `one-minus-src-alpha`)
- * lands `finer = mix(finer, tent(coarser), radius)`. A tent of a tent of a tent is close to a
- * Gaussian, which is why the glow reads smooth rather than blobby. Reads `uBloomUp` = (radius,
- * unused, unused, unused).
- */
+/** Writes `radius` to alpha, so the `'normal'` blend its pass sets in `build` gives `mix(finer, coarser, radius)` */
 const UP_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -125,12 +103,7 @@ vec4 effect(vec2 uv) {
 `,
 };
 
-/**
- * Last pass: adds level 0 of the pyramid, magnified, onto the chain image
- *
- * Only RGB is added, because bloom adds light, never coverage. Reads `uBloomCombine` =
- * (intensity, unused, unused, unused).
- */
+/** Adds RGB only and keeps the chain image's alpha, since the glow adds light, not coverage */
 const COMBINE_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
@@ -160,9 +133,9 @@ export interface BloomEffectOptions extends PostEffectOptions {
   /**
    * Brightness above which a pixel blooms, measured on its brightest channel
    *
-   * A soft knee fades the cut-off in rather than switching it on: bloom starts at half the
-   * threshold and is fully in by one and a half times it. {@link BloomEffect} explains why the
-   * default is too high for most scenes.
+   * A pixel blooms with the brightness it has above the threshold, eased in from half the
+   * threshold, so the cut-off is soft. At the default stage it's measured before the tone curve, so `1` blooms mostly what is
+   * brighter than white.
    * @default 1
    * @example
    * ```ts
@@ -192,10 +165,9 @@ export interface BloomEffectOptions extends PostEffectOptions {
    */
   radius?: number;
   /**
-   * Number of textures in the blur pyramid; each one is half the size of the last and doubles
-   * the glow's reach
+   * Number of blur levels; each is half the size of the last and doubles the glow's reach
    *
-   * Fixed at construction. Rounded to a whole number, at least 1.
+   * Rounded to a whole number, at least 1. Fixed at construction.
    * @default 5
    * @example
    * ```ts
@@ -204,10 +176,9 @@ export interface BloomEffectOptions extends PostEffectOptions {
    */
   levels?: number;
   /**
-   * Texels per logical pixel for the largest pyramid texture, as `resolution` means on a pixi filter
+   * Texels per logical pixel for the largest blur level, like a pixi filter's `resolution`
    *
-   * A glow has no fine detail, so a fraction is the usual choice: `0.5` gives one texel to every
-   * two logical pixels across. Fixed at construction.
+   * A glow has no fine detail, so a fraction is the usual choice. Fixed at construction.
    * @default 0.5
    * @example
    * ```ts
@@ -220,29 +191,24 @@ export interface BloomEffectOptions extends PostEffectOptions {
 /**
  * Bright parts of the frame glow outward
  *
- * The effect keeps what passes `threshold`, blurs it through a pyramid of `levels` textures, each
- * half the size of the last, and adds the result back onto the frame. That costs `2 × levels`
- * passes, all drawn at `resolution` or smaller except the last.
+ * The effect keeps what's brighter than `threshold`, blurs it through `levels` textures, each half
+ * the size of the last, and adds the result back onto the frame. That costs `2 × levels` passes,
+ * all but the last at `resolution` or smaller. `threshold`, `intensity` and `radius` can change
+ * every frame; `levels` and `resolution` are fixed, so replace the effect to change them.
  *
- * `threshold`, `intensity` and `radius` are plain uniform writes, so they can change every frame.
- * `levels` and `resolution` are fixed at construction; replace the effect to change them.
- *
- * The threshold applies to the image the chain carries at this point. A normal canvas stores it
- * in 8 bits, so no channel passes 1, and at the default threshold even pure white passes only an
- * eighth of its brightness. Lower it, to around `0.5`, to make highlights glow.
+ * By default it runs before the tone curve, where emissive surfaces, lights and specular glints
+ * are still brighter than 1, so they glow in their own colour. Lower `threshold` to let bright but
+ * ordinary surfaces glow too, for a hazier look.
  * @example
  * ```ts
- * view.passes = [new BloomEffect({ threshold: 0.5, intensity: 0.6 })];
+ * view.passes = [new BloomEffect({ intensity: 0.6 })];
  * ```
  * @category extras:post-processing
  * @standard
  */
 export class BloomEffect extends PostEffect {
   /**
-   * Default {@link BloomEffectOptions} merged under every constructor call
-   *
-   * `new BloomEffect(opts)` resolves as `{ ...BloomEffect.defaultOptions, ...opts }`. Mutate to change defaults
-   * process-wide.
+   * Defaults for every new `BloomEffect`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * BloomEffect.defaultOptions.resolution = 0.25;
@@ -257,12 +223,12 @@ export class BloomEffect extends PostEffect {
   };
 
   /**
-   * Number of textures in the blur pyramid, fixed at construction
+   * Number of blur levels, fixed at construction
    * @advanced
    */
   public readonly levels: number = 0;
   /**
-   * Texels per logical pixel for the largest pyramid texture, fixed at construction
+   * Texels per logical pixel for the largest blur level, fixed at construction
    * @advanced
    */
   public readonly resolution: number = 0;
@@ -295,7 +261,7 @@ export class BloomEffect extends PostEffect {
   }
 
   /**
-   * Add the bright extract, the downsample and upsample walks, and the combine for this slot
+   * Adds the effect's passes for this slot in the chain
    * @param graph - Render graph being built.
    * @param io - Input/output handles for this slot in the chain.
    * @example
@@ -306,9 +272,10 @@ export class BloomEffect extends PostEffect {
    * @advanced
    */
   public override build(graph: RenderGraph, io: EffectIO): void {
+    const format = graph.sceneIsLinear ? floatRgbFormat(io.renderer) : undefined;
     const levels: ColorHandle[] = [];
     for (let k = 0; k < this.levels; k++) {
-      levels.push(graph.createColor({ resolution: this.resolution / 2 ** k, label: `bloomLevel${k}` }));
+      levels.push(graph.createColor({ resolution: this.resolution / 2 ** k, format, label: `bloomLevel${k}` }));
     }
 
     graph.addPass(
@@ -371,8 +338,8 @@ export class BloomEffect extends PostEffect {
     return (this._brightUniforms.uniforms.uBloom as Float32Array)[0];
   }
   /**
-   * Sets the bloom threshold and its soft knee (half the threshold, either side of it)
-   * @param value - Brightness of the brightest channel at the middle of the knee.
+   * Sets the bloom threshold
+   * @param value - Brightness of a pixel's brightest channel.
    */
   public set threshold(value: number) {
     this.writeLane(this._brightUniforms, 'uBloom', 0, value);
@@ -393,7 +360,7 @@ export class BloomEffect extends PostEffect {
   }
   /**
    * Sets the glow strength
-   * @param value - Multiplier on the glow; 0 turns the bloom off.
+   * @param value - Multiplier on the glow.
    */
   public set intensity(value: number) {
     this.writeLane(this._combineUniforms, 'uBloomCombine', 0, value);
@@ -410,8 +377,8 @@ export class BloomEffect extends PostEffect {
     return (this._upUniforms.uniforms.uBloomUp as Float32Array)[0];
   }
   /**
-   * Sets the per-level blend that spreads the glow
-   * @param value - `0` keeps only the finest level, `1` replaces each level with the coarser one.
+   * Sets how far the glow spreads
+   * @param value - `0` (tight) to `1` (wide).
    */
   public set radius(value: number) {
     this.writeLane(this._upUniforms, 'uBloomUp', 0, value);

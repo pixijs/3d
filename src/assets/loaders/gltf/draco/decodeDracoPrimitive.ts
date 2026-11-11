@@ -2,29 +2,18 @@ import type { TypedArray } from 'pixi.js';
 
 import type { Geometry3DOptions } from '../../../../geometry/Geometry3D';
 import { warnOnce } from '../../../../utils/warnOnce';
-import type { GltfFormat, KHRDracoMeshCompression, MeshPrimitive } from '../GltfFormat';
+import type { GltfFormat } from '../GltfFormat';
 import { GLTF_SEMANTIC_TO_ATTRIBUTE } from '../utils/gltfAttributeMap';
 import { widenColorToRgba } from '../utils/widenColorToRgba';
 import type { DracoAttributeRequest } from './worker/loadDracoOnWorker';
 import { loadDracoOnWorker } from './worker/loadDracoOnWorker';
 
-/**
- * Decodes a primitive's `KHR_draco_mesh_compression` data into `Geometry3DOptions` fields
- *
- * Only the attributes the extension lists are decoded. The primitive can name others, stored
- * uncompressed, which this path doesn't load. Colours are widened to RGBA as on the uncompressed
- * path in `processMeshes`.
- * @param gltfRaw - Parsed glTF JSON, used to resolve the extension's bufferView and accessors
- * @param buffers - Binary buffers indexed by glTF buffer index
- * @param primitiveRaw - The primitive whose attribute accessors the decoded data belongs to
- * @param dracoExt - The primitive's `KHR_draco_mesh_compression` entry
- * @internal
- */
+/** @internal */
 export async function decodeDracoPrimitive(
   gltfRaw: GltfFormat,
   buffers: ArrayBuffer[],
-  primitiveRaw: MeshPrimitive,
-  dracoExt: KHRDracoMeshCompression,
+  primitiveRaw: GltfFormat.MeshPrimitive,
+  dracoExt: GltfFormat.KHRDracoMeshCompression,
 ): Promise<Partial<Geometry3DOptions>> {
   const bufferView = gltfRaw.bufferViews![dracoExt.bufferView];
   const sourceBuffer: ArrayBuffer = buffers[bufferView.buffer];
@@ -40,7 +29,7 @@ export async function decodeDracoPrimitive(
     const accessor = gltfRaw.accessors![accessorIdx];
     attributeIds[semantic] = {
       dracoId: dracoExt.attributes[semantic],
-      componentType: accessor.componentType as number,
+      componentType: accessor.componentType,
     };
   }
 
@@ -62,5 +51,5 @@ export async function decodeDracoPrimitive(
     }
   }
 
-  return result as Partial<Geometry3DOptions>;
+  return result;
 }

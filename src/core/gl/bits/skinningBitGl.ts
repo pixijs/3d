@@ -2,12 +2,7 @@ import { glTexelAddress } from '../../buffers/dataTextureLayout';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * Skeletal animation for WebGL using bone matrices stored in a texture, the GLSL twin of
- * `skinningBitGpu`, which documents the three-row bone matrices and how they transform
- *
- * WebGL has no storage buffers, so the bone pit arrives as an `rgba32float` data texture read with
- * `texelFetch`, a bone being three texels. `bonePitIndex` is a local from `instanceFetchBitGl`: the
- * mesh's first bone in the pit.
+ * The GLSL twin of `skinningBitGpu`; `bonePitIndex`, the mesh's first bone, comes from `instanceFetchBitGl`
  * @internal
  */
 export const skinningBitGl: ShaderBit = {

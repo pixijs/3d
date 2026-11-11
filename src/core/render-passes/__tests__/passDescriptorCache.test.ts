@@ -9,7 +9,6 @@ import { View3D } from '~/scene/View3D';
 
 import { RenderPassBit } from '../RenderPass';
 
-/** A one-triangle geometry, drawn as a line list when `topology` says so */
 const triangle = (topology?: 'triangle-list' | 'line-list'): Geometry3D =>
   new Geometry3D({
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),

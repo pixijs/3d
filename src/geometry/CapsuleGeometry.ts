@@ -26,7 +26,7 @@ export interface CapsuleGeometryOptions extends Geometry3DOptions {
    * The total height of the capsule along the Y axis, including the caps
    *
    * The cylindrical portion is `height - 2 * radius`; when `height <= 2 * radius` there is no
-   * cylinder and the capsule is a sphere.
+   * cylinder, and the capsule is a sphere of `radius`.
    * @default 2
    * @example
    * ```ts
@@ -47,7 +47,7 @@ export interface CapsuleGeometryOptions extends Geometry3DOptions {
    */
   radialSegments: number;
   /**
-   * The number of segments along the cylindrical portion only; the caps follow `radialSegments`
+   * The number of segments along the cylindrical portion; the caps follow `radialSegments`
    *
    * Floored, and clamped to a minimum of 1.
    * @default 8
@@ -63,13 +63,9 @@ export interface CapsuleGeometryOptions extends Geometry3DOptions {
  * A capsule geometry oriented along the +Y axis and centered on the origin: a cylindrical
  * mid-section with hemispherical caps on each end
  *
- * The total `height` includes the caps, so the cylindrical portion measures `height - 2 * radius`
- * (clamped to `>= 0`); top sits at `+height/2` and bottom at `-height/2`.
- *
- * Normals are smooth across the seams, where the caps share the cylinder's end rings. UVs wrap
- * once around the circumference (`u` from 0 to 1). `v` runs from 0 at the top pole to 1 at the
- * bottom one, the top cap, cylinder and bottom cap each taking a share in proportion to its
- * height.
+ * Normals are smooth across the seams between the caps and the cylinder. UVs wrap once around the
+ * circumference (`u` from 0 to 1), and `v` runs from 0 at the top pole to 1 at the bottom one, the
+ * top cap, cylinder and bottom cap each taking a share in proportion to its height.
  * @example
  * ```ts
  * const capsule = new CapsuleGeometry({
@@ -79,16 +75,13 @@ export interface CapsuleGeometryOptions extends Geometry3DOptions {
  *   heightSegments: 8,
  * });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
- * @see {@link CylinderGeometry} For the same primitive without rounded caps
- * @see {@link ConeGeometry} For a cylinder with `radiusTop = 0`
+ * @see {@link CylinderGeometry} For flat ends instead of rounded caps
  * @category geometry
  * @standard
  */
 export class CapsuleGeometry extends Geometry3D {
   /**
-   * Default options for {@link CapsuleGeometry}
+   * Defaults for every new `CapsuleGeometry`
    * @example
    * ```ts
    * CapsuleGeometry.defaultOptions.radialSegments = 16;

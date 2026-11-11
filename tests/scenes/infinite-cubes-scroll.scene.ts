@@ -1,6 +1,5 @@
 import type { TestScene } from '@test-utils';
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
-import type { Renderer } from 'pixi.js';
 
 import { ContainerTexture } from '~/core/textures/ContainerTexture';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
@@ -8,14 +7,12 @@ import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Static frame of the `infinite-cubes-scroll` example at a fixed scroll value, on a non-square window:
-// verifies the conveyor + presenter assembles (fills the window, true cubes, no black, no reparenting).
 const T = 1024;
 const FOV = 50;
 const CUBE = 2;
 const N = 7;
 const REST = 5;
-const SCROLL = 3.7; // topId 3, f 0.7 (top mostly zoomed out)
+const SCROLL = 3.7;
 
 const fillDistance = (): number => CUBE / 2 + CUBE / 2 / Math.tan(((FOV / 2) * Math.PI) / 180);
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -26,7 +23,7 @@ const poseY = (id: number): number => 0.5 + 0.4 * Math.cos(id * 1.1);
 export const scene: TestScene = {
   app: { backgroundColor: 0x05060c, width: 768, height: 432 },
   create: async (app) => {
-    const renderer = app.renderer as unknown as Renderer;
+    const renderer = app.renderer;
 
     interface Engine {
       texture: ContainerTexture;
@@ -86,7 +83,6 @@ export const scene: TestScene = {
       below = engine.texture;
     }
 
-    // Assemble the window for SCROLL.
     const topId = Math.floor(SCROLL);
     const f = SCROLL - topId;
     const fill = fillDistance();
@@ -110,8 +106,6 @@ export const scene: TestScene = {
       }
     }
 
-    // The ContainerTexture is stored screen-oriented (flipY:true, for 3D), so a 2D Sprite presenting it
-    // must flip it back vertically (negative Y scale, positioned from the bottom edge).
     const presenter = new Sprite(engines[N - 1].texture);
     const fit = Math.max(app.screen.width, app.screen.height) / T;
     presenter.scale.set(fit, -fit);
@@ -120,7 +114,6 @@ export const scene: TestScene = {
     presenter.position.set(left, top + T * fit);
     app.stage.addChild(presenter);
 
-    // Render the chain deepest-first (a couple of passes so the nesting settles) before the screenshot.
     for (let pass = 0; pass < 2; pass++) {
       floorTex.render(renderer);
       for (const engine of engines) engine.texture.render(renderer);

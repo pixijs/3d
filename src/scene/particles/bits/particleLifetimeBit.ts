@@ -1,34 +1,14 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Gives every particle a clock: when it was born, how long it lives, and how
- * far through that it is right now
+ * Gives every particle a clock, which the other lifetime bits read
  *
- * The base every stateless particle behaviour reads from.
+ * Each particle carries its `aBirth` time and `aLife` length in seconds, and you advance the
+ * container's `uParticleTime` uniform yourself, so you can pause or scrub the system. A particle
+ * draws only from its birth until its life runs out.
  *
- * Declares `aBirth` and `aLife` per particle and `uParticleTime` per system,
- * and derives two locals for later bits:
- *
- * - `particleAge`: seconds since birth, negative before the particle is born.
- * - `particleProgress`: age over lifetime, clamped to `[0, 1]`, so every ramp
- *   can blend on it without clamping again. An unwritten slot has a lifetime of
- *   zero; the divide is floored so its progress is a finite number rather than
- *   NaN, and it reads as long dead.
- *
- * A particle that is not yet born or already dead is removed in
- * `afterTransform` by collapsing its clip position to a point outside the
- * frustum. That slot runs after every bit that writes size or tint, so a ramp
- * assigning `particleSize` cannot bring a dead particle back. Nothing on the
- * CPU tracks liveness; a particle is written once at birth and the shader
- * decides every frame whether it exists.
- *
- * Time is the system's own `uParticleTime` rather than the global clock so a
- * system can be paused or scrubbed, and so a capture is deterministic.
- *
- * The locals are declared in `beforeTransform` rather than `input` because on
- * WebGL the `material` struct only comes into scope after the input slot. That
- * also puts them after the particle bit's locals, so a later bit sees both. Both
- * backends use the same slot so the two sources stay line for line.
+ * Bits composed after it can read two locals in their `beforeTransform` or later: `particleAge`,
+ * seconds since birth, and `particleProgress`, age over life from 0 to 1.
  * @category scene
  * @advanced
  */

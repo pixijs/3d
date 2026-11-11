@@ -8,7 +8,6 @@ import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 
 const template: ShaderBitTemplate = { bindGroups: ['global'], gpu: '{{header}}' };
 
-/** The WebGPU layout entry generated for the binding `name` */
 function entryFor(bits: ShaderBit[], name: string) {
   const { gpuLayout } = compileWgslSource({ bits, template });
   const map = buildWgslBindingMap(collectBindings(bits, template));

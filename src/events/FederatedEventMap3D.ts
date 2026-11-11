@@ -9,6 +9,7 @@ import type { Pointer3DEvent, Wheel3DEvent } from './Pointer3DEvent';
  * @example
  * ```ts
  * mesh.eventMode = 'static';
+ * mesh.hitVolume = 'geometry'; // per triangle, so hits carry a uv
  * mesh.on('pointertap', (e) => {
  *   if (!e.hit3D) return;
  *   marker.position.copyFrom(e.hit3D.point); // where on the mesh the ray landed
@@ -24,8 +25,8 @@ export type FederatedEventMap3D = {
   /**
    * Fired when a mouse click on this node completes, with any button but the right one
    *
-   * `detail` counts quick repeat clicks on the same node, so `2` is a double click. A pen fires
-   * only `pointertap`.
+   * `detail` counts repeat clicks on the same node, each within 200 ms of the last, so `2` is a
+   * double click. A pen fires only `pointertap`.
    * @example
    * ```ts
    * mesh.on('click', (e) => {
@@ -181,7 +182,8 @@ export type FederatedEventMap3D = {
    */
   pointerover: Pointer3DEvent;
   /**
-   * Fired when a pointer completes a tap on this node; `click` and `tap` for any pointer type
+   * Fired when a pointer completes a tap on this node, for any pointer type and any button, right
+   * clicks included
    * @example
    * ```ts
    * mesh.on('pointertap', () => select(mesh));
@@ -243,10 +245,15 @@ export type FederatedEventMap3D = {
   rightupoutside: Pointer3DEvent;
   /**
    * Fired when a touch completes a tap on this node
+   *
+   * Chrome gives each touch a new `pointerId`, and `detail` only counts repeat taps by the same one,
+   * so it stays `1` there; time a double tap yourself.
    * @example
    * ```ts
+   * let lastTap = 0;
    * mesh.on('tap', (e) => {
-   *   if (e.detail === 2) focusOn(mesh); // double tap
+   *   if (e.timeStamp - lastTap < 300) focusOn(mesh); // double tap
+   *   lastTap = e.timeStamp;
    * });
    * ```
    */
@@ -281,6 +288,7 @@ export type FederatedEventMap3D = {
    * Fired while a touch moves across this node
    * @example
    * ```ts
+   * canvasMesh.hitVolume = 'geometry'; // per triangle, so hits carry a uv
    * canvasMesh.on('touchmove', (e) => {
    *   if (e.hit3D) paintAt(e.hit3D.uv);
    * });
@@ -310,7 +318,7 @@ export type FederatedEventMap3D = {
 /**
  * The move events an interactive {@link Container3D} hears wherever the pointer is
  *
- * Every interactive node in the View hears them on every pointer move over the canvas, as in
+ * Every interactive node in the View hears them on every pointer move on the page, as in
  * pixi.js's `GlobalFederatedEventMap`, and there is no capture variant. The 3D fields carry the
  * View's pick for that move, not the node being told, and read `null` when the ray hit nothing.
  * @example
@@ -328,7 +336,7 @@ export type FederatedEventMap3D = {
  */
 export type GlobalFederatedEventMap3D = {
   /**
-   * Fired on every mouse move over the canvas, wherever the pointer is
+   * Fired on every mouse move, wherever the pointer is on the page
    * @example
    * ```ts
    * mesh.on('globalmousemove', (e) => {
@@ -338,7 +346,7 @@ export type GlobalFederatedEventMap3D = {
    */
   globalmousemove: Pointer3DEvent;
   /**
-   * Fired on every pointer move over the canvas, whether or not the pointer is over this node
+   * Fired on every pointer move on the page, whether or not the pointer is over this node
    * @example
    * ```ts
    * mesh.on('globalpointermove', (e) => {
@@ -348,7 +356,7 @@ export type GlobalFederatedEventMap3D = {
    */
   globalpointermove: Pointer3DEvent;
   /**
-   * Fired on every touch move over the canvas, wherever the touch is
+   * Fired on every touch move, wherever the touch is on the page
    * @example
    * ```ts
    * mesh.on('globaltouchmove', (e) => {
@@ -360,10 +368,6 @@ export type GlobalFederatedEventMap3D = {
 };
 
 /**
- * Emitter signatures for the 3D event set, including the `${type}capture` keys fired during the capture phase
- *
- * The 3D counterpart of pixi.js's `FederatedEventEmitterTypes`. Merged into `Container3DEvents`
- * through the `PixiMixins.Container3DEvents` hook, which is what types `container.on(...)` payloads.
  * @interface
  * @internal
  */

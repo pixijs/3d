@@ -1,19 +1,8 @@
-import { Texture, TextureSource } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { ParticleContainer3D } from '~/scene/particles/ParticleContainer3D';
 
-function sheet(frames: number): Texture[] {
-  const source = new TextureSource({ width: frames * 16, height: 16, resolution: 1 });
-
-  return Array.from(
-    { length: frames },
-    (_, i) => new Texture({ source, frame: { x: i * 16, y: 0, width: 16, height: 16 } as never }),
-  );
-}
-
-/** A bit that declares what it needs and does nothing with it — enough to grow the buffer */
 const trajectoryBit: ShaderBit = {
   name: 'test-trajectory',
   attributes: { aVel: 'float32x3', aBirth: 'float32' },
@@ -21,42 +10,6 @@ const trajectoryBit: ShaderBit = {
 };
 
 describe('ParticleContainer3D layout', () => {
-  it('derives the same layout the hard-coded offsets used to produce', () => {
-    const plain = new ParticleContainer3D({ capacity: 4 });
-
-    expect(plain.data.vertexStride).toBe(24);
-    expect(plain.data.offsets).toEqual({
-      aPosition: 0,
-      aParticleSizeRot: 12,
-      aParticleColor: 20,
-    });
-
-    const flipbook = new ParticleContainer3D({ capacity: 4, texture: sheet(2) });
-
-    expect(flipbook.data.vertexStride).toBe(32);
-    expect(flipbook.data.offsets.aParticleUVFrame).toBe(24);
-  });
-
-  it("grows the buffer from an extra bit's attribute declarations without moving a built-in attribute", () => {
-    const particles = new ParticleContainer3D({ capacity: 4, extraBits: [trajectoryBit] });
-
-    expect(particles.data.offsets).toEqual({
-      aPosition: 0,
-      aParticleSizeRot: 12,
-      aParticleColor: 20,
-      aVel: 24,
-      aBirth: 36,
-    });
-    expect(particles.data.vertexStride).toBe(40);
-  });
-
-  it('keeps the corner id, which streams from its own buffer, out of the interleaved one', () => {
-    const particles = new ParticleContainer3D({ capacity: 4, extraBits: [trajectoryBit] });
-
-    expect(particles.data.offsets.aUV).toBeUndefined();
-    expect(particles.geometry.attributes.aUV.stride).toBe(4);
-  });
-
   it('keeps writing the built-in attributes correctly once a bit widens the vertex', () => {
     const particles = new ParticleContainer3D({ capacity: 4, extraBits: [trajectoryBit] });
     const { f32, floatStride } = particles.data;

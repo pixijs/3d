@@ -24,7 +24,7 @@ const unit = (v: Vec3): Vec3 => {
 };
 
 /**
- * The "Venice Sunset" IBL the gltf-compare example lights models with: the
+ * The "Venice Sunset" IBL the glTF scenes light models with: the
  * committed LDR cube-face capture (served from the test publicDir). `View3D`
  * prefilters it at runtime for diffuse + specular image-based lighting.
  */
@@ -35,9 +35,9 @@ interface RenderGltfOptions {
   url: string;
   /** Margin multiplier on the tight-fit camera distance. Larger pulls the camera back. Default 1.05. */
   padding?: number;
-  /** Key directional-light intensity. Default `0.8·π`, matching gltf-compare. */
+  /** Key directional-light intensity. Default `0.8·π`. */
   lightIntensity?: number;
-  /** Ambient fill intensity. Default `0.3`, matching gltf-compare. */
+  /** Ambient fill intensity. Default `0.3`. */
   ambientIntensity?: number;
   /** `.cubemap` manifest for the IBL. Default the Venice Sunset capture. */
   environmentUrl?: string;
@@ -47,16 +47,18 @@ interface RenderGltfOptions {
 
 /**
  * Loads a glTF/GLB model and frames it for a deterministic 512×512 snapshot,
- * lit identically to the gltf-compare example: the Venice Sunset IBL, a soft
- * white ambient term, and a single key directional, both parented to the camera
- * so they track the view, with no-curve sRGB-encode tone mapping so authored
- * colours read true.
+ * lit the same way every time: the Venice Sunset IBL, a soft white ambient
+ * term, and a single key directional, both parented to the camera so they
+ * track the view, with no-curve sRGB-encode tone mapping so authored colours
+ * read true.
  *
  * Centres the model on its local AABB and parks the camera on an elevated 3/4
  * diagonal at the tightest distance that still contains every AABB corner, so
  * the model fills the frame regardless of its authored scale, origin, or shape.
+ *
+ * Returns the model, framed and lit, for a test that changes it afterwards.
  */
-export async function renderGltfModel(app: Application, options: RenderGltfOptions): Promise<void> {
+export async function renderGltfModel(app: Application, options: RenderGltfOptions): Promise<Model3D> {
   const container = new Container();
   app.stage.addChild(container);
 
@@ -123,13 +125,15 @@ export async function renderGltfModel(app: Application, options: RenderGltfOptio
   view3d.camera.position.set(forward[0] * distance, forward[1] * distance, forward[2] * distance);
   view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-  // Punctual rig parented to the camera so the lights track the view, matching
-  // the gltf-compare example. pixi lights emit along local -Z; a +30° yaw points
-  // the key into the scene from the camera's right.
+  // Punctual rig parented to the camera so the lights track the view. pixi
+  // lights emit along local -Z; a +30° yaw points the key into the scene from
+  // the camera's right.
   const ambient = new AmbientLight({ color: 0xffffff, intensity: options.ambientIntensity ?? 0.3 });
   view3d.camera.addChild(ambient);
 
   const key = new DirectionalLight({ color: 0xffffff, intensity: options.lightIntensity ?? Math.PI * 0.8 });
   key.rotation.set(0, Math.PI / 6, 0);
   view3d.camera.addChild(key);
+
+  return model;
 }

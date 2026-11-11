@@ -6,19 +6,6 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Ambient-light energy lock.
- *
- * The ambient diffuse term carries the `1/PI` Lambertian normalization, the
- * same as the direct-light diffuse, so an `AmbientLight` reads at the correct
- * energy scale instead of ~PI (≈3.14×) too bright. Tone mapping is `'none'`,
- * so each sphere's encoded colour is `ambient * albedo * INV_PI` directly with
- * no curve to mask drift — drop the `INV_PI` and every sphere jumps brighter
- * (bright channels clip toward white), failing the pixel match.
- *
- * Lit by ambient only (no directional), so the spheres are flat discs whose
- * value is purely the ambient energy across R/G/B/white.
- */
 const COLORS = [0xffffff, 0xff3030, 0x32d24a, 0x3060ff];
 
 export const scene: TestScene = {

@@ -1,7 +1,10 @@
+import { RendererType } from 'pixi.js';
 import type { Buffer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { DataStoreBuffer } from '~/core/buffers/DataStoreBuffer';
+import { MaterialDataStoreBuffer } from '~/core/buffers/MaterialDataStoreBuffer';
+import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 
 function createStore(): DataStoreBuffer {
   return new DataStoreBuffer({
@@ -62,6 +65,35 @@ describe('DataStoreBuffer.destroy', () => {
   });
 });
 
+describe('MaterialDataStoreBuffer.destroy', () => {
+  it('frees its data texture and every texture growth retired, and a second call does nothing', () => {
+    const store = new MaterialDataStoreBuffer({ alignment: 256, rendererType: RendererType.WEBGPU });
+    const initial = store.texture;
+    const initialSource = initial.source;
+    const materials: FlatMaterial[] = [];
+
+    for (let i = 0; i < 1000 && store.texture === initial; i++) {
+      const material = new FlatMaterial();
+      store.register(material);
+      materials.push(material);
+    }
+    const grown = store.texture;
+    const grownSource = grown.source;
+    expect(grown).not.toBe(initial);
+    expect(initial.destroyed, 'a view that drew earlier in the frame still holds the old texture').toBe(false);
+
+    store.destroy();
+
+    expect(initial.destroyed).toBe(true);
+    expect(initialSource.destroyed).toBe(true);
+    expect(grown.destroyed).toBe(true);
+    expect(grownSource.destroyed).toBe(true);
+    expect(() => store.destroy()).not.toThrow();
+
+    for (const material of materials) material.destroy();
+  });
+});
+
 describe('DataStoreBuffer.unload', () => {
   it('frees the data textures orphaned by growth and keeps the live one, sized to the grown store', () => {
     const buf = createStore();
@@ -83,25 +115,5 @@ describe('DataStoreBuffer.unload', () => {
 
     buf.destroy();
     expect(grown.destroyed).toBe(true);
-  });
-
-  it('makes neither view until read, and retires nothing on growth without them', () => {
-    const buf = createStore();
-    const internals = buf as unknown as {
-      _buffer: unknown;
-      _texture: unknown;
-      _retiredBuffers: unknown[];
-      _retiredTextures: unknown[];
-    };
-
-    buf.set({ _storeIndex: -1 });
-    buf.allocateBlock({}, 100);
-    buf.update();
-
-    expect(internals._buffer).toBe(null);
-    expect(internals._texture).toBe(null);
-    expect(internals._retiredBuffers).toEqual([]);
-    expect(internals._retiredTextures).toEqual([]);
-    buf.destroy();
   });
 });

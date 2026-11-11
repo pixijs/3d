@@ -2,10 +2,7 @@ import type { Vector3 } from '../../../math/vector/Vector3';
 import type { EmitterShape } from './EmitterShape';
 
 /**
- * All particles start at the emitter and head straight up
- *
- * The default shape. Combine it with `speed` for a jet, or leave `speed` at 0
- * and let gravity or a custom behaviour do the work.
+ * Starts every particle at the emitter, heading straight up; the default shape
  * @example
  * ```ts
  * const jet = new ParticleSystem3D({ shape: new PointShape(), speed: 6 });
@@ -27,9 +24,9 @@ export class PointShape implements EmitterShape {
    *   }
    * }
    * ```
-   * @param _rng - Unused; every particle starts at the same point
-   * @param outPos - Receives the spawn offset, always the origin
-   * @param outDir - Receives the direction, always +Y
+   * @param _rng - Unused
+   * @param outPos - Receives the origin
+   * @param outDir - Receives +Y
    * @advanced
    */
   public sample(_rng: () => number, outPos: Vector3, outDir: Vector3): void {

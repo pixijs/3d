@@ -27,26 +27,14 @@ const MIP_DOWNSAMPLE_WGSL = /* wgsl */ `
   }
 `;
 
-/** Cached per-mip render targets + bind groups for one source */
 interface MipCacheEntry {
   readonly bindGroups: GPUBindGroup[];
   readonly dstViews: GPUTextureView[];
 }
 
 /**
- * Regenerates a colour texture's mip chain (levels 1+ from level 0) in-band
- *
- * Records per-level fullscreen-triangle downsamples into the renderer's current
- * frame encoder, no submit. In-band — not Pixi's `GpuMipmapGenerator`, which
- * submits on its own encoder and would mip stale contents (the one-frame glass
- * flicker with a shared pool) — so copy → mip-gen → sample stay one ordered
- * submission. The graph calls it after a mip-chained colour's last writer.
- *
- * Caches the per-format pipeline + sampler, and each source's views/bind groups
- * keyed by uid (a pooled copy crossing a pow2 bucket is a new source/uid). The views
- * bind the GPU texture, not its contents, so one set serves every frame for as long as the
- * source keeps that GPU texture; nothing drops an entry when it doesn't.
- * Registered as a WebGPU renderer system (`renderer.mipChain3d`).
+ * Records into the frame's encoder, since pixi's `GpuMipmapGenerator` submits its own and mips stale
+ * contents; a source's cached views hold only while it keeps the same GPU texture
  * @internal
  */
 export class MipChainSystemGpu {
@@ -66,16 +54,12 @@ export class MipChainSystemGpu {
     this._renderer = renderer;
   }
 
-  /**
-   * Record `source`'s mip levels 1+ into the current frame encoder; no-op for single-level textures
-   * @param source - The texture whose mip chain gets filled from level 0
-   */
   public generate(source: TextureSource): void {
     if (source.mipLevelCount <= 1) return;
 
     const device = this._renderer.gpu.device;
     const encoder = this._renderer.encoder.commandEncoder;
-    const pipeline = this._pipeline(device, source.format as GPUTextureFormat);
+    const pipeline = this._pipeline(device, source.format);
 
     const { bindGroups, dstViews } = this._cache[source.uid] || this._buildCacheEntry(source);
 
@@ -94,7 +78,7 @@ export class MipChainSystemGpu {
 
   private _buildCacheEntry(source: TextureSource): MipCacheEntry {
     const device = this._renderer.gpu.device;
-    const pipeline = this._pipeline(device, source.format as GPUTextureFormat);
+    const pipeline = this._pipeline(device, source.format);
 
     const gpuTexture = this._renderer.texture.getGpuSource(source);
 
@@ -139,12 +123,7 @@ export class MipChainSystemGpu {
     return pipeline;
   }
 
-  /**
-   * Drop references to the cached WebGPU objects
-   *
-   * The pipelines, shader module, sampler, views, and bind groups are garbage-collected with
-   * the device, so teardown only clears the caches to release them.
-   */
+  /** The cached WebGPU objects have no `destroy()`, so dropping them is their release */
   public destroy(): void {
     this._shaderModule = null;
     this._sampler = null;
@@ -156,7 +135,7 @@ export class MipChainSystemGpu {
 declare global {
   namespace PixiMixins {
     interface WebGPUSystems {
-      /** In-band mip-chain regeneration for pooled colour copies */
+      /** Fills colour textures' mip chains within the frame */
       mipChain3d: MipChainSystemGpu;
     }
   }

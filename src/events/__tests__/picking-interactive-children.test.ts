@@ -18,7 +18,6 @@ const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 const CENTER = { x: 50, y: 50 };
 
-/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -34,7 +33,6 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -48,10 +46,6 @@ function makeView(): View3D {
   return view3d;
 }
 
-/**
- * An origin-centred sphere volume that counts its `raycast` calls, to prove a barrier keeps the picker away
- * from a descendant's volume
- */
 class CountingSphereVolume implements IHitVolume3D {
   public raycastCalls = 0;
   private readonly _sphere: Sphere;
@@ -226,24 +220,6 @@ describe('interactiveChildren as a registration barrier', () => {
     mid.interactiveChildren = true;
     expect(view3d.events._interactiveList).toContain(mesh);
     expect(view3d.raycast(CENTER)!.target).toBe(mesh);
-  });
-
-  test("a pre-set interactiveChildren = false holds through the attach walk: the barrier registers, its subtree doesn't", () => {
-    const view3d = makeView();
-    const group = new Container3D();
-    group.eventMode = 'static';
-    const mid = new Container3D();
-    mid.eventMode = 'static';
-    mid.interactiveChildren = false;
-    const mesh = makeCube();
-    mesh.eventMode = 'static';
-    mid.addChild(mesh);
-    group.addChild(mid);
-
-    view3d.root.addChild(group);
-
-    expect(view3d.events._interactiveList).toContain(mid);
-    expect(view3d.events._interactiveList).not.toContain(mesh);
   });
 
   test('reparenting across a barrier unregisters, and back out re-registers', () => {

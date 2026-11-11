@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ShaderDescriptorOptions } from '~/core/shader/ShaderDescriptor';
 import { BloomEffect } from '~/extras/post-processing/effects/BloomEffect';
+import { FxaaEffect } from '~/extras/post-processing/effects/FxaaEffect';
 import { SsaoEffect } from '~/extras/post-processing/effects/SsaoEffect';
 import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
 import { TintEffect } from '~/extras/post-processing/effects/TintEffect';
@@ -9,7 +10,6 @@ import { OutlinePass } from '~/extras/post-processing/passes/OutlinePass';
 import { WireframePass } from '~/extras/post-processing/passes/WireframePass';
 import type { MeshPassOptions } from '~/post-processing/passes/MeshPass';
 
-/** The solid-colour overrides a mesh pass was built with */
 function solidOverrides(pass: OutlinePass | WireframePass): Record<string, number> {
   const options = (pass as unknown as { _options: MeshPassOptions })._options;
   const shader = options.descriptor!.shaderDescriptor as ShaderDescriptorOptions;
@@ -19,6 +19,7 @@ function solidOverrides(pass: OutlinePass | WireframePass): Record<string, numbe
 
 describe('post-processing defaultOptions', () => {
   const bloom = { ...BloomEffect.defaultOptions };
+  const fxaa = { ...FxaaEffect.defaultOptions };
   const tint = { ...TintEffect.defaultOptions };
   const tiltShift = { ...TiltShiftEffect.defaultOptions };
   const ssao = { ...SsaoEffect.defaultOptions };
@@ -27,6 +28,7 @@ describe('post-processing defaultOptions', () => {
 
   afterEach(() => {
     BloomEffect.defaultOptions = { ...bloom };
+    FxaaEffect.defaultOptions = { ...fxaa };
     TintEffect.defaultOptions = { ...tint };
     TiltShiftEffect.defaultOptions = { ...tiltShift };
     SsaoEffect.defaultOptions = { ...ssao };
@@ -55,6 +57,19 @@ describe('post-processing defaultOptions', () => {
     expect(overridden.intensity).toBe(2);
     expect(new BloomEffect({ levels: 2.6 }).levels).toBe(3);
     expect(new BloomEffect({ levels: 0 }).levels).toBe(1);
+  });
+
+  it('FxaaEffect writes every default into its uniforms', () => {
+    const effect = new FxaaEffect();
+
+    expect(effect.edgeThreshold).toBeCloseTo(0.125);
+    expect(effect.edgeThresholdMin).toBeCloseTo(0.05);
+    expect(effect.edgeSharpness).toBe(8);
+
+    FxaaEffect.defaultOptions.edgeSharpness = 4;
+    const overridden = new FxaaEffect({ edgeSharpness: undefined, edgeThreshold: 0.166 });
+    expect(overridden.edgeSharpness).toBe(4);
+    expect(overridden.edgeThreshold).toBeCloseTo(0.166);
   });
 
   it('TiltShiftEffect writes every default into its uniforms', () => {

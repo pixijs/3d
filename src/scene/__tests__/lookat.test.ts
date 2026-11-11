@@ -13,7 +13,6 @@ function expectVec3Close(actual: Vector3, x: number, y: number, z: number) {
   expect(actual.z).toBeCloseTo(z, 5);
 }
 
-/** Where a node's local `axis` points in world space, reading the parent's stored `worldTransform` */
 function worldForward(node: Container3D, axis: Vector3): Vector3 {
   const parentQuat = new Quaternion();
   if (node.parent) {
@@ -25,7 +24,6 @@ function worldForward(node: Container3D, axis: Vector3): Vector3 {
   return new Vector3().copyFrom(axis).applyQuaternion(worldQuat);
 }
 
-/** Sets a parentless node's stored `worldTransform` from its local one, as the transform pass would */
 function updateRootWorldTransform(node: Container3D): void {
   node.updateLocalTransform();
   node.worldTransform.copyFrom(node.localTransform);

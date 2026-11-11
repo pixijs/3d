@@ -1,6 +1,5 @@
 import type { ShaderBit } from '../ShaderBit';
 
-/** Sets albedo's red channel when the `u32` field reads 3, and its green channel when the `i32` field reads -2 */
 export const integerFieldsBit: ShaderBit = {
   name: 'integerFieldsTest',
   bindings: { material: { flags: 'u32', offset: 'i32' } },

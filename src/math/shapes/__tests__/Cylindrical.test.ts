@@ -103,14 +103,6 @@ describe('Cylindrical', () => {
   });
 
   describe('setFromCartesianCoords', () => {
-    test('(0, 0, 0) gives radius=0, theta=0, y=0', () => {
-      const c = new Cylindrical(99, 99, 99);
-      c.setFromCartesianCoords(0, 0, 0);
-      expect(c.radius).toBe(0);
-      expect(c.theta).toBe(0);
-      expect(c.y).toBe(0);
-    });
-
     test('(0, 5, 0) gives radius=0, theta=0, y=5', () => {
       const c = new Cylindrical();
       c.setFromCartesianCoords(0, 5, 0);

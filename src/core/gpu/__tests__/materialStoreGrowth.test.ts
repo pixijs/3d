@@ -2,7 +2,6 @@ import { getApp } from '@test-utils';
 import type { Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
-import { MATERIAL_STRIDE_FLOATS } from '~/core/buffers/MaterialDataStoreBuffer';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
@@ -46,16 +45,11 @@ describe('material store growth between two Views in one frame, which pixi recor
 
       await device.queue.onSubmittedWorkDone();
       device.pushErrorScope('validation');
-      /**
-       * Materials enough to overflow the store, all drawn only by the second View and added in the
-       * same task as the render, so the ticker can't draw the growth frame first
-       */
-      const capacity = lengthBefore / MATERIAL_STRIDE_FLOATS;
+      const capacity = Math.ceil(lengthBefore / materials[0].data._f32.length);
       for (let i = 0; i < capacity; i++) addMesh(views[1]);
       app.render();
-      /** Read before awaiting, because a ticker frame during the await rebinds both Views to the grown texture */
-      const boundFirst = views[0]._gpuData[app.renderer.uid]!.globalBindGroup.resources[9];
-      const boundSecond = views[1]._gpuData[app.renderer.uid]!.globalBindGroup.resources[9];
+      const boundFirst = views[0]._gpuData[app.renderer.uid].globalBindGroup.getResource('uMaterialStorage');
+      const boundSecond = views[1]._gpuData[app.renderer.uid].globalBindGroup.getResource('uMaterialStorage');
       await device.queue.onSubmittedWorkDone();
       const error = await device.popErrorScope();
 

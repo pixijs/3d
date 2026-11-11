@@ -15,10 +15,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** Slot of `uBonePitTexture` in the GL global bind group (`View3DPipeGl` binds the pit there each frame) */
-const BONE_PIT_SLOT = 5;
-
-/** The one internal these tests read off the shadow pass */
 interface ShadowPassProbe {
   renderTarget: { depthStencilTexture: unknown };
 }
@@ -34,11 +30,11 @@ describe('GL global bind group shadow slot, which only the shadow pass binds, so
       const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
       app.stage.addChild(view3d);
 
-      const { shadowMap } = app.renderer.renderPipes.view3d.globalSlots;
-      const group = getGlobalGlData(view3d, app.renderer).globalBindGroup;
+      const { globalBindGroup: group, globalTextureBindings } = getGlobalGlData(view3d, app.renderer);
+      const shadowMap = globalTextureBindings.shadowMap.slot;
       expect(group.getResource(shadowMap)).toBe(DEPTH_EMPTY.source);
-      expect(group.getResource(BONE_PIT_SLOT)).toBe(Texture.EMPTY.source);
-      expect(group.getResource(1)).toBe(CUBETEXTURE_EMPTY.source);
+      expect(group.getResource('uBonePitTexture')).toBe(Texture.EMPTY.source);
+      expect(group.getResource('uEnvironmentTexture')).toBe(CUBETEXTURE_EMPTY.source);
 
       const ground = new Mesh3D({
         geometry: new PlaneGeometry({ width: 20, height: 20 }),
@@ -50,7 +46,7 @@ describe('GL global bind group shadow slot, which only the shadow pass binds, so
 
       app.render();
       expect(group.getResource(shadowMap), 'no light claims a slot, so the pass never runs').toBe(DEPTH_EMPTY.source);
-      expect(group.getResource(BONE_PIT_SLOT)).toBe(view3d._bonePit.texture.source);
+      expect(group.getResource('uBonePitTexture')).toBe(view3d._bonePit.texture.source);
 
       const caster = new Mesh3D({
         geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),

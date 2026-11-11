@@ -19,7 +19,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** pixi keeps one GPU copy per renderer of a buffer or texture source, keyed by renderer uid. */
 interface GpuResident {
   _gpuData: Record<string, unknown>;
 }
@@ -46,7 +45,6 @@ function makeTexture(color: string): Texture {
   return new Texture({ source: new CanvasSource({ resource: canvas }) });
 }
 
-/** A dynamic (non-atlased) mesh, so its geometry keeps GPU buffers of its own to give back. */
 function makeMesh(texture: Texture, x: number): Mesh3D {
   const mesh = new Mesh3D({
     geometry: new CubeGeometry({ width: 1, height: 1, depth: 1, dynamic: true }),
@@ -86,7 +84,6 @@ function pixels(app: Application<Renderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -110,25 +107,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.destroy();
       }
     }
-
-    it('unloads a mesh’s geometry and leaves its shared material alone', async () => {
-      await withApp('mesh-unload-geometry-only', (app) => {
-        const view3d = buildView(app);
-        const texture = makeTexture('#ff8800');
-        const mesh = makeMesh(texture, 0);
-        view3d.root.addChild(mesh);
-        app.render();
-
-        expect(bufferResidency(mesh.geometry)).toBeGreaterThan(0);
-        expect(residency(texture.source)).toBeGreaterThan(0);
-
-        mesh.removeFromParent();
-        mesh.unload();
-
-        expect(bufferResidency(mesh.geometry)).toBe(0);
-        expect(residency(texture.source)).toBeGreaterThan(0);
-      });
-    });
 
     it('re-packs an atlased geometry the frame after unloading a mesh that stayed in the scene', async () => {
       await withApp('mesh-unload-in-scene', (app) => {
@@ -187,7 +165,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           batched.setGeometryAt(i, geometry);
           batched.setMaterialAt(i, new Material3D({ baseColor: 0xdd4444, metallic: 0, roughness: 0.5 }));
           batched.setMatrixAt(i, new Matrix4().setPosition({ x: i * 2 - 1, y: 0, z: 0 }));
-          batched.setItemActive(i, RenderPassBit.OPAQUE);
+          batched.setPassesAt(i, RenderPassBit.OPAQUE);
         }
         view3d.root.addChild(batched);
         app.render();

@@ -1,3 +1,4 @@
+import { screenSpaceFuncsBit } from '@pixi/3d';
 import type { ShaderBit } from '@pixi/3d';
 
 /**
@@ -6,9 +7,9 @@ import type { ShaderBit } from '@pixi/3d';
  *
  * ### How it works
  *
- * 1. **Depth comparison** — Reads `uOpaqueDepthTexture` (global bind group
- *    slot 7, bound by {@link TransparentRenderPass}) via `textureLoad` and
- *    compares the stored scene depth with the fragment's own depth.
+ * 1. **Depth comparison** — Reads `uOpaqueDepthTexture` from the global bind
+ *    group via `textureLoad` and compares the stored scene depth with the
+ *    fragment's own depth.
  *    Fragments whose depth is close to existing opaque geometry produce a
  *    bright intersection glow (`smoothstep` with a 0.02 threshold).
  *
@@ -38,6 +39,8 @@ import type { ShaderBit } from '@pixi/3d';
  */
 export const depthEffectBit: ShaderBit = {
   name: 'depthEffect',
+  // Provides `screenUVFromWorld`.
+  requires: [screenSpaceFuncsBit],
 
   gpu: {
     fragment: {

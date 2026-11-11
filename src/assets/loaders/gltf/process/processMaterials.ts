@@ -15,18 +15,13 @@ import type {
 } from '../../../../materials/pbr/Material3D';
 import type { EmissiveOptions } from '../../../../materials/utils/emissiveProps';
 import type { Scene3DSource } from '../../../Scene3DSource';
-import type { GltfFormat, KHRTextureTransform, Material } from '../GltfFormat';
+import type { GltfFormat } from '../GltfFormat';
 
 /**
- * The first `KHR_texture_transform` on any texture the material uses
- *
- * glTF puts the transform on each texture reference, but a material here has one UV transform for
- * all its textures, so the first one found applies to every texture. Different transforms on
- * different textures are not supported. The list covers every texture passed to `Material3D`, so a
- * transform declared only on, say, a clearcoat texture still applies.
- * @param rawMaterial - The glTF material
+ * A material has one UV transform for all its textures, so this takes the first on any texture
+ * `processPbrMaterial` sets; keep this list in step with it
  */
-function extractUvTransform(rawMaterial: Material): KHRTextureTransform | undefined {
+function extractUvTransform(rawMaterial: GltfFormat.Material): GltfFormat.KHRTextureTransform | undefined {
   const pbr = rawMaterial.pbrMetallicRoughness;
   const ext = rawMaterial.extensions;
   const candidates = [
@@ -63,16 +58,6 @@ interface TextureBindingLike {
   extensions?: { KHR_texture_transform?: { texCoord?: number } };
 }
 
-/**
- * Warns when a texture asks for a UV set other than the first, once per texture slot and set
- *
- * Every texture samples UV set 0, which misdraws a texture made for set 1, such as the baked
- * occlusion map of many PBR exports. It also warns when a `KHR_texture_transform` names a different
- * set than its texture.
- * @param bindingName - The texture slot, for the message
- * @param info - The texture reference, when the material has one
- * @param materialName - The material's name, for the message
- */
 function warnUnsupportedTexCoord(
   bindingName: string,
   info: TextureBindingLike | undefined,
@@ -108,7 +93,7 @@ function warnUnsupportedTexCoord(
   }
 }
 
-function warnUnsupportedPbrTexCoords(rawMaterial: Material): void {
+function warnUnsupportedPbrTexCoords(rawMaterial: GltfFormat.Material): void {
   const name = rawMaterial.name ?? '<unnamed>';
   const pbr = rawMaterial.pbrMetallicRoughness;
   warnUnsupportedTexCoord('baseColorTexture', pbr?.baseColorTexture, name);
@@ -152,20 +137,16 @@ function warnUnsupportedPbrTexCoords(rawMaterial: Material): void {
   );
 }
 
-function warnUnsupportedUnlitTexCoords(rawMaterial: Material): void {
+function warnUnsupportedUnlitTexCoords(rawMaterial: GltfFormat.Material): void {
   const name = rawMaterial.name ?? '<unnamed>';
   warnUnsupportedTexCoord('baseColorTexture', rawMaterial.pbrMetallicRoughness?.baseColorTexture, name);
 }
 
 /**
- * The matrix `BaseMaterial3D.uvTransform` takes for a `KHR_texture_transform`
- *
- * It equals `new Matrix().scale(sx, sy).rotate(rotation).translate(ox, oy)`, written out. The
- * shader applies it transposed (see the `uvTransform` setter), so the rotation turns the way the
- * Khronos sample renderer turns it, the opposite of the GLSL snippet in the extension's README.
- * @param ktt - The texture transform
+ * The `KHR_texture_transform` matrix in the form `BaseMaterial3D.uvTransform` documents. It rotates as
+ * the Khronos sample renderer does, the opposite of the GLSL in the extension's README
  */
-function buildUvTransformMatrix(ktt: KHRTextureTransform): Matrix {
+function buildUvTransformMatrix(ktt: GltfFormat.KHRTextureTransform): Matrix {
   const [ox, oy] = ktt.offset ?? [0, 0];
   const [sx, sy] = ktt.scale ?? [1, 1];
   const rot = ktt.rotation ?? 0;
@@ -174,39 +155,27 @@ function buildUvTransformMatrix(ktt: KHRTextureTransform): Matrix {
   return new Matrix(sx * cos, sx * sin, -sy * sin, sy * cos, ox, oy);
 }
 
-function gltfAlphaMode(rawMaterial: Material): BaseMaterial3DOptions['alphaMode'] {
+function gltfAlphaMode(rawMaterial: GltfFormat.Material): BaseMaterial3DOptions['alphaMode'] {
   return rawMaterial.alphaMode === 'BLEND' ? 'blend' : rawMaterial.alphaMode === 'MASK' ? 'mask' : 'opaque';
 }
 
 /**
- * Encodes a linear RGB colour to sRGB
- *
- * glTF colour factors and `KHR_lights_punctual` colours are linear, while material and light
- * colours are set in sRGB and decoded when written. Encoding first lands the file's value on the
- * GPU. The result stays a float triple, so nothing is rounded to 8 bits on the way.
- * @param rgb - Linear-light colour; only the first three components are read
+ * Encodes glTF's linear colours to the sRGB that material and light colours decode, as floats, so
+ * nothing rounds to 8 bits
  * @internal
  */
 export function linearRgbToSrgb(rgb: number[]): [number, number, number] {
   return [linearToSrgb(rgb[0]), linearToSrgb(rgb[1]), linearToSrgb(rgb[2])];
 }
 
-/**
- * Builds a {@link FlatMaterial} for a `KHR_materials_unlit` material
- *
- * An unlit material uses only its base colour and base colour texture, alpha mode, alpha cutoff and
- * double-sidedness, and ignores everything else. So only the base colour texture's
- * `KHR_texture_transform` applies, where the PBR path takes the first transform on any texture.
- * @param rawMaterial - The glTF material
- * @param source - Supplies the textures the material refers to
- */
-function processUnlitMaterial(rawMaterial: Material, source: Scene3DSource): FlatMaterial {
+function processUnlitMaterial(rawMaterial: GltfFormat.Material, source: Scene3DSource): FlatMaterial {
   warnUnsupportedUnlitTexCoords(rawMaterial);
 
   const options: BaseMaterial3DOptions = {
     alphaMode: gltfAlphaMode(rawMaterial),
     alphaCutoff: rawMaterial.alphaCutoff,
     doubleSided: rawMaterial.doubleSided ?? false,
+    vertexColors: true,
   };
 
   const pbr = rawMaterial.pbrMetallicRoughness;
@@ -219,35 +188,16 @@ function processUnlitMaterial(rawMaterial: Material, source: Scene3DSource): Fla
   }
 
   const ktt = pbr?.baseColorTexture?.extensions?.KHR_texture_transform;
-  if (ktt) options.uvTransform = buildUvTransformMatrix(ktt as KHRTextureTransform);
+  if (ktt) options.uvTransform = buildUvTransformMatrix(ktt);
 
-  const material = new FlatMaterial(options);
-
-  material.vertexColors = true;
-
-  return material;
+  return new FlatMaterial(options);
 }
 
 /**
- * Builds a {@link Material3D} for a glTF material that isn't unlit
- *
- * Every value the file leaves out gets its glTF default, passed explicitly, because `Material3D`
- * defaults differ: metallic is 0, and an extension group, which its presence switches on, starts
- * visibly on at factor 1 or white. An extension that would draw nothing creates no group: emissive
- * strength without an emissive colour or texture, or a volume without transmission.
- *
- * Where an extension has two textures, `Material3D` packs them into one slot and keeps one (see
- * {@link SpecularOptions}, {@link SheenOptions} and {@link IridescenceOptions}). A file that binds
- * two different images gets a warning.
- *
- * With transmission, alpha mode `BLEND` or `MASK` becomes `OPAQUE`, with a warning, because the
- * transmission pass draws the see-through itself. Blending would also turn depth writes off, and a
- * double-sided transmissive mesh would then draw its front and back triangles in no set order and
- * show stripes.
- * @param rawMaterial - The glTF material
- * @param source - Supplies the textures the material refers to
+ * Passes every glTF default explicitly, as `Material3D`'s differ: metallic 0, and an extension group
+ * switching on at factor 1
  */
-function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Material3D {
+function processPbrMaterial(rawMaterial: GltfFormat.Material, source: Scene3DSource): Material3D {
   warnUnsupportedPbrTexCoords(rawMaterial);
 
   const options: Partial<Material3DOptions> = {
@@ -256,6 +206,7 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     doubleSided: rawMaterial.doubleSided ?? false,
     metallic: 1,
     roughness: 1,
+    vertexColors: true,
   };
 
   if (rawMaterial.normalTexture !== undefined) {
@@ -439,24 +390,11 @@ function processPbrMaterial(rawMaterial: Material, source: Scene3DSource): Mater
     options.anisotropy = aniso;
   }
 
-  const material = new Material3D(options);
-
-  material.vertexColors = true;
-
-  return material;
+  return new Material3D(options);
 }
 
-/**
- * Converts one glTF material into a runtime material: a `FlatMaterial` when it's unlit, a
- * `Material3D` otherwise
- *
- * Either way it turns {@link BaseMaterial3D#vertexColors} on, because glTF multiplies the base
- * colour by `COLOR_0`.
- * @param rawMaterial - The glTF material to convert
- * @param source - Supplies the already-processed textures the material references
- * @internal
- */
-export function processMaterial(rawMaterial: Material, source: Scene3DSource): BaseMaterial3D {
+/** @internal */
+export function processMaterial(rawMaterial: GltfFormat.Material, source: Scene3DSource): BaseMaterial3D {
   if (rawMaterial.extensions?.KHR_materials_unlit) {
     return processUnlitMaterial(rawMaterial, source);
   }
@@ -464,13 +402,8 @@ export function processMaterial(rawMaterial: Material, source: Scene3DSource): B
 }
 
 /**
- * Converts every glTF material and stores it on the source by index and name
- *
- * When a mesh primitive names no material, one unnamed glTF default material (white, fully
- * metallic, fully rough, opaque, single-sided) is added in the slot after the file's own
- * materials, and every such primitive shares it; `processNodes` points them there.
- * @param gltfRaw - Parsed glTF JSON
- * @param source - Receives the materials and supplies the already-processed textures they reference
+ * Adds the glTF default material after the file's own, at the index `processNodes` gives a
+ * primitive with none
  * @internal
  */
 export function processMaterials(gltfRaw: GltfFormat, source: Scene3DSource): void {
@@ -479,6 +412,7 @@ export function processMaterials(gltfRaw: GltfFormat, source: Scene3DSource): vo
   rawMaterials.forEach((rawMaterial, index) => {
     const material = processMaterial(rawMaterial, source);
 
+    material.label = rawMaterial.name;
     source.materials[index] = material;
 
     if (rawMaterial.name) {

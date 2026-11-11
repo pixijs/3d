@@ -1,9 +1,12 @@
-import { BindGroup, CubeTexture, UniformGroup } from 'pixi.js';
+import { BindGroup, Color, CubeTexture, UniformGroup } from 'pixi.js';
 import type { Geometry, Shader, State, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
+import { writeLinearRgb } from '../../../materials/BaseMaterial3D';
 import type { Camera3D } from '../../../scene/cameras/Camera3D';
 import { getCameraData } from '../../CameraData';
 import type { PassBuilder } from '../../render-graph/PassBuilder';
+import type { SceneOutput } from '../../render-graph/SceneOutput';
+import { decodeToLinearBit, isLinearFormat } from '../../shader/bits/decodeToLinearBit';
 import type { ShaderBit } from '../../shader/ShaderBit';
 import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
 import { CUBETEXTURE_EMPTY } from '../../textures/DefaultTextures';
@@ -19,14 +22,7 @@ import {
   createBackgroundState,
 } from './backgroundPassUtils';
 
-/**
- * WGSL vertex stage shared by the cube and gradient templates; `backgroundVertexGl` is its GLSL twin
- *
- * The cube's vertex position is already the world direction to look up, so the shader doesn't
- * rotate it again. The view matrix loses its translation, which keeps the sky at infinity, and the
- * vertex is written with `z = w`, on the far plane, so neither clipping plane cuts the cube
- * whatever the camera's `near` and `far`.
- */
+/** Vertex stage of both sky templates; `backgroundVertexGl` in `backgroundPassUtils.ts` is its GLSL twin */
 const backgroundVertexWgsl = /* wgsl */ `
 @vertex
 fn mainVertex(input: VertexInput) -> VertexOutput {
@@ -44,24 +40,16 @@ fn mainVertex(input: VertexInput) -> VertexOutput {
 }
 `;
 
-/**
- * The cube sky's shader template, in WGSL here and GLSL in {@link backgroundGlTemplate}
- *
- * Each backend's `compilePassShader` reads its own half and puts the global and camera bits first,
- * so `render` adds the background bit and the view's tone-mapping bit after them, and fills the
- * groups `bindGroups` lists: 0 global, 1 camera, 2 background. The fragment decodes the cubemap's
- * sRGB with a 2.2 gamma and scales it by the view's exposure; the tone-mapping bit then applies the
- * matching 1/2.2 encode.
- */
+/** The cube sky's template; `backgroundGlTemplate` in `backgroundPassUtils.ts` is its GLSL half */
 const backgroundTemplate: ShaderBitTemplate = {
-  bindGroups: ['global', 'camera', 'background'],
+  bindGroups: [{ name: 'global', ubo: true }, 'camera', 'background'],
   gpu: /* wgsl */ `
 {{header}}
 ${backgroundVertexWgsl}
 @fragment
 fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
   let sample = textureSample(uCube, uCubeSampler, normalize(input.vDir));
-  let sampleLinear = pow(sample.rgb, vec3<f32>(2.2));
+  let sampleLinear = decodeToLinear(sample.rgb);
   var finalColor = sampleLinear * global.uExposure;
   {{fragmentEnd}}
   return vec4<f32>(finalColor, sample.a);
@@ -70,16 +58,9 @@ fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
   gl: backgroundGlTemplate,
 };
 
-/**
- * The {@link Hemisphere} gradient sky's shader template, in WGSL here and GLSL in
- * {@link backgroundGradientGlTemplate}
- *
- * Same vertex stage and bind groups as the cube template. The fragment draws the gradient that
- * materials get from a hemisphere environment (`envSourceHemisphereBit`), scaled by the view's
- * exposure.
- */
+/** The gradient sky's template; `backgroundGradientGlTemplate` in `backgroundPassUtils.ts` is its GLSL half */
 const backgroundGradientTemplate: ShaderBitTemplate = {
-  bindGroups: ['global', 'camera', 'background'],
+  bindGroups: [{ name: 'global', ubo: true }, 'camera', 'background'],
   gpu: /* wgsl */ `
 {{header}}
 ${backgroundVertexWgsl}
@@ -102,41 +83,26 @@ fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
 export interface BackgroundPassOptions {
   /** Renderer the pass draws with: the {@link PassContext#renderer} a {@link Pass3D#build} call receives */
   renderer: WebGLRenderer | WebGPURenderer;
-  /**
-   * Camera to draw the sky from
-   *
-   * Omitted, the pass draws from the view's own camera into the view. Given one, it draws from
-   * that camera into that camera's target: its `viewport` rect, or its render texture. See
-   * {@link RenderPassOptions#camera}.
-   */
+  /** Camera to draw the sky from, or the view's own when omitted; see {@link RenderPassOptions#camera} */
   camera?: Camera3D;
+  /** The scene outputs attached after the target colour; see {@link RenderPassOptions#attachedOutputs} */
+  attachedOutputs?: readonly SceneOutput[];
 }
 
 /**
- * Draws the view's {@link View3D#background} behind the scene: a cubemap, or a {@link Hemisphere}
- * sky/ground gradient
+ * Draws the view's {@link View3D#background} behind the scene: a cubemap, a {@link Hemisphere}
+ * sky/ground gradient, or a plain colour
  *
- * The sky is a cube around the camera with the camera's translation removed, so it stays at
- * infinity however the camera moves. It runs the view's {@link View3D#exposure} and
- * {@link View3D#toneMapping} curve, so it matches the materials that reflect the same
- * environment. The pass skips any frame where the view has no background.
+ * The sky stays at infinity however the camera moves, and takes the view's {@link View3D#exposure}
+ * and {@link View3D#toneMapping}, so it matches materials that reflect the same environment. Fog in
+ * the same colour as a plain colour background blends into it exactly. Switching between a cubemap
+ * and a hemisphere or colour recompiles the pass's shader. The pass holds the old cubemap until a
+ * frame draws another background, which a `null` background never does; destroying the cubemap
+ * before then makes pixi warn.
  *
- * With a hemisphere, the pass draws the gradient described on {@link Hemisphere} for each view
- * direction, the same one materials receive when that object is the environment. It converts the
- * hemisphere's fields into its own uniforms every frame, so the background does not depend on
- * the view's environment.
- *
- * The pass holds one shader. Swapping between a cubemap and a hemisphere recompiles it. A swap to
- * a hemisphere also unbinds the old cubemap, so destroying that cubemap raises no pixi warning.
- * `unload` frees the gradient's uniform buffer, and the next frame that draws a hemisphere
- * uploads it again.
- *
- * The draw writes colour only, with depth test and depth write off, so it paints over anything
- * already on its target: add it before its camera's opaque draw. The default graph runs one for
- * the view's camera straight after the per-view depth clear and before the opaque pass.
- *
- * Any other camera draws no sky of its own. To give it one, add a `BackgroundPass` with that
- * `camera` from a {@link Pass3D#build}, ahead of the camera's opaque draw.
+ * It paints colour over whatever its target holds, with no depth test, so add it before its
+ * camera's opaque draw. The default graph draws one for the view's camera; any other camera draws
+ * no sky unless you add a `BackgroundPass` with that `camera` from a {@link Pass3D#build}.
  * @category rendering
  * @advanced
  */
@@ -144,109 +110,109 @@ export class BackgroundPass extends RenderPass {
   private readonly _geometry: Geometry;
   private readonly _state: State;
   private readonly _cubeBindGroup: BindGroup;
-  /** Linear sky colour scaled by intensity, the `uSkyColor` lane */
   private readonly _skyColor = new Float32Array(3);
-  /** Linear ground colour scaled by intensity, the `uGroundColor` lane */
   private readonly _groundColor = new Float32Array(3);
-  /** Unit up axis, or zeros for a zero-length one, the `uUp` lane */
   private readonly _up = new Float32Array(3);
   private readonly _gradientUniforms: UniformGroup;
   private readonly _gradientBindGroup: BindGroup;
   private _shader: Shader | null = null;
-  /** Tone-map bit baked into `_shader`, compared each frame to catch a change on the view */
   private _cachedToneBit: ShaderBit | null = null;
-  /** Background bit baked into `_shader`: cube or gradient */
   private _cachedBackgroundBit: ShaderBit | null = null;
+  private _cachedDecodeBit: ShaderBit | null = null;
   private _destroyed = false;
 
   constructor(options: BackgroundPassOptions) {
     super({
       renderer: options.renderer,
       name: 'background',
-      description: 'Draws the View3D cubemap or hemisphere background behind scene geometry.',
+      description: 'Draws the View3D cubemap, hemisphere or colour background behind scene geometry.',
       bit: RenderPassBit.BACKGROUND,
       camera: options.camera,
+      attachedOutputs: options.attachedOutputs,
     });
     this._geometry = createBackgroundGeometry();
     this._state = createBackgroundState();
     this._cubeBindGroup = new BindGroup({
-      0: CUBETEXTURE_EMPTY.source,
-      1: CUBETEXTURE_EMPTY.source.style,
+      uCube: CUBETEXTURE_EMPTY.source,
+      uCubeSampler: CUBETEXTURE_EMPTY.source.style,
     });
     this._gradientUniforms = new UniformGroup({
       uSkyColor: { value: this._skyColor, type: 'vec3<f32>' },
       uGroundColor: { value: this._groundColor, type: 'vec3<f32>' },
       uUp: { value: this._up, type: 'vec3<f32>' },
     });
-    this._gradientBindGroup = new BindGroup({ 0: this._gradientUniforms });
+    this._gradientBindGroup = new BindGroup({ background: this._gradientUniforms });
   }
 
   /**
    * Declares colour and depth writes on its camera's target, or on the scene's
-   *
-   * Declaring the depth too puts the sky on the same render target as the opaque draw that
-   * follows, even though the draw never writes depth.
    * @param b - The builder recording this pass's resource accesses
    */
   public override setup(b: PassBuilder): void {
-    b.writeColor(b.targetColor);
-    b.writeDepth(b.targetDepth);
+    this._writeTarget(b);
   }
 
   /**
    * Skips the frame when the view has no background
-   *
-   * A skipped pass binds no target and draws nothing.
    * @param session - The current frame's render session
-   * @returns Whether the view has a cubemap or hemisphere background to draw
+   * @returns Whether the view has a background to draw
    */
   public override condition(session: RenderSession): boolean {
     return session.view3d.background !== null;
   }
 
   /**
-   * Draws the sky cube with the view's current background
-   *
-   * Picks the cubemap or gradient variant, then recompiles the shader if the variant or the view's
-   * tone mapping changed since the last draw. Moving to the gradient also points the cube bind group
-   * back at the empty cubemap, so the old cubemap isn't left bound and destroying it raises no pixi
-   * warning.
+   * Draws the sky with the view's current background
    * @param session - The current frame's render session
    */
   public override render(session: RenderSession): void {
     const { view3d } = session;
     const background = view3d.background;
-    if (!background) return;
+    if (background === null) return;
 
     let bit: ShaderBit;
     let template: ShaderBitTemplate;
     let backgroundGroup: BindGroup;
+    let decodeBit: ShaderBit | null = null;
     if (background instanceof CubeTexture) {
       bit = backgroundBit;
+      decodeBit = decodeToLinearBit(!isLinearFormat(background.source.format));
       template = backgroundTemplate;
-      this._cubeBindGroup.setResource(background.source, 0);
-      this._cubeBindGroup.setResource(background.source.style, 1);
+      this._cubeBindGroup.setResource(background.source, 'uCube');
+      this._cubeBindGroup.setResource(background.source.style, 'uCubeSampler');
       backgroundGroup = this._cubeBindGroup;
     } else {
       bit = backgroundGradientBit;
       template = backgroundGradientTemplate;
-      writeHemisphere(background, this._skyColor, this._groundColor, this._up);
+      if (typeof background === 'number') {
+        writeLinearRgb(this._skyColor, 0, Color.shared.setValue(background));
+        this._groundColor.set(this._skyColor);
+        this._up.fill(0);
+      } else {
+        writeHemisphere(background, this._skyColor, this._groundColor, this._up);
+      }
       backgroundGroup = this._gradientBindGroup;
     }
 
     const toneBit = view3d._toneMappingBit;
-    if (this._shader && (this._cachedToneBit !== toneBit || this._cachedBackgroundBit !== bit)) {
+    if (
+      this._shader &&
+      (this._cachedToneBit !== toneBit || this._cachedBackgroundBit !== bit || this._cachedDecodeBit !== decodeBit)
+    ) {
       this._shader.destroy();
       this._shader = null;
     }
     if (!this._shader) {
-      const bits: ShaderBit[] = toneBit ? [bit, toneBit] : [bit];
+      const bits: ShaderBit[] = [bit];
+      if (decodeBit) bits.push(decodeBit);
+      if (toneBit) bits.push(toneBit);
       this._shader = this.pipe.renderer.material3d.compilePassShader(bits, template);
       this._cachedToneBit = toneBit;
       this._cachedBackgroundBit = bit;
+      this._cachedDecodeBit = decodeBit;
       if (bit === backgroundGradientBit) {
-        this._cubeBindGroup.setResource(CUBETEXTURE_EMPTY.source, 0);
-        this._cubeBindGroup.setResource(CUBETEXTURE_EMPTY.source.style, 1);
+        this._cubeBindGroup.setResource(CUBETEXTURE_EMPTY.source, 'uCube');
+        this._cubeBindGroup.setResource(CUBETEXTURE_EMPTY.source.style, 'uCubeSampler');
       }
     }
 
@@ -257,23 +223,12 @@ export class BackgroundPass extends RenderPass {
     this.pipe.renderGeometry(this._geometry, this._shader, this._state);
   }
 
-  /**
-   * Frees the gradient's uniform buffer on the GPU
-   *
-   * The next frame that draws a hemisphere uploads it again. {@link RenderGraph#unload} calls
-   * this. Idempotent.
-   */
+  /** Frees the gradient's uniform buffer on the GPU; the next frame drawing a hemisphere or colour uploads it again */
   public unload(): void {
     this._gradientUniforms.buffer?.unload();
   }
 
-  /**
-   * Releases the pass's shader, its sky cube with the cube's vertex buffer, its bind groups and the
-   * gradient's uniform buffer
-   *
-   * The view's background texture stays alive: the cube bind group only pointed at it. The gradient
-   * bind group goes first, so it lets go of the uniform group before the buffer under it is freed.
-   */
+  /** Releases the pass's shader, sky cube, bind groups and uniform buffer; the view's background texture stays alive */
   public override destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;

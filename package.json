@@ -1,6 +1,6 @@
 {
   "name": "@pixi/3d",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "description": "A 3D extension for PixiJS",
   "homepage": "https://github.com/pixijs/pixi-3d#readme",
   "bugs": {
@@ -15,17 +15,15 @@
   "workspaces": [
     "playground",
     "examples/racing",
-    "examples/gltf-compare",
-    "examples/perf-compare",
     "scripts/typedoc"
   ],
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "type": "module",
   "sideEffects": [
     "./src/index.ts",
-    "./src/index.bundle.ts",
     "./src/**/init.ts",
     "./dist/index.*",
     "./dist/**/init.*"
@@ -80,7 +78,7 @@
     "access": "public"
   },
   "scripts": {
-    "prepare": "husky",
+    "prepare": "husky && node scripts/repos/sync.mts --existing",
     "start": "npm run dev --prefix playground --",
     "clean": "rm -rf dist .pr_uploads .s3_uploads",
     "build": "npm run build:lib && npm run build:cdn",
@@ -92,13 +90,17 @@
     "watch:docs": "npm run watch -w @pixi/3d-docs",
     "watch:test": "vitest",
     "download:assets": "node scripts/assets/download-assets.mts",
-    "test": "npm run test:lint && npm run test:types && npm run test:examples && vitest run --browser.headless",
+    "sync:repos": "node scripts/repos/sync.mts",
+    "setup": "npm ci --prefer-offline --no-audit --no-fund && npm run download:assets && npm run sync:repos",
+    "test": "npm run test:lint && npm run test:types && npm run test:docs && npm run test:unused && vitest run --browser.headless",
     "test:unit": "vitest run src --browser.headless",
     "test:visual": "vitest run scenes --browser.headless",
     "test:update": "vitest run --browser.headless --update=true",
-    "test:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p playground/tsconfig.json && tsc --noEmit -p examples/tsconfig.json && tsc --noEmit -p bench/tsconfig.json",
-    "test:lint": "oxlint --deny-warnings && oxfmt --check",
-    "test:examples": "node scripts/typedoc/check-examples.mts",
+    "test:example-shots": "node scripts/test/example-shots.mts",
+    "test:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p playground/tsconfig.json && tsc --noEmit -p examples/tsconfig.json && tsc --noEmit -p examples/tutorials/tsconfig.json && tsc --noEmit -p bench/tsconfig.json",
+    "test:lint": "oxlint --deny-warnings && oxfmt --check && node scripts/build/index.mts --check",
+    "test:docs": "node scripts/lint/check-doc-refs.mts && node scripts/lint/check-doc-links.mts && node scripts/lint/check-example-readmes.mts && node scripts/typedoc/check-examples.mts && node scripts/typedoc/check-guides.mts",
+    "test:unused": "node scripts/typedoc/check-unused-internal.mts",
     "test:bundle": "node scripts/build/check-split.mts",
     "test:dts": "node scripts/build/check-dts.mts",
     "lint": "oxlint --fix && oxfmt --write",
@@ -112,14 +114,16 @@
   "devDependencies": {
     "@actions/core": "^3.0.1",
     "@actions/github": "^9.1.1",
+    "@tweakpane/core": "^2.0.5",
     "@types/node": "^26.3.0",
     "@types/pngjs": "^6.0.5",
     "@types/semver": "^7.8.0",
     "@types/web": "^0.0.356",
     "@vitest/browser-playwright": "^5.0.0",
     "@webgpu/types": "^0.1.72",
-    "eslint-plugin-jsdoc": "^64.3.8",
+    "esbuild": "^0.28.2",
     "glob": "^13.0.6",
+    "gsap": "3.15.0",
     "husky": "^9.1.7",
     "inquirer": "^14.1.0",
     "lint-staged": "^17.3.0",
@@ -127,17 +131,18 @@
     "oxlint": "^1.82.0",
     "oxlint-tsgolint": "^7.0.2001",
     "pixelmatch": "^7.2.0",
-    "pixi.js": "^8.22.0",
+    "pixi.js": "8.23.0",
     "playwright": "^1.62.1",
     "pngjs": "^7.0.0",
     "rolldown": "1.2.8",
     "semver": "^7.8.5",
     "tsdown": "^0.23.0",
+    "tweakpane": "^4.0.5",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
   },
   "peerDependencies": {
-    "pixi.js": "^8.22.0"
+    "pixi.js": "^8.23.0"
   },
   "lint-staged": {
     "*": [

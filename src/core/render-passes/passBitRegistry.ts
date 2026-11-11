@@ -1,25 +1,10 @@
 import { warn } from 'pixi.js';
 
-/**
- * Global name → bit registry for render passes
- *
- * One map for the whole page rather than one per pipe, so a material can name a pass
- * (`passes: { outline: true }`) without knowing any pipe, and one material works in several
- * views. Whatever uses a name first allocates its bit: the pass's constructor, a material's
- * `passes` option, or `enablePass()`. Later uses get the same bit, in any order.
- *
- * Bits 0-7 are reserved for built-in passes. Custom passes start at `1 << 8` and shift left for
- * each new name. JS bitwise ops are 32-bit signed, so about 23 custom names fit, which only a
- * project that generates pass names needs to worry about.
- * @internal
- */
+/** @internal */
 class PassBitRegistry {
   /**
-   * Bits by pass name, seeded with the built-in passes
-   *
-   * The seed repeats the values of `RenderPassBit` in `RenderPass.ts` by name, since importing them
-   * would make a module cycle (`RenderPass.ts` imports this registry); change the two together.
-   * Passes that take no meshes register at `RenderPassBit.NONE` and use up no custom bit.
+   * Built-in pass names at their `RenderPassBit` values in `RenderPass.ts` (`blendedRefraction` is
+   * missing), written out because importing them is a cycle; change the two together
    */
   private _bitsByName: Record<string, number> = Object.assign(Object.create(null), {
     shadow: 1 << 0,
@@ -29,16 +14,9 @@ class PassBitRegistry {
     transmission: 1 << 4,
   });
 
+  /** Custom bits start here, one per new name; bitwise ops are 32-bit, so about 23 fit */
   private _nextBit = 1 << 8;
 
-  /**
-   * Looks up the bit allocated to a pass name, allocating a fresh one if the name has
-   * never been seen
-   * @param name - The pass's `name`, as a material's `passes` option keys it
-   * @param explicitBit - Fixed bit a built-in pass asks for. It pins the bit for a new name; for a
-   *   name that already has a different bit, it warns and keeps the old one.
-   * @returns The bit allocated for `name`.
-   */
   public getOrAllocate(name: string, explicitBit?: number): number {
     const existing = this._bitsByName[name];
     if (existing !== undefined) {
@@ -53,20 +31,18 @@ class PassBitRegistry {
     return bit;
   }
 
-  /**
-   * Returns the bit registered for `name` without allocating one if absent
-   *
-   * `disablePass` uses it, so disabling a name nothing has used costs no bit.
-   * @param name - The pass name to look up
-   * @returns The registered bit, or `undefined` when the name has never been seen
-   */
+  /** Never allocates, so disabling a name nothing has used spends no bit */
   public get(name: string): number | undefined {
     return this._bitsByName[name];
+  }
+
+  public nameOf(bit: number): string | undefined {
+    return Object.keys(this._bitsByName).find((name) => this._bitsByName[name] === bit);
   }
 }
 
 /**
- * Global pass-bit registry singleton
+ * One for the page, not per renderer, so a material's pass names map to the same bits in every view
  * @internal
  */
 export const passBitRegistry = new PassBitRegistry();

@@ -1,12 +1,12 @@
 import { Texture, TextureSource } from 'pixi.js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { BoxShape } from '~/extras/particles/emitterShapes/BoxShape';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 import type { ParticleSystem3DOptions } from '~/extras/particles/ParticleSystem3D';
 import { generateSpawn } from '~/extras/particles/utils/generateSpawn';
-import { generateSpawnBurst, setSpawnCodegen, spawnSignature } from '~/extras/particles/utils/generateSpawnBurst';
+import { generateSpawnBurst, spawnSignature } from '~/extras/particles/utils/generateSpawnBurst';
 import { generateSpawnPolyfill } from '~/extras/particles/utils/generateSpawnPolyfill';
 import {
   ABSENT,
@@ -19,11 +19,11 @@ import {
   FROM_SPREAD,
   FROM_VELOCITY,
   FROM_ZERO,
-  FUNCTION,
   PAIR,
 } from '~/extras/particles/utils/spawnPlan';
-import type { SpawnAttribute, SpawnContext, SpawnPlan } from '~/extras/particles/utils/spawnPlan';
+import type { SpawnAttribute, SpawnContext, SpawnFn, SpawnPlan, SpawnShape } from '~/extras/particles/utils/spawnPlan';
 import { Matrix4 } from '~/math/matrix/Matrix4';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { Vector3 } from '~/math/vector/Vector3';
 
 function attribute(
@@ -40,10 +40,6 @@ function attribute(
 
 const STRIDE = 12;
 const CAPACITY = 4;
-/**
- * One attribute of each shape a spawn handles: a spread scalar, the velocity point, the tint, the
- * clock, a packed constant and a two-component custom
- */
 const ATTRIBUTES: SpawnAttribute[] = [
   attribute('life', 3, 1, FROM_SPREAD, AS_F32, 0),
   attribute('velocity', 4, 3, FROM_VELOCITY, AS_F32),
@@ -54,12 +50,6 @@ const ATTRIBUTES: SpawnAttribute[] = [
 ];
 const SHAPE = { floatStride: STRIDE, world: false, randomFrames: false };
 
-/**
- * A context whose rng always returns 0.5 and whose shape always samples (1, 2, 3) heading +Y
- *
- * Its spread table draws life between 2 and 4 and fixes speed and alpha at 1, so neither of those
- * takes a random draw.
- */
 function makeContext(capacity = CAPACITY): SpawnContext {
   const words = new ArrayBuffer(CAPACITY * 4 * STRIDE * 4);
   const spreads = new Float32Array(16);
@@ -90,13 +80,13 @@ function makeContext(capacity = CAPACITY): SpawnContext {
   };
 }
 
-function makePlan(kinds: number[], position = ABSENT): SpawnPlan {
+function makePlan(kinds: number[]): SpawnPlan {
   return {
     kind: kinds,
     raw: kinds.map(() => undefined),
     lo: kinds.map(() => undefined),
     hi: kinds.map(() => undefined),
-    position,
+    position: ABSENT,
     positionRaw: undefined,
     positionLo: { x: 0, y: 0, z: 0 },
     positionHi: { x: 0, y: 0, z: 0 },
@@ -104,7 +94,6 @@ function makePlan(kinds: number[], position = ABSENT): SpawnPlan {
   };
 }
 
-/** The element `at` of each of a slot's four vertices */
 function column(view: Float32Array | Uint32Array, slot: number, at: number): number[] {
   return [0, 1, 2, 3].map((v) => view[(slot * 4 + v) * STRIDE + at]);
 }
@@ -113,56 +102,6 @@ describe.each([
   ['generateSpawn', generateSpawn],
   ['generateSpawnPolyfill', generateSpawnPolyfill],
 ])('%s', (_name, create) => {
-  it('writes every attribute of a slot across its four vertices from defaults', () => {
-    const ctx = makeContext();
-    const kinds = ATTRIBUTES.map(() => ABSENT);
-    const spawn = create(ATTRIBUTES, kinds, ABSENT, SHAPE);
-
-    expect(spawn(ctx, makePlan(kinds), 7.5, 0, 1)).toBe(1);
-
-    expect(column(ctx.f32, 0, 0)).toEqual([1, 1, 1, 1]);
-    expect(column(ctx.f32, 0, 1)).toEqual([2, 2, 2, 2]);
-    expect(column(ctx.f32, 0, 2)).toEqual([3, 3, 3, 3]);
-    expect(column(ctx.f32, 0, 3), 'life drawn halfway between 2 and 4').toEqual([3, 3, 3, 3]);
-    expect(column(ctx.f32, 0, 4), 'velocity is the +Y direction times speed 1').toEqual([0, 0, 0, 0]);
-    expect(column(ctx.f32, 0, 5)).toEqual([1, 1, 1, 1]);
-    expect(column(ctx.f32, 0, 6)).toEqual([0, 0, 0, 0]);
-    expect(column(ctx.u32, 0, 7), "the tint is the plan's rgb with alpha 1").toEqual(Array(4).fill(0xff112233));
-    expect(column(ctx.f32, 0, 8)).toEqual([7.5, 7.5, 7.5, 7.5]);
-    expect(column(ctx.u32, 0, 9)).toEqual(Array(4).fill(0x80ff0000));
-    expect(column(ctx.f32, 0, 10)).toEqual([0, 0, 0, 0]);
-    expect(column(ctx.f32, 0, 11)).toEqual([0, 0, 0, 0]);
-  });
-
-  it('takes each override kind: constant, pair, function and an explicit origin', () => {
-    const ctx = makeContext();
-    const kinds = [CONSTANT, PAIR, FUNCTION, ABSENT, ABSENT, CONSTANT];
-    const plan = makePlan(kinds, CONSTANT);
-
-    plan.raw[0] = 9;
-    plan.lo[1] = { x: 1, y: 1, z: 1 };
-    plan.hi[1] = { x: 3, y: 5, z: 7 };
-    plan.raw[2] = (_rng: () => number, index: number) => (index === 2 ? 0.5 : 0);
-    plan.raw[5] = { x: 0.25, y: 0.75 };
-    plan.positionRaw = { x: 10, y: 20, z: 30 };
-
-    const spawn = create(ATTRIBUTES, kinds, CONSTANT, SHAPE);
-
-    expect(spawn(ctx, plan, 0, 2, 1)).toBe(3);
-
-    expect(column(ctx.f32, 2, 0), "the origin adds to the shape's sample, with no transform").toEqual([11, 11, 11, 11]);
-    expect(column(ctx.f32, 2, 1)).toEqual([22, 22, 22, 22]);
-    expect(column(ctx.f32, 2, 2)).toEqual([33, 33, 33, 33]);
-    expect(column(ctx.f32, 2, 3)).toEqual([9, 9, 9, 9]);
-    expect(column(ctx.f32, 2, 4)).toEqual([2, 2, 2, 2]);
-    expect(column(ctx.f32, 2, 5)).toEqual([3, 3, 3, 3]);
-    expect(column(ctx.f32, 2, 6)).toEqual([4, 4, 4, 4]);
-    expect(column(ctx.u32, 2, 7), 'alpha 0.5 packs to 0x80').toEqual(Array(4).fill(0x80112233));
-    expect(column(ctx.f32, 2, 10)).toEqual([0.25, 0.25, 0.25, 0.25]);
-    expect(column(ctx.f32, 2, 11)).toEqual([0.75, 0.75, 0.75, 0.75]);
-    expect(column(ctx.f32, 0, 3), 'a slot outside the run stays clear').toEqual([0, 0, 0, 0]);
-  });
-
   it('wraps the cursor at the context capacity', () => {
     const ctx = makeContext(3);
     const kinds = ATTRIBUTES.map(() => ABSENT);
@@ -176,8 +115,6 @@ describe.each([
 });
 
 describe('generateSpawnBurst', () => {
-  afterEach(() => setSpawnCodegen(true));
-
   it('shares one function across the same attributes and pattern, and no further', () => {
     const signature = spawnSignature(ATTRIBUTES, SHAPE);
     const absent = ATTRIBUTES.map(() => ABSENT);
@@ -202,9 +139,6 @@ describe('generateSpawnBurst', () => {
       generateSpawnBurst(spawnSignature(ATTRIBUTES, world), ATTRIBUTES, absent, ABSENT, world),
       'another space',
     ).not.toBe(first);
-
-    setSpawnCodegen(false);
-    expect(generateSpawnBurst(signature, ATTRIBUTES, absent, ABSENT, SHAPE), 'the polyfill').not.toBe(first);
   });
 
   it('keys the signature on what shapes the code, not on the objects', () => {
@@ -232,12 +166,28 @@ function sheet(frames: number): Texture[] {
 
 type Script = (system: ParticleSystem3D<readonly [typeof customBit]>) => void;
 
-/** Builds a system, runs the script, and hands back a copy of its vertex words */
-function run(codegen: boolean, options: ParticleSystem3DOptions, script: Script): Uint32Array {
-  setSpawnCodegen(codegen);
+interface SpawnInternals {
+  _spawns: Map<string, SpawnFn>;
+  _spawnAttributes: readonly SpawnAttribute[];
+  _spawnShape: SpawnShape;
+  _plan: SpawnPlan;
+}
 
+function usePolyfill(system: ParticleSystem3D<readonly [typeof customBit]>): void {
+  const internals = system as unknown as SpawnInternals;
+
+  internals._spawns.get = () =>
+    generateSpawnPolyfill(
+      internals._spawnAttributes,
+      internals._plan.kind,
+      internals._plan.position,
+      internals._spawnShape,
+    );
+}
+
+function run(polyfill: boolean, options: ParticleSystem3DOptions, script: Script): Uint32Array {
   const system = new ParticleSystem3D({
-    seed: 'parity',
+    createRandom: () => seededRandom('parity'),
     autoUpdate: false,
     capacity: 64,
     emitRate: 0,
@@ -245,6 +195,7 @@ function run(codegen: boolean, options: ParticleSystem3DOptions, script: Script)
     ...options,
   });
 
+  if (polyfill) usePolyfill(system);
   script(system);
 
   const words = system.data.u32.slice();
@@ -255,16 +206,14 @@ function run(codegen: boolean, options: ParticleSystem3DOptions, script: Script)
 }
 
 function expectParity(options: ParticleSystem3DOptions, script: Script): void {
-  const generated = run(true, options, script);
-  const polyfilled = run(false, options, script);
+  const generated = run(false, options, script);
+  const polyfilled = run(true, options, script);
 
   expect(generated.some((w) => w !== 0)).toBe(true);
   expect(generated).toEqual(polyfilled);
 }
 
 describe('generated spawn parity with the polyfill', () => {
-  afterEach(() => setSpawnCodegen(true));
-
   it('matches on the built-ins with emission and bursts', () => {
     expectParity(
       { emitRate: 120, life: [1, 2], speed: [1, 3], size: [0.1, 0.5], alpha: [0.2, 1], startRotation: [0, 6] },
@@ -352,10 +301,14 @@ describe('generated spawn parity with the polyfill', () => {
   });
 
   it("keeps each system's capacity and end colour when two systems share one generated function", () => {
-    setSpawnCodegen(true);
-
     const make = (capacity: number, colorEnd: number) =>
-      new ParticleSystem3D({ seed: 'shared', autoUpdate: false, capacity, emitRate: 0, colorEnd });
+      new ParticleSystem3D({
+        createRandom: () => seededRandom('shared'),
+        autoUpdate: false,
+        capacity,
+        emitRate: 0,
+        colorEnd,
+      });
     const a = make(8, 0xff0000);
     const b = make(5, 0x00ff00);
 

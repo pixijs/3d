@@ -7,12 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Cascaded shadow maps: a directional light with `cascades: 3` over a row of
- * cubes receding into the distance, so casters fall into different cascade
- * slices. Exercises the multi-cascade stable-fit derivation and the shader's
- * view-depth cascade selection. Static scene for determinism.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,
@@ -34,7 +28,6 @@ export const scene: TestScene = {
     ground.rotation.set(-Math.PI / 2, 0, 0);
     view3d.root.addChild(ground);
 
-    // Cubes receding in -Z span the cascade splits.
     const colors = [0x4a7c59, 0xc06c4a, 0x4a6cc0, 0xc0a84a];
     for (let i = 0; i < colors.length; i++) {
       const cube = new Mesh3D({

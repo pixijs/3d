@@ -30,24 +30,21 @@ export interface AmbientLightOptions extends Omit<LightOptions, 'castShadow' | '
  * Light that reaches every surface equally, whatever its position or direction
  *
  * It lifts shadowed areas off pure black for almost no cost. Several ambient lights add up.
- * It casts no shadows; `castShadow` is ignored.
+ * It casts no shadows; `castShadow` is ignored. On a {@link Material3D} it lights only the
+ * non-metal part, so a fully metallic surface gets nothing from it.
  * @example
  * ```ts
  * import { AmbientLight } from '@pixi/3d';
  *
  * view.root.addChild(new AmbientLight({ color: 0xffffff, intensity: 0.3 }));
  * ```
- * @see {@link Light} For the abstract base class.
- * @see {@link Hemisphere} For a normal-aware sky/ground alternative.
+ * @see {@link Hemisphere} For sky and ground colours that vary with the way a surface faces.
  * @category scene
  * @standard
  */
 export class AmbientLight extends Light {
   /**
-   * Default {@link AmbientLightOptions} merged under every constructor call
-   *
-   * `new AmbientLight(opts)` resolves as `{ ...AmbientLight.defaultOptions, ...opts }`, ignoring
-   * options set to `undefined`. Mutate to change the defaults process-wide.
+   * Defaults for every new `AmbientLight`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * AmbientLight.defaultOptions.intensity = 0.2;

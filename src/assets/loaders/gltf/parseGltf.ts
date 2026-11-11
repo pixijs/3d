@@ -4,6 +4,7 @@ import type { Scene3DDescriptor } from '../../Scene3DDescriptor';
 import { Scene3DSource } from '../../Scene3DSource';
 import type { GltfFormat } from './GltfFormat';
 import { processAnimations } from './process/processAnimations';
+import { processCameras } from './process/processCameras';
 import { processLights } from './process/processLights';
 import { processMaterials } from './process/processMaterials';
 import { processMeshes } from './process/processMeshes';
@@ -13,10 +14,7 @@ import { processSkins } from './process/processSkins';
 import { processTextures } from './process/processTextures';
 
 /**
- * Builds a {@link Scene3DSource} from parsed glTF JSON, binary buffers, and decoded images
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers indexed by glTF buffer index
- * @param images - Loaded textures indexed by glTF image index
+ * Skins read the nodes and materials read the textures, so each runs after what it reads
  * @internal
  */
 export async function parseGltf(
@@ -29,6 +27,7 @@ export async function parseGltf(
   processNodes(gltfRaw, descriptor);
   processScenes(gltfRaw, descriptor);
   processLights(gltfRaw, descriptor);
+  processCameras(gltfRaw, descriptor);
 
   const source = new Scene3DSource(descriptor);
 

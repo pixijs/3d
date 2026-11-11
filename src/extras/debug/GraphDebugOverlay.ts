@@ -11,6 +11,7 @@ import { RenderGraphDebugger } from './GraphDebugSnapshot';
 import type {
   GraphDebugBatchPassSnapshot,
   GraphDebugBatchSnapshot,
+  GraphDebugBundleCauseCode,
   GraphDebugBundleSnapshot,
   GraphDebugDrawBuildSnapshot,
   GraphDebugDrawSnapshot,
@@ -45,17 +46,14 @@ export interface GraphDebugOverlayOptions {
    */
   maxRecordedFrames?: number;
   /**
-   * Whether {@link GraphDebugOverlay#refresh | refresh()} runs after each screen render of `renderer`; needs a
-   * renderer to hook
+   * Whether {@link GraphDebugOverlay#refresh | refresh()} runs after each screen render of `renderer`;
+   * {@link GraphDebugOverlay#autoUpdate} has the details
    * @default true
    */
   autoUpdate?: boolean;
   /**
-   * The renderer to follow, so every capture is the frame just drawn
-   *
-   * `refresh()` runs off the renderer's own render rather than a ticker, so it's right whichever ticker drives
-   * the app, or none. Leave unset (or set `autoUpdate: false`) to call `refresh()` yourself, throttled or
-   * outside a timed section.
+   * The renderer to follow, so each capture is the frame just drawn; leave it unset to call
+   * {@link GraphDebugOverlay#refresh | refresh()} yourself
    */
   renderer?: Renderer;
 }
@@ -89,6 +87,7 @@ const DRAW_BUILD_STATUS_LABELS: Record<PassStatus, string> = {
   'first-capture': 'baseline',
   'no-draws': 'no draws',
   rebuilt: 'draws rebuilt',
+  repacked: 'draws repacked',
   reused: 'draws reused',
   skipped: 'skipped',
 };
@@ -99,6 +98,13 @@ const BUNDLE_STATUS_LABELS: Record<GraphDebugBundleSnapshot['status'], string> =
   'not-used': 'no bundle',
   recorded: 'bundle recorded',
   reused: 'bundle reused',
+};
+
+const BUNDLE_CAUSE_DETAILS: Record<GraphDebugBundleCauseCode, string> = {
+  'bundle-only-change': 'Draw data was reused; bundle-only GPU state changed.',
+  'counts-changed': 'A visibility change moved the instance counts baked into the direct draws.',
+  'draws-rebuilt': 'The draw rebuild required a fresh bundle recording.',
+  'first-capture': 'Baseline captured; prior bundle activity is unknown.',
 };
 
 const CSS = `
@@ -117,7 +123,7 @@ const CSS = `
 .p3d-debug__pass-name{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .p3d-debug__status{font-size:8px;font-weight:700;text-transform:uppercase;padding:1px 4px;border-radius:3px;white-space:nowrap}
 .p3d-debug__status-group{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:3px}
-.p3d-debug__status--rebuilt{color:#251a05;background:#ffbf5b}.p3d-debug__status--reused{color:#0d2514;background:#7ad27a}
+.p3d-debug__status--rebuilt{color:#251a05;background:#ffbf5b}.p3d-debug__status--repacked{color:#0d2514;background:#b5e48c}.p3d-debug__status--reused{color:#0d2514;background:#7ad27a}
 .p3d-debug__status--dynamic{color:#c9bfd9;background:#3a3344}.p3d-debug__status--first-capture{color:#102434;background:#9fd9ff}.p3d-debug__status--active{color:#0d2514;background:#7ad27a}.p3d-debug__status--no-draws{color:#aaa;background:#444}.p3d-debug__status--skipped{color:#788691;background:#2b3035}
 .p3d-debug__status--bundle-recorded{color:#21142f;background:#c79aff}.p3d-debug__status--bundle-reused{color:#a9b3bd;background:#343b43}.p3d-debug__status--bundle-invalidated{color:#30131e;background:#ff91b5}.p3d-debug__status--bundle-first-capture{color:#102434;background:#9fd9ff}.p3d-debug__status--bundle-not-used{color:#788691;background:#2b3035}
 .p3d-debug__subtle{color:#8796a3;font-size:9px}
@@ -171,8 +177,7 @@ const CSS = `
  * lifetime of each resource. Copy Frame and Copy Recording put the data on the clipboard as
  * JSON.
  *
- * Nothing is captured outside a recording. Until one starts, the overlay adds nothing to the
- * renderer but the `postrender` listener that runs {@link GraphDebugOverlay#refresh | refresh()}.
+ * Nothing is captured outside a recording, so an idle overlay costs next to nothing.
  * @example
  * ```ts
  * const overlay = new GraphDebugOverlay({ view: view3d, renderer: app.renderer });
@@ -182,10 +187,7 @@ const CSS = `
  */
 export class GraphDebugOverlay {
   /**
-   * Default {@link GraphDebugOverlayOptions} merged under every constructor call
-   *
-   * `new GraphDebugOverlay(opts)` resolves as `{ ...GraphDebugOverlay.defaultOptions, ...opts }`. Mutate to change
-   * defaults process-wide.
+   * Defaults for every new `GraphDebugOverlay`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * GraphDebugOverlay.defaultOptions.maxRecordedFrames = 600;
@@ -216,12 +218,7 @@ export class GraphDebugOverlay {
   private _renderer: Renderer | null = null;
   private _hooked = false;
   private _destroyed = false;
-  /**
-   * Runner listener: pixi calls the method named after the runner on every object added to it
-   *
-   * Renders to a texture go through the same runner, so only a render to the screen counts as a
-   * drawn frame.
-   */
+  /** Renders into a texture run `postrender` too, so only a render to the screen counts as a frame */
   private readonly _postrenderListener = {
     postrender: (options: RenderOptions): void => {
       if (options.target !== this._renderer!.view.renderTarget) return;
@@ -229,7 +226,7 @@ export class GraphDebugOverlay {
     },
   };
 
-  /** @param options - Overlay options; see {@link GraphDebugOverlayOptions} */
+  /** @param options - Options for the overlay */
   constructor(options: GraphDebugOverlayOptions) {
     const { view, parent, maxRecordedFrames, autoUpdate, renderer } = {
       ...GraphDebugOverlay.defaultOptions,
@@ -252,7 +249,7 @@ export class GraphDebugOverlay {
    * Whether {@link GraphDebugOverlay#refresh | refresh()} runs after each screen render of
    * {@link GraphDebugOverlay#renderer | renderer}
    *
-   * Render-to-texture passes are skipped, so a recording only holds frames that were drawn.
+   * Renders into a texture don't count, so a recording holds only frames drawn to the screen.
    * @example
    * ```ts
    * const overlay = new GraphDebugOverlay({ view: () => view3d, renderer: app.renderer });
@@ -265,8 +262,8 @@ export class GraphDebugOverlay {
   }
 
   /**
-   * Installs or removes the renderer's `postrender` listener; has no effect once the overlay is destroyed
-   * @param value - Whether to run `refresh()` after each screen render
+   * Sets whether `refresh()` runs after each screen render
+   * @param value - `true` to refresh after each one
    */
   public set autoUpdate(value: boolean) {
     this._autoUpdate = value;
@@ -282,8 +279,8 @@ export class GraphDebugOverlay {
   }
 
   /**
-   * Moves the `postrender` listener to the new renderer; has no effect once the overlay is destroyed
-   * @param value - The renderer to follow, or `null` to follow none
+   * Sets the renderer to follow; ignored once the overlay is destroyed
+   * @param value - The renderer to follow, or `null` for none
    */
   public set renderer(value: Renderer | null) {
     if (this._destroyed || value === this._renderer) return;
@@ -295,8 +292,8 @@ export class GraphDebugOverlay {
   }
 
   /**
-   * Captures the frame just rendered while a recording runs; outside one it only refreshes the
-   * idle panel, which enables Record once the view has a render graph
+   * Captures the frame just rendered while a recording runs; outside one it only updates the panel,
+   * enabling Record once the view has rendered
    *
    * Runs after every screen render while {@link GraphDebugOverlay#autoUpdate | autoUpdate} is on
    * and a {@link GraphDebugOverlay#renderer | renderer} is set. Otherwise call it yourself after each
@@ -324,7 +321,7 @@ export class GraphDebugOverlay {
     this._renderCurrent();
   }
 
-  /** Stops following the renderer, removes the overlay from the DOM and drops all captured debug state */
+  /** Stops following the renderer and removes the overlay from the DOM */
   public destroy(): void {
     if (this._destroyed) return;
 
@@ -332,11 +329,10 @@ export class GraphDebugOverlay {
     this._syncHook();
     this._renderer = null;
     this._debugger.reset();
-    this._geometryThumbnails.clear();
+    (this._geometryThumbnails as GeometryThumbnailGenerator | null) = null;
     this._container.remove();
   }
 
-  /** Installs or removes the postrender listener so it matches renderer, autoUpdate and destroyed */
   private _syncHook(): void {
     const want = Boolean(this._renderer) && this._autoUpdate && !this._destroyed;
     if (want === this._hooked) return;
@@ -463,9 +459,9 @@ export class GraphDebugOverlay {
   }
 
   private _beginShell(state: string): {
-    /** Root panel element for the state's content */
+    /** Root element for the state's content */
     shell: HTMLDivElement;
-    /** Header row the caller fills with title and buttons */
+    /** Header row for the title and buttons */
     toolbar: HTMLDivElement;
   } {
     this._applyModeStyle(false);
@@ -681,8 +677,8 @@ export class GraphDebugOverlay {
         ),
       );
       if (pass.isAnchored) identity.appendChild(element('span', 'p3d-debug__graph-anchor', 'anchored output'));
-      if (pass.mipmapHandles.length > 0)
-        identity.appendChild(element('span', 'p3d-debug__graph-anchor', 'generates mipmaps'));
+      if (pass.finishedColors.length > 0)
+        identity.appendChild(element('span', 'p3d-debug__graph-anchor', 'finishes a colour'));
       title.appendChild(identity);
       title.appendChild(this._status(pass.active ? 'active' : 'skipped'));
       card.appendChild(title);
@@ -929,8 +925,15 @@ export class GraphDebugOverlay {
       section.appendChild(element('div', 'p3d-debug__subtle', 'Regenerated every frame by pass policy.'));
       return section;
     }
+    if (drawBuild.status === 'repacked') {
+      section.appendChild(
+        element('div', 'p3d-debug__subtle', 'Kept the built commands; only their instance ranges moved.'),
+      );
+    }
     if (drawBuild.causes.length === 0) {
-      section.appendChild(element('div', 'p3d-debug__subtle', 'Draw command list reused without rebuilding.'));
+      if (drawBuild.status !== 'repacked') {
+        section.appendChild(element('div', 'p3d-debug__subtle', 'Draw command list reused without rebuilding.'));
+      }
       return section;
     }
     for (let i = 0; i < drawBuild.causes.length; i++) {
@@ -960,11 +963,7 @@ export class GraphDebugOverlay {
       return section;
     }
 
-    const cause = bundle.causes[0]?.code;
-    let detail =
-      cause === 'draws-rebuilt'
-        ? 'The draw rebuild required a fresh bundle recording.'
-        : 'Draw data was reused; bundle-only GPU state changed.';
+    let detail = BUNDLE_CAUSE_DETAILS[bundle.causes[0].code];
     if (bundle.status === 'invalidated') detail += ' The bundle was still pending when this snapshot was captured.';
     section.appendChild(element('div', 'p3d-debug__cause p3d-debug__cause--bundle', detail));
     return section;
@@ -1036,7 +1035,7 @@ export class GraphDebugOverlay {
       row.appendChild(geometryCell);
       row.onpointerdown = (event) => {
         if (event.button !== 0) return;
-        const inspector = row.closest('.p3d-debug__panel') as HTMLElement | null;
+        const inspector = row.closest('.p3d-debug__panel');
         const scrollTop = inspector?.scrollTop ?? 0;
         this._selectedDraw = selected ? null : draw.index;
         this._renderCurrent();
@@ -1057,6 +1056,13 @@ export class GraphDebugOverlay {
 
   private _renderDrawInspector(snapshot: GraphDebugSnapshot, draw: GraphDebugDrawSnapshot): HTMLElement {
     const section = element('div', 'p3d-debug__draw-details');
+    section.appendChild(
+      element(
+        'div',
+        'p3d-debug__subtle',
+        `${draw.form} · pipeline ${Math.floor(draw.batchKey / 2 ** 32)} · geometry ${draw.batchKey % 2 ** 32}`,
+      ),
+    );
     section.appendChild(
       element(
         'div',
@@ -1177,7 +1183,7 @@ export class GraphDebugOverlay {
       color = '#ffcc66';
     } else if (access.mode === 'sample') {
       glyph = '⊙';
-      body = `${resourceName} @ slot ${access.slot}`;
+      body = `${resourceName} as ${access.slot}${access.globalGroup === false ? ' (own group)' : ''}`;
       color = '#b0e6b0';
     }
     const line = element('div', 'p3d-debug__access', `${glyph} ${body}`);
@@ -1383,6 +1389,7 @@ export class GraphDebugOverlay {
     if (drawStatuses.has('rebuilt')) drawBuild = 'rebuilt';
     else if (drawStatuses.has('dynamic')) drawBuild = 'dynamic';
     else if (drawStatuses.has('first-capture')) drawBuild = 'first-capture';
+    else if (drawStatuses.has('repacked')) drawBuild = 'repacked';
     else if (drawStatuses.has('reused')) drawBuild = 'reused';
 
     let bundle: PassMetrics['bundle'] = 'empty';
@@ -1409,11 +1416,11 @@ export class GraphDebugOverlay {
   }
 
   private _passResourceCounts(pass: GraphDebugBatchPassSnapshot): {
-    /** Distinct geometry ids referenced by the pass's draws */
+    /** Count of distinct geometries the pass's draws use */
     geometries: number;
-    /** Distinct material ids referenced by the pass's draws */
+    /** Count of distinct materials the pass's draws use */
     materials: number;
-    /** Distinct texture ids referenced by the pass's draws */
+    /** Count of distinct textures the pass's draws sample */
     textures: number;
   } {
     const geometries = new Set<number>();
@@ -1479,6 +1486,7 @@ function copyText(value: string): boolean {
   textarea.setSelectionRange(0, value.length);
 
   try {
+    // oxlint-disable-next-line typescript/no-deprecated -- the synchronous fallback for contexts without navigator.clipboard
     return document.execCommand('copy');
   } catch {
     return false;

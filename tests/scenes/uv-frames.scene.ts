@@ -6,21 +6,10 @@ import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Framed (spritesheet) baseColor textures drive the material UV transform.
-// A 2×2 atlas of split-shade quadrants renders onto four quads:
-//  - top-left / top-right: plain frames — each quad shows exactly its
-//    quadrant (whole-atlas sampling would show all four colours per quad);
-//  - bottom-left: a GroupD8-rotated frame — the bright/dark split flips from
-//    vertical to horizontal, proving the rotation is encoded;
-//  - bottom-right: a framed texture UNDER an explicit identity uvTransform —
-//    explicit wins, so the whole atlas renders despite the frame.
-// Unlit flats + nearest sampling keep the pixels deterministic.
-
 function atlasCanvas(): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 64;
   const ctx = canvas.getContext('2d')!;
-  // [bright, dark] per quadrant: TL red, TR green, BL blue, BR yellow.
   const cells: [string, string][] = [
     ['#ee3344', '#881122'],
     ['#33dd44', '#117722'],
@@ -65,9 +54,9 @@ export const scene: TestScene = {
       view3d.root.addChild(mesh);
     };
 
-    place(new FlatMaterial({ baseColorTexture: frame(0, 0) }), -0.95, 0.95); // red quadrant
-    place(new FlatMaterial({ baseColorTexture: frame(32, 0) }), 0.95, 0.95); // green quadrant
-    place(new FlatMaterial({ baseColorTexture: frame(0, 32, 2) }), -0.95, -0.95); // blue, rotated 90°
-    place(new FlatMaterial({ baseColorTexture: frame(32, 32), uvTransform: new Matrix() }), 0.95, -0.95); // explicit wins → whole atlas
+    place(new FlatMaterial({ baseColorTexture: frame(0, 0) }), -0.95, 0.95);
+    place(new FlatMaterial({ baseColorTexture: frame(32, 0) }), 0.95, 0.95);
+    place(new FlatMaterial({ baseColorTexture: frame(0, 32, 2) }), -0.95, -0.95);
+    place(new FlatMaterial({ baseColorTexture: frame(32, 32), uvTransform: new Matrix() }), 0.95, -0.95);
   },
 };

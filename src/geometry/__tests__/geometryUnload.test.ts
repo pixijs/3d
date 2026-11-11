@@ -13,7 +13,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** pixi keeps one GPU copy per renderer of a buffer, texture source or geometry layout, keyed by renderer uid. */
 interface GpuResident {
   _gpuData: Record<string, unknown>;
 }
@@ -30,12 +29,10 @@ function bufferResidency(geometry: Geometry3D): number {
   return gpuCopyCount(...(geometry.buffers as unknown as GpuResident[]));
 }
 
-/** The GPU layouts (WebGL VAOs, WebGPU geometry records) recorded for a geometry drawn from its own buffers. */
 function layoutResidency(geometry: Geometry3D): number {
-  return gpuCopyCount(geometry as unknown as GpuResident);
+  return gpuCopyCount(geometry);
 }
 
-/** The atlas internals these tests assert against; a vacated range shows up as dead space */
 interface AtlasProbe {
   _deadVertexCount: number;
   _deadIndexCount: number;
@@ -45,11 +42,9 @@ interface Scene {
   view3d: View3D;
   cube: Mesh3D;
   cubeGeometry: Geometry3D;
-  /** Unrelated to the cube; dirtied when a test needs the View's draw lists rebuilt */
   ground: Mesh3D;
 }
 
-/** A lit View at `x` holding a ground plane and an orange cube of `cubeGeometry`, rendered once */
 function buildView(app: Application<Renderer>, x = 0, cubeGeometry?: Geometry3D): Scene {
   const view3d = new View3D({ width: SIZE, height: SIZE });
   view3d.position.set(x, 0);
@@ -87,7 +82,6 @@ function pixels(app: Application<Renderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -100,7 +94,6 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`geometry unload (${preference})`, () => {
-    /** The process-wide pool this backend packs into, reached the same way the pipe reaches it */
     const pool = (): GeometryAtlasPool => GeometryAtlasPool.from({ rebaseIndices: preference === 'webgl' });
 
     async function withApp(

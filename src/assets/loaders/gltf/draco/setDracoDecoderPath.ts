@@ -1,7 +1,6 @@
 /**
- * URLs the Draco worker loads the decoder from, defaulting to Google's hosted build
- *
- * Change them with {@link setDracoDecoderPath}.
+ * The URLs the Draco decoder loads from, by default Google's hosted build;
+ * {@link setDracoDecoderPath} changes them
  * @category assets
  * @advanced
  */
@@ -11,11 +10,10 @@ export const dracoDecoderUrls = {
 };
 
 /**
- * Overrides where the Draco decoder is fetched from, for self-hosted deployments
+ * Sets where the Draco decoder is fetched from, to self-host it
  *
- * Works like pixi's `setBasisTranscoderPath`. Call it before loading the first Draco-compressed
- * file: the decoder loads once, on that first decode. A relative URL resolves against the page's
- * origin, not the page's path.
+ * Call it before loading the first Draco-compressed file, as the decoder loads once, on the first
+ * decode. A relative URL resolves against the page's origin, not the page's path.
  * @example
  * ```ts
  * setDracoDecoderPath({
@@ -23,7 +21,7 @@ export const dracoDecoderUrls = {
  *   wasmUrl: '/draco/draco_decoder.wasm',
  * });
  * ```
- * @param config - Replacement decoder JS/WASM URLs; omitted fields keep their current value
+ * @param config - Decoder JS and WASM URLs; a field left out keeps its current value
  * @category assets
  * @standard
  */

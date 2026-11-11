@@ -1,5 +1,5 @@
 import type { BaseMaterial3DOptions } from '@pixi/3d';
-import { BaseMaterial3D, RenderPassBit, screenSpaceFuncsBit } from '@pixi/3d';
+import { BaseMaterial3D, RenderPassBit } from '@pixi/3d';
 
 import { depthEffectBit } from './depthEffectBit';
 
@@ -18,8 +18,7 @@ import { depthEffectBit } from './depthEffectBit';
  */
 export class DepthEffectMaterial extends BaseMaterial3D {
   constructor(options: BaseMaterial3DOptions = {}) {
-    // screenSpaceFuncsBit provides `screenUVFromWorld`, called by depthEffectBit.
-    const bits = [screenSpaceFuncsBit, depthEffectBit];
+    const bits = [depthEffectBit];
 
     super({
       ...options,
@@ -30,6 +29,7 @@ export class DepthEffectMaterial extends BaseMaterial3D {
 
     // Same routing as WaterMaterial: BLENDED_REFRACTION is the pass that
     // samples the opaque depth copy (and keeps CopyDepth alive in the graph).
+    // unused-internal-disable-next-line -- no public API routes a custom material to BLENDED_REFRACTION yet
     this._passBit = RenderPassBit.BLENDED_REFRACTION;
   }
 }

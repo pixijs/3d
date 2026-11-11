@@ -8,21 +8,12 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * P2 repro: two cards, each a 2D container holding a bright 2D frame AND a
- * transmissive {@link View3D}, under ONE shared `app.stage` filter. On WebGPU
- * this used to render only the first card (the per-view graph's pop() reverted
- * the live binding off the bind()-established filter texture to the root). The
- * 2D frame must stay centred on its cube in BOTH cards — it reads whether the
- * binding restore also preserves the surrounding 2D's render state.
- */
 function addCard(parent: Container, cx: number, cy: number, accent: number, scale: number): void {
   const card = new Container();
   card.position.set(cx, cy);
   card.scale.set(scale);
   parent.addChild(card);
 
-  // Bright 2D frame centred on the card origin — should sit around the cube.
   const frame = new Graphics().roundRect(-50, -50, 100, 100, 10).stroke({ color: accent, width: 4, alpha: 1 });
   card.addChild(frame);
 
@@ -57,9 +48,6 @@ function addCard(parent: Container, cx: number, cy: number, accent: number, scal
 
 export const scene: TestScene = {
   app: {
-    // Non-power-of-two so the pooled filter texture is larger than the filter
-    // bounds — surfaces the projection/viewport (frame vs full-texture) mismatch
-    // a pow2 canvas hides.
     width: 500,
     height: 220,
     backgroundColor: 0x10202a,
@@ -70,7 +58,6 @@ export const scene: TestScene = {
     const w = app.screen.width;
     const h = app.screen.height;
 
-    // Grid backdrop so the glass refracts something legible.
     const backdrop = new Graphics();
     const step = 16;
     for (let x = 0; x <= w; x += step) backdrop.moveTo(x, 0).lineTo(x, h);
@@ -78,12 +65,9 @@ export const scene: TestScene = {
     backdrop.stroke({ color: 0x3a7ca5, width: 1.5, alpha: 1 });
     app.stage.addChild(backdrop);
 
-    // One shared filter over the whole stage — the P2 trigger.
     app.stage.filters = [new ColorMatrixFilter()];
     (app.stage.filters[0] as ColorMatrixFilter).desaturate();
 
-    // Five cards at staggered scales — the cumulative viewport-drift bug
-    // mispositioned every card after the second.
     const accents = [0xffc857, 0x88ffcc, 0xff5566, 0xa8c8ff, 0xffaaff];
     const scales = [0.6, 1.3, 0.8, 1.4, 1.0];
     for (let i = 0; i < 5; i++) {

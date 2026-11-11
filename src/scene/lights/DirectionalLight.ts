@@ -19,8 +19,8 @@ export interface DirectionalLightOptions extends LightOptions {}
  *
  * The usual choice for a scene's main light.
  *
- * It shines along its local **-Z** axis, so only its rotation matters: moving it changes
- * neither the lighting nor the shadow, which is fitted to the scene or to the camera. Aim it
+ * It shines along its local **-Z** axis, so only its rotation matters: moving it doesn't change
+ * the lighting, and its shadow is fitted to the scene or to the camera wherever it sits. Aim it
  * with {@link Container3D.lookAt | lookAt} from any position.
  *
  * Its shadow covers one box over the scene by default. For a large world, turn on
@@ -39,17 +39,13 @@ export interface DirectionalLightOptions extends LightOptions {}
  * sun.lookAt({ x: 0, y: 0, z: 0 }); // local -Z faces origin
  * view.root.addChild(sun);
  * ```
- * @see {@link Light} For the abstract base class.
  * @see {@link LightShadow} For shadow tuning fields (bounds, cascades, update, bias).
  * @category scene
  * @standard
  */
 export class DirectionalLight extends Light {
   /**
-   * Default {@link DirectionalLightOptions} merged under every constructor call
-   *
-   * `new DirectionalLight(opts)` resolves as `{ ...DirectionalLight.defaultOptions, ...opts }`,
-   * ignoring options set to `undefined`. Mutate to change the defaults process-wide.
+   * Defaults for every new `DirectionalLight`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * DirectionalLight.defaultOptions.castShadow = true;

@@ -10,7 +10,7 @@
 
 // The extras entry needs the core entry evaluated first; in Node, where this file runs, nothing else loads it before
 // this file does.
-import '@pixi/3d';
+import { seededRandom } from '@pixi/3d';
 import { ParticleSystem3D, SphereShape } from '@pixi/3d/extras';
 import type { ParticleSpawnOverrides } from '@pixi/3d/extras';
 import { cpu } from 'benchy';
@@ -30,7 +30,7 @@ const SNAPSHOT_FLOATS = 12;
 type Options = ConstructorParameters<typeof ParticleSystem3D>[0];
 
 const BASE: Options = {
-  seed: 'bench',
+  createRandom: () => seededRandom('bench'),
   autoUpdate: false,
   emitRate: 0,
   capacity: 4096,

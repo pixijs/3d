@@ -4,6 +4,9 @@
  * runs), so the ladder is the comparison, and the objects shrink as the count grows, which keeps the screen about as
  * covered and the fill rate out of the answer.
  *
+ * The `still20k` and `still50k` variants skip the transform writes, so they time a frame where nothing in the scene
+ * changed.
+ *
  * Judged on `cpu.render`: the walk, the bounds and the batching all happen inside `renderer.render`, and the
  * quaternion writes that mark each transform dirty are the update's. A frame's time over both would dilute an engine
  * change inside the render with a write path that did not move.
@@ -23,12 +26,17 @@ import { applyLook } from './stage.ts';
 import type { PixiStage } from './stage.ts';
 
 frame('field', {
-  variants: { c20k: { count: 20_000 }, c50k: { count: 50_000 } },
+  variants: {
+    c20k: { count: 20_000, still: false },
+    c50k: { count: 50_000, still: false },
+    still20k: { count: 20_000, still: true },
+    still50k: { count: 50_000, still: true },
+  },
   primary: 'cpu.render',
   gate: 'strict',
-  create(stage: PixiStage, { count }) {
+  create(stage: PixiStage, { count, still }) {
     const data = fieldScene(count);
     applyLook(stage, data.look);
-    return meshPerObject(stage, data);
+    return meshPerObject(stage, data, still);
   },
 });

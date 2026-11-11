@@ -1,21 +1,38 @@
 import '../src/index.ts';
-import { Application, Assets } from 'pixi.js';
+import { Application, Assets, BindGroup } from 'pixi.js';
 import type { ApplicationOptions, Renderer, WebGPURenderer } from 'pixi.js';
 import { describe, expect, test, vi } from 'vitest';
 import type { TestContext } from 'vitest';
 import { page, server } from 'vitest/browser';
 
+import type { GlobalTextureBindings } from '../src/core/render-graph/TextureBinding';
+import { PostEffect } from '../src/post-processing/effects/PostEffect';
+import type { EffectFragment } from '../src/post-processing/effects/PostEffect';
+import type { EffectStage } from '../src/post-processing/Pass3D';
+
 export interface TestScene {
+  /** Assets `Assets.load` loads before `create` runs */
   assets?: string | string[];
+  /** Options for the scene's `Application`; the harness sets `preference` to the renderer under test */
   app?: Partial<ApplicationOptions>;
+  /**
+   * The scene fails when this many pixels or more differ from its reference image, 100 by default. A
+   * pixel differs when pixelmatch's colour distance passes 0.1 (`scripts/test/compare-command.mts`)
+   */
   pixelMatch?: number;
   /** WebGPU-only tolerance override; falls back to `pixelMatch`. Keeps the deterministic WebGL guard tight while absorbing WebGPU shading drift. */
   pixelMatchWebgpu?: number;
   /** `true` skips both renderers; an array skips only the listed renderers (known-failing on those backends). */
   skip?: boolean | ('webgl' | 'webgpu')[];
+  /** Why the scene is skipped; the skipped test's title shows it */
+  skipReason?: string;
+  /** Skips the scene when {@link isCI}, for a scene too GPU-heavy for CI's adapters */
   skipCI?: boolean;
+  /** Runs only this scene, as `test.only` does; CI throws on it, so it can't be merged */
   only?: boolean;
+  /** Milliseconds to wait after the forced frame before the screenshot, 10 by default */
   delay?: number;
+  /** Builds the scene on `app`; the harness then renders one frame and screenshots the canvas */
   create: (app: Application, context: TestContext) => Promise<void>;
 }
 
@@ -52,6 +69,24 @@ export async function expectCleanRender(app: Application<Renderer>): Promise<voi
   app.render();
   const error = await device.popErrorScope();
   expect(error?.message ?? null).toBe(null);
+}
+
+/**
+ * Renders one frame and returns the canvas as that frame drew it, failing the test if WebGPU
+ * raised a validation error. It reads the canvas before it awaits anything, so the pixels are
+ * the tested frame's and never a later one's.
+ */
+export async function renderFrame(app: Application<Renderer>): Promise<Uint8ClampedArray> {
+  const device = (app.renderer as WebGPURenderer).gpu?.device;
+
+  device?.pushErrorScope('validation');
+  app.render();
+  const pixels = readCanvasPixels(app.canvas);
+  const error = await device?.popErrorScope();
+
+  expect(error?.message ?? null).toBe(null);
+
+  return pixels;
 }
 
 interface GetAppOptions {
@@ -154,16 +189,14 @@ export function defineSceneTests(name: string, scene: TestScene): void {
 
   describe('Visual Tests', () => {
     RENDERERS.forEach((renderer) => {
-      // Scenes (or specific renderers) flagged via `skip` are known-failing; each scene notes why beside its `skip`.
-      // WebGPU is skipped in CI: GitHub-hosted runners expose only a paravirtual Metal / software adapter whose
-      // rendering diverges from the bare-metal reference snapshots, so its visual diffs are unreliable. WebGL stays
-      // as the deterministic CI guard; WebGPU still runs locally on real hardware.
-      const skipped =
-        isSkipped(scene.skip, renderer) || (isCI && Boolean(scene.skipCI)) || (isCI && renderer === 'webgpu');
+      // Scenes (or specific renderers) flagged via `skip` are known-failing; each says why in `skipReason`.
+      const skipped = isSkipped(scene.skip, renderer) || (isCI && Boolean(scene.skipCI));
       const runner = scene.only ? test.only : skipped ? test.skip : test;
+      const title =
+        skipped && scene.skipReason ? `${name} - ${renderer} (skipped: ${scene.skipReason})` : `${name} - ${renderer}`;
 
       // Remote glTF models can be multi-MB; allow generous time for the network fetch.
-      runner(`${name} - ${renderer}`, { timeout: 30000 }, async (context) => {
+      runner(title, { timeout: 30000 }, async (context) => {
         const app = await getApp({
           appOptions: {
             ...scene.app,
@@ -175,6 +208,7 @@ export function defineSceneTests(name: string, scene: TestScene): void {
         });
 
         try {
+          expect(app.renderer.name, 'the renderer the scene actually got').toBe(renderer);
           await scene.create(app, context);
 
           // Force one synchronous, fully-resident frame so the screenshot can't race the throttled rAF ticker
@@ -202,4 +236,36 @@ export function defineSceneTests(name: string, scene: TestScene): void {
       });
     });
   });
+}
+
+/**
+ * Global texture bindings over a bind group that declares the three names and holds nothing, for
+ * a graph built without a view: the stub passes sample nothing global.
+ */
+export function stubGlobalTextureBindings(): GlobalTextureBindings {
+  const group = new BindGroup({ uOpaqueColorTexture: null, uOpaqueDepthTexture: null, uShadowMap: null });
+  return {
+    opaqueColor: { group, slot: 'uOpaqueColorTexture' },
+    opaqueDepth: { group, slot: 'uOpaqueDepthTexture' },
+    shadowMap: { group, slot: 'uShadowMap' },
+  };
+}
+
+/** The 8-bit value `toneMapping: 'none'` writes for linear `x`: its 1/2.2 display encode */
+export function encoded(x: number): number {
+  return 255 * Math.min(1, x) ** (1 / 2.2);
+}
+
+/** Multiplies the chain image's RGB by a constant; `1` is a plain copy */
+export class ScaleEffect extends PostEffect {
+  protected readonly fragment: EffectFragment;
+
+  constructor(factor = 1, stage: EffectStage = 'beforeToneMapping') {
+    super({ stage });
+    const f = factor.toFixed(4);
+    this.fragment = {
+      gpu: `fn effect(uv: vec2<f32>) -> vec4<f32> { let c = sampleColor(uv); return vec4<f32>(c.rgb * ${f}, c.a); }`,
+      gl: `vec4 effect(vec2 uv) { vec4 c = sampleColor(uv); return vec4(c.rgb * ${f}, c.a); }`,
+    };
+  }
 }

@@ -7,12 +7,14 @@ import type { Scene3DSource } from '~/assets/Scene3DSource';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
+import { model } from '../../../../examples/assets/manifest';
+
 const SIZE = 64;
 
-/** A GLB, whose embedded images load through blob URLs, and a glTF, whose images are separate files */
-const FILES = ['/TextureTransformMultiTest.glb', '/duck-quantized/Duck.gltf'];
+const GLB_WITH_BLOB_URL_IMAGES = model('gltf.TextureTransformMultiTest');
+const GLTF_WITH_IMAGE_FILES = model('gltf.DuckQuantized');
+const FILES = [GLB_WITH_BLOB_URL_IMAGES, GLTF_WITH_IMAGE_FILES];
 
-/** pixi keeps one GPU copy per renderer of a texture source, keyed by renderer uid. */
 function gpuCopyCount(sources: TextureSource[]): number {
   let n = 0;
   for (const source of sources) n += Object.keys((source as unknown as { _gpuData: object })._gpuData).length;
@@ -23,7 +25,6 @@ function textureSources(source: Scene3DSource): TextureSource[] {
   return [...new Set(source.textures.map((texture) => texture.source))];
 }
 
-/** Runs `Assets.unload(url)` and returns what pixi warned, e.g. that a cached texture was destroyed instead of unloaded */
 async function unloadWarnings(url: string): Promise<string[]> {
   const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
@@ -34,7 +35,6 @@ async function unloadWarnings(url: string): Promise<string[]> {
   }
 }
 
-/** The loader's cache keys that `run` added */
 async function newCacheKeys(run: () => Promise<unknown>): Promise<string[]> {
   const before = new Set(Object.keys(Assets.loader.promiseCache));
   await run();
@@ -55,7 +55,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     }
 
-    /** Draws a model of `source` once so its textures and geometry reach the GPU */
     function draw(app: Application<Renderer>, source: Scene3DSource): () => void {
       const view3d = new View3D({ width: SIZE, height: SIZE });
       app.stage.addChild(view3d);
@@ -106,7 +105,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
     it('frees a cubemap and its six face textures, then loads it again', async () => {
       await withApp('unload-cubemap', async (app) => {
-        const url = `/skybox/skybox.cubemap?unload-${preference}`;
+        const url = `/venice-sunset/venice-sunset.cubemap?unload-${preference}`;
         let cube!: CubeTexture;
 
         const cacheKeys = await newCacheKeys(async () => {

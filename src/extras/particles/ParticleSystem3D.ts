@@ -42,12 +42,7 @@ import {
 } from './utils/spawnPlan';
 import type { SpawnAttribute, SpawnContext, SpawnFn, SpawnPlan, SpawnShape } from './utils/spawnPlan';
 
-/**
- * Offsets of each spawn spread's `[min, max]` pair
- *
- * No attribute carries the speed offset, so `generateSpawn` and `generateSpawnPolyfill` hard-code
- * it as `SPEED_OFFSET`. Move `speed` and those must follow.
- */
+/** `speed` must match `SPEED_OFFSET` in `generateSpawn.ts` and `generateSpawnPolyfill.ts` */
 const SPREAD = {
   life: 0,
   speed: 2,
@@ -61,12 +56,7 @@ const SPREAD = {
 
 const SPREAD_FLOATS = 16;
 
-/**
- * Longest step, in seconds, that {@link ParticleSystem3D.update | update} takes from one tick
- *
- * A backgrounded tab hands back a huge `deltaMS`. Without a ceiling the clock would jump that far,
- * and every live particle would skip to the end of its life on the first frame back.
- */
+/** Caps a step, so a tab back from the background doesn't age every live particle to death at once */
 const MAX_STEP = 1 / 10;
 
 const _pos = new Vector3();
@@ -96,7 +86,7 @@ export interface ParticleBurst {
    */
   time: number;
   /**
-   * How many particles it emits
+   * How many particles it emits each time it fires
    * @example
    * ```ts
    * const pulse: ParticleBurst = { time: 0, count: 20, repeatEvery: 0.5 };
@@ -133,14 +123,13 @@ export interface ParticleBurst {
 export type ParticleFrameMode = 'random' | 'animate' | 'overLife';
 
 /**
- * Constructor options for {@link ParticleSystem3D}
+ * Constructor options for {@link ParticleSystem3D}, on top of the {@link ParticleContainer3DOptions}
  *
- * Every field is optional, and the container options ({@link ParticleContainer3DOptions}) are
- * accepted too. An omitted field takes its value from {@link ParticleSystem3D.defaultOptions}.
+ * An omitted field takes its value from {@link ParticleSystem3D.defaultOptions}.
  * @example
  * ```ts
  * const sparks = new ParticleSystem3D({
- *   capacity: 300,
+ *   capacity: 40, // emitRate × the longest life, 40 × 0.8, rounded up
  *   blendMode: 'add',
  *   emitRate: 40,
  *   life: [0.4, 0.8],
@@ -149,7 +138,6 @@ export type ParticleFrameMode = 'random' | 'animate' | 'overLife';
  *   gravity: 9.8,
  * });
  * ```
- * @see {@link ParticleSystem3D} For the constructed system.
  * @category extras:particles
  * @standard
  */
@@ -166,14 +154,13 @@ export interface ParticleSystem3DOptions<
    */
   emitRate?: number;
   /**
-   * Scheduled bursts, timed on the system's burst timeline
+   * Bursts to fire on the system's burst timeline, which starts at 0 and advances only while the
+   * system is {@link ParticleSystem3D.playing | playing}
    *
-   * The timeline starts at 0 and advances only while the system is
-   * {@link ParticleSystem3D.playing | playing};
-   * {@link ParticleSystem3D.gotoAndPlay | gotoAndPlay} moves it. The list is
-   * copied at construction, so add or remove bursts before then. A burst's own
-   * fields stay yours to edit: `count` and `repeatEvery` apply as it fires,
-   * `time` on the next `gotoAndPlay` or `gotoAndStop`.
+   * The list is copied at construction, so adding or removing a burst later does nothing. An edit
+   * to a burst's `count` or `repeatEvery` applies the next time it fires; an edit to its `time`
+   * applies on the next {@link ParticleSystem3D.gotoAndPlay | gotoAndPlay} or
+   * {@link ParticleSystem3D.gotoAndStop | gotoAndStop}.
    * @example
    * ```ts
    * const explosion = new ParticleSystem3D({ emitRate: 0, bursts: [{ time: 0, count: 150 }] });
@@ -218,9 +205,9 @@ export interface ParticleSystem3DOptions<
    */
   size?: ParticleSpread;
   /**
-   * Each particle's starting spin angle about the view axis, in radians
+   * Each particle's starting spin angle in radians, turning its quad in its own plane
    *
-   * Named apart from the node's own `rotation`, which orients the emitter.
+   * The `rotation` option turns the emitter instead.
    * @default 0
    * @example
    * ```ts
@@ -246,9 +233,9 @@ export interface ParticleSystem3DOptions<
    */
   alpha?: ParticleSpread;
   /**
-   * Starting tint, display-space like every other colour in the engine
+   * Starting tint, in display (sRGB) space
    *
-   * Its own alpha is ignored; `alpha` sets opacity.
+   * A colour's own alpha is ignored; `alpha` sets opacity.
    * @default 0xffffff
    * @example
    * ```ts
@@ -283,10 +270,11 @@ export interface ParticleSystem3DOptions<
   colorEnd?: ColorSource;
 
   /**
-   * Constant acceleration; a bare number is shorthand for that much downward pull
+   * Constant acceleration, in units per second squared; a number is shorthand for that much
+   * downward pull
    *
-   * It is in the system's own space, like velocity, so in a `space: 'local'` system it turns and
-   * scales with the node.
+   * It's in the system's own space, so in a `space: 'local'` system it turns and scales with the
+   * node.
    * @example
    * ```ts
    * const fountain = new ParticleSystem3D({ speed: 5, gravity: 9.8 });
@@ -309,13 +297,9 @@ export interface ParticleSystem3DOptions<
   /**
    * How a multi-frame `texture` picks frames; {@link ParticleFrameMode} lists the modes
    *
-   * Ignored for a single texture.
-   *
-   * `'animate'` and `'overLife'` read the sheet as a grid of equal cells, left to right then top to
-   * bottom from the top-left cell, and compute each particle's frame in the shader. The grid comes
-   * from the first frame's size and the number of frames, not from where each frame sits, and every
-   * frame must be on the same source or the constructor throws. `'random'` copies one frame's exact
-   * region at spawn, so it is the mode for sheets whose frames are not laid out on a grid.
+   * Ignored for a single texture. `'animate'` and `'overLife'` read the sheet as a grid of cells the
+   * size of the first frame, in order left to right then top to bottom from the top-left, and ignore
+   * where each frame actually sits. Use `'random'` for a sheet that isn't laid out that way.
    * @default 'random'
    * @example
    * ```ts
@@ -334,17 +318,26 @@ export interface ParticleSystem3DOptions<
   frameRate?: number;
 
   /**
-   * Seed for reproducible runs. Omit for a random seed
+   * Makes the random stream spawns draw from, so an effect can replay the same way
+   *
+   * It's called at construction and on every {@link ParticleSystem3D.gotoAndPlay | gotoAndPlay} and
+   * {@link ParticleSystem3D.gotoAndStop | gotoAndStop}, so with a seeded generator `gotoAndPlay(0)`
+   * replays the effect. A seek to a later time doesn't replay what the first run drew from there,
+   * but two seeks to the same time, followed by the same calls, draw the same particles.
+   *
+   * Omitted, each stream gets a random seed, so no two runs match. `() => Math.random` works too,
+   * but allocates on every draw.
    * @example
    * ```ts
-   * const replayable = new ParticleSystem3D({ seed: 'campfire' });
+   * const campfire = new ParticleSystem3D({ createRandom: () => seededRandom('campfire') });
+   *
+   * campfire.gotoAndPlay(0); // the same sparks as the first run
    * ```
    */
-  seed?: string;
+  createRandom?: () => () => number;
   /**
-   * Whether {@link ParticleSystem3D.update | update} runs from `Ticker.shared` every frame
-   *
-   * Set `false` to drive updates yourself; {@link ParticleSystem3D.autoUpdate} says when you would.
+   * Whether {@link ParticleSystem3D.update | update} runs from `Ticker.shared` every frame;
+   * {@link ParticleSystem3D.autoUpdate} says when to turn it off
    * @default true
    * @example
    * ```ts
@@ -355,11 +348,15 @@ export interface ParticleSystem3DOptions<
    */
   autoUpdate?: boolean;
   /**
-   * Whether the system starts playing, emitting and running its burst timeline, as soon as it is built
+   * Whether the system is {@link ParticleSystem3D.playing | playing} from the start
    * @default true
    * @example
    * ```ts
-   * const confetti = new ParticleSystem3D({ autoPlay: false, emitRate: 0, bursts: [{ time: 0, count: 300 }] });
+   * const confetti = new ParticleSystem3D({
+   *   autoPlay: false,
+   *   emitRate: 0,
+   *   bursts: [{ time: 0, count: 300 }],
+   * });
    *
    * winBanner.on('shown', () => confetti.play());
    * ```
@@ -384,27 +381,21 @@ export interface ParticleSystem3DOptions<
  * A particle system with the movement built in: emission, lifetimes, spreads,
  * forces and over-life ramps, all from one options object
  *
- * Nothing moves on the CPU. A particle is written once when it is born: where
- * it started, which way it was going, when, and for how long. Every frame the
- * vertex shader works out where it is now from that record and the system
- * clock. The options you set decide which behaviour bits are composed into
- * that shader: a system with no `spin`, ramps or flipbook carries none of that
- * code. Lifetime and motion are always there; gravity and drag are uniforms.
+ * A particle is written once, at birth, and the GPU works out where it is every frame after that.
+ * So the CPU only pays for the particles born each frame, whatever the pool size. `spin`,
+ * `sizeEnd`, `alphaEnd`, `colorEnd` and a multi-frame `texture` each add GPU work, so set only
+ * what an effect needs.
  *
- * So the per-frame cost is emission plus one uniform, whatever the pool size,
- * and the upload each frame covers only the slots born that frame.
- *
- * Rendering, capacity and blending come from {@link ParticleContainer3D}, which
- * this extends. Drop to that layer when you want to drive particles yourself.
- * @typeParam B - The `extraBits` you pass. They type the custom attributes that `spawn`,
- *   `setParticle` and `onUpdate` accept; the system's own bits are typed by
- *   {@link ParticleSystemValues} instead.
+ * Rendering, capacity and blending come from {@link ParticleContainer3D}, which this extends.
+ * Drop to that layer when you want to move particles yourself.
+ * @typeParam B - The `extraBits` you pass; they type the custom attributes that
+ *   {@link ParticleSystem3D.spawn | spawn} and {@link ParticleSystem3D.setParticle | setParticle} accept.
  * @example
  * ```ts
  * // Campfire smoke.
  * const smoke = new ParticleSystem3D({
  *   texture: puff,
- *   capacity: 400,
+ *   capacity: 100, // emitRate × the longest life, 30 × 3, rounded up
  *   emitRate: 30,
  *   shape: new ConeShape({ angle: 15, radius: 0.2 }),
  *   life: [1.5, 3],
@@ -420,13 +411,12 @@ export interface ParticleSystem3DOptions<
  * view.root.addChild(smoke);
  * ```
  * @see {@link ParticleSystem3DOptions} For the constructor options.
- * @see {@link ParticleContainer3D} For the rendering layer underneath.
  * @category extras:particles
  * @standard
  */
 export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBit[]> extends ParticleContainer3D<B> {
   /**
-   * Where particles start and which way they head. Swap freely at runtime
+   * Where particles start and which way they head; swap it at any time
    * @example
    * ```ts
    * thruster.shape = boosting ? new ConeShape({ angle: 8 }) : new ConeShape({ angle: 25 });
@@ -435,13 +425,13 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   public shape: EmitterShape;
 
   /**
-   * Called at the end of each step, for effects the options don't cover
+   * Called at the end of each {@link ParticleSystem3D.update | update} with a step above 0, playing
+   * or not, for effects the options don't cover
    *
-   * Write through {@link ParticleSystem3D.setParticle | setParticle}, or through the raw
-   * {@link ParticleContainer3D.data | data} views followed by
-   * {@link ParticleContainer3D.markDirty | markDirty}; the step uploads the marked slots after
-   * this returns. A slot written from scratch needs `aBirth` and `aLife` too, or the shader reads
-   * it as long dead. Runs whether or not the system is {@link ParticleSystem3D.playing | playing}.
+   * Write particles with {@link ParticleSystem3D.setParticle | setParticle}, or through
+   * {@link ParticleContainer3D.data | data} and {@link ParticleContainer3D.markDirty | markDirty};
+   * the update uploads them after this returns. A particle written from scratch needs `aBirth` and
+   * `aLife` too, or it won't draw.
    * @example
    * ```ts
    * system.onUpdate = (dt, self) => {
@@ -453,60 +443,48 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
 
   private readonly _bursts: readonly ParticleBurst[];
   private readonly _burstNext: Float64Array;
+  private readonly _createRandom: () => () => number;
 
   private _gravity: Vector3 | null = null;
   private _drag: number | null = null;
   private readonly _frameMode: ParticleFrameMode;
   private _frameRate = 0;
   private readonly _hasShaderFlipbook: boolean;
-  /** The sheet wrapper `deriveSetup` made for a shader flipbook, freed with the system; `null` when the caller's texture is bound as given */
+  /** The sheet `deriveSetup` made for a shader flipbook, freed in `destroy`; `null` when the texture is the caller's */
   private readonly _gridSheet: Texture | null;
 
   private readonly _colorStart: number = 0;
 
-  /** Every attribute a spawn writes; `createSpawnAttributes` sets the order */
   private readonly _spawnAttributes: SpawnAttribute[];
-  /** The current burst's overrides, classified once; see `SpawnPlan` */
   private readonly _plan: SpawnPlan;
-  /** What the spawn functions read, hoisted once; see `SpawnContext` */
   private readonly _spawnContext: SpawnContext;
-  /** What shapes their code; see `SpawnShape` */
   private readonly _spawnShape: SpawnShape;
-  /** The attribute list's signature, so systems with the same attributes share spawn functions */
   private readonly _spawnSignature: string;
-  /** The spawn function for each override pattern this system has seen, keyed by the pattern */
+  /** Keyed by the pattern alone, so a burst skips building the longer key of `generateSpawnBurst`'s cache */
   private readonly _spawns = new Map<string, SpawnFn>();
-  /**
-   * The emitter transform world-space spawns bake in. Refreshed from the live
-   * parent chain once per burst rather than read from `worldTransform`, which
-   * only the render pass keeps current: a system moved this frame, or spawning
-   * before its first frame, emits from where it is
-   */
+  /** Rebuilt from the live parent chain each burst, since `worldTransform` is only current after a render */
   private readonly _spawnTransform = new Matrix4();
 
-  /** Next slot to write. Slots recycle in order; the shader decides what is alive */
   private _cursor = 0;
 
   private _emitRate = 0;
   private _playing: boolean;
   private _accumulator = 0;
-  /** Seconds into the burst timeline; advances while playing, moved by the goto methods */
+  /** The burst timeline in seconds; the public `time` is `_clock` */
   private _time = 0;
   /**
-   * The clock births are stamped with and the shader reads
-   *
-   * Only `update` and the `time` setter move it. The goto methods never do, so they can't kill
-   * live particles.
+   * What births are stamped with and the shader reads; the goto methods never move it, so they
+   * can't kill live particles
    */
   private _clock = 0;
 
   private _autoUpdate = false;
 
   /**
-   * Default options for {@link ParticleSystem3D}, merged under every constructor call
+   * Defaults for every new `ParticleSystem3D`; an option passed as `undefined` keeps its default
    *
-   * Mutate to change the defaults process-wide. A shape set here is one object shared by every
-   * system that doesn't pass its own, so editing one system's `shape` edits them all.
+   * A `shape` set here is one object shared by every system that doesn't pass its own, so editing
+   * its fields on one system edits them all.
    * @example
    * ```ts
    * ParticleSystem3D.defaultOptions.emitRate = 30;
@@ -527,12 +505,12 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     color: 0xffffff,
     frameMode: 'random',
     frameRate: 12,
+    // oxlint-disable-next-line no-restricted-properties -- seeds the default stream once per seek, never per draw
+    createRandom: () => seededRandom(Math.random().toString(36)),
   };
 
   /**
-   * Creates a particle system
-   *
-   * Add it under a `View3D`'s root to render it.
+   * Creates a particle system; add it under a `View3D`'s root to draw it
    * @param options - What to override in {@link ParticleSystem3D.defaultOptions | defaultOptions}.
    */
   constructor(options: ParticleSystem3DOptions<B> = {}) {
@@ -556,7 +534,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
       drag,
       frameMode,
       frameRate,
-      seed,
+      createRandom,
       autoUpdate,
       autoPlay,
       onUpdate,
@@ -572,14 +550,12 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
       extraBits: [...setup.bits, ...(extraBits ?? [])] as unknown as B,
     });
 
-    const rng = seededRandom(seed ?? Math.random().toString(36));
     this.shape = shape!;
     this._bursts = [...(bursts ?? [])];
     this._gridSheet = setup.ownsTexture ? (setup.texture as Texture) : null;
     this._burstNext = new Float64Array(this._bursts.length);
+    this._createRandom = createRandom!;
     this.onUpdate = onUpdate ?? null;
-
-    this._seek(0);
 
     this._emitRate = emitRate!;
     this._playing = autoPlay!;
@@ -587,7 +563,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     this._frameRate = frameRate!;
     this._hasShaderFlipbook = setup.grid !== null;
 
-    this._colorStart = packParticleColor(Color.shared.setValue(color!).toNumber(), 1);
+    this._colorStart = packColor(color!);
 
     const spreads = new Float32Array(SPREAD_FLOATS);
 
@@ -624,7 +600,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     };
     this._spawnSignature = spawnSignature(attributes, this._spawnShape);
     this._spawnContext = {
-      rng,
+      // oxlint-disable-next-line no-restricted-properties -- placeholder; the _seek(0) below installs the real stream
+      rng: Math.random,
       spreads,
       shape: this.shape,
       pos: _pos,
@@ -640,6 +617,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
       u16: this.data.u16,
     };
 
+    this._seek(0);
+
     this.gravity = gravity ?? null;
     this.drag = drag ?? null;
 
@@ -654,10 +633,12 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * The system clock in seconds
+   * The system clock in seconds, which particle ages are measured from
    *
-   * What births are stamped with and what the shader reads. Advances with
-   * {@link ParticleSystem3D.update | update}.
+   * It advances with each {@link ParticleSystem3D.update | update}, playing or not, and isn't the
+   * burst timeline that {@link ParticleSystem3D.gotoAndPlay | gotoAndPlay} moves. Assign it to
+   * scrub, backwards too: the particles still in the pool show as they would at that time, and
+   * nothing is emitted.
    * @example
    * ```ts
    * scrubber.on('change', (seconds: number) => {
@@ -670,13 +651,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Scrubs the clock
-   *
-   * Every particle is a pure function of its birth record and this value, so
-   * assigning it renders that moment exactly, backwards included: particles
-   * born after it are not yet born, particles whose life ended before it are
-   * dead. Nothing is resimulated. Resuming continues from here, and new spawns
-   * then recycle the oldest slots as usual.
+   * Sets the clock
    * @param value - Clock time in seconds.
    */
   set time(value: number) {
@@ -696,8 +671,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Changes the steady emission rate; takes effect on the next step
-   * @param value - Particles emitted per second.
+   * Sets the emission rate
+   * @param value - Particles per second.
    */
   set emitRate(value: number) {
     this._emitRate = value;
@@ -706,9 +681,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   /**
    * Whether the system is emitting and running its burst timeline
    *
-   * Change it with {@link ParticleSystem3D.play | play} and
-   * {@link ParticleSystem3D.stop | stop}. Live particles keep moving and
-   * ageing either way.
+   * Change it with {@link ParticleSystem3D.play | play} and {@link ParticleSystem3D.stop | stop}.
    * @example
    * ```ts
    * if (!fountain.playing) fountain.play();
@@ -719,9 +692,11 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Constant acceleration, or `null` when the system has none
+   * Constant acceleration, or `null` for none; {@link ParticleSystem3DOptions.gravity} has the units
    *
-   * Assign a new value to change it: editing the returned vector doesn't reach the shader.
+   * A change reshapes every live particle's whole path, as if the new value had held since its
+   * birth, so a big change makes particles jump. Assign a new value to change it; editing the returned
+   * vector doesn't reach the particles.
    * @example
    * ```ts
    * snow.gravity = { x: wind, y: -1, z: 0 };
@@ -733,10 +708,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
 
   /**
    * Sets the acceleration
-   *
-   * It is a uniform, so every live particle feels the change on the next frame
-   * and there is nothing to recompile.
-   * @param value - Acceleration vector, a number `g` for a pull of `g` straight down, or `null` for none.
+   * @param value - A vector, a number for a pull straight down, or `null` for none.
    */
   set gravity(value: number | PointData3D | null) {
     if (value === null) {
@@ -753,8 +725,11 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * How fast velocity dies away, or `null` when the system has none;
-   * {@link ParticleSystem3DOptions.drag} has the scale
+   * How fast velocity dies away, or `null` for none; {@link ParticleSystem3DOptions.drag} has the
+   * scale
+   *
+   * A change reshapes live particles' paths, as a change to {@link ParticleSystem3D.gravity | gravity}
+   * does.
    * @example
    * ```ts
    * bubbles.drag = underwater ? 4 : null;
@@ -765,7 +740,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Sets the drag. A uniform, like {@link ParticleSystem3D.gravity | gravity}
+   * Sets the drag
    * @param value - The drag, or `null` for none.
    */
   set drag(value: number | null) {
@@ -785,8 +760,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Changes the flipbook playback rate
-   * @param value - Frames per second; only used when `frameMode` is `'animate'`.
+   * Sets the flipbook rate
+   * @param value - Frames per second.
    */
   set frameRate(value: number) {
     this._frameRate = value;
@@ -796,13 +771,10 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   /**
    * Whether {@link ParticleSystem3D.update | update} runs from `Ticker.shared` every frame
    *
-   * The step runs at `UPDATE_PRIORITY.LOW + 1`: after code at the default `NORMAL` priority, so a
-   * spawn bakes the emitter where this frame's game code left it, and before anything at `LOW`,
-   * where an `Application` renders. That only orders it before the render when the application
-   * is built with `sharedTicker: true`. A default application renders from a ticker of its own,
-   * which the browser usually runs first, so new particles show a frame late. Turn this off and
-   * call `update` from `app.ticker` to step before that render, or to step the system yourself
-   * from a fixed-step loop or a test.
+   * It runs after `Ticker.shared` callbacks at the default priority, so particles spawn where those
+   * left the emitter. An `Application` renders from its own ticker unless built with
+   * `sharedTicker: true`, so new particles can show a frame late. Turn this off and call `update`
+   * from `app.ticker` to avoid that, or to step the system from a loop of your own.
    * @example
    * ```ts
    * steam.autoUpdate = false;
@@ -814,7 +786,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Connects to or disconnects from `Ticker.shared`
+   * Turns automatic updates on or off
    * @param value - Whether to run `update()` every frame.
    */
   set autoUpdate(value: boolean) {
@@ -843,10 +815,9 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   /**
    * Stops emitting and freezes the burst timeline where it is
    *
-   * Live particles carry on until their lifetimes run out: the "close the tap,
-   * let the smoke clear" behaviour. {@link ParticleSystem3D.clear | clear}
-   * removes them at once; turning off
-   * {@link ParticleSystem3D.autoUpdate | autoUpdate} freezes them in place.
+   * Live particles carry on until their lifetimes run out. {@link ParticleSystem3D.clear | clear}
+   * removes them at once, and turning off {@link ParticleSystem3D.autoUpdate | autoUpdate} freezes
+   * them in place.
    * @example
    * ```ts
    * exhaust.stop();
@@ -859,8 +830,10 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   /**
    * Moves the burst timeline to `time` and plays from there
    *
-   * `gotoAndPlay(0)` restarts the effect: every burst fires again on schedule.
-   * Live particles aren't touched.
+   * Bursts due before `time` count as spent, and a repeating one picks up at its next repeat.
+   * `gotoAndPlay(0)` restarts the effect, drawing from a fresh
+   * {@link ParticleSystem3DOptions.createRandom | random stream}. Live particles, and the
+   * {@link ParticleSystem3D.time | clock} they're drawn at, don't change.
    * @example
    * ```ts
    * explosion.gotoAndPlay(0);
@@ -874,12 +847,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Moves the burst timeline to `time` and stops there
-   *
-   * Bursts scheduled before `time` count as spent; a repeating one picks up at
-   * its next repeat. Live particles aren't touched, and the clock they render
-   * against doesn't move; assign {@link ParticleSystem3D.time | time} to scrub
-   * that.
+   * Moves the burst timeline to `time` and stops there; {@link ParticleSystem3D.gotoAndPlay | gotoAndPlay}
+   * says what the move changes
    * @example
    * ```ts
    * fireworks.gotoAndStop(0);
@@ -897,14 +866,15 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
    * Emits `count` particles right now, whether or not the system is
    * {@link ParticleSystem3D.playing | playing}
    *
-   * Overflow recycles the oldest slots, and more than the capacity spawns the
-   * capacity. The new particles upload with the next {@link ParticleSystem3D.update | update}.
+   * Slots are reused in spawn order, so once all are used a new particle replaces the oldest, even
+   * if it's still alive. A `count` over the capacity spawns the capacity. The new particles upload
+   * with the next {@link ParticleSystem3D.update | update} that has a step above 0.
    * @example
    * ```ts
    * sparks.spawn(30, { position: hit.point, color: 0xffaa00 });
    * ```
    * @param count - How many to emit.
-   * @param overrides - Per-spawn values replacing the system's defaults.
+   * @param overrides - Values for this batch in place of the system's options.
    */
   public spawn(count: number, overrides?: ParticleSpawnOverrides<B>): void {
     const plan = this._plan;
@@ -913,10 +883,19 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     if (o !== undefined) this._checkOverrides(o);
 
     const attributes = this._spawnAttributes;
+    const packed = this._spawnContext.packed;
+    let packedOverride = -1;
 
     for (let i = 0; i < attributes.length; i++) {
       const key = attributes[i].key;
-      const raw = key === '' ? undefined : o?.[key];
+      let raw = key === '' ? undefined : o?.[key];
+
+      if (raw !== undefined && attributes[i].source === FROM_PACKED) {
+        packed[i] = packColor(raw as ColorSource);
+        packedOverride = i;
+        raw = undefined;
+      }
+
       const kind = kindOf(raw);
 
       plan.raw[i] = raw;
@@ -933,22 +912,21 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
       plan.positionLo = pair[0];
       plan.positionHi = pair[1];
     }
-    plan.packedColor =
-      o?.color === undefined
-        ? this._colorStart
-        : packParticleColor(Color.shared.setValue(o.color as ColorSource).toNumber(), 1);
+    plan.packedColor = o?.color === undefined ? this._colorStart : packColor(o.color as ColorSource);
 
     this._spawnBatch(Math.min(count, this.capacity));
+
+    if (packedOverride >= 0) packed[packedOverride] = attributes[packedOverride].packed;
   }
 
   /**
-   * The container's {@link ParticleContainer3D.setParticle | setParticle}, also
-   * accepting the attributes the system's own behaviour bits declare
+   * Writes any of a particle's attributes by name, the system's own {@link ParticleSystemValues}
+   * included; see {@link ParticleContainer3D.setParticle}
    * @example
    * ```ts
    * sparks.setParticle(0, { aPosition: { x: 0, y: 2, z: 0 }, aBirth: sparks.time, aLife: 1.5 });
    * ```
-   * @param index - Slot to write, in `[0, capacity)`.
+   * @param index - Slot to write, 0 to `capacity - 1`.
    * @param values - Attribute name to value. An undeclared name throws.
    * @advanced
    */
@@ -957,17 +935,10 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Advances the system by one tick and uploads whatever was born
+   * Moves the clock on by one step, emits what's due and uploads what was born
    *
-   * Runs every frame while {@link ParticleSystem3D.autoUpdate | autoUpdate} is on. Call it
-   * yourself when driving the system from your own loop. Both clocks move before anything spawns:
-   * a burst fires in the step that reaches its time, and a particle born in the step is stamped
-   * with the time the shader reads, so it first draws at age 0, where it spawned. While the system
-   * is stopped the clock still moves, so live particles finish their lives. To move the clock
-   * without emitting, assign {@link ParticleSystem3D.time | time}.
-   *
-   * The step always comes from a ticker's `deltaMS`, so a fixed-step loop keeps a `Ticker` of its
-   * own and writes its step into `deltaMS` before each call.
+   * Runs every frame while {@link ParticleSystem3D.autoUpdate | autoUpdate} is on; call it yourself
+   * otherwise. A fixed-step loop keeps a `Ticker` of its own and sets its `deltaMS` before each call.
    * @example
    * ```ts
    * const step = new Ticker();
@@ -975,8 +946,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
    * step.deltaMS = 1000 / 120;
    * system.update(step); // one 120 Hz step, however long the frame took
    * ```
-   * @param ticker - The ticker driving this update; its `deltaMS` is the step, capped at a tenth
-   *   of a second. Omitted, one 60 fps frame is assumed.
+   * @param ticker - Supplies the step as its `deltaMS`, capped at a tenth of a second. Omitted, the
+   *   step is one 60 fps frame.
    */
   public update(ticker?: Ticker): void {
     const dt = ticker ? Math.min(ticker.deltaMS / 1000, MAX_STEP) : 1 / 60;
@@ -1007,11 +978,10 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Kills every particle immediately
+   * Kills every particle, from the next {@link ParticleSystem3D.update | update} on
    *
-   * Emission carries on from where it was; use
-   * {@link ParticleSystem3D.gotoAndPlay | gotoAndPlay(0)} to restart the burst
-   * timeline too.
+   * Emission and the burst timeline carry on; {@link ParticleSystem3D.gotoAndPlay | gotoAndPlay(0)}
+   * restarts the timeline too.
    * @example
    * ```ts
    * respawnButton.on('pointertap', () => {
@@ -1031,9 +1001,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   };
 
   /**
-   * Disconnects from the ticker, tears down the buffer and frees the sheet wrapper a shader flipbook made
-   *
-   * The source under that wrapper is yours, so `options` decides its fate as for any texture you pass.
+   * Stops updating and destroys the system; `options` works as for
+   * {@link ParticleContainer3D.destroy}
    * @example
    * ```ts
    * explosion.destroy();
@@ -1044,18 +1013,11 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     if (this.destroyed) return;
     this.autoUpdate = false;
     this.onUpdate = null;
+    (this._createRandom as (() => () => number) | null) = null;
     super.destroy(options);
     this._gridSheet?.destroy(false);
   }
 
-  /**
-   * Puts the burst timeline at `time`, with each burst due at its first firing at or after it
-   *
-   * A non-finite time would poison the timeline (`NaN` never fires again, `Infinity` dumps a
-   * pool's worth at once), so it is refused before anything moves.
-   * @param time - Seconds into the burst timeline.
-   * @throws {RangeError} If `time` is not a finite number
-   */
   private _seek(time: number): void {
     if (!Number.isFinite(time)) {
       throw new RangeError(`[ParticleSystem3D] time must be a finite number of seconds, got ${time}`);
@@ -1063,6 +1025,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
 
     this._time = time;
     this._accumulator = 0;
+    this._spawnContext.rng = this._createRandom();
 
     for (let i = 0; i < this._bursts.length; i++) {
       const { time: start, repeatEvery } = this._bursts[i];
@@ -1079,13 +1042,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     }
   }
 
-  /**
-   * Fires any bursts the timeline has reached since the last step
-   *
-   * A step longer than many repeat intervals owes a repeating burst many firings, but only the
-   * last pool's worth can survive. Once that many have fired, the rest are skipped and the
-   * schedule picks up from the present.
-   */
+  /** Fires a repeating burst's missed repeats at most a pool's worth of times; more would only overwrite each other */
   private _emitBursts(): void {
     const bursts = this._bursts;
 
@@ -1116,7 +1073,6 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     }
   }
 
-  /** Marks every entry of the plan absent, for emission with no overrides */
   private _resetPlan(): void {
     const plan = this._plan;
 
@@ -1130,12 +1086,8 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 
   /**
-   * Writes `count` new particles into the next slots, from the current plan
-   *
-   * Runs the spawn function for this plan's override pattern, kept per system by the pattern
-   * alone. A pattern the system hasn't seen comes from `generateSpawnBurst`, whose cache every
-   * system shares.
-   * @param count - Particles to write; never more than the capacity, so the run wraps the pool at most once.
+   * Writes `count` particles from the current plan
+   * @param count - At most the capacity, since the dirty range below wraps the pool only once
    */
   private _spawnBatch(count: number): void {
     const plan = this._plan;
@@ -1172,12 +1124,6 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     }
   }
 
-  /**
-   * Rejects an override the system has no attribute for, or one shaped wrong
-   * for its attribute, once per burst: either would otherwise write nothing or
-   * NaN with no error
-   * @param o - The override object passed to `spawn()`.
-   */
   private _checkOverrides(o: Record<string, unknown>): void {
     const attributes = this._spawnAttributes;
 
@@ -1197,6 +1143,7 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
         }
 
         if (components === 0) throw new Error(`[ParticleSystem3D] spawn(): nothing takes '${key}'.`);
+        if (key === 'colorEnd') continue;
       }
 
       const kind = kindOf(raw);
@@ -1212,7 +1159,6 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
     }
   }
 
-  /** Refreshes `_spawnTransform` from the live parent chain */
   private _refreshSpawnTransform(): void {
     updateTransformBackwards3D(this, _parentWorld.identity());
 
@@ -1225,15 +1171,13 @@ export class ParticleSystem3D<B extends readonly ShaderBit[] = readonly ShaderBi
   }
 }
 
+function packColor(value: ColorSource): number {
+  return packParticleColor(typeof value === 'number' ? value : Color.shared.setValue(value).toNumber(), 1);
+}
+
 /**
- * Every attribute a spawn writes, built-in or not, as one list in the order its random draws happen
- *
- * The order fixes which draw each attribute gets, so reordering the list changes what every seed
- * produces. The attributes the caller's `extraBits` declare come last and are written as zero
- * unless an override names them. A user bit that redeclares a built-in, to type `setParticle` say,
- * gets no entry of its own, which would write zero over the built-in's value.
- * @param offsets - Byte offset of each attribute in a vertex, from the container's `data.offsets`
- * @param options - The options that decide which attributes exist
+ * The list is in draw order, so reordering it changes what every seed produces. A user bit that
+ * redeclares a built-in gets no entry, or it would write zero over the built-in.
  */
 function createSpawnAttributes(
   offsets: Readonly<Record<string, number>>,
@@ -1268,14 +1212,12 @@ function createSpawnAttributes(
   if (offsets.aParticleUVFrame !== undefined)
     attributes.push(entry('', 'aParticleUVFrame', 0, 4, FROM_FRAME, 0, AS_FRAME));
   attributes.push(entry('', 'aBirth', 0, 1, FROM_CLOCK, 0, AS_F32));
-  if (sizeEnd !== undefined) attributes.push(entry('', 'aSizeEnd', 0, 1, FROM_SPREAD, SPREAD.sizeEnd, AS_F32));
-  if (alphaEnd !== undefined) attributes.push(entry('', 'aAlphaEnd', 0, 1, FROM_SPREAD, SPREAD.alphaEnd, AS_F32));
-  if (spin !== undefined) attributes.push(entry('', 'aSpin', 0, 1, FROM_SPREAD, SPREAD.spin, AS_F32));
-  if (colorEnd !== undefined) {
-    const packed = packParticleColor(Color.shared.setValue(colorEnd).toNumber(), 1);
-
-    attributes.push(entry('', 'aColorEnd', 0, 4, FROM_PACKED, 0, AS_PACKED, packed));
-  }
+  if (sizeEnd !== undefined) attributes.push(entry('sizeEnd', 'aSizeEnd', 0, 1, FROM_SPREAD, SPREAD.sizeEnd, AS_F32));
+  if (alphaEnd !== undefined)
+    attributes.push(entry('alphaEnd', 'aAlphaEnd', 0, 1, FROM_SPREAD, SPREAD.alphaEnd, AS_F32));
+  if (spin !== undefined) attributes.push(entry('spin', 'aSpin', 0, 1, FROM_SPREAD, SPREAD.spin, AS_F32));
+  if (colorEnd !== undefined)
+    attributes.push(entry('colorEnd', 'aColorEnd', 0, 4, FROM_PACKED, 0, AS_PACKED, packColor(colorEnd)));
 
   for (const [name, format] of Object.entries(collectAttributes([...(extraBits ?? [])]))) {
     if (owned.has(name) || offsets[name] === undefined) continue;

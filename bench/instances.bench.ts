@@ -38,7 +38,7 @@ function build(stage: PixiStage, count: number): Batch {
   for (let i = 0; i < count; i++) {
     batch.setGeometryAt(i, geometry);
     batch.setMaterialAt(i, material);
-    batch.setItemActive(i, RenderPassBit.OPAQUE);
+    batch.setPassesAt(i, RenderPassBit.OPAQUE);
   }
   stage.view.root.addChild(batch);
   return {

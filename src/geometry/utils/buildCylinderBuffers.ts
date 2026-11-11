@@ -1,33 +1,13 @@
 import { clampSegments } from './clampSegments';
 
-/**
- * Raw vertex/index arrays produced by `buildCylinderBuffers`
- * @internal
- */
 interface CylinderBuffers {
-  /** Positions, three floats per vertex */
   positions: Float32Array;
-  /** Normals, three floats per vertex */
   normals: Float32Array;
-  /** UVs, two floats per vertex */
   uvs: Float32Array;
-  /** Triangle-list indices; a `Uint32Array` when there are more than 65536 vertices */
   indices: Uint16Array | Uint32Array;
 }
 
-/**
- * Builds the position/normal/UV/index buffers for a Y-axis aligned cylinder centered on the origin
- *
- * Shared by `CylinderGeometry` and `ConeGeometry`. A ring with a radius of `0` collapses to an
- * apex: it gets no cap, and the side triangles that would have no area there are left out.
- * @param radiusTop - Radius of the top ring (apex collapses when 0).
- * @param radiusBottom - Radius of the bottom ring (apex collapses when 0).
- * @param height - Total height along Y; the mesh extends from `-height/2` to `+height/2`.
- * @param rawRadialSegments - Requested number of segments around the circumference (clamped to `>= 3`).
- * @param rawHeightSegments - Requested number of segments along Y (clamped to `>= 1`).
- * @param openEnded - When true, the top and bottom caps are omitted.
- * @internal
- */
+/** @internal */
 export function buildCylinderBuffers(
   radiusTop: number,
   radiusBottom: number,

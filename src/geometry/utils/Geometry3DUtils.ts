@@ -5,37 +5,29 @@ import { Box } from '../../math/shapes/Box';
 import { Vector3 } from '../../math/vector/Vector3';
 import type { Geometry3DOptions } from '../Geometry3D';
 
-/**
- * Splits an attribute input into its raw data and, for an `Attribute`, the format it declares
- * @param input - Attribute input from the geometry options; `undefined` when absent
- * @internal
- */
+/** @internal */
 export function resolveAttributeInput(
   input: TypedArray | Attribute | undefined,
 ): { data: TypedArray; format?: VertexFormat } | undefined {
   if (!input) return undefined;
-  if (ArrayBuffer.isView(input)) return { data: input as TypedArray };
-  return { data: input.buffer.data as TypedArray, format: input.format };
+  if (ArrayBuffer.isView(input)) return { data: input };
+  return { data: input.buffer.data, format: input.format };
 }
 
+/** @internal */
+export type IntegerFormat = 'norm' | 'int';
+
 /**
- * Turns an attribute input into the data, component count and vertex format to upload
- *
- * An `Attribute` is used as given. A typed array is padded or quantized by `prepareAttributeData`
- * and gets its format from `getAttributeFormat`.
- * @param input - Attribute input from the geometry options; `undefined` when absent
- * @param size - Components per vertex before any padding
- * @param normalized - Whether integer data maps to a normalized (snorm/unorm) format. For positions,
- * UVs and colours, callers pass `true` for any typed array other than `Float32Array`, a rule
- * pixijs/pixi-3d#41 plans to replace with explicit formats.
- * @param quantize - Quantize Float32 data into Int16 snorm
+ * Positions and UVs pass no `integerFormat`, as glTF stores them as normalized or raw integers and only an
+ * `Attribute`'s format can say which
  * @internal
  */
 export function resolveAttribute(
   input: TypedArray | Attribute | undefined,
+  name: string,
   size: number,
-  normalized: boolean,
-  quantize: boolean,
+  integerFormat?: IntegerFormat,
+  quantize = false,
 ): { data: TypedArray; size: number; format: VertexFormat } | undefined {
   const resolved = resolveAttributeInput(input);
   if (!resolved) return undefined;
@@ -48,7 +40,14 @@ export function resolveAttribute(
     };
   }
 
-  const prepared = prepareAttributeData(resolved.data, size, normalized, quantize);
+  if (!integerFormat && !(resolved.data instanceof Float32Array)) {
+    throw new Error(
+      `[Geometry3D] ${name} got ${resolved.data.constructor.name} data, which could be normalized or raw integers. ` +
+        'Pass a Float32Array, or an Attribute whose format says which.',
+    );
+  }
+
+  const prepared = prepareAttributeData(resolved.data, size, integerFormat !== 'int', quantize);
   return {
     data: prepared.data,
     size: prepared.size,
@@ -57,14 +56,10 @@ export function resolveAttribute(
 }
 
 /**
- * Pads three-component integer data to four components, leaving the fourth at zero
- *
- * WebGPU has no three-component vertex format for 8- or 16-bit integers. The shader reads only
- * the first three components.
- * @param data - Vertex data to widen
+ * WebGPU has no three-component vertex format for 8- or 16-bit integers
  * @internal
  */
-function padTo4Components<T extends TypedArray>(data: T): T {
+export function padTo4Components<T extends TypedArray>(data: T): T {
   const Ctor = data.constructor as new (len: number) => T;
   const vertexCount = data.length / 3;
   const out = new Ctor(vertexCount * 4);
@@ -79,21 +74,7 @@ function padTo4Components<T extends TypedArray>(data: T): T {
   return out;
 }
 
-/**
- * Quantizes or pads raw attribute data ahead of upload
- *
- * With `quantize`, Float32 data is clamped to `[-1, 1]` and stored as Int16 snorm, three
- * components padded to four. Otherwise three-component integer data is padded to four by
- * `padTo4Components`. Anything else passes through.
- *
- * The clamp is written as ternaries rather than `Math.min` / `Math.max` because it runs once per
- * component of every quantized normal and tangent.
- * @param data - Raw attribute data
- * @param size - Components per vertex in `data`
- * @param normalized - Whether integer data is normalized; passed through unless quantizing
- * @param quantize - Map Float32 data in `[-1, 1]` to Int16 snorm
- * @internal
- */
+/** Clamps with ternaries, not `Math.min`/`Math.max`, as it runs per component of every quantized normal and tangent */
 function prepareAttributeData(
   data: TypedArray,
   size: number,
@@ -124,16 +105,7 @@ function prepareAttributeData(
   return { data, size, normalized };
 }
 
-/**
- * Computes the box around raw xyz position data of any typed-array type
- *
- * The box is in the space the vertex shader's `position` lives in, so integer data is used as
- * stored. For quantized data that is integer space: the position bit multiplies the normalized
- * `aPosition` back up by the format's divisor, and the exporter bakes the inverse into the node's
- * scale.
- * @param positions - Packed xyz positions, three components per vertex
- * @internal
- */
+/** @internal */
 export function computeBoundsFromPositions(positions: TypedArray): Box {
   let minX = Infinity;
   let minY = Infinity;
@@ -157,14 +129,6 @@ export function computeBoundsFromPositions(positions: TypedArray): Box {
   return new Box(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
 }
 
-/**
- * Infers a `VertexFormat` from a typed array's type, component count, and normalized flag
- * @param data - Attribute data; its array type picks the base format
- * @param size - Components per vertex; 3 maps to an x4 format for integer data, matching the
- * padding `prepareAttributeData` adds
- * @param normalized - Pick a snorm/unorm format for integer data
- * @internal
- */
 function getAttributeFormat(data: TypedArray, size: number, normalized: boolean): VertexFormat {
   if (data instanceof Float32Array) {
     if (size === 1) return 'float32';
@@ -193,13 +157,7 @@ function getAttributeFormat(data: TypedArray, size: number, normalized: boolean)
 }
 
 /**
- * Builds an interleaved attribute map from {@link Geometry3DOptions} inputs, packing every
- * per-vertex attribute into one shared buffer
- *
- * The copy loop is unrolled for two, three and four components, which covers every attribute the
- * options produce once padded; a generic loop handles any other size.
- * @param options - Geometry options supplying the per-vertex attributes
- * @param shrinkToFit - Whether the shared buffer may shrink to fit its data on resize
+ * The copy is unrolled for 2, 3 and 4 components, as that beats a loop per component
  * @internal
  */
 export function interleaveData(options: Geometry3DOptions, shrinkToFit?: boolean): Record<string, Attribute> {
@@ -215,10 +173,10 @@ export function interleaveData(options: Geometry3DOptions, shrinkToFit?: boolean
     input: TypedArray | Attribute | undefined,
     attribute: string,
     size: number,
-    normalized: boolean,
-    quantize = false,
+    integerFormat?: IntegerFormat,
+    quantize?: boolean,
   ) => {
-    const r = resolveAttribute(input, size, normalized, quantize);
+    const r = resolveAttribute(input, attribute, size, integerFormat, quantize);
     if (!r) return;
 
     arrays.push({
@@ -230,14 +188,14 @@ export function interleaveData(options: Geometry3DOptions, shrinkToFit?: boolean
     });
   };
 
-  add(options.positions, 'aPosition', 3, !!options.positions && !(options.positions instanceof Float32Array));
-  add(options.uvs, 'aUV', 2, !!options.uvs && !(options.uvs instanceof Float32Array));
-  add(options.normals, 'aNormal', 3, true, options.quantizeNormals ?? true);
-  add(options.tangents, 'aTangent', 4, true, options.quantizeTangents ?? true);
-  add(options.joints, 'aJoints', 4, false);
-  add(options.weights, 'aWeights', 4, true);
-  add(options.colors, 'aColor', 4, !!options.colors && !(options.colors instanceof Float32Array));
-  add(options.colors1, 'aColor1', 4, !!options.colors1 && !(options.colors1 instanceof Float32Array));
+  add(options.positions, 'aPosition', 3);
+  add(options.uvs, 'aUV', 2);
+  add(options.normals, 'aNormal', 3, 'norm', options.quantizeNormals ?? true);
+  add(options.tangents, 'aTangent', 4, 'norm', options.quantizeTangents ?? true);
+  add(options.joints, 'aJoints', 4, 'int');
+  add(options.weights, 'aWeights', 4, 'norm');
+  add(options.colors, 'aColor', 4, 'norm');
+  add(options.colors1, 'aColor1', 4, 'norm');
 
   let stride = 0;
   const offsets: number[] = [];
@@ -327,10 +285,7 @@ export function interleaveData(options: Geometry3DOptions, shrinkToFit?: boolean
 }
 
 /**
- * Vertex count of an attribute map: the first non-instance attribute's byte length over its stride
- *
- * Pixi's own `Geometry.vertexCount` assumes 4-byte elements, so it miscounts quantized buffers.
- * @param attributes - Attribute map to measure
+ * Pixi's own `Geometry.vertexCount` assumes 4-byte elements, so it miscounts quantized buffers
  * @internal
  */
 export function vertexCountFromAttributes(attributes: Record<string, Attribute>): number {
@@ -345,15 +300,8 @@ export function vertexCountFromAttributes(attributes: Record<string, Attribute>)
 }
 
 /**
- * Builds a geometry's index buffer, with sequential indices `[0, vertexCount)` when none are given
- *
- * Every geometry is indexed because every batched draw is: the atlas packs geometries by index
- * range. A `Uint16Array` whose byte length isn't a multiple of 4 is copied into a `Uint32Array`,
- * because WebGPU writes buffers in 4-byte steps. Returns `undefined` when there are no vertices to
- * index.
- * @param indices - Supplied indices, or `undefined` to synthesize sequential ones
- * @param attributes - Attribute map that gives the vertex count when synthesizing
- * @param shrinkToFit - Whether the buffer may shrink to fit its data on resize
+ * Indexes every geometry, as the atlas packs by index range, and widens an odd-length `Uint16Array`, as
+ * WebGPU writes buffers in 4-byte steps
  * @internal
  */
 export function createIndexBuffer(
@@ -382,9 +330,7 @@ export function createIndexBuffer(
 }
 
 /**
- * Rounds a byte offset or stride up to a multiple of 4, the alignment WebGPU requires of vertex
- * attribute offsets and strides
- * @param bytes - Byte offset or stride to align
+ * WebGPU requires vertex attribute offsets and strides to be multiples of 4
  * @internal
  */
 export function alignTo4Bytes(bytes: number): number {

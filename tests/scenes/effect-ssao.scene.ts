@@ -9,17 +9,6 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * SSAO alone — the multi-pass `build()` shape: AO from the scene-depth
- * transient (grabbed off the graph), box blur, then a merge pass multiplying
- * it onto the chain input and presenting (the single effect is elected
- * presenter, so its merge writes the screen directly).
- *
- * The scene is an AO torture-corner: boxes clustered on a floor under flat
- * hemisphere/ambient light — without AO every face is near-uniform; contact
- * darkening at the box bases and inner corners is the effect's signature.
- */
-
 const SIZE = 200;
 
 export const scene: TestScene = {

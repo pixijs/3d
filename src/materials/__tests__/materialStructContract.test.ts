@@ -19,12 +19,6 @@ const glslTemplate: ShaderBitTemplate = {
   gl: { vertex: '{{header}}\nvoid main() {}', fragment: '{{header}}\nvoid main() {}' },
 };
 
-/**
- * Material3D options that each add struct fields, plus an explicit `uvTransform`
- *
- * Every Material3D carries the `uvTransform` bit and its two struct fields; a construction matrix
- * only seeds them.
- */
 const FEATURES: { name: string; options: Material3DOptions }[] = [
   { name: 'emissive', options: { emissive: { color: 0xff0000 } } },
   { name: 'specular', options: { specular: { factor: 0.5 } } },
@@ -64,10 +58,9 @@ describe('Material struct contract — construction layout == compiled layout', 
         bits: descriptor.bitsGl,
         template: glslTemplate,
         extraPlugins: [materialStructPackPlugin],
-        uboGroups: [],
         useLocations: false,
       });
-      expect(materialStructSnapshot(gpu.structs.Material!), label).toBe(material._materialStructSnapshot);
+      expect(materialStructSnapshot(gpu.structs.Material), label).toBe(material._materialStructSnapshot);
       expect(materialStructSnapshot(gl.structs.Material as StructDefinition), label).toBe(
         material._materialStructSnapshot,
       );

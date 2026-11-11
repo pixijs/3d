@@ -11,11 +11,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 256;
 
-/**
- * A ground + cubes, shadowed by up to two directional lights aimed from clearly different angles (so
- * their shadows are easy to tell apart). `sunA` is added first (the removable one, list index 0),
- * `sunB` second. Returns the view and the `sunA` handle so a test can detach it mid-run.
- */
 function buildScene(
   app: Application<Renderer>,
   includeSunA: boolean,
@@ -74,7 +69,6 @@ function buildScene(
   return { view3d, sunA };
 }
 
-/** Builds a scene, renders one more frame so every capture has the same frame history, and reads its pixels */
 async function pixelsFor(
   preference: 'webgl' | 'webgpu',
   id: string,
@@ -93,7 +87,6 @@ async function pixelsFor(
   }
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {

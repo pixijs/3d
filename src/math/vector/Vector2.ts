@@ -74,7 +74,6 @@ export class Vector2 implements PointLike {
    * ```
    * @param x - The x component
    * @param y - The y component, defaults to `x`
-   * @returns This vector, for chaining
    */
   public set(x = 0, y = x): this {
     this.x = x;
@@ -90,7 +89,6 @@ export class Vector2 implements PointLike {
    * dragStart.copyFrom(event.global);
    * ```
    * @param p - The point to copy from
-   * @returns This vector, for chaining
    */
   public copyFrom(p: PointData): this {
     this.x = p.x;
@@ -115,13 +113,12 @@ export class Vector2 implements PointLike {
   }
 
   /**
-   * Checks if another point is equal to this vector
+   * Checks whether `x` and `y` both match `p` exactly, with no tolerance
    * @example
    * ```ts
    * if (!cursor.equals(lastCursor)) updateHover(cursor);
    * ```
-   * @param p - The point to check
-   * @returns `true` when `x` and `y` both match exactly (no epsilon tolerance)
+   * @param p - The point to compare against
    */
   public equals(p: PointData): boolean {
     return p.x === this.x && p.y === this.y;
@@ -133,7 +130,6 @@ export class Vector2 implements PointLike {
    * ```ts
    * const dragStart = cursor.clone();
    * ```
-   * @returns A new `Vector2` with the same component values
    */
   public clone(): Vector2 {
     return new Vector2(this.x, this.y);
@@ -145,7 +141,6 @@ export class Vector2 implements PointLike {
    * ```ts
    * console.log(cursor.toString());
    * ```
-   * @returns A string describing the vector's components
    */
   public toString(): string {
     return `[pixi-3d/math:Vector2 x=${this.x} y=${this.y}]`;
@@ -159,7 +154,6 @@ export class Vector2 implements PointLike {
    * ```
    * @param array - The array to read from
    * @param offset - The index of the first component
-   * @returns This vector, for chaining
    */
   public fromArray(array: number[] | Float32Array, offset = 0): this {
     this.x = array[offset];
@@ -422,7 +416,6 @@ export class Vector2 implements PointLike {
    * ```ts
    * const stickTilt = stick.magnitude();
    * ```
-   * @returns The length
    */
   public magnitude(): number {
     return Math.sqrt(this.x * this.x + this.y * this.y);
@@ -437,7 +430,6 @@ export class Vector2 implements PointLike {
    * ```ts
    * if (stick.magnitudeSquared() < deadZone * deadZone) stick.set(0);
    * ```
-   * @returns The squared length
    */
   public magnitudeSquared(): number {
     return this.x * this.x + this.y * this.y;
@@ -450,7 +442,6 @@ export class Vector2 implements PointLike {
    * if (cursor.distanceTo(dragStart) > dragThreshold) startDrag();
    * ```
    * @param v - The point to measure to
-   * @returns The distance
    */
   public distanceTo(v: PointData): number {
     const dx = this.x - v.x;
@@ -468,7 +459,6 @@ export class Vector2 implements PointLike {
    * const hovered = cursor.distanceToSquared(button.center) < button.radius * button.radius;
    * ```
    * @param v - The point to measure to
-   * @returns The squared distance
    */
   public distanceToSquared(v: PointData): number {
     const dx = this.x - v.x;
@@ -487,7 +477,6 @@ export class Vector2 implements PointLike {
    * const targetIsAhead = heading.dot(toTarget) > 0;
    * ```
    * @param v - The other vector
-   * @returns The dot product
    */
   public dot(v: PointData): number {
     return this.x * v.x + this.y * v.y;
@@ -509,7 +498,7 @@ export class Vector2 implements PointLike {
   /**
    * Computes `x * v.y - y * v.x`, the z of the 3D cross product with both vectors at `z = 0`
    *
-   * Its sign tells which way to turn from this vector to `v`: positive is the way +x turns toward +y
+   * The sign says which way to turn from this vector to `v`: positive is the way +x turns toward +y
    * (counter-clockwise when y points up, clockwise on a pixi screen, where y points down), negative
    * the other way, and zero when they are parallel.
    * @example
@@ -517,7 +506,6 @@ export class Vector2 implements PointLike {
    * const turnDirection = Math.sign(heading.cross(toTarget));
    * ```
    * @param v - The other vector
-   * @returns The z of the cross product
    */
   public cross(v: PointData): number {
     return this.x * v.y - this.y * v.x;

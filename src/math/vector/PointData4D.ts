@@ -9,14 +9,12 @@
  * const v4 = new Vector4();
  * v4.copyFrom(p);
  * ```
- * @see {@link Vector4} For standard 4D vector implementation
- * @see {@link PointLike4D} For 4D point manipulation interface
  * @category maths
  * @standard
  */
 export interface PointData4D {
   /**
-   * Position of the point on the x axis
+   * The x component
    * @example
    * ```ts
    * const clip = new Vector4(point.x, point.y, point.z, 1).applyMatrix4(camera.viewProjection);
@@ -25,7 +23,7 @@ export interface PointData4D {
    */
   x: number;
   /**
-   * Position of the point on the y axis
+   * The y component
    * @example
    * ```ts
    * const screenY = clip.y / clip.w;
@@ -33,7 +31,7 @@ export interface PointData4D {
    */
   y: number;
   /**
-   * Position of the point on the z axis
+   * The z component
    * @example
    * ```ts
    * const depth = clip.z / clip.w;
@@ -41,9 +39,7 @@ export interface PointData4D {
    */
   z: number;
   /**
-   * Fourth component, `1` for a position and `0` for a direction by convention
-   *
-   * A 4x4 matrix moves a point whose `w` is 1, and only turns one whose `w` is 0.
+   * Fourth component, by convention `1` for a position and `0` for a direction
    * @example
    * ```ts
    * const behindCamera = clip.w <= 0;

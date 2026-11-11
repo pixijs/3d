@@ -5,11 +5,11 @@ import { renderGltfModel } from './frameModel';
 
 const URL = model('gltf.MarblesForever');
 
-// Skipped: KHR_animation_pointer channels have no `target.node`; processAnimations throws on load.
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },
   skip: true,
+  skipReason: 'KHR_animation_pointer channels have no `target.node`; processAnimations throws on load',
   create: async (app) => {
     await renderGltfModel(app, { url: URL });
   },

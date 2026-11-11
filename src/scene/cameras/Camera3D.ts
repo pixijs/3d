@@ -1,4 +1,4 @@
-import { definedProps, Rectangle } from 'pixi.js';
+import { DEG_TO_RAD, definedProps, Point, Rectangle } from 'pixi.js';
 import type { RenderTexture } from 'pixi.js';
 
 import type { CameraData } from '../../core/CameraData';
@@ -21,7 +21,6 @@ import type { Container3DOptions } from '../Container3D';
  *
  * view.camera.mode = mode;
  * ```
- * @see {@link Camera3D#mode}
  * @category scene
  * @standard
  */
@@ -30,8 +29,8 @@ export type CameraMode = 'perspective' | 'orthographic';
 /**
  * Constructor options for {@link Camera3D}
  *
- * Every field has a default; pass only what you need. Inherited {@link Container3DOptions}
- * (`label`, `position`, `eventMode`, …) are applied too.
+ * Every field has a default. The {@link Container3DOptions} apply too, and `label` defaults to
+ * `'Camera3D'`.
  * @example
  * ```ts
  * const camera = new Camera3D({
@@ -42,7 +41,6 @@ export type CameraMode = 'perspective' | 'orthographic';
  *   label: 'mainCamera',
  * });
  * ```
- * @see {@link Camera3D} For the constructed camera and runtime accessors.
  * @category scene
  * @standard
  */
@@ -126,17 +124,16 @@ export interface Camera3DOptions extends Container3DOptions {
  * The point of view a scene is drawn from
  *
  * A camera is a {@link Container3D}: move, rotate and parent it like any other node. Cameras face
- * local **-Z**, matching the glTF and OpenGL convention, so
- * {@link Container3D#lookAt | camera.lookAt(target)} points the lens at the target.
+ * local **-Z**, as in glTF and OpenGL, so {@link Container3D#lookAt | camera.lookAt(target)}
+ * points the lens at the target.
  *
  * Every {@link View3D} has a camera to start with. Assign another to {@link View3D#camera}, or
  * hand one to a pass to draw a second view of the scene, such as a minimap or a security feed.
- * The camera must be in the view's scene graph, which is what keeps its world transform current.
+ * A camera must be in the view's scene graph, which keeps its world transform current.
+ * `view.camera` adds a camera that has no parent to `view.root`; add any other camera yourself.
  *
- * Change {@link Camera3D#fov | fov}, {@link Camera3D#zoom | zoom},
- * {@link Camera3D#near | near}, {@link Camera3D#far | far} or
- * {@link Camera3D#orthographicSize | orthographicSize} at any time: the view rebuilds the
- * matrices from them every frame.
+ * Change the projection settings at any time: the view rebuilds the matrices from them each time
+ * it draws the camera.
  * @example
  * ```ts
  * import { Camera3D } from '@pixi/3d';
@@ -152,19 +149,13 @@ export interface Camera3DOptions extends Container3DOptions {
  * camera.orthographicSize = 4;
  * ```
  * @see {@link Camera3DOptions} For all constructor options.
- * @see {@link CameraMode} For projection modes.
- * @see {@link View3D#camera} For installing a camera on a View.
- * @see `OrbitCamera` (from `@pixi/3d/extras`) For orbit/pan/zoom interaction.
+ * @see `OrbitCamera` (from `@pixi/3d/extras`) For orbit, pan and zoom controls.
  * @category scene
  * @standard
  */
 export class Camera3D extends Container3D {
   /**
-   * Default {@link Camera3DOptions} merged under every constructor call
-   *
-   * `new Camera3D(opts)` resolves as `{ ...Camera3D.defaultOptions, ...opts }`, ignoring options
-   * set to `undefined`. Mutate to change the defaults process-wide. {@link Camera3D#usePerspective}
-   * and {@link Camera3D#useOrthographic} read their own defaults from here too.
+   * Defaults for every new `Camera3D`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * Camera3D.defaultOptions.fov = 50;
@@ -186,9 +177,8 @@ export class Camera3D extends Container3D {
   /**
    * Projection matrix, from camera space to clip space
    *
-   * The view rebuilds it every frame from the camera's settings, for the rect the image lands
-   * in, with {@link Camera3D#clippingPlane} applied. Read it, but don't write it: the next frame
-   * overwrites it.
+   * The view rebuilds it from the camera's settings each time it draws the camera, with
+   * {@link Camera3D#clippingPlane | clippingPlane} applied. Read it, but don't write it.
    * @example
    * ```ts
    * const inverseProjection = new Matrix4().getInverse(camera.projection);
@@ -199,7 +189,7 @@ export class Camera3D extends Container3D {
   /**
    * View matrix, from world space to camera space: the inverse of the camera's world transform
    *
-   * The view rebuilds it every frame. Read it, but don't write it.
+   * The view rebuilds it each time it draws the camera. Read it, but don't write it.
    * @example
    * ```ts
    * const inCameraSpace = new Vector3(5, 0, 0).applyMatrix4(camera.view);
@@ -211,20 +201,19 @@ export class Camera3D extends Container3D {
   /**
    * `projection` times `view`, from world space to clip space
    *
-   * The view rebuilds it every frame. Read it, but don't write it.
+   * The view rebuilds it each time it draws the camera. Read it, but don't write it.
    * @example
    * ```ts
-   * const clip = new Vector3(5, 0, 0).applyMatrix4(camera.viewProjection);
+   * const ndc = new Vector3(5, 0, 0).applyMatrix4(camera.viewProjection);
    * ```
    */
   public readonly viewProjection: Matrix4 = new Matrix4();
 
   /**
-   * World-space volume this camera sees, rebuilt every frame from
-   * {@link Camera3D#viewProjection | viewProjection}
+   * World-space volume this camera sees, rebuilt each time the view draws the camera
    *
-   * Culling tests against {@link Camera3D#cullFrustum}, which is this same object unless you
-   * replace it.
+   * Culling tests against {@link Camera3D#cullFrustum | cullFrustum}, which is this same object
+   * unless you replace it.
    * @example
    * ```ts
    * const onScreen = camera.frustum.intersectsSphere(enemy.boundingSphere);
@@ -233,12 +222,11 @@ export class Camera3D extends Container3D {
   public readonly frustum: Frustum = new Frustum();
 
   /**
-   * Volume meshes are culled against when this camera draws
+   * Volume meshes are culled against when this camera draws; starts as {@link Camera3D#frustum | frustum}
    *
-   * Starts as the same object as {@link Camera3D#frustum}. Assign another frustum to cull against
-   * a volume other than the one this camera draws, such as to watch culling at work from a
-   * second viewpoint, and assign `frustum` back to restore. The view only ever rebuilds
-   * `frustum`, so a frustum you assign stays as you set it.
+   * Assign another frustum to cull against a different volume, such as a frozen copy to watch
+   * culling from a second viewpoint, and assign `frustum` back to restore. The view never rebuilds
+   * a frustum you assign.
    * @example
    * ```ts
    * const frozen = view.camera.frustum.clone();
@@ -260,7 +248,7 @@ export class Camera3D extends Container3D {
   public mode: CameraMode;
 
   /**
-   * Vertical field of view in degrees, for a perspective camera
+   * Vertical field of view in degrees, for a perspective camera at a `zoom` of 1
    *
    * The horizontal field follows from the aspect ratio of the rect the image lands in.
    * @default 60
@@ -272,10 +260,10 @@ export class Camera3D extends Container3D {
   public fov = 0;
 
   /**
-   * Zoom factor
+   * Magnification: a zoom of 2 shows the scene twice as large, in either mode
    *
-   * A perspective camera divides `fov` by it, so a larger zoom narrows the view. An orthographic
-   * camera multiplies `orthographicSize` by it, so a larger zoom widens the view.
+   * A perspective camera's vertical field of view becomes `2 * atan(tan(fov / 2) / zoom)`, and an
+   * orthographic camera's half-width is `orthographicSize / zoom`.
    * @default 1
    * @example
    * ```ts
@@ -287,8 +275,8 @@ export class Camera3D extends Container3D {
   /**
    * Distance to the near clipping plane, in world units; anything closer isn't drawn
    *
-   * Keep it as large as the scene allows. Depth precision depends on the ratio of `far` to
-   * `near`, and a tiny `near` makes distant surfaces flicker through each other.
+   * Keep it as large as the scene allows. Depth precision depends mostly on `near`, hardly on
+   * `far`, and a tiny `near` makes distant surfaces flicker through each other.
    * @default 0.1
    * @example
    * ```ts
@@ -324,8 +312,8 @@ export class Camera3D extends Container3D {
    *
    * A mirror or portal camera uses one to cut its scene at the mirror's or the portal's surface.
    * The plane is in the camera's view space, and the camera has to sit on the side it hides.
-   * The view builds the plane into the projection's near plane every frame, so clipping costs
-   * nothing per pixel.
+   * It works only for a perspective camera drawing into a texture or into a view that isn't
+   * rotated.
    * @example
    * ```ts
    * portalCamera.clippingPlane = portalExitClipPlane(exit.worldTransform, portalCamera.worldTransform);
@@ -336,19 +324,25 @@ export class Camera3D extends Container3D {
   /**
    * Texture this camera draws into, or `null` to draw into the view
    *
-   * Give a second camera a render texture and every pass that names it, such as
-   * `new MeshPass({ name: 'opaque', camera })`, draws into that texture instead of the view:
-   * a security feed on a monitor, a mirror, a portal. The projection takes the texture's
-   * aspect ratio.
+   * Every pass that names this camera, such as `new MeshPass({ name: 'opaque', camera })`, draws
+   * into the texture instead of the view: a security feed on a monitor, a mirror, a portal. The
+   * projection takes the texture's aspect ratio and follows a resize on the next frame. The view's
+   * own camera can't have one; the view throws when it renders.
    *
-   * The passes draw into a separate target, cleared each frame, and the view copies it into the
-   * texture after the camera's last pass. So a mesh that samples this texture while the camera
-   * is drawing it shows last frame's picture: a monitor that films itself recurses, one frame
-   * late. Passes that run later in the same frame see the finished picture.
+   * The picture lands after the camera's last pass, so a mesh that shows the texture while the
+   * camera draws it shows last frame's picture: a monitor that films itself recurses, one frame late.
    *
-   * Set `autoGenerateMipmaps` on the texture and its mipmaps are generated after each copy.
-   * Resize the texture and the camera follows on the next frame. The view's own camera always
-   * draws the view; a texture on it throws.
+   * An 8-bit texture, the default, holds the picture with the view's tone curve applied, ready for
+   * a 2D sprite; the view's post effects and the canvas's antialiasing don't reach it. In a view
+   * with a `'beforeToneMapping'` effect, an `rgba16float` texture holds the scene's linear light
+   * instead, brightness above 1 included, which a `PortalMaterial` there needs. A mesh applies the
+   * view's exposure to the feed again. Other materials, such as `FlatMaterial`, apply the tone curve
+   * again too, so an 8-bit feed on one matches the scene only at an exposure of 1 with
+   * `toneMapping: 'none'`.
+   *
+   * Create the texture with `antialias: true` for smooth edges, and with `autoGenerateMipmaps: true`
+   * for the view to regenerate its mipmaps each frame; turning mipmaps on after the texture's first
+   * frame does nothing.
    * @example
    * ```ts
    * const feed = RenderTexture.create({ width: 256, height: 256 });
@@ -361,8 +355,7 @@ export class Camera3D extends Container3D {
   public renderTexture: RenderTexture | null;
 
   /**
-   * The data passes draw this camera from, sharing this camera's `frustum`; created on first use
-   * by `getCameraData`
+   * `null` until `getCameraData` makes it on the camera's first draw
    * @internal
    */
   public _cameraData: CameraData | null = null;
@@ -371,26 +364,37 @@ export class Camera3D extends Container3D {
    * Rect the camera's image fills, as fractions of the view: `(0, 0)` is the top-left corner and
    * `(1, 1)` the bottom-right
    *
-   * Defaults to the whole view. Shrink it for picture-in-picture or split-screen. For a camera
-   * with a {@link Camera3D#renderTexture | renderTexture}, it is a rect of that texture instead.
+   * Defaults to the whole view. For a camera with a {@link Camera3D#renderTexture | renderTexture},
+   * it is a rect of that texture instead.
    * @example
    * ```ts
-   * minimapCamera.viewport.set(0.75, 0, 0.25, 0.25);
+   * view3d.camera.viewport.set(0, 0, 0.5, 1); // the left half of the view
    * ```
    */
   public readonly viewport: Rectangle = new Rectangle(0, 0, 1, 1);
 
   /**
-   * Cameras face local -Z, unlike the +Z default `Container3D` gives meshes
-   * @internal
+   * Sub-pixel offset the camera's image is drawn at, in the scene's pixels: `+x` moves it right,
+   * `+y` down
+   *
+   * A scene pixel is a physical pixel, or larger when {@link View3D#resolution} draws the scene
+   * smaller. Temporal anti-aliasing and upscalers set a new offset each frame, usually -0.5 to 0.5,
+   * and blend the frames. Only the drawn image moves; the matrices, culling and picking ignore it.
+   * Leave it at `(0, 0)` unless something blends the frames; a changing offset on its own makes the
+   * image shake.
+   * @example
+   * ```ts
+   * camera.jitter.set(0.25, -0.25);
+   * ```
+   * @advanced
    */
+  public readonly jitter: Point = new Point();
+
+  /** @internal */
   protected override _lookAtForwardIsPositiveZ: boolean = false;
 
   /**
    * Creates a new `Camera3D`
-   *
-   * Assign it to {@link View3D#camera}, which adds it to `view.root` when it has no parent, or
-   * add it to the view's scene graph yourself to draw a pass from it.
    * @example
    * ```ts
    * const camera = new Camera3D({ fov: 45, near: 0.1, far: 500 });
@@ -465,12 +469,29 @@ export class Camera3D extends Container3D {
   }
 
   /**
+   * Forgets where the camera was at its previous render, so its next render reads no motion
+   *
+   * Call it on a cut, such as a teleport, a respawn or a change of shot, so effects that read
+   * motion, such as `MotionBlurEffect`, don't smear the first frame after it. A camera's first
+   * render needs no call. Every render moves the history on, so a view drawn twice in one frame
+   * reads no motion on its second draw.
+   * @example
+   * ```ts
+   * camera.position.copyFrom(spawnPoint);
+   * camera.resetHistory();
+   * ```
+   */
+  public resetHistory(): void {
+    if (this._cameraData) this._cameraData._hasHistory = false;
+  }
+
+  /**
    * Removes the camera from the scene graph and frees the GPU data it drew from
    *
    * The {@link Camera3D#clippingPlane | clippingPlane} and
    * {@link Camera3D#renderTexture | renderTexture} are yours and are left alone. A view keeps
-   * pointing at its camera after the camera is destroyed, and its next render throws, so assign
-   * the view another camera first. Calling it again does nothing.
+   * pointing at its camera after the camera is destroyed, and its next render with meshes to draw
+   * throws, so assign the view another camera first. Calling it again does nothing.
    * @example
    * ```ts
    * view.camera = gameplayCamera;
@@ -490,10 +511,9 @@ export class Camera3D extends Container3D {
   /**
    * Writes the projection this camera's settings give for an aspect ratio into `out`
    *
-   * This is {@link Camera3D#projection | projection} before two things the view adds: the fit
-   * to where the image lands on its target, which only changes it when the view is rotated or
-   * partly off-screen, and the {@link Camera3D#clippingPlane | clippingPlane}. The view builds
-   * its projection from this, and so do {@link View3D#worldToScreen} and {@link View3D#screenToRay}.
+   * It matches {@link Camera3D#projection | projection} apart from the
+   * {@link Camera3D#clippingPlane | clippingPlane} and, when the image is rotated or partly off its
+   * target, a fit to where it lands.
    * @example
    * ```ts
    * const thumbnailProjection = camera.computeProjection(1, new Matrix4());
@@ -505,15 +525,18 @@ export class Camera3D extends Container3D {
    */
   public computeProjection(aspect: number, out: Matrix4): Matrix4 {
     if (this.mode === 'perspective') {
-      const fovRadians = (this.fov / this.zoom) * (Math.PI / 180);
-
-      out.makePerspective(fovRadians, aspect, this.near, this.far);
+      out.makePerspective(2 * Math.atan(this._tanHalfFovY()), aspect, this.near, this.far);
     } else {
-      const size = this.zoom * this.orthographicSize;
+      const size = this.orthographicSize / this.zoom;
 
       out.makeOrthographic(-size, size, size / aspect, -size / aspect, this.near, this.far);
     }
 
     return out;
+  }
+
+  /** @internal */
+  public _tanHalfFovY(): number {
+    return Math.tan((this.fov * DEG_TO_RAD) / 2) / this.zoom;
   }
 }

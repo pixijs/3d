@@ -10,13 +10,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Whether the renderer has compiled a `normalMapping` or `tangentNormalMapping` shader variant
- *
- * The material system, not the material, adds that bit, and only while the `normal` slot holds a
- * texture other than the flat `NORMAL_MAP` default. Any material with a `normal` slot gets the
- * same gating, and a runtime swap recompiles through the ordinary texture-swap invalidation.
- */
 const hasNormalVariant = (app: Application<WebGLRenderer | WebGPURenderer>): boolean => {
   const materialSystem = app.renderer.material3d;
   return [...materialSystem['_shaderCache'].keys()].some((k) => /normalMapping/i.test(k));

@@ -10,20 +10,7 @@ import type { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderP
 import { writeHemisphere } from '../writeHemisphere';
 import { getGlobalGlData } from './shader/globalBitGl';
 
-/**
- * WebGL counterpart to `LightingSystemGpu`
- *
- * Packs light data into the global uniforms and coordinates with the shadow pass to compute
- * shadow matrices.
- *
- * Per-frame, packs into the global uniform group:
- *   - Per-light data (directional / point / spot) into `view3d._lightDataList`, whose array is the `uLightData` uniform.
- *   - Ambient summed from any `AmbientLight` instances.
- *   - Hemisphere uniforms when `view3d.environment` is a hemisphere.
- *
- * Registered as a WebGL renderer system (`renderer.lighting3d`).
- * @internal
- */
+/** @internal */
 export class LightingSystemGl {
   /** @ignore */
   public static extension = {
@@ -38,16 +25,8 @@ export class LightingSystemGl {
   }
 
   /**
-   * Packs the frame's light and shadow state into the view's global uniform group
-   *
-   * Calls the shadow pass's `beginFrame` before the light loop, every frame even when the pass is
-   * culled. Each light up to `MAX_LIGHTS` then goes through `prepareShadow` before it's packed, so
-   * its shadow slot index is current when written; lights past the cap are skipped.
-   *
-   * The hemisphere uniforms are written only while the environment is a `Hemisphere`; under any
-   * other environment no compiled shader reads them, so stale values are harmless.
-   * @param view3d - The view whose global uniforms receive the packed data
-   * @param lights - The frame's visible-scene light list
+   * Runs the shadow pass's `beginFrame` every frame, then `prepareShadow` on each light before packing it, so the
+   * light's shadow slot index is current when written
    */
   public update(view3d: View3D, lights: Light[]): void {
     const shadowPass = view3d.passByBit[RenderPassBit.SHADOW] as ShadowRenderPassBase | undefined;
@@ -100,7 +79,7 @@ export class LightingSystemGl {
 declare global {
   namespace PixiMixins {
     interface WebGLSystems {
-      /** Per-frame light/shadow data packing for 3D scenes */
+      /** Packs each frame's lights and shadows into a 3D view's global uniforms */
       lighting3d: LightingSystemGl;
     }
   }

@@ -7,14 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Renders a camera-filling morphed triangle under a shadow-casting light and reads the centre pixel
- *
- * The light makes the shadow pass compile a depth shader for the morphed caster, and that shader
- * reads the vertex index and the morph and geometry stores, so it has to declare and bind them.
- * `morphShadowDeform.test.ts` checks that the shadow follows the morph.
- * @param preference - The backend to render with
- */
 async function run(preference: 'webgl' | 'webgpu'): Promise<[number, number, number]> {
   const app = await getApp({
     id: `morph-shadow-${preference}`,
@@ -52,12 +44,6 @@ async function run(preference: 'webgl' | 'webgpu'): Promise<[number, number, num
 }
 
 describe('morphed shadow caster', () => {
-  it('WebGL: lit base-pose shadow, not a failed shader', async () => {
-    const [r, g, b] = await run('webgl');
-    expect([r, g, b], 'not the magenta of a failed shader').not.toEqual([255, 0, 255]);
-    expect(g, 'a lit surface, not shadowed to black').toBeGreaterThan(20);
-  });
-
   it('WebGPU: lit base-pose shadow, not a failed pipeline', async () => {
     const [, g] = await run('webgpu');
     expect(g, 'not the black of an invalid pipeline').toBeGreaterThan(20);

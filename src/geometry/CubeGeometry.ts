@@ -80,11 +80,9 @@ export interface CubeGeometryOptions extends Geometry3DOptions {
 /**
  * A box geometry with six axis-aligned faces, centered on the origin
  *
- * The box measures `width`, `height` and `depth` along X, Y and Z. Each face has its own vertices
- * with a constant normal (`+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`); no vertex is shared between faces,
- * which keeps the lighting hard-edged. Each face's UVs run from (0, 0) at its bottom-left to (1, 1)
- * at its top-right. As on a default {@link PlaneGeometry}, `v` grows upward, so an image texture
- * shows upside down on the side faces.
+ * Faces share no vertices, so the edges light hard. Each face's UVs run from (0, 0) at its
+ * bottom-left to (1, 1) at its top-right. As on a default {@link PlaneGeometry}, `v` grows upward,
+ * so an image texture shows upside down on the side faces.
  * @example
  * ```ts
  * const cube = new CubeGeometry({
@@ -96,14 +94,12 @@ export interface CubeGeometryOptions extends Geometry3DOptions {
  *   depthSegments: 1,
  * });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
  * @category geometry
  * @standard
  */
 export class CubeGeometry extends Geometry3D {
   /**
-   * Default options for {@link CubeGeometry}
+   * Defaults for every new `CubeGeometry`
    * @example
    * ```ts
    * CubeGeometry.defaultOptions.width = 2;

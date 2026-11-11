@@ -1,18 +1,6 @@
 import type { ShaderBit } from '../ShaderBit';
 
-/**
- * Collects slot code contributions from all shader bits
- * @example
- * ```ts
- * const slotCode = collectSlotCode(bits, "gl", "vertex");
- * // { header: ["// bit1 code", "// bit2 code"], end: ["// cleanup"] }
- * ```
- * @param bits - Array of shader bits
- * @param platform - Target platform ("gl" or "gpu")
- * @param stage - Shader stage ("vertex" or "fragment")
- * @returns Record mapping slot names to arrays of code strings
- * @internal
- */
+/** @internal */
 export function collectSlotCode(
   bits: ShaderBit[],
   platform: 'gl' | 'gpu',

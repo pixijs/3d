@@ -12,7 +12,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 64;
 
-/** Enough cubes to grow the atlas past its first capacity, retiring the wrapper that holds a VAO */
 const CUBES_PAST_ATLAS_CAPACITY = 200;
 
 interface AtlasProbe {
@@ -30,11 +29,6 @@ interface PassProbe {
   _geometry: { uid: number };
 }
 
-/**
- * How many of `uids` still hold an entry in the GL geometry system's managed hash, its VAO cache
- *
- * Pixi frees an entry only from the geometry's `unload` event, which `destroy()` emits.
- */
 function managedCount(renderer: RendererProbe, uids: number[]): number {
   const items = renderer.geometry._managedGeometries.items;
   return uids.filter((uid) => items[uid] != null).length;
@@ -65,7 +59,6 @@ describe('pass- and atlas-owned geometries leave the WebGL geometry hash when de
     const renderer = app.renderer as unknown as RendererProbe;
 
     try {
-      /** Composite, so its output pass draws the shared triangle */
       const view3d = new View3D({ width: SIZE, height: SIZE, composite: true });
       view3d.background = CubeTexture.from({
         faces: {
@@ -84,7 +77,6 @@ describe('pass- and atlas-owned geometries leave the WebGL geometry hash when de
 
       const background = view3d._graph.passes.find((pass) => pass instanceof BackgroundPass) as unknown as PassProbe;
       const owned = [background._geometry.uid];
-      /** The output pass's shared triangle, which outlives any one View */
       const shared = [fullscreenTriangleGeometry().uid];
       expect(managedCount(renderer, owned)).toBe(1);
       expect(managedCount(renderer, shared)).toBe(1);

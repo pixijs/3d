@@ -1,6 +1,6 @@
 import type { VertexFormat } from 'pixi.js';
 
-import type { Accessor } from '../GltfFormat';
+import type { GltfFormat } from '../GltfFormat';
 
 const GL_BYTE = 5120;
 const GL_UNSIGNED_BYTE = 5121;
@@ -23,16 +23,20 @@ const COMPONENT_TYPE_TO_PREFIX: Record<number, { raw: string; normalized: string
   [GL_UNSIGNED_SHORT]: { raw: 'uint16', normalized: 'unorm16' },
 };
 
+/** @internal */
+export const NORMALIZED_SCALE: Record<number, number> = {
+  [GL_BYTE]: 1 / 127,
+  [GL_UNSIGNED_BYTE]: 1 / 255,
+  [GL_SHORT]: 1 / 32767,
+  [GL_UNSIGNED_SHORT]: 1 / 65535,
+};
+
 /**
- * The vertex format for an accessor's component type, element type and `normalized` flag
- *
- * WebGPU has no three-component 8- or 16-bit formats, so an integer VEC3 maps to `x4` and the
- * caller must pad its data to four components. A float VEC3 stays `float32x3`. Scalars, matrices
- * and 32-bit integers throw.
- * @param accessor - The accessor describing the attribute's element layout
+ * Maps an integer VEC3 to `x4`, as WebGPU has no 3-component 8- or 16-bit format, so
+ * `accessorToAttribute` in `processMeshes.ts` pads the data
  * @internal
  */
-export function accessorToVertexFormat(accessor: Accessor): VertexFormat {
+export function accessorToVertexFormat(accessor: GltfFormat.Accessor): VertexFormat {
   const components = TYPE_TO_COMPONENTS[accessor.type];
   if (!components || components === 1) {
     throw new Error(`[accessorToVertexFormat] Unsupported accessor type: ${accessor.type}`);

@@ -6,16 +6,12 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * End-to-end glTF morph test: Khronos `AnimatedMorphCube` (POSITION deltas +
- * an animated `weights` channel). Exercises the whole loader path — morph
- * target decode, the `weights` → `Track` mapping, and the
- * `FloatArrayBinding` driving `mesh.weights` — sampled at a fixed time for a
- * deterministic frame. Both backends show the morphed pose (each keeps its
- * own reference).
- */
+import { model } from '../../examples/assets/manifest';
+
+const MORPH_CUBE = model('gltf.AnimatedMorphCube');
+
 export const scene: TestScene = {
-  assets: ['AnimatedMorphCube.glb'],
+  assets: [MORPH_CUBE],
   app: {
     backgroundColor: 0x1e2024,
   },
@@ -23,9 +19,7 @@ export const scene: TestScene = {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
     app.stage.addChild(view3d);
 
-    const source = Assets.get<Scene3DSource>('AnimatedMorphCube.glb');
-    // Manual playback so we can pin a deterministic frame instead of relying on
-    // wall-clock ticks.
+    const source = Assets.get<Scene3DSource>(MORPH_CUBE);
     const model = new Model3D({ source, autoUpdate: false });
     view3d.root.addChild(model);
 
@@ -33,7 +27,6 @@ export const scene: TestScene = {
       const [label] = model.player.animationLabels;
       if (label) {
         const state = model.player.getState(label);
-        // Mid-animation: the cube is clearly deformed away from its base pose.
         state.gotoAndStop(state.animation.duration * 0.4);
       }
     }

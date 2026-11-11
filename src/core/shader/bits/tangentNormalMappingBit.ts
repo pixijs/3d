@@ -1,20 +1,8 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Bends `normal` by the material's normal map, with the tangent frame from the mesh's `aTangent`
- *
- * The renderer picks it over `normalMappingBit` when the mesh has tangents, since they match the
- * frame the normal map was baked against. `aTangent.xyz` is the tangent and `aTangent.w` the
- * handedness, ±1.
- *
- * The vertex stage turns the tangent into world space with the model matrix, after skinning has
- * moved the shared `tangent` local, and builds the bitangent as `cross(worldNormal, worldTangent)`
- * times the handedness. It reads the `worldNormal` local rather than the `vNormal` varying, which
- * the template publishes only after this slot. The handedness comes straight from the attribute,
- * since a sign never goes through a matrix.
- *
- * Like `normalMappingBit`, it scales the map's `xy` by `normalScale` and takes `normalScale` and the
- * `normal` texture from the material bit, declaring no `material` fields of its own.
+ * Reads `worldNormal`, since the template writes `vNormal` after this slot. Declares no `material`
+ * fields or textures, for the reason `normalMappingBit` gives.
  * @internal
  */
 export const tangentNormalMappingBit: ShaderBit = {

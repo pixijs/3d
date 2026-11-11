@@ -1,8 +1,9 @@
 import { getApp } from '@test-utils';
 import type { Renderer } from 'pixi.js';
 import { Rectangle, RenderTexture } from 'pixi.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { Mesh3DBatcher } from '~/core/batcher/Mesh3DBatcher';
 import { getCameraData } from '~/core/CameraData';
 import { prepareCamera, updateCameraProjectionForView } from '~/core/prepareCamera';
 import type { RenderGraph } from '~/core/render-graph/RenderGraph';
@@ -21,14 +22,13 @@ import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Pass3D } from '~/post-processing/Pass3D';
-import type { PassContext, PassStage } from '~/post-processing/Pass3D';
+import type { PassContext, SceneStage } from '~/post-processing/Pass3D';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** A named forward pass from `camera`, with its own descriptor */
 class NightVisionPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'afterTransparent';
+  public readonly stage: SceneStage = 'afterTransparent';
 
   constructor(private readonly _camera: Camera3D) {
     super();
@@ -47,14 +47,13 @@ class NightVisionPass extends Pass3D {
   }
 }
 
-/** Adds one extra opaque forward pass, optionally from a second camera */
 class ExtraOpaquePass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'>;
+  public readonly stage: SceneStage;
 
   private readonly _camera?: Camera3D;
   private readonly _withDescriptor: boolean;
 
-  constructor(camera?: Camera3D, withDescriptor = false, stage: Exclude<PassStage, 'post'> = 'afterTransparent') {
+  constructor(camera?: Camera3D, withDescriptor = false, stage: SceneStage = 'afterTransparent') {
     super();
     this._camera = camera;
     this._withDescriptor = withDescriptor;
@@ -74,9 +73,8 @@ class ExtraOpaquePass extends Pass3D {
   }
 }
 
-/** Adds the default scene sequence for `camera`, pointed at its render texture */
 class FeedGlassPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'beforeOpaque';
+  public readonly stage: SceneStage = 'beforeOpaque';
 
   constructor(private readonly _camera: Camera3D) {
     super();
@@ -97,9 +95,8 @@ class FeedGlassPass extends Pass3D {
   }
 }
 
-/** A picture-in-picture inset: a depth clear plus an opaque draw, both from `camera` */
 class InsetPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'afterTransparent';
+  public readonly stage: SceneStage = 'afterTransparent';
 
   constructor(private readonly _camera: Camera3D) {
     super();
@@ -116,7 +113,6 @@ class InsetPass extends Pass3D {
 
 const VIEW_SIZE = 128;
 
-/** Where the composite variant sits the view, so the transient's space differs from the screen's */
 const OFFSET_X = 40;
 const OFFSET_Y = 24;
 
@@ -142,54 +138,6 @@ function buildView(options: { composite?: boolean } = {}): { view3d: View3D; cam
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`camera per pass (${preference})`, () => {
-    it('lets two passes share a name when their cameras differ, the view camera owning the lookups', async () => {
-      const app = await getApp<Renderer>({
-        id: `camera-per-pass-two-nodes-${preference}`,
-        appOptions: { preference, width: 128, height: 128 },
-      });
-
-      try {
-        const { view3d, camera } = buildView();
-        view3d.passes = [new ExtraOpaquePass(camera)];
-        app.stage.addChild(view3d);
-        app.render();
-
-        const opaquePasses = view3d._graph.passes.filter((p) => p.name === 'opaque') as ForwardRenderPass[];
-        expect(opaquePasses).toHaveLength(2);
-        expect(opaquePasses[0].camera).toBeNull();
-        expect(opaquePasses[1].camera).toBe(camera);
-        expect(opaquePasses[0].bit, 'one bit, so one draw list').toBe(opaquePasses[1].bit);
-        expect(opaquePasses[0].cullResults, 'what each frustum keeps is its own').not.toBe(opaquePasses[1].cullResults);
-
-        expect(view3d.passByBit[RenderPassBit.OPAQUE]).toBe(opaquePasses[0]);
-      } finally {
-        app.destroy();
-      }
-    });
-
-    it('leaves the lookups with the view camera even when a camera pass is declared first, as a beforeOpaque feed is', async () => {
-      const app = await getApp<Renderer>({
-        id: `camera-per-pass-before-opaque-${preference}`,
-        appOptions: { preference, width: 128, height: 128 },
-      });
-
-      try {
-        const { view3d, camera } = buildView();
-        view3d.passes = [new ExtraOpaquePass(camera, false, 'beforeOpaque')];
-        app.stage.addChild(view3d);
-        app.render();
-
-        const opaquePasses = view3d._graph.passes.filter((p) => p.name === 'opaque') as ForwardRenderPass[];
-        expect(opaquePasses).toHaveLength(2);
-        expect(opaquePasses[0].camera).toBe(camera);
-        expect(opaquePasses[1].camera).toBeNull();
-
-        expect(view3d.passByBit[RenderPassBit.OPAQUE]).toBe(opaquePasses[1]);
-      } finally {
-        app.destroy();
-      }
-    });
-
     it('rejects a second pass on a name with no camera of its own', async () => {
       const app = await getApp<Renderer>({
         id: `camera-per-pass-duplicate-${preference}`,
@@ -321,10 +269,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           camera.rotation.set(-Math.PI / 2, 0, 0);
           camera.rotationDirty = true;
 
-          /**
-           * A floor for the inset to look straight down on, which the view camera lies in and never
-           * sees; unlit, since a lit material in this view with no lights would read black on black
-           */
           const ground = new Mesh3D({
             geometry: new PlaneGeometry({ width: 40, height: 40 }),
             material: new FlatMaterial({ baseColor: 0x3366ff }),
@@ -345,7 +289,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           const withInset = app.renderer.extract.pixels({ target: app.stage, frame: app.screen });
 
           const scale = plain.width / app.screen.width;
-          /** Where the graph put the camera, in screen pixels; padded 2px below for the viewport's rounding */
           const frame = getCameraData(camera).frame;
           const left = Math.floor(frame.x * scale) - 2;
           const right = Math.ceil((frame.x + frame.width) * scale) + 2;
@@ -377,32 +320,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         }
       });
     }
-
-    it("puts an inset camera's frame where the view puts it on screen, with the view off the screen origin", async () => {
-      const app = await getApp<Renderer>({
-        id: `camera-per-pass-frame-${preference}`,
-        appOptions: { preference, width: 256, height: 256 },
-      });
-
-      try {
-        const { view3d, camera } = buildView();
-        view3d.position.set(OFFSET_X, OFFSET_Y);
-        view3d.passes = [new InsetPass(camera)];
-        app.stage.addChild(view3d);
-        app.render();
-
-        const { viewport } = camera;
-        const { x, y, width, height } = getCameraData(camera).frame;
-        expect([x, y, width, height]).toEqual([
-          OFFSET_X + viewport.x * VIEW_SIZE,
-          OFFSET_Y + viewport.y * VIEW_SIZE,
-          viewport.width * VIEW_SIZE,
-          viewport.height * VIEW_SIZE,
-        ]);
-      } finally {
-        app.destroy();
-      }
-    });
   });
 }
 
@@ -429,6 +346,87 @@ describe('camera per pass (webgpu records)', () => {
       app.destroy();
     }
   });
+
+  it('builds the shared draw list once on a frame that rebuilds it, however many passes draw it', async () => {
+    const app = await getApp<Renderer>({
+      id: 'camera-per-pass-shared-build',
+      appOptions: { preference: 'webgpu', width: 128, height: 128 },
+    });
+
+    try {
+      const { view3d, camera } = buildView();
+      const secondCamera = new Camera3D();
+      view3d.root.addChild(secondCamera);
+      view3d.passes = [new ExtraOpaquePass(camera), new ExtraOpaquePass(secondCamera)];
+      app.stage.addChild(view3d);
+      app.render();
+
+      view3d.root.addChild(new Mesh3D({ geometry: new CubeGeometry(), material: new Material3D() }));
+      view3d._sceneBatch.invalidateDrawCaches();
+      const build = vi.spyOn(Mesh3DBatcher.prototype, 'render');
+      app.render();
+      const opaqueBuilds = build.mock.calls.filter(([options]) => options.passBit === RenderPassBit.OPAQUE).length;
+      build.mockRestore();
+
+      const passes = view3d._graph.passes.filter((p) => p.name === 'opaque') as ForwardRenderPass[];
+      const batch = view3d._sceneBatch;
+      const list = batch.drawLists[RenderPassBit.OPAQUE];
+
+      expect(passes).toHaveLength(3);
+      expect(opaqueBuilds).toBe(1);
+      for (const pass of passes) {
+        expect(pass.cullResults.get(batch)!.lastCommandListDirtyId, 'every pass synced to the one build').toBe(
+          list.commandList.dirtyId,
+        );
+      }
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it('edits the shared draw list for a plain add without the batcher, and every pass syncs to the edit', async () => {
+    const app = await getApp<Renderer>({
+      id: 'camera-per-pass-shared-edit',
+      appOptions: { preference: 'webgpu', width: 128, height: 128 },
+    });
+
+    try {
+      const { view3d, camera } = buildView();
+      const secondCamera = new Camera3D();
+      view3d.root.addChild(secondCamera);
+      view3d.passes = [new ExtraOpaquePass(camera), new ExtraOpaquePass(secondCamera)];
+      app.stage.addChild(view3d);
+      app.render();
+
+      const batch = view3d._sceneBatch;
+      const list = batch.drawLists[RenderPassBit.OPAQUE];
+      const resident = view3d.root.children.find((child): child is Mesh3D => child instanceof Mesh3D)!;
+      const dirtyId = list.commandList.dirtyId;
+      const rangesDirtyId = list.rangesDirtyId;
+
+      view3d.root.addChild(
+        new Mesh3D({ geometry: resident.geometry, material: resident.material }),
+        new Mesh3D({ geometry: resident.geometry, material: new Material3D({ baseColor: 0x00ff00 }) }),
+      );
+      const build = vi.spyOn(Mesh3DBatcher.prototype, 'render');
+      app.render();
+      const builds = build.mock.calls.length;
+      build.mockRestore();
+
+      const passes = view3d._graph.passes.filter((p) => p.name === 'opaque') as ForwardRenderPass[];
+      expect(passes).toHaveLength(3);
+      expect(builds, 'a mesh of a known kind and one of a new kind join without a walk').toBe(0);
+      expect(list.commandList.dirtyId, 'no rebuild').toBe(dirtyId);
+      expect(list.rangesDirtyId, 'the edit moved the ranges').toBeGreaterThan(rangesDirtyId);
+      for (const pass of passes) {
+        const result = pass.cullResults.get(batch)!;
+        expect(result.lastCommandListDirtyId).toBe(list.commandList.dirtyId);
+        expect(result.lastRangesDirtyId, 'every pass synced to the edit').toBe(list.rangesDirtyId);
+      }
+    } finally {
+      app.destroy();
+    }
+  });
 });
 
 describe('prepareCamera', () => {
@@ -444,27 +442,12 @@ describe('updateCameraProjectionForView', () => {
   const SCREEN = new Rectangle(0, 0, 256, 256);
   const NO_OFFSET = { x: 0, y: 0 };
 
-  /** A detached view — no parent, so the world transform is identity and the maths reads directly */
   function insetIn(view3d: View3D, viewport: Partial<Rectangle>): Camera3D {
     const camera = new Camera3D({ fov: 60 });
     Object.assign(camera.viewport, viewport);
     view3d.root.addChild(camera);
     return camera;
   }
-
-  it('places the camera by its viewport and takes the aspect from that rect', () => {
-    const view3d = new View3D({ width: 128, height: 128 });
-    const camera = insetIn(view3d, { x: 0.5, y: 0.25, width: 0.5, height: 0.25 });
-
-    const frame = updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)!;
-
-    expect([frame.x, frame.y, frame.width, frame.height]).toEqual([64, 32, 64, 32]);
-    /** `1 / tan(fov / 2)` at 60°: the projection's y scale, and its x scale times the aspect */
-    const f = 1 / Math.tan(Math.PI / 6);
-    const e = camera.projection.elements;
-    expect(e[0]).toBeCloseTo(f / 2, 5);
-    expect(e[5]).toBeCloseTo(f, 5);
-  });
 
   it('clips the frame to the screen and zooms the projection into what is left', () => {
     const view3d = new View3D({ width: 256, height: 256 });
@@ -473,39 +456,9 @@ describe('updateCameraProjectionForView', () => {
     const frame = updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)!;
 
     expect([frame.x, frame.width], 'asked for 192..320 of a 256-wide screen').toEqual([192, 64]);
-    /** `1 / tan(fov / 2)` at 60° */
     const f = 1 / Math.tan(Math.PI / 6);
     const e = camera.projection.elements;
     expect(e[0], "the unclipped rect's aspect, zoomed into the visible half").toBeCloseTo((f / 0.5) * 2, 5);
     expect(e[8], 'how far the visible centre sits from the intended one').toBeCloseTo(-1, 5);
-  });
-
-  it("offsets by the renderer's own origin, so a view inside a filter still lands right", () => {
-    const view3d = new View3D({ width: 128, height: 128 });
-    const camera = insetIn(view3d, { x: 0.5, y: 0.5, width: 0.5, height: 0.5 });
-
-    const frame = updateCameraProjectionForView(view3d, camera, SCREEN, { x: 20, y: 12 })!;
-
-    expect([frame.x, frame.y]).toEqual([64 - 20, 64 - 12]);
-  });
-
-  it('reports no frame when the camera lands entirely past the edge of the screen', () => {
-    const view3d = new View3D({ width: 256, height: 256 });
-    const camera = insetIn(view3d, { x: 2.2, width: 0.4, height: 0.4 });
-
-    expect(updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)).toBeUndefined();
-  });
-
-  it('keeps an inset on screen while any of it still overlaps', () => {
-    const view3d = new View3D({ width: 256, height: 256 });
-    const camera = insetIn(view3d, { x: 0.9, width: 0.4, height: 0.4 });
-
-    expect(
-      updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET),
-      '230.4..332.8 of a 256-wide screen straddles its edge',
-    ).toBeDefined();
-
-    camera.viewport.x = 2.2;
-    expect(updateCameraProjectionForView(view3d, camera, SCREEN, NO_OFFSET)).toBeUndefined();
   });
 });

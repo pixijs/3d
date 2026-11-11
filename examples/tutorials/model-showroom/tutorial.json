@@ -1,0 +1,6 @@
+{
+  "title": "Model Showroom",
+  "description": "Show an animated glTF model on a stand, lit by a photo of a real place, with an orbiting camera, 2D buttons that crossfade its animations, and a label that follows it.",
+  "level": "intermediate",
+  "minutes": 30
+}

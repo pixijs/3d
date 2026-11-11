@@ -12,11 +12,6 @@ import { View3D } from '~/scene/View3D';
 
 import { puffTexture } from './helpers/particleTextures';
 
-// One row, every over-life ramp on at once. Eight particles share a lifetime
-// and are born at staggered times, so left to right is progress 0 to 1: the
-// puff shrinks, fades and shifts from hot orange to cool blue, and the last
-// one is only just alive. The system clock is pinned, so the whole ramp is one
-// deterministic capture.
 export const scene: TestScene = {
   create: async (app) => {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
@@ -46,7 +41,6 @@ export const scene: TestScene = {
     particles.uniforms.uParticleTime = 4;
 
     for (let i = 0; i < 8; i++) {
-      // Progress i/7 at t = 4 with a 4s life: born at 4 - 4·(i/7).
       particles.setParticle(i, {
         aPosition: { x: (i - 3.5) * 0.8, y: 0, z: 0 },
         aParticleSizeRot: { x: 1.3, y: 0 },
@@ -55,7 +49,6 @@ export const scene: TestScene = {
         aLife: 4,
         aSizeEnd: 0.35,
         aAlphaEnd: 0.15,
-        // Linear RGB, the same encoding as the decoded spawn tint.
         aColorEnd: { x: 0.05, y: 0.25, z: 1, w: 1 },
       });
     }

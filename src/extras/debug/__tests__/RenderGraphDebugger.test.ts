@@ -3,9 +3,9 @@ import type { Texture } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import type { Mesh3DData, MeshPassCache } from '~/core/batcher/Mesh3DData';
+import { MESH3D_LANE_VISIBILITY } from '~/core/buffers/Mesh3DDataStoreBuffer';
 import type { GraphRenderPass } from '~/core/render-graph/GraphRenderPass';
-import { RenderPassBit } from '~/core/render-passes/RenderPass';
-import type { View3D } from '~/scene/View3D';
+import type { CullMode, View3D } from '~/scene/View3D';
 
 import { RenderGraphDebugger } from '../GraphDebugSnapshot';
 
@@ -15,9 +15,12 @@ interface Fixture {
   view: View3D;
   pass: GraphRenderPass;
   passData: {
-    view: { count: number; items: Mesh3DData[]; indices: Uint32Array };
+    view: { count: number; items: Mesh3DData[]; renderableIndices: Uint32Array };
+    readonly records: Uint32Array;
+    rangesDirtyId: number;
     commandList: {
       count: number;
+      bodyCount: number;
       dirtyId: number;
       commands: Array<{ geometry: object; topology: string }>;
     };
@@ -26,14 +29,14 @@ interface Fixture {
       bundleDirtyId: number;
       instanceBuffer: { data: Uint32Array };
     };
-    _cullProducer: 'off' | 'cpu' | 'gpu';
   };
-  /** The pass's WebGPU cull result for the batch: the culled args and the bundle watermark */
   result: {
     indirectDrawData: { drawCalls: Uint32Array };
     lastBundleDirtyId: number;
+    lastBundleCountsDirtyId: number;
+    direct: boolean;
   };
-  batch: { storeBuffer: { bufferVersion: number } };
+  batch: { cull: CullMode; storeBuffer: { bufferVersion: number; u32Data: Uint32Array; stride: number } };
   meshes: Mesh3DData[];
   textures: Texture[];
 }
@@ -106,10 +109,26 @@ describe('RenderGraphDebugger', () => {
     expect(() => JSON.parse(JSON.stringify(snapshot))).not.toThrow();
   });
 
+  it("names a user batch by its owner's label, and by its index without one", () => {
+    const fixture = makeFixture();
+    const views = fixture.view as unknown as { _meshBatches: object[] };
+
+    views._meshBatches = [
+      fixture.batch,
+      { ...fixture.batch, uid: 51, renderData: { label: 'trees' } },
+      { ...fixture.batch, uid: 52, renderData: {} },
+    ];
+
+    const snapshot = new RenderGraphDebugger({ view: fixture.view }).capture()!;
+
+    expect(snapshot.batches.map((batch) => batch.label)).toEqual(['scene', 'trees', 'batch 2']);
+  });
+
   it('mirrors GPU-cull survivor counts on the CPU', () => {
     const fixture = makeFixture();
-    fixture.passData._cullProducer = 'gpu';
+    fixture.batch.cull = 'gpu';
     fixture.passData.commandList.count = 2;
+    fixture.passData.commandList.bodyCount = 2;
     fixture.passData.commandList.commands.push(fixture.passData.commandList.commands[0]);
     fixture.passData.drawData.drawCalls = new Uint32Array([6, 1, 0, 0, 0, 6, 1, 0, 0, 1]);
     fixture.result.indirectDrawData.drawCalls = new Uint32Array([6, 1, 0, 0, 0, 6, 1, 0, 0, 1]);
@@ -139,12 +158,19 @@ describe('RenderGraphDebugger', () => {
     expect(snapshot.summary.drawnInstanceCount).toBe(1);
   });
 
-  it('classifies the shadow pass as scene workload', () => {
+  it('counts only the visible instances of an unculled WebGPU list', () => {
     const fixture = makeFixture();
-    delete (fixture.pass as unknown as { _forward?: unknown })._forward;
-    (fixture.pass as unknown as { bit: number }).bit = RenderPassBit.SHADOW;
+    const store = fixture.batch.storeBuffer;
+    store.u32Data[1 * store.stride + MESH3D_LANE_VISIBILITY] = 0;
 
-    expect(new RenderGraphDebugger({ view: fixture.view }).capture()!.graph.passes[0].sceneWorkload).toBe('shadow');
+    const snapshot = new RenderGraphDebugger({ view: fixture.view }).capture()!;
+
+    expect(snapshot.batches[0].passes[0].draws[0]).toMatchObject({
+      sourceInstanceCount: 2,
+      drawnInstanceCount: 1,
+      drawnInstanceCountStatus: 'exact',
+    });
+    expect(snapshot.summary.drawnInstanceCount).toBe(1);
   });
 
   it('excludes non-scene pass state from workload totals', () => {
@@ -244,6 +270,26 @@ describe('RenderGraphDebugger', () => {
     });
   });
 
+  it("reports a direct-draw bundle re-recorded for changed counts, and a frustum-culled batch's direct draws as no bundle", () => {
+    const fixture = makeFixture();
+    fixture.batch.cull = 'off';
+    fixture.result.direct = true;
+    const debug = new RenderGraphDebugger({ view: fixture.view });
+    debug.capture();
+
+    fixture.result.lastBundleCountsDirtyId++;
+    expect(debug.capture()!.batches[0].passes[0].bundle).toEqual({
+      status: 'recorded',
+      bundleDirtyId: 1,
+      lastBundleDirtyId: 1,
+      causes: [{ code: 'counts-changed' }],
+    });
+    expect(debug.capture()!.batches[0].passes[0].bundle.status, 'the same counts reuse it').toBe('reused');
+
+    fixture.batch.cull = 'cpu';
+    expect(debug.capture()!.batches[0].passes[0].bundle.status).toBe('not-used');
+  });
+
   it('reports mesh membership and batch-buffer growth causes independently', () => {
     const fixture = makeFixture();
     const debug = new RenderGraphDebugger({ view: fixture.view });
@@ -252,7 +298,8 @@ describe('RenderGraphDebugger', () => {
     const mesh = makeMesh(3, fixture.meshes[0].geometry, fixture.meshes[0].material);
     fixture.meshes.push(mesh);
     fixture.passData.view.count = 3;
-    fixture.passData.view.indices = new Uint32Array([0, 1, 2]);
+    fixture.passData.view.renderableIndices = new Uint32Array([0, 1, 2]);
+    fixture.passData.gpuData.instanceBuffer.data = new Uint32Array([0, 1, 2]);
     fixture.passData.drawData.drawCalls[1] = 3;
     fixture.passData.commandList.dirtyId++;
     fixture.batch.storeBuffer.bufferVersion++;
@@ -266,11 +313,43 @@ describe('RenderGraphDebugger', () => {
     );
   });
 
-  it('classifies passes whose cache policy regenerates every frame as dynamic', () => {
+  it('names the members an edited list draws from its tail commands, wherever they sit in the view', () => {
     const fixture = makeFixture();
-    (fixture.pass as unknown as { _forward: { bit: number; sort: string } })._forward = {
+    const debug = new RenderGraphDebugger({ view: fixture.view });
+    debug.capture();
+
+    const { geometry, material } = fixture.meshes[0];
+    fixture.meshes.push(makeMesh(3, geometry, material), makeMesh(4, geometry, material));
+    fixture.passData.view.count = 4;
+    fixture.passData.view.renderableIndices = new Uint32Array([0, 3, 1, 2]);
+    fixture.passData.commandList.count = 2;
+    fixture.passData.commandList.commands.push(fixture.passData.commandList.commands[0]);
+    const drawCalls = new Uint32Array([6, 3, 0, 0, 0, 6, 1, 0, 0, 3]);
+    fixture.passData.drawData.drawCalls = drawCalls;
+    fixture.result.indirectDrawData.drawCalls = drawCalls;
+    fixture.passData.gpuData.instanceBuffer.data = new Uint32Array([0, 1, 2, 3]);
+    fixture.passData.rangesDirtyId++;
+
+    const captured = debug.capture()!.batches[0].passes[0];
+    expect(captured.drawBuild.status).toBe('repacked');
+    expect(captured.drawBuild.causes).toEqual(
+      expect.arrayContaining([
+        { code: 'mesh-added', meshIds: [3, 4] },
+        { code: 'tail', meshIds: [4] },
+      ]),
+    );
+    expect(
+      captured.draws.map((draw) => draw.sourceMeshIds),
+      'mesh 3 joined the body command, mesh 4 the tail command',
+    ).toEqual([[1, 2, 3], [4]]);
+  });
+
+  it('classifies a key-sorted pass that never caches as dynamic', () => {
+    const fixture = makeFixture();
+    (fixture.pass as unknown as { _forward: { bit: number; sort: string; cache: string } })._forward = {
       bit: PASS_BIT,
-      sort: 'distance',
+      sort: 'key',
+      cache: 'never',
     };
     const debug = new RenderGraphDebugger({ view: fixture.view });
     debug.capture();
@@ -289,14 +368,33 @@ describe('RenderGraphDebugger', () => {
       causes: [],
     });
   });
+
+  it('reports a distance-sorted pass as reused while its order holds, and rebuilt when the order moves', () => {
+    const fixture = makeFixture();
+    (fixture.pass as unknown as { _forward: { bit: number; sort: string } })._forward = {
+      bit: PASS_BIT,
+      sort: 'distance',
+    };
+    const debug = new RenderGraphDebugger({ view: fixture.view });
+    debug.capture();
+
+    const held = debug.capture()!.batches[0].passes[0];
+    expect(held.drawBuild).toEqual({ status: 'reused', commandListDirtyId: 1, causes: [] });
+    expect(held.bundle.status, 'it caches no bundle').toBe('not-used');
+
+    fixture.passData.gpuData.instanceBuffer.data = new Uint32Array([1, 0]);
+    fixture.passData.commandList.dirtyId++;
+
+    const moved = debug.capture()!.batches[0].passes[0];
+    expect(moved.drawBuild).toEqual({
+      status: 'rebuilt',
+      commandListDirtyId: 2,
+      causes: [{ code: 'order-changed' }],
+    });
+    expect(moved.bundle.status).toBe('not-used');
+  });
 });
 
-/**
- * A WebGPU view with one forward pass drawing two meshes from one batch
- *
- * The draw list and the pass's cull result share one args array, so the snapshot reads the same
- * counts whichever of the two it picks.
- */
 function makeFixture(): Fixture {
   const texture = makeTexture(30, 31, 'albedo');
   const geometry = {
@@ -314,22 +412,28 @@ function makeFixture(): Fixture {
   const meshes = [makeMesh(1, geometry, material), makeMesh(2, geometry, material)];
   const drawCalls = new Uint32Array([6, 2, 0, 0, 0]);
   const passData = {
-    view: { count: 2, items: meshes, indices: new Uint32Array([0, 1]) },
+    view: { count: 2, items: meshes, renderableIndices: new Uint32Array([0, 1]) },
+    get records() {
+      return this.gpuData.instanceBuffer.data;
+    },
+    rangesDirtyId: 0,
     commandList: {
       count: 1,
+      bodyCount: 1,
       dirtyId: 1,
       commands: [{ geometry, topology: 'triangle-list' }],
     },
     drawData: { drawCalls },
     gpuData: {
       bundleDirtyId: 1,
-      instanceBuffer: { data: new Uint32Array([0, 0, 1, 0]) },
+      instanceBuffer: { data: new Uint32Array([0, 1]) },
     },
-    _cullProducer: 'off' as const,
   };
   const result = {
     indirectDrawData: { drawCalls },
     lastBundleDirtyId: 1,
+    lastBundleCountsDirtyId: 0,
+    direct: false,
   };
   const batchMatrix = new Float32Array(24);
   batchMatrix[0] = 1;
@@ -341,6 +445,7 @@ function makeFixture(): Fixture {
   storeU32[43] = 1;
   const batch = {
     uid: 50,
+    cull: 'off' as CullMode,
     items: meshes,
     drawLists: { [PASS_BIT]: passData },
     storeBuffer: { bufferVersion: 0, data: batchMatrix, u32Data: storeU32, stride: 24 },
@@ -360,7 +465,7 @@ function makeFixture(): Fixture {
     record: { accesses: [] },
     dependsOn: [],
     isAnchored: true,
-    mipmapHandles: [],
+    finishedColors: [],
     lastSampleSourceUids: [],
   };
   const graph = {
@@ -397,6 +502,7 @@ function makeFixture(): Fixture {
 function makeMesh(id: number, geometry: Mesh3DData['geometry'], material: Mesh3DData['material']): Mesh3DData {
   return {
     uid: id,
+    _storeIndex: id - 1,
     geometry,
     material,
     _worldVisible: 1,

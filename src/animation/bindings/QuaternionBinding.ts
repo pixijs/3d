@@ -1,23 +1,13 @@
 import type { QuaternionData } from '../../math/rotation/Quaternion';
 import { Binding } from './Binding';
 
-/**
- * Quaternion-like target with a single batched setter
- *
- * Covers `Quaternion` and `ObservableQuaternion` so the observer fires once per
- * sample, not four times.
- * @internal
- */
+/** Written through `set` so an `ObservableQuaternion` notifies once per sample, not four times */
 interface QuaternionSettable extends QuaternionData {
   set: (x: number, y: number, z: number, w: number) => this;
 }
 
 /**
- * Writes four-component samples to a quaternion, renormalised to unit length
- *
- * Blending several states averages unit quaternions component by component, which comes out
- * shorter than unit length and would scale the transform. A zero-length sample writes the
- * identity rotation.
+ * Renormalises each sample, since a blend of unit quaternions comes out shorter and would scale the transform
  * @internal
  */
 export class QuaternionBinding extends Binding {

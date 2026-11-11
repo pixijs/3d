@@ -4,70 +4,30 @@ import type { PointData, VertexFormat } from 'pixi.js';
 import type { PointData3D } from '../../../math/vector/PointData3D';
 import type { PointData4D } from '../../../math/vector/PointData4D';
 
-/**
- * Bytes `aPosition` occupies at the head of every vertex
- * @internal
- */
 const POSITION_BYTES = 12;
 
-/**
- * Declared attributes the layout doesn't place in declaration order
- *
- * `aUV` is the per-corner id and streams from its own shared buffer;
- * `aPosition` is placed by the layout itself so it always leads the vertex. Each
- * still takes one of the {@link MAX_VERTEX_ATTRIBUTES} slots.
- * @internal
- */
+/** Kept out of the interleaved order, though each still counts toward {@link MAX_VERTEX_ATTRIBUTES} */
 const NOT_INTERLEAVED = new Set(['aUV', 'aPosition']);
 
-/**
- * The vertex-input slots WebGL 2 and WebGPU both guarantee; past this the
- * failure is a pipeline error with no name in it
- * @internal
- */
+/** The vertex inputs WebGL 2 and WebGPU both guarantee */
 const MAX_VERTEX_ATTRIBUTES = 16;
 
-/**
- * One declared attribute, resolved into where it lives in a vertex and how
- * `ParticleContainer3D.setParticle` writes it
- *
- * `'color'` is the built-in tint: it takes a `ColorSource` and sRGB-decodes on
- * the way in, the same path `setParticleAt` uses. `'unsupported'` marks a format
- * the writer has no packer for yet; it only errors if something targets it.
- * @internal
- */
+/** @internal */
 export interface ParticleAttribute {
-  /** Storage format, as the bit declared it */
   format: VertexFormat;
-  /** Byte offset within a vertex */
   offset: number;
-  /** Index of the first element in the `f32` / `u32` view */
+  /** `offset` in 32-bit elements */
   index: number;
-  /** Elements, and so the shape of value `setParticle` accepts */
   components: 1 | 2 | 3 | 4;
-  /** The packer `setParticle` routes the value through */
+  /** `'unsupported'` has no packer, and throws only when `setParticle` writes it */
   kind: 'float' | 'unorm8' | 'unorm16' | 'color' | 'unsupported';
 }
 
-/**
- * The attributes the composed bits declare, resolved into where each lives in
- * a vertex; see {@link buildParticleLayout}
- * @internal
- */
 interface ParticleLayout {
-  /** Attribute name to its resolved placement, in declaration order */
   attributes: Record<string, ParticleAttribute>;
-  /** Bytes one vertex occupies */
   vertexStride: number;
 }
 
-/**
- * Resolves a declared attribute's placement and packer from its format
- * @param name - Attribute name; `aParticleColor` always gets the colour packer
- * @param format - Vertex format the bit declared
- * @param offset - Byte offset within a vertex
- * @internal
- */
 function resolveParticleAttribute(name: string, format: VertexFormat, offset: number): ParticleAttribute {
   const index = offset / 4;
 
@@ -92,10 +52,7 @@ function resolveParticleAttribute(name: string, format: VertexFormat, offset: nu
 }
 
 /**
- * Throws when a value's shape doesn't match the attribute it targets
- * @param name - Attribute name, for the error message
- * @param value - Value to check
- * @param components - Components the attribute takes; 1 means a plain number
+ * Throws unless `value` has the shape the attribute takes
  * @internal
  */
 export function expectShape(name: string, value: unknown, components: number): asserts value is PointData4D {
@@ -118,12 +75,8 @@ export function expectShape(name: string, value: unknown, components: number): a
 /**
  * Derives the interleaved vertex layout from the attributes the composed bits declare
  *
- * `aPosition` always leads: both material systems pick the position decode bit
- * by reading `geometry.attributes.aPosition`, so its name and format belong to
- * the engine. Everything else packs in declaration order, 4-byte aligned, which
- * every vertex format wants anyway. The same declarations generate the shader's
- * attribute inputs, so buffer and shader cannot disagree.
- * @param declared - Attribute name to vertex format, as the composed bits declare them
+ * `aPosition` leads as `float32x3`: `ParticleContainerViews` promises it at offset 0, and the material
+ * systems pick the position bit by its format.
  * @internal
  */
 export function buildParticleLayout(declared: Record<string, VertexFormat>): ParticleLayout {

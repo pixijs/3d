@@ -4,6 +4,7 @@ import { alphaMaskBit } from '../../../core/shader/bits/alphaMaskBit';
 import { BaseMaterial3D } from '../../../materials/BaseMaterial3D';
 import type { BaseMaterial3DOptions } from '../../../materials/BaseMaterial3D';
 import type { MaterialData } from '../../../materials/utils/createMaterialDataClass';
+import type { MaterialTextures } from '../../../materials/utils/createMaterialTexturesClass';
 import { toonMaterialBit, toonLightingBit } from './toonBit';
 
 /**
@@ -28,7 +29,7 @@ export interface ToonMaterialOptions extends BaseMaterial3DOptions {
    */
   bands?: number;
   /**
-   * Size of the specular highlight, 0–1
+   * Size of the specular highlight, from 0 to 1
    * @default 0.15
    * @example
    * ```ts
@@ -67,16 +68,14 @@ export interface ToonMaterialOptions extends BaseMaterial3DOptions {
 }
 
 /**
- * The packed data shape {@link toonMaterialBit} produces
- *
- * `baseColor` and `alphaCutoff` are required because the bit always declares them.
+ * The fields of {@link ToonMaterial#data}
  * @category extras:materials
  * @advanced
  */
 export interface ToonData extends MaterialData {
-  /** Base colour, linear RGBA */
+  /** Base colour in linear light, alpha in the last lane */
   baseColor: Float32Array;
-  /** Alpha below which a fragment is discarded in `mask` alpha mode */
+  /** Cutoff for `alphaMode: 'mask'` */
   alphaCutoff: number;
   /** See {@link ToonMaterialOptions#bands} */
   bands: number;
@@ -91,8 +90,8 @@ export interface ToonData extends MaterialData {
 /**
  * Cel-shaded toon material: banded diffuse, a sharp specular highlight and a rim light
  *
- * The material half of the toon look. Pair it with {@link OutlinePass} on the view for the ink
- * outline; every instance opts into that pass unless `outline: false` is passed.
+ * Add an {@link OutlinePass} to the view for ink outlines. To change `bands`, `specularSize`,
+ * `rimPower` or `rimIntensity` after construction, set them on `material.data`.
  * @example
  * ```ts
  * const view3d = new View3D({ passes: [new OutlinePass({ width: 0.05 })] });
@@ -106,12 +105,9 @@ export interface ToonData extends MaterialData {
  * @category extras:materials
  * @standard
  */
-export class ToonMaterial extends BaseMaterial3D<ToonData> {
+export class ToonMaterial extends BaseMaterial3D<ToonData, MaterialTextures, ToonMaterialOptions> {
   /**
-   * Default {@link ToonMaterialOptions} merged under every constructor call
-   *
-   * `new ToonMaterial(opts)` resolves as `{ ...ToonMaterial.defaultOptions, ...opts }`. Mutate to change defaults
-   * process-wide.
+   * Defaults for every new `ToonMaterial`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * ToonMaterial.defaultOptions.bands = 4;
@@ -151,5 +147,17 @@ export class ToonMaterial extends BaseMaterial3D<ToonData> {
     this.data.specularSize = specularSize!;
     this.data.rimPower = rimPower!;
     this.data.rimIntensity = rimIntensity!;
+  }
+
+  /**
+   * The base options plus the band, specular and rim values, with the outline pass as `outline`
+   * @advanced
+   */
+  protected override _toOptions(): ToonMaterialOptions {
+    const options = super._toOptions();
+    const { outline, ...passes } = options.passes ?? {};
+    const { bands, specularSize, rimPower, rimIntensity } = this.data;
+
+    return { ...options, passes, outline: !!outline, bands, specularSize, rimPower, rimIntensity };
   }
 }

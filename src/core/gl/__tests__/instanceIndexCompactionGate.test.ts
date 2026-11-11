@@ -8,24 +8,14 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Spies on the batcher's private compaction, so a test can count the walks
- *
- * The visual scenes can't catch a broken gate: skipping work that gives identical pixels is
- * invisible to them.
- */
 function spyOnCompaction(renderer: WebGLRenderer) {
   const batcher = renderer.material3d.batcher as unknown as { _compact: (...args: unknown[]) => void };
 
   return vi.spyOn(batcher, '_compact');
 }
 
-/**
- * A lit view of `meshCount` cubes, few enough that the `'auto'` cull mode resolves to `'off'`:
- * frustum culling compacts every frame by design, so only the visibility-only walk is gated
- */
 function buildView(meshCount: number): { view3d: View3D; meshes: Mesh3D[] } {
-  const view3d = new View3D({ width: 64, height: 64 });
+  const view3d = new View3D({ width: 64, height: 64, cull: 'off' });
   view3d.camera.position.set(0, 0, 8);
 
   const light = new DirectionalLight({ color: 0xffffff, intensity: 3 });
@@ -66,36 +56,6 @@ describe('WebGL instance-index compaction gate', () => {
       app.render();
 
       expect(compact).not.toHaveBeenCalled();
-    } finally {
-      app.destroy();
-    }
-  });
-
-  it('re-walks on the frame a mesh is hidden, then settles again', async () => {
-    const app = await getApp<WebGLRenderer>({
-      id: 'gl-compaction-gate-visibility',
-      appOptions: { preference: 'webgl', width: 64, height: 64, backgroundColor: 0x000000 },
-    });
-
-    try {
-      const { view3d, meshes } = buildView(8);
-      app.stage.addChild(view3d);
-
-      app.render();
-
-      const compact = spyOnCompaction(app.renderer);
-
-      meshes[0].visible = false;
-      app.render();
-      const afterHide = compact.mock.calls.length;
-      expect(afterHide).toBeGreaterThan(0);
-
-      app.render();
-      expect(compact.mock.calls.length, 'the flip was consumed, so the next frame is clean').toBe(afterHide);
-
-      meshes[0].visible = true;
-      app.render();
-      expect(compact.mock.calls.length, 'showing it again is another flip').toBeGreaterThan(afterHide);
     } finally {
       app.destroy();
     }

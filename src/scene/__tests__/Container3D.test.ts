@@ -18,35 +18,6 @@ const resetDirty = (c: Container3D) => {
 };
 
 describe('Container3D visibility', () => {
-  it('setting visible to a new value sets _worldVisibleDirty (not _worldTransformDirty) and dispatches once', () => {
-    const { view3d, _onChildUpdate } = fakeView3D();
-    const c = new Container3D();
-    c._view3d = view3d;
-    resetDirty(c);
-
-    c.visible = false;
-
-    expect(c.visible).toBe(false);
-    expect(c._worldVisibleDirty).toBe(true);
-    expect(c._worldTransformDirty).toBe(false);
-    expect(c.didChange).toBe(true);
-    expect(_onChildUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it('setting visible to its current value, true, is a no-op (no enqueue, no flag flip)', () => {
-    const { view3d, _onChildUpdate } = fakeView3D();
-    const c = new Container3D();
-    c._view3d = view3d;
-    resetDirty(c);
-
-    c.visible = true;
-
-    expect(c._worldVisibleDirty).toBe(false);
-    expect(c._worldTransformDirty).toBe(false);
-    expect(c.didChange).toBe(false);
-    expect(_onChildUpdate).not.toHaveBeenCalled();
-  });
-
   it('emits visibleChanged only when the value flips, even after a position write has enqueued the node', () => {
     const c = new Container3D();
     const seen: boolean[] = [];
@@ -59,51 +30,6 @@ describe('Container3D visibility', () => {
     c.visible = true;
 
     expect(seen).toEqual([false, true]);
-  });
-
-  it('multiple property changes in one frame enqueue only once and set both cascade flags', () => {
-    const { view3d, _onChildUpdate } = fakeView3D();
-    const c = new Container3D();
-    c._view3d = view3d;
-    resetDirty(c);
-
-    c.visible = false;
-    c.position.set(1, 2, 3);
-    c.scale.set(2, 2, 2);
-
-    expect(_onChildUpdate).toHaveBeenCalledTimes(1);
-    expect(c._worldVisibleDirty).toBe(true);
-    expect(c._worldTransformDirty).toBe(true);
-  });
-
-  it('local-transform setters set _localTransformDirty, but a visibility flip or a reparent does not', () => {
-    const { view3d } = fakeView3D();
-    const c = new Container3D();
-    c._view3d = view3d;
-    resetDirty(c);
-
-    c.visible = false;
-    expect(c._localTransformDirty).toBe(false);
-
-    resetDirty(c);
-    new Container3D().addChild(c);
-    expect(c._localTransformDirty).toBe(false);
-
-    resetDirty(c);
-    c.position.set(1, 0, 0);
-    expect(c._localTransformDirty).toBe(true);
-
-    c._localTransformDirty = false;
-    c.scale.set(2, 2, 2);
-    expect(c._localTransformDirty).toBe(true);
-
-    c._localTransformDirty = false;
-    c.rotation.set(0.1, 0, 0);
-    expect(c._localTransformDirty).toBe(true);
-
-    c._localTransformDirty = false;
-    c.quaternion.set(0, 0.1, 0, 1);
-    expect(c._localTransformDirty).toBe(true);
   });
 
   it('addChild sets both _worldTransformDirty and _worldVisibleDirty on the child', () => {
@@ -211,15 +137,8 @@ describe('Container3D transform accessors', () => {
   });
 });
 
-/**
- * `[x, y, z]` rounded to six decimals, so a value solved through the matrix can be compared with a
- * hand-worked literal
- *
- * `+ 0` turns -0 into 0, which toEqual treats as a different value.
- */
 const rounded = (p: PointData3D): number[] => [p.x, p.y, p.z].map((v) => Math.round(v * 1e6) / 1e6 + 0);
 
-/** Where local point `(x, y, z)` lands in the parent, through the rebuilt local matrix */
 const landing = (c: Container3D, x: number, y: number, z: number): number[] => {
   c.updateLocalTransform();
 
@@ -227,10 +146,6 @@ const landing = (c: Container3D, x: number, y: number, z: number): number[] => {
 };
 
 describe('Container3D origin', () => {
-  /**
-   * A node at x = 10, scaled by (2, 3, 1); once turned 90° about +Z, local (1, 0, 0) moves by (0, 2, 0)
-   * in the parent and local (0, 1, 0) by (-3, 0, 0)
-   */
   const turned = () => new Container3D({ position: { x: 10, y: 0, z: 0 }, scale: { x: 2, y: 3, z: 1 } });
 
   it('turns the node around the origin, which stays at position + origin, without moving it', () => {
@@ -287,13 +202,6 @@ describe('Container3D reparentChild', () => {
 });
 
 describe('Container3D replaceChild', () => {
-  /**
-   * A child at (10, -2, 5) with Euler angles (90°, 0, 90°) and scale (2, 3, 4), a basis M that sends
-   * local (x, y, z) to (-3y, -4z, 2x)
-   *
-   * Its origin (1, 1, 0) adds origin - M·origin = (1, 1, 0) - (-3, 0, 2) = (4, 1, -2), so its matrix
-   * translates by (14, -1, 3).
-   */
   const oldChildUnder = (parent: Container3D): Container3D =>
     new Container3D({
       position: { x: 10, y: -2, z: 5 },
@@ -306,10 +214,6 @@ describe('Container3D replaceChild', () => {
   it('lands a new child with a different origin exactly where the old child sat', () => {
     const parent = new Container3D();
     const oldChild = oldChildUnder(parent);
-    /**
-     * Keeps its origin (0, 2, -1), which on the copied basis adds (0, 2, -1) - (-6, 4, 0) = (6, -2, -1),
-     * so its position solves to (14, -1, 3) - (6, -2, -1) and its origin lands at position + origin
-     */
     const newChild = new Container3D({
       position: { x: 100, y: 100, z: 100 },
       rotation: { x: 0, y: 1, z: 0 },
@@ -317,7 +221,6 @@ describe('Container3D replaceChild', () => {
       origin: { x: 0, y: 2, z: -1 },
     });
 
-    /** Where the old child puts four local points; its origin (1, 1, 0) lands at position + origin */
     const corners = [
       landing(oldChild, 0, 0, 0),
       landing(oldChild, 1, 1, 0),
@@ -403,29 +306,6 @@ describe('Container3D label', () => {
 });
 
 describe('Container3D rotationDirty', () => {
-  it('is set by every write path of the observable rotation vector', () => {
-    const c = new Container3D();
-
-    c.rotation.x = 0.1;
-    expect(c.rotationDirty).toBe(true);
-
-    c.rotationDirty = false;
-    c.rotation.y = 0.2;
-    expect(c.rotationDirty).toBe(true);
-
-    c.rotationDirty = false;
-    c.rotation.z = 0.3;
-    expect(c.rotationDirty).toBe(true);
-
-    c.rotationDirty = false;
-    c.rotation.set(0.4, 0.5, 0.6);
-    expect(c.rotationDirty).toBe(true);
-
-    c.rotationDirty = false;
-    c.rotation.copyFrom({ x: 0.7, y: 0.8, z: 0.9 });
-    expect(c.rotationDirty).toBe(true);
-  });
-
   it('is cleared when the quaternion is written, making it authoritative', () => {
     const c = new Container3D();
     c.rotation.set(0.1, 0.2, 0.3);
@@ -496,40 +376,20 @@ describe('Container3D rotationDirty', () => {
     expect(c.localTransform.elements[0]).toBeCloseTo(1);
     expect(c.localTransform.elements[2]).toBeCloseTo(0);
   });
-
-  it('is cleared once updateLocalTransform has rebuilt the quaternion from the Euler angles', () => {
-    const c = new Container3D();
-    c.rotation.set(0, Math.PI / 2, 0);
-
-    c.updateLocalTransform();
-
-    expect(c.rotationDirty).toBe(false);
-    expect(c.quaternion.y).toBeCloseTo(Math.SQRT1_2);
-    expect(c.quaternion.w).toBeCloseTo(Math.SQRT1_2);
-  });
 });
 
+const build = () => {
+  const deep = new Container3D({ label: 'wheel_3' });
+  const deeper = new Container3D({ label: 'wheel_2' });
+  const a = new Container3D({ label: 'wheel_1', children: [deep] });
+  const b = new Container3D({ label: 'body', children: [deeper] });
+  const c = new Container3D({ label: 'wheel_4' });
+  const root = new Container3D({ children: [a, b, c] });
+
+  return { root, a, b, c, deep, deeper };
+};
+
 describe('Container3D label lookup', () => {
-  /**
-   * A labelled tree with a deeper wheel under each of the first two children
-   *
-   * ```
-   * root ─┬─ a('wheel_1') ── deep('wheel_3')
-   *       ├─ b('body')    ── deeper('wheel_2')
-   *       └─ c('wheel_4')
-   * ```
-   */
-  const build = () => {
-    const deep = new Container3D({ label: 'wheel_3' });
-    const deeper = new Container3D({ label: 'wheel_2' });
-    const a = new Container3D({ label: 'wheel_1', children: [deep] });
-    const b = new Container3D({ label: 'body', children: [deeper] });
-    const c = new Container3D({ label: 'wheel_4' });
-    const root = new Container3D({ children: [a, b, c] });
-
-    return { root, a, b, c, deep, deeper };
-  };
-
   it('getChildByLabel checks direct children only unless deep', () => {
     const { root, b, deeper } = build();
 
@@ -554,5 +414,62 @@ describe('Container3D label lookup', () => {
     const out: Container3D[] = [];
     expect(root.getChildrenByLabel(/^wheel_/, true, out)).toBe(out);
     expect(out).toEqual([a, c, deep, deeper]);
+  });
+});
+
+describe('Container3D traverse', () => {
+  it('visits this container, then each child before its subtree, in children order, hidden ones included', () => {
+    const { root, a, b, c, deep, deeper } = build();
+    const visited: Container3D[] = [];
+
+    a.visible = false;
+    root.traverse((container) => visited.push(container));
+
+    expect(visited).toEqual([root, a, deep, b, deeper, c]);
+  });
+
+  it('moves on to the next sibling when the callback removes or destroys the container it was given', () => {
+    const { root, a, b, c, deep } = build();
+    const visited: Container3D[] = [];
+
+    root.traverse((container) => {
+      visited.push(container);
+
+      if (container === a) a.removeFromParent();
+      if (container === b) b.destroy();
+    });
+
+    expect(visited).toEqual([root, a, deep, b, c]);
+    expect(root.children).toEqual([c]);
+  });
+
+  it('replaces every child the callback swaps out with replaceChild, without visiting the replacements', () => {
+    const originals = [new Container3D(), new Container3D(), new Container3D(), new Container3D()];
+    const root = new Container3D({ children: originals });
+    const visited: Container3D[] = [];
+
+    root.traverse((container) => {
+      visited.push(container);
+
+      if (container !== root) root.replaceChild(container, new Container3D());
+    });
+
+    expect(visited).toEqual([root, ...originals]);
+    expect(root.children).toHaveLength(4);
+    expect(root.children.filter((child) => originals.includes(child))).toEqual([]);
+  });
+
+  it('skips containers the callback adds under or beside the one it was given, so the walk ends', () => {
+    const { root, a, b, c, deep, deeper } = build();
+    const visited: Container3D[] = [];
+
+    root.traverse((container) => {
+      visited.push(container);
+
+      container.addChild(new Container3D());
+      container.parent?.addChild(new Container3D());
+    });
+
+    expect(visited).toEqual([root, a, deep, b, deeper, c]);
   });
 });

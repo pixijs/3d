@@ -1,10 +1,7 @@
 import type { Skeleton } from '../../scene/Skeleton';
 import { Binding } from './Binding';
 
-/**
- * Writes three-component position samples directly into a skeleton's local position buffer
- * @internal
- */
+/** @internal */
 export class SkeletonPositionBinding extends Binding {
   constructor(
     private readonly _skel: Skeleton,

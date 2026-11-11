@@ -4,20 +4,17 @@ import type { BaseDestroyOptions, TextureDestroyOptions, TypeOrBool } from 'pixi
  * What a 3D node's `destroy()` takes down with it
  *
  * The flags are pixi.js's `children`, `texture` and `textureSource`, plus `geometry` and
- * `material` for meshes. Every flag defaults to `false`, because children, geometry, materials and
- * textures are often shared: a plain `destroy()` leaves them all alive. A boolean sets every flag
- * at once, so `true` also destroys resources that other nodes still use. A node that destroys its
- * children passes them the same options.
+ * `material` for meshes. Each defaults to `false`, since children, geometries, materials and
+ * textures are often shared. `true` sets every flag, so it also destroys resources other nodes
+ * still use. A node passes the same options to the children it destroys.
  *
- * `texture` frees the textures of the materials this call destroys. A {@link Mesh3D} destroys its
- * material only when `material` is set, so there `texture` alone frees nothing and `material`
- * alone keeps the textures. A {@link Sprite3D} is the exception: `texture` always frees the
- * sprite's own texture. `textureSource` extends `texture` to the sources behind the textures and,
- * as in pixi.js, frees nothing by itself.
+ * `texture` frees the textures of the materials the call destroys, so on a {@link Mesh3D},
+ * `texture` alone frees nothing and `material` alone keeps the textures. On a {@link Sprite3D},
+ * `texture` always frees the sprite's texture. `textureSource` also frees the sources behind those
+ * textures and, as in pixi.js, does nothing alone.
  *
- * Resources a node built for itself are always destroyed, whatever the flags: a {@link View3D}'s
- * GPU resources, a {@link BatchedMesh3D}'s batch, the material a {@link Sprite3D} made for its
- * texture.
+ * What a node made for itself always goes, whatever the flags: a {@link View3D}'s GPU resources,
+ * a {@link BatchedMesh3D}'s batch, the material a {@link Sprite3D} built for its texture.
  * @example
  * ```ts
  * sprite.destroy({ texture: true });               // the sprite, the material it built, its texture
@@ -52,12 +49,7 @@ export type Destroy3DOptions = TypeOrBool<
     }
 >;
 
-/**
- * Resolves one flag from a {@link Destroy3DOptions} value, whether it is a boolean, an object or missing
- * @param options - the options a `destroy()` call received
- * @param key - which flag to read
- * @internal
- */
+/** @internal */
 export function resolveDestroy3DFlag(
   options: Destroy3DOptions | undefined,
   key: keyof Exclude<Destroy3DOptions, boolean>,

@@ -2,14 +2,18 @@ import { expectCleanRender, getApp } from '@test-utils';
 import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
-import type { CullResult, CullResults } from '~/core/render-passes/CullResult';
+import type { ShadowDataGpu } from '~/core/gpu/ShadowRenderPassGpu';
+import type { CullResult } from '~/core/render-passes/CullResult';
+import type { CullResults } from '~/core/render-passes/CullResults';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import { cascadeCountFor } from '~/core/render-passes/shadow/shadowPassUtils';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
+import { Matrix4 } from '~/math/matrix/Matrix4';
+import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
-import type { Light, ShadowData } from '~/scene/lights/Light';
+import type { Light } from '~/scene/lights/Light';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
@@ -41,7 +45,6 @@ function pixels(app: Application<Renderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -52,12 +55,10 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-/** Anything carrying pixi's GC idle clock — a buffer or a geometry. */
 interface GcClocked {
   _gcLastUsed: number;
 }
 
-/** How many renderers hold a GPU copy of this resource — 0 once it has been collected. */
 function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   let n = 0;
   for (const uid in resource._gpuData) {
@@ -66,25 +67,19 @@ function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   return n;
 }
 
-/** The map `CullResults` keys by batch uid — the one internal the release case reads. */
 interface CullResultsProbe {
   _byBatch: Record<number, (CullResult | undefined)[]>;
 }
 
-/** The cull results a light's shadow data holds — WebGPU only; `undefined` on WebGL and after a release. */
 function shadowCullResults(light: Light): CullResults | undefined {
-  return (light._gpuShadowData as (ShadowData & { cullResults?: CullResults }) | null)?.cullResults;
+  const data: ShadowDataGpu | null = light._gpuShadowData;
+  return data?.cullResults;
 }
 
-/**
- * The GPU copies one cull result holds: its survivor records and its indirect draw args. Both are
- * `Buffer3D`s, exempt from pixi's GC, so nothing but an explicit unload ever frees them.
- */
 function resultResidency(result: CullResult): number {
   return gpuCopies(result.survivors.buffer) + gpuCopies(result.indirectDrawData.drawCallsBuffer);
 }
 
-/** Sweep with a 1 s idle threshold after backdating `stale`'s clocks, so only those age out. */
 function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
   const saved = renderer.gc.maxUnusedTime;
   renderer.gc.maxUnusedTime = 1000;
@@ -102,10 +97,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       try {
-        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
+        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull: 'off' });
         app.stage.addChild(view3d);
 
-        /** `dynamic` keeps it out of the shared atlas, so the buffers a shadow build captures are its own */
         const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1, dynamic: true });
         const caster = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0x4a7c59 }), castShadow: true });
         view3d.root.addChild(ground(), caster, sun());
@@ -144,7 +138,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       try {
-        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
+        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull: 'off' });
         app.stage.addChild(view3d);
 
         const caster = new Mesh3D({
@@ -184,7 +178,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       try {
-        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
+        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull: 'off' });
         app.stage.addChild(view3d);
 
         const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1, dynamic: true });
@@ -225,7 +219,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       try {
-        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
+        const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull: 'off' });
         app.stage.addChild(view3d);
 
         const caster = new Mesh3D({
@@ -289,3 +283,43 @@ for (const preference of ['webgpu', 'webgl'] as const) {
     });
   });
 }
+
+describe('shadow cull results (webgpu)', () => {
+  it('lets a hidden light give back the results of a batch removed while it was hidden', async () => {
+    const app = await getApp<Renderer>({
+      id: 'shadow-cull-result-hidden-light-detach',
+      appOptions: { preference: 'webgpu', width: SIZE, height: SIZE },
+    });
+
+    try {
+      const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
+      app.stage.addChild(view3d);
+
+      const caster = new Mesh3D({ geometry: new CubeGeometry(), material: new Material3D(), castShadow: true });
+      const batched = new BatchedMesh3D({ size: 1 });
+      batched.setGeometryAt(0, new CubeGeometry());
+      batched.setMaterialAt(0, new Material3D());
+      batched.setMatrixAt(0, new Matrix4());
+      batched.setPassesAt(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+      const light = sun();
+      view3d.root.addChild(ground(), caster, batched, light);
+      frame(view3d);
+
+      app.render();
+      const results = shadowCullResults(light) as unknown as CullResultsProbe;
+      expect(Object.keys(results._byBatch)).toContain(String(batched.batch.uid));
+
+      light.visible = false;
+      batched.removeFromParent();
+      batched.destroy();
+      app.render();
+
+      expect(
+        Object.keys(results._byBatch),
+        'the cube still casts, so the pass runs and the hidden light lets go of the removed batch',
+      ).toEqual([String(view3d._sceneBatch.uid)]);
+    } finally {
+      app.destroy();
+    }
+  });
+});

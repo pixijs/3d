@@ -1,45 +1,39 @@
-import { MATERIAL_STRIDE_FLOATS } from '../../core/buffers/MaterialDataStoreBuffer';
+import { WORDS_PER_TEXEL } from '../../core/buffers/dataTextureLayout';
 import { createStructLayout } from '../../core/shader/codegen/structLayout';
 import type { StructDefinition } from '../../core/shader/ShaderBit';
 import type { BaseMaterial3D } from '../BaseMaterial3D';
 
 /**
- * A material's GPU-side values, as `material.data`
- *
- * One fixed-size buffer laid out exactly as the material's compiled `Material` struct, with an
- * accessor per field:
+ * A material's GPU-side values, as `material.data`, with a property per field its bits declare
  *
  * - Scalars read and write as numbers.
- * - Vectors read as live `Float32Array` views into the buffer and are set by copying from any
- *   array-like. Writing into a returned view changes the data without queueing an upload, so
- *   call `material.update()` afterwards.
- * - Setters queue an upload through `material.update()`; repeat writes in one frame upload once.
+ * - Vectors read as live `Float32Array` views and are set by copying from any array-like no longer
+ *   than the field; a longer one throws. Writing into a view queues no upload, so call
+ *   `material.update()` afterwards.
+ * - Assigning a field queues an upload; repeat writes in one frame upload once.
  *
- * The fields typed here are the ones {@link BaseMaterial3D} reads itself. A material with a fixed
- * struct narrows the type further, as {@link Material3DData} does.
+ * A material with fixed fields narrows the type, as {@link Material3DData} does.
  * @category materials
  * @advanced
  */
 export interface MaterialData {
-  /**
-   * The buffer itself, in the struct's layout
-   * @internal
-   */
+  /** @internal */
   readonly _f32: Float32Array;
-  /** Base colour in linear light, alpha in the last lane; absent when the struct doesn't declare it */
+  /**
+   * Base colour in linear light, alpha in the last lane; absent when the struct doesn't declare it
+   *
+   * Set `material.baseColor` and `material.alpha` instead, which keep `displayBaseColor` in step.
+   */
   baseColor?: Float32Array;
+  /** Base colour in display space, alpha in the last lane, for unlit bits; absent when not declared */
+  displayBaseColor?: Float32Array;
   /** Cutoff for `alphaMode: 'mask'`; absent when the struct doesn't declare it */
   alphaCutoff?: number;
   /** The UV transform's 2x2 part, row-major as `[m00, m01, m10, m11]`; absent when the struct doesn't declare it */
   uvTransformRow0?: Float32Array;
   /** The UV transform's offset; absent when the struct doesn't declare it */
   uvOffset?: Float32Array;
-  /**
-   * Any other field the struct declares
-   *
-   * The value type has no `boolean`, so a write such as `data._dirty = true` is a compile error
-   * rather than a property the GPU never sees.
-   */
+  /** Any other field the struct declares */
   [field: string]: number | ArrayLike<number> | undefined;
 }
 
@@ -47,18 +41,11 @@ type MaterialDataClass = new (material: BaseMaterial3D) => MaterialData;
 
 const classCache = new Map<string, MaterialDataClass>();
 
+const TEXEL_BYTES = WORDS_PER_TEXEL * 4;
+
 /**
- * Build, or return the cached, data class for a material struct layout
- *
- * One class per layout, with accessors on the prototype over fixed offsets, so every instance
- * shares one hidden class and each access can be inline-cached.
- *
- * Float setters compare against `Math.fround(value)`: a float slot rounds what it stores, so an
- * inexact number like 0.3 would never match. Integer setters compare the raw value, since rounding
- * to float32 would merge distinct integers. Vector setters copy through a view bounded to the
- * field, so an oversized source throws a `RangeError` instead of overwriting the next field.
- * @param def - The merged Material struct from the construction bit list
- * @param snapshot - Cache key, the material's `_materialStructSnapshot`
+ * Float setters compare with `Math.fround(value)`, integer ones raw since rounding would merge
+ * distinct integers; accessors sit on the prototype so each layout has one hidden class
  * @internal
  */
 export function getOrCreateMaterialDataClass(def: StructDefinition, snapshot: string): MaterialDataClass {
@@ -66,17 +53,17 @@ export function getOrCreateMaterialDataClass(def: StructDefinition, snapshot: st
   if (cached) return cached;
 
   const layout = createStructLayout(def);
+  const bytes = Math.max(1, Math.ceil(layout.size / TEXEL_BYTES)) * TEXEL_BYTES;
 
   class GeneratedMaterialData {
     public readonly _f32: Float32Array;
     public readonly _u32: Uint32Array;
     public readonly _material: BaseMaterial3D;
-    /** Each vector field's view, made on first access; public so the prototype accessors can reach it */
     public readonly _views: Record<string, Float32Array> = Object.create(null);
 
     constructor(material: BaseMaterial3D) {
       this._material = material;
-      const buffer = new ArrayBuffer(MATERIAL_STRIDE_FLOATS * 4);
+      const buffer = new ArrayBuffer(bytes);
       this._f32 = new Float32Array(buffer);
       this._u32 = new Uint32Array(buffer);
     }

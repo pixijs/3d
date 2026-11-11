@@ -4,7 +4,8 @@ import { Track } from '../../../../animation/tracks/Track';
 import type { InterpolationMode, TrackOptions } from '../../../../animation/tracks/Track';
 import { Vector3Track } from '../../../../animation/tracks/Vector3Track';
 import type { Scene3DSource } from '../../../Scene3DSource';
-import type { AnimationChannelTarget, AnimationSampler, GltfFormat } from '../GltfFormat';
+import type { GltfFormat } from '../GltfFormat';
+import { NORMALIZED_SCALE } from '../utils/accessorToVertexFormat';
 import { getBuffer } from '../utils/getBuffer';
 
 const trackClassMap: Record<string, new (options: TrackOptions) => Track> = {
@@ -20,13 +21,7 @@ const trackPathMap: Record<string, string> = {
   weights: 'weights',
 };
 
-/**
- * Converts glTF animations into {@link Animation} clips on the source
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers holding the sampler keyframe data
- * @param source - Receives the converted clips
- * @internal
- */
+/** @internal */
 export function processAnimations(gltfRaw: GltfFormat, buffers: ArrayBuffer[], source: Scene3DSource) {
   if (!gltfRaw.animations) return;
 
@@ -51,28 +46,7 @@ export function processAnimations(gltfRaw: GltfFormat, buffers: ArrayBuffer[], s
   });
 }
 
-/**
- * The scale from a normalized integer to its float, per component type: 5120 BYTE, 5121
- * UNSIGNED_BYTE, 5122 SHORT and 5123 UNSIGNED_SHORT
- */
-const DEQUANT_NORMALIZED: Record<number, number> = {
-  5120: 1 / 127,
-  5121: 1 / 255,
-  5122: 1 / 32767,
-  5123: 1 / 65535,
-};
-
-/**
- * Reads keyframe times or values as floats
- *
- * `KHR_mesh_quantization` lets keyframes, rotations above all, be stored as normalized integers.
- * Interpolation runs on the CPU, so they are converted here, once: left as integers, a quaternion
- * slerp would see values far outside -1 to 1 and produce NaN. Signed values clamp at -1, as the
- * glTF formula does.
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers holding the keyframe data
- * @param accessorIndex - Index of the accessor to read
- */
+/** Signed normalized values clamp at -1, as glTF's decode formula does */
 function getBufferAsFloat32(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accessorIndex: number): Float32Array {
   const raw = getBuffer(gltfRaw, buffers, accessorIndex);
   if (raw instanceof Float32Array) return raw;
@@ -82,7 +56,7 @@ function getBufferAsFloat32(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accesso
   const out = new Float32Array(typedRaw.length);
 
   if (accessor.normalized === true) {
-    const scale = DEQUANT_NORMALIZED[accessor.componentType as number] ?? 1;
+    const scale = NORMALIZED_SCALE[accessor.componentType] ?? 1;
     const isSigned = accessor.componentType === 5120 || accessor.componentType === 5122;
 
     if (isSigned) {
@@ -101,20 +75,9 @@ function getBufferAsFloat32(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accesso
   return out;
 }
 
-/**
- * Builds the track for one animation channel
- *
- * A `weights` channel holds one value per morph target per keyframe, or three with `CUBICSPLINE`
- * (in-tangent, value, out-tangent), so its value size is the value count over the keyframe count,
- * divided by three for `CUBICSPLINE`.
- * @param target - The node property the channel drives
- * @param sampler - The channel's keyframes
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers holding the keyframe data
- */
 function createTrack(
-  target: AnimationChannelTarget,
-  sampler: AnimationSampler,
+  target: GltfFormat.AnimationChannelTarget,
+  sampler: GltfFormat.AnimationSampler,
   gltfRaw: GltfFormat,
   buffers: ArrayBuffer[],
 ) {

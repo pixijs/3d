@@ -8,28 +8,7 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Composite-mode refraction against the direct-mode control. Two identical
- * View3Ds — same size, camera, and content (a clear-glass cube refracting an
- * opaque, self-lit grid backdrop that lives *inside* the 3D scene) — differing
- * only in `composite`:
- *
- *   left  — `composite:false` → scene draws straight to screen (control).
- *   right — `composite:true`  → scene draws into its own pooled transient.
- *
- * The backdrop is in-scene (not a 2D sprite behind the view) so it lands in the
- * opaque-colour copy in BOTH modes — isolating the screen-space UV alignment,
- * not the separate "seed the 2D backdrop into the scene buffer" gap.
- *
- * The View size (264px) is deliberately NOT a power of two: its physical
- * viewport rounds up to the 512 pooled-texture bucket (ratio ~0.52). The two
- * cubes should refract the grid identically. Any divergence is the composite
- * path sampling only the `[0, viewport/bucket]` corner of the bucket-filled
- * scene — magnifying the refraction by ~1/ratio. Regenerate the reference once
- * composite refraction is aligned and the halves match.
- */
-
-const SIZE = 264; // physical viewport 264 → nextPow2 bucket 512 → ratio ~0.52
+const SIZE = 264;
 
 function gridTexture(): Texture {
   const c = document.createElement('canvas');
@@ -86,13 +65,10 @@ export const scene: TestScene = {
     width: 660,
     height: 340,
     backgroundColor: 0x242c36,
-    // The opaque-colour copy reads the composited framebuffer; glass needs it.
     useBackBuffer: true,
   },
   delay: 120,
   pixelMatchWebgpu: 3000,
-  // Resources are built in create() (not module scope) so the second renderer in
-  // the webgl→webgpu run gets its own GPU objects rather than freed ones.
   create: async (app) => {
     const grid = gridTexture();
 

@@ -2,16 +2,15 @@
  * Creates a random function that returns the same sequence of numbers in `[0, 1)` for the same seed
  *
  * Use it wherever `Math.random` would go when results must repeat, such as a level generated from a
- * shared seed or a replay. Every `random*` helper in this package takes it as its last argument.
- * It runs the mulberry32 generator, seeded by hashing the string with xmur3; neither is safe for
- * cryptography.
+ * shared seed or a replay. It runs mulberry32, seeded by hashing the string with xmur3, and isn't
+ * safe for cryptography.
  * @see https://stackoverflow.com/a/47593316
  * @example
  * ```ts
  * const random = seededRandom(`level-${levelNumber}`);
  *
  * for (const slot of treeSlots) {
- *   if (randomBool(0.3, random)) plantTree(slot, randomFloat(0.8, 1.2, random));
+ *   if (random() < 0.3) plantTree(slot, 0.8 + random() * 0.4);
  * }
  * ```
  * @param seed - Any string; the same string always gives the same sequence
@@ -39,14 +38,7 @@ function xmur3(str: string): () => number {
   };
 }
 
-/**
- * The mulberry32 generator, returning floats in `[0, 1)`
- *
- * The state wraps at 32 bits, as mulberry32 specifies, so it stays an integer V8 never boxes. It
- * lives in an `Int32Array` rather than a closure variable because draws measured about twice as fast
- * that way in Chrome.
- * @param seed - 32-bit starting state
- */
+/** The state sits in an `Int32Array`, not a closure variable, because draws measured faster that way */
 function mulberry32(seed: number): () => number {
   const state = new Int32Array(1);
 

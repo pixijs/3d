@@ -14,20 +14,6 @@ import { model } from '../../examples/assets/manifest';
 const SKINNED = model('gltf.CesiumMan');
 const MORPHED = model('gltf.AnimatedMorphCube');
 
-/**
- * Deformed geometry casting shadows: one skinned caster and one morphed caster.
- *
- * The shadow pass compiles its own vertex template but shares `skinningBit*` and
- * `morphTargetBit*` with the forward pass, so the two templates have to agree on
- * the types those bits read. When they drift, the shadow shader fails to compile
- * and the caster's shadow silently vanishes — or the whole pass dies — while the
- * forward pass keeps rendering perfectly. Nothing else in the suite pairs a
- * deformed mesh with a shadow, so that drift was invisible.
- *
- * Both casters are posed at a fixed animation time rather than ticked, so the
- * silhouette on the ground is deterministic. The camera looks along the ground
- * so the shadows carry real pixels rather than a sliver.
- */
 export const scene: TestScene = {
   assets: [SKINNED, MORPHED],
   app: {
@@ -51,8 +37,6 @@ export const scene: TestScene = {
     ground.rotation.set(-Math.PI / 2, 0, 0);
     view3d.root.addChild(ground);
 
-    // Pins a clip mid-way instead of relying on wall-clock ticks, so the
-    // deformed pose — and therefore the shadow silhouette — is reproducible.
     const poseAt = (target: Model3D, fraction: number) => {
       const [label] = target.player?.animationLabels ?? [];
 
@@ -63,14 +47,12 @@ export const scene: TestScene = {
       state.gotoAndStop(state.animation.duration * fraction);
     };
 
-    // Skinned caster — exercises skinningBit* inside the shadow pass.
     const skinned = new Model3D({ source: Assets.get<Scene3DSource>(SKINNED), autoUpdate: false });
 
     skinned.position.set(-0.9, 0, 0);
     view3d.root.addChild(skinned);
     poseAt(skinned, 0.35);
 
-    // Morphed caster — exercises morphTargetBit* on the same path.
     const morphed = new Model3D({ source: Assets.get<Scene3DSource>(MORPHED), autoUpdate: false });
 
     morphed.position.set(1.1, 0.35, 0);
@@ -78,8 +60,6 @@ export const scene: TestScene = {
     view3d.root.addChild(morphed);
     poseAt(morphed, 0.4);
 
-    // Low sun across the scene, so both silhouettes stretch out where the
-    // camera can see them.
     const sun = new DirectionalLight({ color: 0xfff4e0, intensity: 6, castShadow: true });
 
     sun.rotation.set((-32 * Math.PI) / 180, (38 * Math.PI) / 180, 0);

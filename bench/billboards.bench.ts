@@ -1,6 +1,6 @@
 /**
  * `billboards`: N camera-facing sprites in a ball the camera circles, all one soft round texture and one colour. Each
- * is a `Sprite3D` sharing one `FlatMaterial`, the form that lets the batcher draw them together (a sprite built from
+ * is a `Sprite3D` sharing one `FlatMaterial`, which lets the batcher draw them together (a sprite built from
  * a texture would own a material of its own); unlit, blended and sorted back to front, as sprites are by default.
  *
  * Judged on `cpu.render`, where the sort, the cull, the batching and the draws are. The update is one camera move.
@@ -8,8 +8,8 @@
  * verdict reads without `--variant`, because a host-time verdict needs the host to set the frame, and a thousand
  * sprites can render in less time than the GPU's floor for a multisampled 1080p frame.
  *
- * The view culls on the CPU (`cull: 'cpu'`): a GPU cull compacts the survivors in whatever order its threads finish,
- * which reorders the blended sprites, so no two runs would draw the same frame.
+ * The view culls on the CPU (`cull: 'cpu'`), as the transparent pass does under `'gpu'` too, since a GPU cull doesn't
+ * keep back-to-front order.
  */
 
 import { FlatMaterial, Sprite3D } from '@pixi/3d';

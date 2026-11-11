@@ -5,8 +5,8 @@ import type { LightOptions } from './Light';
 
 /**
  * Constructor options for {@link SpotLight}: the {@link LightOptions} plus the cone's
- * {@link SpotLightOptions.range | range}, {@link SpotLightOptions.coneAngle | coneAngle} and
- * {@link SpotLightOptions.penumbra | penumbra}
+ * {@link SpotLightOptions.range | range}, {@link SpotLightOptions.radius | radius},
+ * {@link SpotLightOptions.coneAngle | coneAngle} and {@link SpotLightOptions.penumbra | penumbra}
  * @example
  * ```ts
  * const options: SpotLightOptions = { intensity: 10, range: 25, coneAngle: 30, penumbra: 0.25 };
@@ -25,6 +25,15 @@ export interface SpotLightOptions extends LightOptions {
    * ```
    */
   range?: number;
+  /**
+   * Radius of the light's bulb, in world units; see {@link SpotLight.radius}
+   * @default 0.1
+   * @example
+   * ```ts
+   * const wallLamp = new SpotLight({ intensity: 6, range: 4, radius: 0.5 });
+   * ```
+   */
+  radius?: number;
   /**
    * Angle between the cone's axis and its edge, in degrees; see {@link SpotLight.coneAngle}
    * @default 60
@@ -72,17 +81,13 @@ export interface SpotLightOptions extends LightOptions {
  * flashlight.lookAt({ x: 0, y: 0, z: 0 });
  * view.root.addChild(flashlight);
  * ```
- * @see {@link Light} For the abstract base class.
  * @see {@link PointLight} For the omnidirectional alternative.
  * @category scene
  * @standard
  */
 export class SpotLight extends Light {
   /**
-   * Default {@link SpotLightOptions} merged under every constructor call
-   *
-   * `new SpotLight(opts)` resolves as `{ ...SpotLight.defaultOptions, ...opts }`, ignoring
-   * options set to `undefined`. Mutate to change the defaults process-wide.
+   * Defaults for every new `SpotLight`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * SpotLight.defaultOptions.penumbra = 0.2;
@@ -93,6 +98,7 @@ export class SpotLight extends Light {
     intensity: 1,
     castShadow: false,
     range: 0,
+    radius: 0.1,
     coneAngle: 60,
     penumbra: 0,
   };
@@ -112,6 +118,18 @@ export class SpotLight extends Light {
    * ```
    */
   public range = 0;
+
+  /**
+   * Radius of the light's bulb, in world units
+   *
+   * Works as {@link PointLight.radius} does; it doesn't soften the shadow.
+   * @default 0.1
+   * @example
+   * ```ts
+   * flashlight.radius = 0.5;
+   * ```
+   */
+  public radius = 0.1;
 
   /**
    * Angle between the cone's axis and its edge, in degrees, so the cone is twice as wide
@@ -141,11 +159,12 @@ export class SpotLight extends Light {
    * @param options - Construction options; see {@link SpotLightOptions}.
    */
   constructor(options: SpotLightOptions = {}) {
-    const { range, coneAngle, penumbra, ...rest } = { ...SpotLight.defaultOptions, ...definedProps(options) };
+    const { range, radius, coneAngle, penumbra, ...rest } = { ...SpotLight.defaultOptions, ...definedProps(options) };
 
     super({ label: 'SpotLight', ...rest });
 
     this.range = range!;
+    this.radius = radius!;
     this.coneAngle = coneAngle!;
     this.penumbra = penumbra!;
   }

@@ -1,0 +1,36 @@
+/** The name tags: each visual's class name, stacked on the floor in front of its station */
+
+import type { Label } from '../shared/theme/Label';
+import type { LabelLayer } from '../shared/theme/LabelLayer';
+import { STATIONS } from './scene';
+import type { GalleryScene, StationName } from './scene';
+
+/** The space between stacked tags' tops, in px: a tag's height and a little air */
+const TAG_STEP = 23;
+/** How far in front of its station's middle a tag stands: on the floor, just clear of the widest subject */
+const TAG_DEPTH = 0.85;
+
+export interface NameTags {
+  /** Adds the tag `name` to a station, under the ones it already has */
+  add(station: StationName, name: string): Label;
+}
+
+export function createNameTags(labels: LabelLayer, scene: GalleryScene): NameTags {
+  const stacks = Object.fromEntries(STATIONS.map((name) => [name, [] as Label[]])) as Record<StationName, Label[]>;
+
+  return {
+    add(station, name) {
+      const tag = labels.add({
+        text: name,
+        node: scene.stations[station],
+        at: { x: 0, y: 0, z: TAG_DEPTH },
+        anchor: { x: 0.5, y: 0 },
+        offset: { x: 0, y: stacks[station].length * TAG_STEP },
+      });
+
+      stacks[station].push(tag);
+
+      return tag;
+    },
+  };
+}

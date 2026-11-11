@@ -56,10 +56,7 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
    */
   tubularSegments: number;
   /**
-   * The arc angle in radians swept around the ring (the +Y axis)
-   *
-   * Defaults to `2π` for a closed torus; pass a smaller value (for example `Math.PI` for a half
-   * torus) to leave the ring open.
+   * The angle in radians the ring sweeps around the +Y axis; less than `2π` leaves the ring open
    * @default Math.PI * 2
    * @example
    * ```ts
@@ -68,10 +65,9 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
    */
   arc: number;
   /**
-   * Start angle in radians for the cross-section sweep, measured from the outer edge of the ring
+   * Where the tube's cross-section starts, in radians from the ring's outer edge toward +Y
    *
-   * Combined with `thetaLength` to leave the tube cross-section open, for example for a gutter-like
-   * half tube.
+   * With a `thetaLength` below `2π`, it picks where the gap in the tube falls, as for a gutter.
    * @default 0
    * @example
    * ```ts
@@ -80,9 +76,7 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
    */
   thetaStart: number;
   /**
-   * Sweep length in radians for the cross-section
-   *
-   * Defaults to `2π` for a closed tube.
+   * The angle in radians the cross-section sweeps; less than `2π` leaves the tube open
    * @default Math.PI * 2
    * @example
    * ```ts
@@ -93,12 +87,7 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
 }
 
 /**
- * A torus (donut) geometry built from a ring of `tubularSegments` cross-sections, each a circle
- * of `radialSegments` vertices
- *
- * The ring lies in the XZ plane and the symmetry axis is +Y, matching the rest of the primitive
- * set ({@link CylinderGeometry}, {@link SphereGeometry}, etc.). Lower `arc` values produce a
- * partial ring; `thetaStart`/`thetaLength` open the cross-section.
+ * A torus (donut) geometry lying in the XZ plane around the +Y axis
  *
  * UVs map `u` around the ring (0 at the start of the arc, 1 at the end) and `v` around the tube
  * cross-section (0 at `thetaStart`, 1 at the end of `thetaLength`).
@@ -112,15 +101,12 @@ export interface TorusGeometryOptions extends Geometry3DOptions {
  *   arc: Math.PI * 2,
  * });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
- * @see {@link TorusKnotGeometry} For a tube wrapped along a `(p, q)` torus knot path
  * @category geometry
  * @standard
  */
 export class TorusGeometry extends Geometry3D {
   /**
-   * Default options for {@link TorusGeometry}
+   * Defaults for every new `TorusGeometry`
    * @example
    * ```ts
    * TorusGeometry.defaultOptions.tube = 0.2;

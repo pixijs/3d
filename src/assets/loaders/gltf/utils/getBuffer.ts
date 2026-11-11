@@ -2,7 +2,14 @@ import type { GltfFormat } from '../GltfFormat';
 
 type Component = 5120 | 5121 | 5122 | 5123 | 5125 | 5126;
 
-const TypedMap: Record<Component, any> = {
+type ComponentArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Uint32Array | Float32Array;
+
+interface ComponentArrayConstructor {
+  new (length: number): ComponentArray;
+  new (buffer: ArrayBufferLike, byteOffset?: number, length?: number): ComponentArray;
+}
+
+const TypedMap: Record<Component, ComponentArrayConstructor> = {
   5120: Int8Array,
   5121: Uint8Array,
   5122: Int16Array,
@@ -31,15 +38,8 @@ const NUM_COMPONENTS = {
 } as const;
 
 /**
- * Reads an accessor's data as a tightly packed typed array of the accessor's component type
- *
- * Tightly packed data comes back as a view of the source buffer, without a copy. Interleaved data
- * is copied out element by element, and a sparse accessor is decoded to a dense array.
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - The glTF binary buffers, indexed by `bufferView.buffer`
- * @param accessorIndex - Index of the accessor to read
- * @param copy - Return an array of its own, which outlives the source buffer. Only a view gets
- *   copied; the other paths already allocate.
+ * Returns tightly packed data as a view of the file's buffer unless `copy` is set; interleaved and
+ * sparse data always come back as new arrays
  * @internal
  */
 export function getBuffer(
@@ -88,16 +88,7 @@ export function getBuffer(
   return out;
 }
 
-/**
- * Decodes a sparse accessor to a dense packed array: a copy of the base, with the listed elements
- * replaced
- *
- * Morph targets often ship this way, carrying offsets only for the vertices that move. Those are
- * VEC3, so three components get their own unrolled copy loop.
- * @param gltfRaw - Parsed glTF JSON
- * @param buffers - Binary buffers indexed by glTF buffer index
- * @param accessorIndex - Index of the sparse accessor to decode
- */
+/** VEC3, the usual sparse morph target, gets its own unrolled loop for speed */
 function readSparseAccessor(gltfRaw: GltfFormat, buffers: ArrayBuffer[], accessorIndex: number): ArrayBufferView {
   const accessor = gltfRaw.accessors![accessorIndex];
   const sparse = accessor.sparse!;

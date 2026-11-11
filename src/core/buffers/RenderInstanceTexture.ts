@@ -2,26 +2,18 @@ import { BufferImageSource, Texture } from 'pixi.js';
 
 import { DATA_TEXTURE_WIDTH, uploadTexelRange } from './dataTextureLayout';
 
-/** `u32`s per `rg32uint` texel: the store index and the packed texture slots */
-const WORDS_PER_INSTANCE = 2;
+const WORDS_PER_INSTANCE = 1;
+
+/** Fills a new array, so the compaction, which writes only changed texels, finds every survivor changed */
+const NO_ROW = 0xffffffff;
 
 /**
- * The instances a WebGL draw list draws, after culling, as an `rg32uint` data texture: one texel
- * per instance, holding its mesh store row and its packed texture slots
- *
- * The WebGL form of `RenderInstanceBuffer`. Culling and sorting leave a list of survivors whose
- * rows are scattered through the store, and WebGL2 has no `baseInstance` to start a draw partway
- * into an instance buffer, so the shader looks the list up: `instanceFetchBitGl` reads texel
- * `uInstanceBase + gl_InstanceID`, then the store row it names.
- *
- * The packed slots live here rather than in the store because they map a material's textures onto
- * one pass's bind group, and passes batch differently; the shadow pass batches no textures. Both
- * words are integers, so the format is an integer one: a float texture could flush or rewrite
- * their bit patterns on fetch.
+ * WebGL2 has no `baseInstance`, so `instanceFetchBitGl` reads texel `uInstanceBase + gl_InstanceID`
+ * for the store row; an integer format, since a float one could rewrite the bits
  * @internal
  */
 export class RenderInstanceTexture {
-  /** The CPU texels, two `u32`s each, padded to whole texture rows */
+  /** Matches the GPU copy, which lets the compaction skip unchanged texels, so upload every texel you change */
   public data!: Uint32Array;
 
   private _source!: BufferImageSource;
@@ -32,22 +24,14 @@ export class RenderInstanceTexture {
     this.ensureCapacity(initialCapacity);
   }
 
-  /** The texture to bind */
   public get texture(): Texture {
     return this._texture;
   }
 
-  /** Capacity in instances */
   public get capacity(): number {
     return this._capacity;
   }
 
-  /**
-   * Makes room for `instances` texels, reallocating the array and resizing the texture to grow
-   *
-   * Growth doesn't keep the contents: the compaction rewrites every texel in use before each upload.
-   * @param instances - Instance count to make room for.
-   */
   public ensureCapacity(instances: number): void {
     if (instances <= this._capacity) return;
 
@@ -58,14 +42,14 @@ export class RenderInstanceTexture {
     const width = Math.min(capacity, DATA_TEXTURE_WIDTH);
     const height = Math.ceil(capacity / width);
 
-    this.data = new Uint32Array(width * height * WORDS_PER_INSTANCE);
+    this.data = new Uint32Array(width * height * WORDS_PER_INSTANCE).fill(NO_ROW);
 
     if (!this._source) {
       this._source = new BufferImageSource({
         resource: this.data,
         width,
         height,
-        format: 'rg32uint',
+        format: 'r32uint',
         scaleMode: 'nearest',
         alphaMode: 'no-premultiply-alpha',
         label: 'InstanceIndex',
@@ -80,27 +64,14 @@ export class RenderInstanceTexture {
     }
   }
 
-  /**
-   * Uploads the first `count` texels
-   *
-   * Call after the compaction fills them and before the draws that read them.
-   * @param count - Slots the draw list staged, one texel each. Every texel a draw reads sits inside that range.
-   */
-  public upload(count: number): void {
-    uploadTexelRange(this._source, 0, count);
+  public upload(start: number, end: number): void {
+    if (start < end) uploadTexelRange(this._source, start, end);
   }
 
-  /**
-   * Frees the GPU copy of the texture and keeps the CPU texels
-   *
-   * pixi re-creates it from `data` on the next bind, and the next compaction rewrites the texels
-   * anyway. Idempotent.
-   */
   public unload(): void {
     this._source?.unload();
   }
 
-  /** Frees the texture and its source and drops the CPU array. Idempotent */
   public destroy(): void {
     if (!this._texture) return;
     this._texture.destroy(true);

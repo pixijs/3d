@@ -6,19 +6,8 @@ import type { HitResult3D, HitVolume3D } from './HitResult3D';
 import { intersectRayGeometry } from './intersectRayGeometry';
 
 /**
- * Squared radius of a sphere around the node's local origin that encloses `volume`
- *
- * Centred on the origin so the broadphase can use the node's world translation as the centre,
- * rejecting a missed node without inverting its world matrix. Squared, so the common Box and
- * Geometry3D path needs no `sqrt`.
- *
- * For a box, it is the squared distance to the farthest corner: on each axis, the larger squared
- * bound. An empty box (`min` at `+Infinity`, `max` at `-Infinity`) gives `Infinity`, so the
- * broadphase never rejects it.
- *
- * Read per node per pick, so a volume edited in place takes effect on the next pick.
- * @param volume - The node's resolved hit volume, in its local space
- * @returns The squared radius of an origin-centred sphere enclosing the volume
+ * Squared radius of a sphere about the node's local origin enclosing `volume`, as the pick in
+ * `EventBoundary3D.ts` centres it on the node; uncached, so a shape edited in place picks right
  * @internal
  */
 export function hitVolumeBoundingRadiusSq(volume: HitVolume3D): number {
@@ -42,22 +31,15 @@ export function hitVolumeBoundingRadiusSq(volume: HitVolume3D): number {
 }
 
 /**
- * Tests a ray against a resolved hit volume, picking the test by the shape's type
- *
- * The engine shapes get `instanceof` branches; anything else is an {@link IHitVolume3D} and is
- * called through its `raycast`.
- *
- * A `Box` or `Sphere` hit is where the ray enters the shape, or leaves it when the ray starts
- * inside. Its `t` is already the distance to the hit, because `localRay.direction` is unit length:
- * `Ray.applyMatrix4` renormalises it under any node scale.
- * @param localRay - The ray in the *node's local space*; the picker applies the node's inverse world transform
- * once before calling this
- * @param volume - The node's resolved hit volume
- * @param out - Scratch buffer filled on a hit; the caller ignores it on a miss
- * @returns The parametric `t` of the closest hit (`>= 0`), or `-1` for a miss
+ * @param localRay - The ray in the node's local space, with a unit-length direction, as
+ * `IHitVolume3D.raycast` promises.
+ * @param volume - The node's resolved hit volume.
+ * @param out - Filled on a hit.
+ * @param maxT - Nearest `t` found so far; only a `Geometry3D` uses it, to skip its triangle loop.
+ * @returns The `t` of the closest hit, or `-1` for a miss.
  * @internal
  */
-export function intersectRayHitVolume(localRay: Ray, volume: HitVolume3D, out: HitResult3D): number {
+export function intersectRayHitVolume(localRay: Ray, volume: HitVolume3D, out: HitResult3D, maxT = Infinity): number {
   if (volume instanceof Box) {
     const t = localRay.intersectBoxT(volume);
     if (t === -1) return -1;
@@ -83,7 +65,7 @@ export function intersectRayHitVolume(localRay: Ray, volume: HitVolume3D, out: H
   }
 
   if (volume instanceof Geometry3D) {
-    return intersectRayGeometry(localRay, volume, out);
+    return intersectRayGeometry(localRay, volume, out, maxT);
   }
 
   return volume.raycast(localRay, out);

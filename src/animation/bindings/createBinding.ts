@@ -13,10 +13,6 @@ import { SkeletonRotationBinding } from './SkeletonRotationBinding';
 import { SkeletonScaleBinding } from './SkeletonScaleBinding';
 import { Vector3Binding } from './Vector3Binding';
 
-/**
- * Describes the target property that should receive sampled animation values
- * @internal
- */
 interface BindingOptions {
   target?: Container3D;
   channel: string;
@@ -24,19 +20,13 @@ interface BindingOptions {
   boneIndex?: number;
 }
 
-/**
- * Ignores animation samples when no supported target property can be resolved
- * @internal
- */
+/** @internal */
 class DummyBinding extends Binding {
   public apply(): void {}
 }
 
 /**
- * Picks the binding for a track's property: straight into the skeleton's buffers for a bone,
- * otherwise by the type of the node's property
- * @param options - Target, channel, and optional skeleton context to bind
- * @returns A binding that can apply sampled track values to the target
+ * Must bind every property type {@link TrackOptions#label} lists
  * @internal
  */
 export function createBinding(options: BindingOptions): Binding {

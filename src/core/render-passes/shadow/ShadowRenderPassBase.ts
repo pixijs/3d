@@ -17,14 +17,12 @@ import { RenderPass } from '../RenderPass';
 import type { RenderPassOptions } from '../RenderPass';
 import type { RenderSession } from '../RenderSession';
 import {
-  MAX_CASCADES,
   computeCascadeMatrix,
   computeCascadeSplits,
   computeFixedBoxMatrix,
   prepareLightSpaceTransform,
 } from './csmUtils';
 import {
-  MAX_SHADOW_LIGHTS,
   MAX_SHADOW_SLOTS,
   SHADOW_QUALITY_SIZE,
   cascadeCountFor,
@@ -35,136 +33,75 @@ import {
 } from './shadowPassUtils';
 import type { CascadeSlot, ShadowQuality } from './shadowPassUtils';
 
-/** Scratch for `_commitCascadeCamera`: the cascade's eye, inverted out of its view */
 const tempEyeMatrix = new Matrix4();
 const tempEye = new Vector3();
 
-/** Scratch for the auto-fit caster-bounds gather */
 const _scratchSphere = new Sphere();
 const _scratchBox = new Box();
 const _scratchVec = new Vector3();
 
 const DEFAULT_SHADOW_BIAS = 0.001;
-/**
- * Normal-offset fallback for spot lights at grazing incidence — a perspective map has no
- * single texel size to derive one from
- */
+/** Default `shadow.normalBias` of a spot light, which `LightShadow.normalBias` in `Light.ts` states */
 const SPOT_SHADOW_NORMAL_BIAS = 0.15;
 /**
- * Normal-offset bias in shadow-map texels, at grazing incidence
- *
- * The world-space offset scales with each texel's world size, and the shader tapers it by
- * `1 - N·L` — so this is the offset a surface the light barely grazes receives, and a surface
- * facing the light receives almost none. Sized so the grazing case stays acne-free; the taper
- * is what keeps the offset off short shadows everywhere else.
+ * Default `shadow.normalBias` of a directional light in shadow-map texels, which `LightShadow.normalBias`
+ * in `Light.ts` states; the shadow bits taper it by `1 - N·L`, so this is the grazing-incidence offset
  */
 const SHADOW_NORMAL_BIAS_TEXELS = 3;
-/** Fallback cascade reach (world units) when a cascaded light sets no `maxDistance` */
+/** Default `shadow.maxDistance`, which `LightShadow.maxDistance` in `Light.ts` states */
 const DEFAULT_CASCADE_MAX_DISTANCE = 50;
-/** World-units-per-texel above which the auto-fit box is deemed "soft" and cascades are suggested */
+/** World units per shadow-map texel above which the auto-fit box warns that shadows look soft */
 const SHADOW_SOFT_TEXEL_THRESHOLD = 0.15;
-/**
- * Caster-count cap under which the auto-fit box re-measures every frame
- *
- * Sized for low-end mobile: a cap-sized walk is a few tens of microseconds worst case.
- * Above it the box is fitted once and frozen — a per-frame walk over e.g. a
- * 50k-instance batch is a hidden cost the user never asked for — and a one-time warn
- * points at the explicit placement tools.
- */
+/** Casters up to which the auto-fit box re-measures every frame, which `LightShadow.bounds` in `Light.ts` states */
 const MAX_AUTO_FIT_CASTERS = 256;
 
-/**
- * Warning for a light with both `bounds` and `cascades`; like the two warnings below, its trigger
- * holds frame after frame, so the text is built once and the per-frame check allocates nothing
- */
+/** The warnings built once, since their triggers hold frame after frame and the check must not allocate */
 const WARN_BOUNDS_WITH_CASCADES =
   'Shadow: shadow.bounds and shadow.cascades are both set — cascades take precedence and the bounds ' +
   'box is ignored. Use bounds for a fixed region or cascades for a camera-following shadow, not both.';
 const WARN_SHADOW_BOX_LARGE =
-  'Shadow auto-fit box spans a large scene, so shadows may look soft. For a roaming or large ' +
-  'scene, enable cascades: light.shadow.cascades = 3.';
+  'Shadow auto-fit box spans a large scene, so shadows may look soft. Raise view3d.shadowQuality, set ' +
+  'light.shadow.bounds to the area that needs shadows, or, for a scene the camera roams across, enable ' +
+  'cascades: light.shadow.cascades = 3.';
 const WARN_SHADOW_BUDGET =
-  `Too many shadow-casting lights for the shadow budget (${MAX_SHADOW_LIGHTS} lights × ` +
-  `${MAX_CASCADES} cascades = ${MAX_SHADOW_SLOTS} slots). Extra casters render without shadows.`;
+  `Too many shadow maps for the shadow budget of ${MAX_SHADOW_SLOTS}: each shadow-casting light takes one, ` +
+  `or one per cascade. Lights past the budget render without shadows.`;
 
-/**
- * Base render-pass options plus the graph-imported shadow-map array handle
- * @internal
- */
 interface ShadowRenderPassBaseOptions extends RenderPassOptions {
-  /** Graph-imported tracking handle for the shadow-map array texture */
   shadowMapHandle: DepthHandle;
 }
 
 /**
- * Backend-shared scaffolding for the cascaded shadow passes
- *
- * Owns the lazily (re)created shadow-map array target, the quality tier, the temporal
- * frame counter, and the graph wiring (`setup` / `condition`). The WebGPU and WebGL
- * passes subclass this and supply only the backend-specific resource creation,
- * matrix upload, and render loop.
+ * The shadow pass work both backends share; `ShadowRenderPassGpu` and `ShadowRenderPassGl` add the draws
  * @internal
  */
 export abstract class ShadowRenderPassBase<
   P extends View3DPipe = View3DPipe,
   S extends ShadowData = ShadowData,
 > extends RenderPass<P> {
-  /** Lazily (re)created depth array texture target spanning the claimed shadow layers */
   protected _renderTarget: RenderTarget | null = null;
 
-  /**
-   * Layers the array texture is sized for — the high-water mark of slots claimed
-   *
-   * The atlas spans every (light, cascade) slot as one array texture, so it costs
-   * `layers × mapSize² × 4` bytes: 4 MB per layer at the default quality, 16 MB at `'high'`.
-   * Sizing it to the whole budget up front spends 64 MB on a scene whose single sun uses
-   * three layers, so it grows to fit instead.
-   *
-   * Grows only. Each growth costs a reallocation plus every render bundle that samples the
-   * map; shrinking would hand that cost to anything that toggles `castShadow`, to give back
-   * memory the scene has already shown it can ask for.
-   */
+  /** Layers the shadow map holds: the most slots claimed, never shrinking, since each growth re-records every bundle */
   private _layerCount = 0;
 
-  /** Current shadow map resolution tier; changing it rebuilds the target */
   protected _quality: ShadowQuality = 'medium';
-
-  /** Frame counter driving the every-Nth-frame `update` cadence */
   protected _frameCount = 0;
-
-  /** World-space caster AABB for the auto-fit box, recomputed once per frame */
+  private _hasCastersValue = false;
+  private _hasCastersFrame = -1;
   private readonly _sceneCasterBounds = new Box();
-
-  /** `_frameCount` the caster bounds were last gathered for */
   private _sceneBoundsFrame = -1;
-
-  /** Re-entry guard for {@link ShadowRenderPassBase.destroy}; shared with subclasses */
-  protected _destroyed = false;
+  private _destroyed = false;
 
   /**
-   * Bumped every time the map's contents are discarded
-   *
-   * Each light records the version its layers were rendered into
-   * (`ShadowData.targetVersion`), so a light whose layers were thrown away re-renders them
-   * instead of trusting a map that no longer holds its depth.
+   * Bumped when the map's contents are discarded; each light's `ShadowData.targetVersion` records the
+   * one its layers hold
    */
   public targetVersion = 0;
 
-  /**
-   * The view this pass belongs to (one graph per view), captured at the first frame boundary
-   *
-   * `unload` runs outside a frame and still has to unbind the map it frees.
-   */
+  /** Kept so `unload`, which runs outside a frame, can unbind the map it frees */
   private _view3d: View3D | null = null;
 
-  /**
-   * Graph-imported tracking handle for the shadow-map array texture
-   *
-   * The pass owns the underlying `TextureSource` (lazy-allocated via
-   * {@link ShadowRenderPassBase#renderTarget}, reallocated on quality changes); the handle is
-   * registered in `createDefaultGraph3D` via
-   * `graph.importDepth(() => pass.renderTarget.depthStencilTexture)`.
-   */
+  /** The graph's handle on the shadow map, imported in `createDefaultGraph3D` */
   public readonly shadowMapHandle: DepthHandle;
 
   constructor(options: ShadowRenderPassBaseOptions) {
@@ -172,13 +109,7 @@ export abstract class ShadowRenderPassBase<
     this.shadowMapHandle = options.shadowMapHandle;
   }
 
-  /**
-   * The shared render target for all shadow layers
-   *
-   * Created on first access. The backends install the map in the view's global group through
-   * {@link ShadowRenderPassBase#_bindShadowSource}, which is also what re-records every bundle
-   * that baked a previous map.
-   */
+  /** The shadow map's render target, created on first use */
   get renderTarget(): RenderTarget {
     if (this._renderTarget === null) {
       this._renderTarget = createShadowRenderTarget(this._quality, Math.max(this._layerCount, 1));
@@ -188,17 +119,8 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Grows the shadow-map array to cover `slots` layers
-   *
-   * Dropping the target leaves {@link ShadowRenderPassBase#renderTarget} to mint a bigger one.
-   * Released through {@link ShadowRenderPassBase#_releaseTarget} so the global binding and every
-   * recorded bundle let go of the old atlas before it dies, and `targetVersion` moves so every
-   * light re-renders its layers into the blank, bigger map.
-   *
-   * Called as slots are claimed, before the graph runs, so the frame that needs a bigger atlas
-   * is the frame that gets one — the pass's own render re-creates and re-binds the map later the
-   * same frame.
-   * @param slots - Layer count the atlas must cover
+   * Grows the shadow map to cover `slots` layers; called as slots are claimed, before the graph
+   * runs, so the frame that needs more layers gets them
    */
   private _growAtlas(slots: number): void {
     if (slots <= this._layerCount) return;
@@ -207,38 +129,20 @@ export abstract class ShadowRenderPassBase<
     this._releaseTarget();
   }
 
-  /**
-   * Sets the shadow quality tier
-   *
-   * Changing the tier releases the current map through
-   * {@link ShadowRenderPassBase#_releaseTarget} — the global binding moves to the placeholder
-   * and every recorded bundle is invalidated before the target dies — and the next
-   * {@link ShadowRenderPassBase#renderTarget} access mints one at the new size.
-   * @param value - The new quality tier
-   */
+  /** The shadow quality tier; a change frees the map, and the next access makes one at the new size */
   set quality(value: ShadowQuality) {
     if (value === this._quality) return;
     this._quality = value;
     this._releaseTarget();
   }
 
-  /** The current shadow map resolution tier */
   get quality(): ShadowQuality {
     return this._quality;
   }
 
   /**
-   * Start-of-frame shadow bookkeeping
-   *
-   * Called once per frame by the lighting system before its light loop, which runs
-   * every frame regardless of whether the pass is culled. Advances the temporal counter
-   * that drives the every-Nth-frame `shadow.update` cadence (so it tracks real frames
-   * even across culled frames) and resets the per-frame slot cursor.
-   *
-   * Also where the view's `shadowQuality` is applied: at the frame boundary nothing is
-   * bound and no bundle has been recorded yet this frame, so a changed tier can release
-   * the map without stranding a live reference.
-   * @param view3d - The view being rendered this frame
+   * Start-of-frame bookkeeping; the lighting system calls it every frame, even when the pass is
+   * skipped, and nothing is bound yet, so a new `shadowQuality` can free the map here
    */
   public beginFrame(view3d: View3D): void {
     this._view3d = view3d;
@@ -248,22 +152,14 @@ export abstract class ShadowRenderPassBase<
     view3d._shadowDataList.reset();
   }
 
-  /**
-   * Frees the shadow map now, the largest allocation this pass owns (up to 64 MB at the default tier)
-   *
-   * Idempotent, and recoverable by construction: the next frame that needs shadows re-creates the
-   * map and every light re-renders its layers into it.
-   */
+  /** Frees the shadow map; the next frame that needs shadows makes it again and every light re-renders */
   public unload(): void {
     this._releaseTarget();
   }
 
   /**
-   * Discards the shadow map
-   *
-   * The order is load-bearing: the global binding moves to the empty depth texture and every
-   * recorded bundle is invalidated *before* the old target dies, so nothing can replay a bundle
-   * that baked the freed texture view.
+   * Unbinds the map before destroying it, so no bundle replays the freed view; pixi's
+   * `RenderTarget.destroy` leaves a depth texture it was handed
    */
   private _releaseTarget(): void {
     const target = this._renderTarget;
@@ -274,113 +170,75 @@ export abstract class ShadowRenderPassBase<
 
     if (this._view3d) this._bindShadowSource(this._view3d, DEPTH_EMPTY.source);
 
+    const shadowMap = target.depthStencilTexture!;
     target.destroy();
+    shadowMap.destroy();
   }
 
   /**
-   * Points the view's global shadow-map slot at `source`
-   *
-   * A change of identity has to re-record every bundle in the view: a WebGPU bundle bakes the
-   * native bind group, so one recorded against the previous map would keep sampling it — or,
-   * after a release, a freed handle. The slot itself says what is bound, so the check reads it
-   * rather than a copy that could drift when the view re-creates its global group. Nothing to
-   * re-point when this renderer has no global data on the view yet (before its first frame,
-   * or after the data was collected).
-   * @param view3d - The view whose global bind group holds the shadow-map slot
-   * @param source - The depth texture to bind
+   * Points the view's global shadow-map slot at `source`, re-recording every bundle in the view on a
+   * change; it compares with the slot itself, since the view can re-create its global group
    */
   protected _bindShadowSource(view3d: View3D, source: TextureSource): void {
-    const data = view3d._gpuData[this.pipe.renderer.uid];
-    if (!data) return;
+    const { group, slot } = view3d._graph.globalTextureBindings.shadowMap;
+    if (group.getResource(slot) === source) return;
 
-    const { globalBindGroup } = data;
-    const slot = this.pipe.globalSlots.shadowMap;
-    if (globalBindGroup.getResource(slot) === source) return;
-
-    globalBindGroup.setResource(source, slot);
+    group.setResource(source, slot);
     view3d._invalidateBundleCaches();
   }
 
-  /**
-   * Declares the shadow-map array texture as a producer output
-   *
-   * The graph treats the cascade loop as one logical "produce" — the pass manages its
-   * own per-layer target binds internally, so the executor performs no target push and
-   * `render()` runs free of an active target.
-   * @param b - The builder recording this pass's resource accesses
-   */
+  /** Declares the shadow map as a produce, so the graph binds no target and the pass binds its own layers */
   public override setup(b: PassBuilder): void {
     b.produce(this.shadowMapHandle);
   }
 
   /**
-   * Skips the frame when no light in the scene can cast a shadow, or no mesh is in the shadow pass
-   *
-   * Membership decides, not visibility: the pass keeps running while casters exist, so the
-   * shadow-map binding that forward bundles bake doesn't come and go when something is hidden. A
-   * frame where everything is hidden just renders an empty map. A skipped pass never enters its
-   * per-light loop, and keeps each batch's recorded list, which the next frame it runs replays as
-   * is since nothing about the casters changed.
-   * @param session - The current frame's render session
-   * @returns Whether the pass should run this frame
+   * Skips the frame when no light can cast or no mesh is in the shadow pass; hidden casters count,
+   * so the WebGPU pass still releases a hidden light's cull results for batches that left the view
    */
   public override condition(session: RenderSession): boolean {
-    const batches = session.view3d._meshBatches;
     const lights = session.lights;
-    let hasCaster = false;
 
     for (let i = 0; i < lights.length; i++) {
-      if (lights[i].canCastShadow) {
-        hasCaster = true;
-        break;
-      }
-    }
-
-    if (hasCaster) {
-      for (let i = 0; i < batches.length; i++) {
-        if ((batches[i].drawLists[this.bit]?.view.count ?? 0) > 0) return true;
-      }
+      if (lights[i].canCastShadow) return this._hasCasters(session.view3d);
     }
 
     return false;
   }
 
-  /** `true` remaps shadow depth to [0,1] (WebGPU); `false` keeps [-1,1] (WebGL) */
+  /** Whether any mesh is in the shadow pass this frame, hidden ones included; read once per frame */
+  private _hasCasters(view3d: View3D): boolean {
+    if (this._hasCastersFrame === this._frameCount) return this._hasCastersValue;
+    this._hasCastersFrame = this._frameCount;
+
+    const batches = view3d._meshBatches;
+    let hasCasters = false;
+
+    for (let i = 0; i < batches.length && !hasCasters; i++) {
+      hasCasters = (batches[i].drawLists[this.bit]?.view.count ?? 0) > 0;
+    }
+
+    this._hasCastersValue = hasCasters;
+
+    return hasCasters;
+  }
+
+  /** `true` remaps shadow depth to 0 to 1 for WebGPU; `false` keeps WebGL's -1 to 1 */
   protected abstract readonly _applyZRangeFix: boolean;
 
-  /**
-   * The light's reusable inverse-light + projection scratch matrices, lazily created on
-   * `light._gpuShadowData`
-   *
-   * Backends grow the returned {@link ShadowData} with their own cascade slots via
-   * `ShadowRenderPassBase._cascadeSlot`.
-   * @param light - The light whose shadow scratch data to resolve
-   * @returns The light's backend shadow data
-   */
+  /** The light's shadow data, created on first use */
   public getShadowGPUData(light: Light): S {
     return (light._gpuShadowData ??= {
       inverseLightMatrix: new Matrix4(),
       lightProjectionMatrix: new Matrix4(),
-      /**
-       * Current from the start: the light drew nothing into an earlier map, so it owes no re-render
-       * for a discarded one. Its first layers come from the refresh a new light starts with
-       * (`_shadowRefreshRequested`), which `updateLightShadowData` turns into `needsRender`.
-       */
+      /** Current from the start; a new light's first layers come from `_shadowRefreshRequested` */
       targetVersion: this.targetVersion,
     }) as S;
   }
 
   /**
-   * The light's cascade slot at `cascadeIndex`, created with its camera group on first use
-   *
-   * A light only allocates the cascade indices it actually renders. Each cascade owns a camera
-   * group rather than sharing one: on WebGPU `queue.writeBuffer` is queue-level, so writes before
-   * submission are last-wins while the bundles all execute after them — a shared group would draw
-   * every cascade with the final matrices. Slots live on the light keyed by identity, so the
-   * upload pass and `render` read the same slot with no pool index to keep in agreement.
-   * @param light - The shadow-casting light.
-   * @param cascadeIndex - Which of the light's cascades.
-   * @returns The cascade's slot.
+   * The light's cascade slot, created on first use with a camera group of its own: WebGPU's
+   * `writeBuffer` calls all land before the bundles run, so a shared group would draw every cascade alike
    */
   protected _cascadeSlot(light: Light, cascadeIndex: number): CascadeSlot {
     const cascades = (this.getShadowGPUData(light).cascades ??= []);
@@ -397,20 +255,8 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Writes a freshly fitted cascade into its camera data
-   *
-   * The cascade is what its casters are drawn from, so its light-space view and its ortho or
-   * perspective box go into the same shape a {@link Camera3D}'s camera data uses, bound at group 1
-   * by the draws. Called with the light's scratch matrices still holding this cascade's fit; the
-   * camera data takes copies.
-   *
-   * The cull volume is refreshed here too, so a cascade throttled off this frame keeps a frustum
-   * that matches its frozen matrices. Every cascade projection already carries the toward-light
-   * near extension, and a shadow map gets no winding flip, so the frustum comes straight from the
-   * draw matrix and is exactly what the map rasterises.
-   * @param slot - The cascade being fitted.
-   * @param view - The cascade's light-space view matrix.
-   * @param projection - The cascade's projection.
+   * Writes a fitted cascade's matrices and cull volume into its camera data, so a cascade throttled
+   * off later frames keeps a frustum that matches its frozen matrices
    */
   protected _commitCascadeCamera(slot: CascadeSlot, view: Matrix4, projection: Matrix4): void {
     tempEyeMatrix.getInverse(view);
@@ -423,24 +269,8 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Updates a light's shadow matrices and fills its cascade slot(s) with everything the
-   * `uShadowData` uniform needs — shared by both backends
-   *
-   * Spot lights fill slot 0 with a single perspective map. Directional lights take one of two
-   * placements: with `shadow.cascades` set, cascades that follow the camera, keep a fixed size and
-   * snap to texels; otherwise a single fixed box, `shadow.bounds` (read each fit) if given, else
-   * auto-fit to the scene's casters. A spot light or a fixed box keeps a cascade count of `0`.
-   * The cascades' reach, `shadow.maxDistance`, is clamped to the camera's far plane, where the
-   * frustum and every receiver end, which packs the cascades into what is visible.
-   *
-   * Per cascade, the resolved `shadow.update` cadence throttles re-rendering: `1` (default) every
-   * frame, `N` every Nth, `0`/`'manual'` only when {@link Light.refreshShadows} forces it. A skipped
-   * cascade keeps its frozen matrix and depth layer, unless the map it drew into has been discarded
-   * since: its matrices still hold, but its depth has to be drawn again. The decision is recorded on
-   * `cascade.needsRender` for `render()` to honour. A light that can't cast, such as a point light,
-   * returns at once.
-   * @param light - The shadow-casting light to update
-   * @param view3d - The view whose camera and casters place the shadow volume
+   * Fits a light's shadow and fills its cascade slots for `uShadowData`; a cascade its update rate
+   * skips keeps its matrices, and re-renders only when the map was discarded since
    */
   public updateLightShadowData(light: Light, view3d: View3D): void {
     if (!light.canCastShadow) return;
@@ -516,33 +346,15 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Marks a light's layers current after its shadow draws completed
-   *
-   * Its depth now belongs to the live map generation, and its one-shot refresh (if any) is
-   * satisfied. Called from the backends' render loops rather than `updateLightShadowData`,
-   * which runs every frame even when the pass is culled — so neither a forced refresh nor a
-   * target loss is ever lost to a culled frame.
-   * @param light - The light whose shadow draws just completed
+   * Marks a light's layers current; the backends call it once the draws ran, so a refresh is marked
+   * done only on a frame that drew the light
    */
   protected _completeShadowUpdate(light: Light): void {
     if (light._gpuShadowData) light._gpuShadowData.targetVersion = this.targetVersion;
     light._shadowRefreshRequested = false;
   }
 
-  /**
-   * The auto-fit box for a directional light with no explicit `shadow.bounds`
-   *
-   * Cost is bounded by {@link MAX_AUTO_FIT_CASTERS}. At or under the cap the box is
-   * re-fitted from the casters every rendered frame, so moved or added content just works.
-   * Above it the walk is the expensive part, so the box is fitted once and frozen with a
-   * one-time warn. The caster count is O(batches) to read, so the live/frozen decision
-   * itself is free; dropping back under the cap resumes live fitting, and
-   * {@link Light.fitShadowBounds} re-fits a frozen box on demand. Returns `undefined`
-   * until the first non-empty gather.
-   * @param light - The directional light being fitted
-   * @param view3d - The view whose casters the box encloses
-   * @param mapSize - Shadow-map size in texels, for the large-box warning
-   */
+  /** The auto-fit box of a directional light with no `shadow.bounds`, or `undefined` before any caster */
   private _resolveAutoShadowBounds(light: Light, view3d: View3D, mapSize: number): Box | undefined {
     const casterCount = this._countSceneCasters(view3d);
     const prev = light._autoShadowBounds;
@@ -571,13 +383,6 @@ export abstract class ShadowRenderPassBase<
     return box;
   }
 
-  /**
-   * Shadow casters in the view's pass membership this frame — the auto-fit live/frozen gate
-   *
-   * {@link BatchedMesh3D} instances count individually, so instanced content trips
-   * the cap by design. O(batches), so cheap enough to sum on demand.
-   * @param view3d - The view whose shadow casters to count
-   */
   private _countSceneCasters(view3d: View3D): number {
     let count = 0;
     const batches = view3d._meshBatches;
@@ -593,16 +398,8 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * World-space AABB over every shadow caster in the view — what a directional light's
-   * auto-fit box tracks
-   *
-   * Cached per frame so multiple lights re-fitting on the same frame walk the casters
-   * once. Reads each shadow list's `renderableIndices`, not its sorted `indices`. This runs
-   * before the pass sorts, and a union needs no order. The scene batch, always first in the
-   * view's batch list, holds world-space bounding spheres; a {@link BatchedMesh3D}'s are
-   * batch-local, so they're lifted by the batch's world matrix. Dynamic geometry has no bounds
-   * (a negative radius) and is skipped. No casters → an empty box.
-   * @param view3d - The view whose casters to enclose
+   * World-space box around every visible shadow caster, gathered once per frame; the scene batch,
+   * always first, holds world-space spheres, and a {@link BatchedMesh3D}'s are batch-local
    */
   private _ensureSceneCasterBounds(view3d: View3D): Box {
     if (this._sceneBoundsFrame === this._frameCount) return this._sceneCasterBounds;
@@ -622,7 +419,9 @@ export abstract class ShadowRenderPassBase<
       const renderableIndices = list.view.renderableIndices;
 
       for (let i = 0; i < list.view.count; i++) {
-        const sphere = items[renderableIndices[i]].boundingSphere;
+        const item = items[renderableIndices[i]];
+        if (item._worldVisible === 0) continue;
+        const sphere = item.boundingSphere;
         if (sphere.radius < 0) continue;
 
         const world = batchMatrix ? sphere.applyMatrix4(batchMatrix, _scratchSphere) : sphere;
@@ -633,11 +432,6 @@ export abstract class ShadowRenderPassBase<
     return box;
   }
 
-  /**
-   * One-time hint when the auto-fit box is large enough that shadows read as soft — nudge toward cascades
-   * @param bounds - The fitted shadow box
-   * @param mapSize - Shadow-map size in texels
-   */
   private _warnIfShadowBoxLarge(bounds: Box, mapSize: number): void {
     if (bounds.isEmpty()) return;
 
@@ -647,19 +441,7 @@ export abstract class ShadowRenderPassBase<
     }
   }
 
-  /**
-   * Normal-offset bias for a slot: the user value if set, else scaled to the shadow-map
-   * texel's world size
-   *
-   * Ortho projection: `elements[0] = 2/width`, so `2/(elements[0]·mapSize)` is world
-   * units per texel. Pushing the sample ~{@link SHADOW_NORMAL_BIAS_TEXELS} texels along
-   * the surface normal keeps acne controlled whatever size box the auto-fit produced,
-   * and avoids the peter-panning a fixed offset causes on a tight box. The shader scales
-   * this down by `1 - N·L`, so the value here is the grazing-incidence maximum.
-   * @param light - The light whose `shadow.normalBias` overrides the default
-   * @param orthoProjection - The slot's orthographic projection, which sets a texel's world size
-   * @param mapSize - Shadow-map size in texels
-   */
+  /** The light's `shadow.normalBias`, else {@link SHADOW_NORMAL_BIAS_TEXELS} at the projection's texel size */
   private _resolveNormalBias(light: Light, orthoProjection: Matrix4, mapSize: number): number {
     if (light.shadow.normalBias !== undefined) return light.shadow.normalBias;
     const texelWorld = 2 / (orthoProjection.elements[0] * mapSize);
@@ -667,20 +449,12 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Prepares one light's shadow for the frame: claims its atlas slots (marking
-   * non-casters unshadowed), computes its matrices, and adds each slot to the view's
-   * shadow list, whose array is the `uShadowData` uniform
-   *
-   * The single per-light entry point the lighting systems call — the whole slot
-   * protocol (claim → update → upload → count) stays inside the shadow pass, so
-   * the lighting systems never track shadow state. A no-op for non-casters,
-   * point lights, and over-budget lights (whose `_shadowDataIndex` it resets).
-   * @param light - The light to prepare
-   * @param view3d - The view being rendered
+   * Claims a light's shadow slots, fits it, and adds its slots to the view's shadow list; the
+   * lighting systems' one entry point, so they never track shadow state
    */
   public prepareShadow(light: Light, view3d: View3D): void {
     const list = view3d._shadowDataList;
-    const slots = this._claimShadowSlots(light, list.count);
+    const slots = this._claimShadowSlots(light, view3d, list.count);
     if (slots === 0) return;
 
     this._growAtlas(list.count + slots);
@@ -691,18 +465,11 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Claims this frame's shadow-atlas slots for a caster that fits the remaining budget,
-   * recording the base layer on `light._shadowDataIndex` and returning the cascade-slot
-   * count claimed
-   *
-   * Returns `0` when the light isn't a caster (point lights never cast) or the budget
-   * is full; over-budget casters are marked unshadowed (`_shadowDataIndex = -1`) with a
-   * one-time warning.
-   * @param light - The light claiming slots
-   * @param claimed - Slots already claimed this frame; the light's base slot if it fits
+   * Claims this frame's slots for a light and sets its `_shadowDataIndex`, or sets -1 and returns 0
+   * when it can't cast, nothing casts, or the budget is full
    */
-  private _claimShadowSlots(light: Light, claimed: number): number {
-    const castsShadow = light.canCastShadow;
+  private _claimShadowSlots(light: Light, view3d: View3D, claimed: number): number {
+    const castsShadow = light.canCastShadow && this._hasCasters(view3d);
     const cascadeCount = cascadeCountFor(light);
 
     if (castsShadow && claimed + cascadeCount <= MAX_SHADOW_SLOTS) {
@@ -717,14 +484,8 @@ export abstract class ShadowRenderPassBase<
   }
 
   /**
-   * Releases the shadow-map array render target this pass exclusively owns (lazily
-   * created via {@link ShadowRenderPassBase#renderTarget}, reallocated on quality changes)
-   *
-   * Invoked by `RenderGraph.destroy` through `pass.destroy?.()`. The per-light
-   * cascade bind groups (`Light._gpuShadowData`) and the View's bone pit are
-   * owned elsewhere and freed on their own teardown, not here. The view tears its global bind
-   * group down before it destroys the graph, so the pass forgets the view first and releases the
-   * map without unbinding it.
+   * Releases the shadow map without unbinding it, since the view tears its global bind group down
+   * before it destroys the graph
    */
   public override destroy(): void {
     if (this._destroyed) return;

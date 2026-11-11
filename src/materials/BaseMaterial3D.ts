@@ -1,6 +1,7 @@
-import { Color, Matrix, State, Texture, warn } from 'pixi.js';
-import type { ColorSource, TextureDestroyOptions, TextureSource, Topology, TypeOrBool } from 'pixi.js';
+import { BindGroup, Color, definedProps, Matrix, NOOP, State, Texture, warn } from 'pixi.js';
+import type { BufferResource, ColorSource, TextureDestroyOptions, TextureSource, Topology, TypeOrBool } from 'pixi.js';
 
+import { textureSetId } from '../core/batcher/textureSetId';
 import { passBitRegistry } from '../core/render-passes/passBitRegistry';
 import { RenderPassBit } from '../core/render-passes/RenderPass';
 import { materialStructSnapshot, mergeMaterialStruct } from '../core/shader/codegen/materialStruct';
@@ -8,8 +9,11 @@ import type { ShaderBit } from '../core/shader/ShaderBit';
 import { ShaderDescriptor } from '../core/shader/ShaderDescriptor';
 import type { ShaderDescriptorOptions } from '../core/shader/ShaderDescriptor';
 import { SHARED_DEFAULT_TEXTURES } from '../core/textures/DefaultTextures';
+import type { Mesh3D } from '../scene/Mesh3D';
 import type { View3D } from '../scene/View3D';
+import { copyState } from '../utils/copyState';
 import { resolveDestroy3DFlag } from '../utils/Destroy3DOptions';
+import { UnstableList } from '../utils/UnstableList';
 import { warnOnce } from '../utils/warnOnce';
 import { normalizePassEntry } from './PassDescriptor';
 import type { PassDescriptor, PassDescriptorOptions } from './PassDescriptor';
@@ -17,31 +21,20 @@ import { getOrCreateMaterialDataClass } from './utils/createMaterialDataClass';
 import type { MaterialData } from './utils/createMaterialDataClass';
 import { getOrCreateMaterialTexturesClass } from './utils/createMaterialTexturesClass';
 import type { MaterialTextures } from './utils/createMaterialTexturesClass';
+import { refreshBindGroup } from './utils/refreshBindGroup';
 import { collectTextureNames } from './utils/validateMaterialTextureSlots';
 
-/**
- * What a registered material calls when its packed data changes
- *
- * `MaterialDataStoreBuffer` implements it, and drains the queue once per frame before uploading.
- * @internal
- */
+/** @internal */
 export interface MaterialUploadQueue {
-  /** Queues the material's row for upload on the next drain; repeat calls before then coalesce */
   enqueueDirty(material: BaseMaterial3D): void;
-  /**
-   * Frees the material's row for reuse and resets its index
-   *
-   * Called by the material's `destroy`, and by another store's `register` when the material moves there.
-   */
+  /** Reads the material's `data` for the length of its place, so call it before `data` is dropped */
   remove(material: BaseMaterial3D): void;
+  uniformResource(material: BaseMaterial3D): BufferResource;
 }
 
 /**
- * Creates the default render `State` for 3D drawing: depth test on, blending off, back-face culling on
- *
- * Every material starts from this state; property setters adjust it afterwards (e.g. `alphaMode`
- * flips blending and depth writes).
- * @returns A new `State` carrying the 3D defaults.
+ * Creates a render `State` with the defaults every material starts from: depth test on, blending
+ * off, back-face culling on
  * @category materials
  * @advanced
  */
@@ -58,9 +51,12 @@ export function stateFor3D(): State {
 /**
  * How a material treats alpha, matching glTF's `alphaMode`
  *
- * - `'opaque'`: alpha is ignored (default)
+ * - `'opaque'` (default): draws fully opaque, ignoring {@link BaseMaterial3D#alpha} and the alpha
+ *   of textures and vertex colours. In an image pixi premultiplies, such as a PNG, a texel with
+ *   alpha 0 draws black.
  * - `'mask'`: fragments with alpha below {@link BaseMaterial3D#alphaCutoff} are discarded
- * - `'blend'`: alpha-blended over what is behind it
+ * - `'blend'`: alpha-blended over what is behind it. Blended meshes draw back to front by each
+ *   mesh's origin, not per triangle, so large or overlapping ones can draw in the wrong order.
  * @example
  * ```ts
  * const leaves = new Material3D({ baseColorTexture: leafTexture, alphaMode: 'mask' });
@@ -69,6 +65,25 @@ export function stateFor3D(): State {
  * @standard
  */
 export type AlphaMode = 'opaque' | 'mask' | 'blend';
+
+/**
+ * The colour space a material's shader does its colour maths in; see {@link BaseMaterial3D#colorSpace}
+ *
+ * - `'linear'` (default): decodes colours to linear light, works there, and encodes for display at
+ *   the end. Lighting needs it.
+ * - `'display'`: works on colours as authored, skipping the decode and the encode. Cheaper on phones,
+ *   for an unlit material that only multiplies colours.
+ * @example
+ * ```ts
+ * class MyStickerMaterial extends BaseMaterial3D {
+ *   public override colorSpace: ColorSpace = 'display';
+ *   public override lit = false;
+ * }
+ * ```
+ * @category materials
+ * @advanced
+ */
+export type ColorSpace = 'linear' | 'display';
 
 /**
  * Constructor options shared by every {@link BaseMaterial3D} subclass
@@ -83,6 +98,14 @@ export type AlphaMode = 'opaque' | 'mask' | 'blend';
  */
 export interface BaseMaterial3DOptions {
   /**
+   * Name for debugging and for finding the material; the glTF loader sets it to the name in the file
+   * @example
+   * ```ts
+   * new Material3D({ label: 'Paint' });
+   * ```
+   */
+  label?: string;
+  /**
    * Base colour tint; the source's alpha is ignored, {@link BaseMaterial3DOptions#alpha} sets opacity
    * @example
    * ```ts
@@ -91,7 +114,7 @@ export interface BaseMaterial3DOptions {
    */
   baseColor?: ColorSource;
   /**
-   * Base opacity
+   * Base opacity; `alphaMode: 'opaque'` ignores it
    * @default 1
    * @example
    * ```ts
@@ -112,8 +135,8 @@ export interface BaseMaterial3DOptions {
   /**
    * Textures by slot name, for the slots a `descriptor` or `extraBits` declares
    *
-   * The bits' `textures` arrays decide which slots exist and in what order; this map only fills
-   * them. A slot left out gets `Texture.WHITE`. A `baseColor` entry here wins over
+   * The bits' `textures` arrays decide which slots exist; this map only fills them. A slot left out
+   * gets `Texture.WHITE`. A `baseColor` entry here wins over
    * {@link BaseMaterial3DOptions#baseColorTexture}.
    * @example
    * ```ts
@@ -129,12 +152,16 @@ export interface BaseMaterial3DOptions {
   /**
    * Extra shader bits composed into the material's shader, fixed for its lifetime
    *
-   * Each material documents where they sit in its bit list; with a raw `descriptor` they follow
-   * the descriptor's own bits. A bit may declare material fields and textures. Fill its textures
-   * through the `textures` option, or later through {@link BaseMaterial3D#textures}.
-   *
-   * Billboarding isn't done this way: set {@link Mesh3D#billboardMode}, which works with any
-   * material.
+   * {@link Material3D}, {@link PhongMaterial} and {@link FlatMaterial} each document where they sit
+   * in their bit list; on a material built from a raw `descriptor`, as `ToonMaterial` and
+   * `PortalMaterial` are, they follow its bits. A bit may declare material fields and textures;
+   * fill its textures through the `textures` option, or later through
+   * {@link BaseMaterial3D#textures}. A bit that uses `PI` or `INV_PI` lists
+   * {@link mathConstantsBit} in its {@link ShaderBit#requires} rather than declaring them, and one that
+   * calls `screenUVFromWorld` or `sampleScreenCopy` lists {@link screenSpaceFuncsBit}. To add bits to a
+   * material that exists, such as one the glTF loader built, `material.clone({ extraBits })` makes a
+   * copy with them and everything else the material has. For billboarding, set
+   * {@link Mesh3D#billboardMode} instead.
    * @example
    * ```ts
    * new Material3D({ baseColor: 0xff3355, extraBits: [glossBit] });
@@ -177,13 +204,9 @@ export interface BaseMaterial3DOptions {
   /**
    * When `true`, each triangle is shaded with its face normal instead of the smooth vertex normal
    *
-   * Gives low-poly scenes their hard-edged, faceted look. The face normal comes from screen-space
-   * derivatives in the fragment shader, so the same geometry draws smooth or faceted depending on
-   * the material, with no duplicated vertices. A normal map still applies, on top of the face
-   * normal. It has no visible effect on a material that doesn't light, such as
-   * {@link FlatMaterial}.
-   *
-   * Fixed at construction.
+   * Gives a faceted, low-poly look with no duplicated vertices, so one geometry can draw smooth or
+   * faceted depending on its material. A normal map still applies on top. No visible effect on an
+   * unlit material such as {@link FlatMaterial}. Fixed at construction.
    * @default false
    * @example
    * ```ts
@@ -192,13 +215,10 @@ export interface BaseMaterial3DOptions {
    */
   flatShading?: boolean;
   /**
-   * Whether the view's distance fog may reach this material
+   * Whether the view's distance {@link View3D#fog | fog} may reach this material
    *
-   * Fog applies only when the view has {@link View3D#fog} set and the material allows it. Turn it
-   * off for skyboxes, water, and anything else with its own distance falloff: a sky dome sits past
-   * the fog's far distance and would otherwise turn flat fog colour.
-   *
-   * Fixed at construction.
+   * Turn it off for skyboxes, water and anything else with its own distance falloff; a sky dome
+   * past the fog's far distance would turn flat fog colour. Fixed at construction.
    * @default true
    * @example
    * ```ts
@@ -206,17 +226,23 @@ export interface BaseMaterial3DOptions {
    * ```
    */
   fog?: boolean;
+  /**
+   * Whether a geometry's vertex colours (its `colors`) tint this material; see
+   * {@link BaseMaterial3D#vertexColors}
+   * @default false
+   * @example
+   * ```ts
+   * new Material3D({ vertexColors: true });
+   * ```
+   */
+  vertexColors?: boolean;
 
   /**
    * Shader bits for the material's main pass, for a custom material
    *
-   * Pass the plain options; they're wrapped in a {@link ShaderDescriptor}. The material's texture
-   * slots and packed data are laid out from `bitsGpu`, and both backends use that layout, so
-   * `bitsGl` must declare the same texture names in the same order. The constructor throws if it
-   * doesn't.
-   *
-   * A material whose bits change with its settings overrides
-   * {@link BaseMaterial3D#getPrimaryDescriptor} instead.
+   * The material's textures and data are laid out from `bitsGpu`, so `bitsGl` must declare the same
+   * texture names in the same order, or the constructor throws. A material whose bits change with
+   * its settings overrides {@link BaseMaterial3D#getPrimaryDescriptor} instead.
    * @example
    * ```ts
    * new BaseMaterial3D({
@@ -232,12 +258,13 @@ export interface BaseMaterial3DOptions {
    *
    * - `true`: draw in the pass with the pass's own shader and state.
    * - a {@link PassDescriptorOptions} object: draw in it with your own shader, state or topology.
-   *   {@link PassDescriptor} explains how these combine with the pass's own, and why they can't
-   *   change later.
+   *   {@link PassDescriptor} says how these combine with the pass's own; they can't change later.
    * - `false`, or left out: don't draw in it. Useful for opting out of a pass that spread options
    *   or a subclass default turned on.
    *
-   * A material can name a pass before the pass exists.
+   * A material can name a pass before the pass exists. A page has room for 24 custom pass names,
+   * `'outline'` included, each taken the first time anything names it; a name past that joins
+   * nothing, and a pass with it draws no meshes, without a warning.
    * @example
    * ```ts
    * view.passes = [new OutlinePass({ width: 0.05 })];
@@ -259,10 +286,9 @@ export interface BaseMaterial3DOptions {
   topology?: Topology;
 
   /**
-   * UV transform for every texture of the material, as glTF's `KHR_texture_transform` gives it
+   * UV transform for every texture of the material; see {@link BaseMaterial3D#uvTransform}
    *
-   * Leave it out to let a framed (spritesheet) base colour texture set the transform. Setting one
-   * takes over until it's cleared; see {@link BaseMaterial3D#uvTransform}.
+   * Leave it out to let a framed (spritesheet) base colour texture set the transform.
    * @example
    * ```ts
    * new Material3D({ baseColorTexture: tileTexture, uvTransform: new Matrix().scale(4, 4) });
@@ -273,24 +299,11 @@ export interface BaseMaterial3DOptions {
 
 let UID = 0;
 
-/** Identity 2x2 block for a cleared / underived UV transform */
 const IDENTITY_UV_ROW0 = new Float32Array([1, 0, 0, 1]);
 
-/**
- * Upload method of pixi's base `TextureSource`, which has no CPU resource to upload from
- *
- * Render textures and `ContainerSource`s carry it: their pixels exist only on the GPU. Image,
- * canvas, buffer, video and compressed sources each name their own method.
- */
+/** Pixi's base `TextureSource` `uploadMethodId`, which render textures and `ContainerSource` don't override */
 const GPU_ONLY_UPLOAD_METHOD = 'unknown';
 
-/**
- * Whether a texture's frame covers its whole source with no packer rotation (nothing to honour)
- *
- * A rotated texture never counts, even when its frame covers the whole source, as in pixi's
- * `TextureMatrix.isSimple`.
- * @param texture - Texture whose frame and rotation are checked
- */
 function isFullFrame(texture: Texture): boolean {
   if (texture.rotate !== 0) return false;
   if (texture.noFrame) return true;
@@ -301,39 +314,33 @@ function isFullFrame(texture: Texture): boolean {
 }
 
 /**
- * Converts an sRGB (display-domain) channel to linear light, the shader's working space
+ * Converts a display (sRGB) channel to linear light
  *
- * Every `ColorSource` material input (baseColor, emissive, sheen/specular/attenuation tints) is
- * authored in display space and decoded at write time. The glTF loader pre-encodes its
- * spec-linear factors to compensate.
- * @param channel - Normalised sRGB channel value.
+ * It uses a 2.2 gamma, the curve the shaders decode textures and encode their output with, rather
+ * than the piecewise sRGB curve. Material colours you set as a `ColorSource` are display colours,
+ * decoded with it.
+ * @param channel - Display channel, from 0 to 1
  * @returns The linear-light channel value.
  * @category materials
  * @advanced
  */
 export function srgbToLinear(channel: number): number {
-  return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+  return Math.pow(channel, 2.2);
 }
 
 /**
- * Converts a linear-light channel to an sRGB (display-domain) channel — the inverse of {@link srgbToLinear}
+ * Converts a linear-light channel to display (sRGB); the inverse of {@link srgbToLinear}
  * @param channel - Linear-light channel value.
- * @returns The sRGB channel value.
+ * @returns The display channel value.
  * @category materials
  * @advanced
  */
 export function linearToSrgb(channel: number): number {
-  return channel <= 0.0031308 ? channel * 12.92 : 1.055 * Math.pow(channel, 1 / 2.4) - 0.055;
+  return Math.pow(channel, 1 / 2.2);
 }
 
 /**
- * Writes a colour's rgb into packed data at `offset`, sRGB-decoded to linear light and scaled
- *
- * `scale` premultiplies light intensity at upload.
- * @param target - Packed float array to write into.
- * @param offset - Component offset of the rgb triple.
- * @param color - Display-space colour to decode.
- * @param scale - Intensity premultiplier.
+ * Writes a display colour's rgb into `target` at `offset` in linear light, times `scale`
  * @internal
  */
 export function writeLinearRgb(target: Float32Array, offset: number, color: Color, scale = 1): void {
@@ -343,11 +350,7 @@ export function writeLinearRgb(target: Float32Array, offset: number, color: Colo
 }
 
 /**
- * Accumulates a colour's rgb into `target` at `offset`, sRGB-decoded and scaled — for summed ambient terms
- * @param target - Packed float array to accumulate into.
- * @param offset - Component offset of the rgb triple.
- * @param color - Display-space colour to decode.
- * @param scale - Intensity premultiplier.
+ * Adds a display colour's rgb to `target` at `offset` in linear light, times `scale`
  * @internal
  */
 export function addLinearRgb(target: Float32Array, offset: number, color: Color, scale: number): void {
@@ -357,49 +360,98 @@ export function addLinearRgb(target: Float32Array, offset: number, color: Color,
 }
 
 /**
+ * Whether `value` is an object literal, such as a feature group, rather than a texture, colour or
+ * array, so `clone` merges it into the option it changes instead of replacing that
+ * @param value - An option value
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+/** Data fields the base sets from its own options, which `clone` leaves to those options rather than copying */
+const BASE_OWNED_FIELDS = new Set(['baseColor', 'displayBaseColor', 'alphaCutoff', 'uvTransformRow0', 'uvOffset']);
+
+/**
  * Base class for all 3D materials
  *
  * Holds what every material shares: base colour and alpha, the alpha mode, render state, texture
- * slots, a UV transform, and the packed data its shader reads. {@link Material3D},
- * {@link PhongMaterial} and {@link FlatMaterial} build on it. A custom material passes its shader
- * bits as `descriptor`.
+ * slots, a UV transform, and the data its shader reads. {@link Material3D}, {@link PhongMaterial}
+ * and {@link FlatMaterial} build on it; a custom material passes its shader bits as `descriptor`.
+ *
+ * ## Sharing
+ *
+ * Many meshes can draw one material, and a change to it shows on all of them. A loaded model's
+ * meshes draw its source's materials, shared with every model built from that source.
+ * {@link BaseMaterial3D#clone} makes a copy of its own, with any constructor options changed, and
+ * {@link Model3D#materials} gives one model copies to draw:
+ * `model.materials = (material) => material.clone()`.
  *
  * ## Changing a material that has rendered
  *
- * Meshes pick up most changes on the next render by themselves: property setters such as
- * `baseColor` or `alphaMode`, texture swaps, {@link BaseMaterial3D#enablePass} and
- * {@link BaseMaterial3D#disablePass}. So do the view-wide `toneMapping`, `fog`, `environment` and
- * `shadowFilter`. A few changes need help:
+ * Meshes pick up most changes on the next render: property setters, texture swaps, joining or
+ * leaving a pass, and the view's `toneMapping`, `fog`, `environment` and `shadowFilter`. A few
+ * need a call from you:
  *
- * - {@link BatchedMesh3D} slots only see a changed material after
- *   {@link BatchedMesh3D#invalidate}, once per slot.
- * - After changing {@link BaseMaterial3D#toneMapped}, {@link BaseMaterial3D#vertexColors} or
- *   {@link BaseMaterial3D#lit}, call {@link Mesh3D#invalidate} on each mesh using the material so
- *   it rebuilds its shader.
- * - After changing a field of `material.state`, do the same: WebGPU replays the draws it
- *   recorded with the old state.
- * - After switching `alphaMode` to or from `'blend'`, call {@link Mesh3D#updateShadow} on each
- *   mesh: blended materials cast no shadow, and the mesh doesn't recheck on its own.
- * - The `passes` overrides can't change. Build a new material and assign it instead.
+ * - A {@link BatchedMesh3D} slot sees a texture swap, a new `alphaMode` or another change to the
+ *   material's shader only after {@link BatchedMesh3D#invalidate}. A slot switching to or from
+ *   `'blend'` also needs {@link BatchedMesh3D#setPassesAt} to move it between the opaque and
+ *   transparent passes.
+ * - After changing {@link BaseMaterial3D#colorSpace}, {@link BaseMaterial3D#vertexColors},
+ *   {@link BaseMaterial3D#lit} or a field of {@link BaseMaterial3D#state}, call
+ *   {@link Mesh3D#invalidate} on each mesh using the material.
+ * - The `passes` overrides can't change; {@link BaseMaterial3D#clone | clone} the material with the new
+ *   entry and assign the copy instead.
  * @example
  * ```ts
  * class MyGlowMaterial extends BaseMaterial3D {
  *   public override lit = false;
  *
- *   constructor() {
- *     super({ descriptor: { bitsGpu: [myGlowBit], bitsGl: [myGlowBit] } });
+ *   constructor(options: BaseMaterial3DOptions = {}) {
+ *     super({ ...options, descriptor: { bitsGpu: [myGlowBit], bitsGl: [myGlowBit] } });
  *   }
  * }
  *
  * const orb = new Mesh3D({ geometry: new SphereGeometry(), material: new MyGlowMaterial() });
  * ```
+ * @typeParam TData - Type of {@link BaseMaterial3D#data}, the material's struct fields.
+ * @typeParam TTextures - Type of {@link BaseMaterial3D#textures}, the material's texture slots.
+ * @typeParam TOptions - The class's constructor options, which {@link BaseMaterial3D#clone} takes.
+ * A subclass with options of its own passes them here, and reads them back in `_toOptions`.
  * @category materials
  * @standard
  */
 export class BaseMaterial3D<
   TData extends MaterialData = MaterialData,
   TTextures extends MaterialTextures = MaterialTextures,
+  TOptions extends object = BaseMaterial3DOptions,
 > {
+  /** Built on first read of `EMPTY`, so importing the module builds nothing */
+  private static _empty: BaseMaterial3D | null = null;
+
+  /**
+   * A shared material with no shader, which a {@link Mesh3D} holds until it's given a material
+   *
+   * A mesh on it draws nothing and compiles no shader, though its skeleton and morph targets still
+   * upload. Assign it to a mesh's `material` to stop the mesh drawing; to hide a mesh for a
+   * while, `visible = false` is cheaper. Don't give it to a {@link BatchedMesh3D} slot that's in a
+   * pass, even a hidden one: such a slot needs a real material.
+   *
+   * Every waiting mesh shares it, so don't edit it. Its `destroy` does nothing, as with pixi's
+   * `Texture.EMPTY`.
+   * @example
+   * ```ts
+   * if (mesh.material === BaseMaterial3D.EMPTY) mesh.material = new Material3D();
+   * ```
+   * @advanced
+   */
+  public static get EMPTY(): BaseMaterial3D {
+    return (BaseMaterial3D._empty ??= (() => {
+      const empty = new BaseMaterial3D();
+      empty.destroy = NOOP;
+      return empty;
+    })());
+  }
+
   /**
    * Unique id for this material instance
    * @advanced
@@ -409,11 +461,12 @@ export class BaseMaterial3D<
   /**
    * Render state (blending, depth, culling) for every draw with this material
    *
-   * `alphaMode` and `doubleSided` set parts of it. Changing a field after the material has
-   * rendered needs {@link Mesh3D#invalidate} on its meshes, as the class notes explain.
+   * `alphaMode` and `doubleSided` set parts of it. To change a field after the material has
+   * rendered, see {@link BaseMaterial3D}. `polygonOffset` works on WebGL only; WebGPU ignores it.
    * @example
    * ```ts
-   * const overlay = new FlatMaterial({ baseColor: 0xffcc00 });
+   * // 'blend' draws it after the opaque meshes, so with no depth test it shows through them
+   * const overlay = new FlatMaterial({ baseColor: 0xffcc00, alphaMode: 'blend' });
    * overlay.state.depthTest = false;
    * ```
    */
@@ -424,70 +477,74 @@ export class BaseMaterial3D<
   public destroyed = false;
 
   /**
-   * Primitive topology for every pass that doesn't set its own, from the `topology` option
-   *
-   * {@link PassDescriptor} lists where it falls among the other sources of a topology.
+   * Primitive topology for every pass that doesn't set its own; set by the
+   * {@link BaseMaterial3DOptions#topology | topology} option, and {@link PassDescriptor} lists what overrides it
    */
   // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
   public readonly topology?: Topology;
 
   /**
-   * Every texture of the material, in slot order
-   *
-   * `_deriveLayoutFromBits` fills it by walking the bits' `textures` declarations, the same walk
-   * that numbers the compiled shader's samplers; `validateMaterialTextureSlots` checks the two
-   * still agree. The batcher packs textures from it, and its length, capped at 15, groups
-   * materials by texture count in the sort key.
+   * Every texture, in the order the shader numbers its samplers; `validateMaterialTextureSlots` checks it
    * @internal
    */
   public _textures: Texture[] = [];
 
   /**
-   * Slot index of each texture name, filled with `_textures`
-   *
-   * Read by `validateMaterialTextureSlots` and wherever the `baseColor` slot is looked up by name.
-   * The `textures` accessors don't use it; each one bakes its index.
+   * The `DrawCommandList.captureTick` that last captured these textures, so a build captures them once
    * @internal
    */
+  public _captureTick = -1;
+
+  /** @internal */
   public _slotByName: Record<string, number> = Object.create(null);
 
-  /** Staged linear rgb of the base tint — written before `data` exists, copied in at derivation */
+  private _bindGroup: BindGroup | null = null;
+
+  private _mergedBindGroup: BindGroup | null = null;
+
+  /**
+   * From `textureSetId`: equal on materials that bind the same sources in slot order
+   * @internal
+   */
+  public _textureSetId = 0;
+
   private readonly _baseColorLinear = new Float32Array([1, 1, 1]);
-  /** Canonical hex of the base tint — `Container.tint`-style read-back */
   private _baseColorTint = 0xffffff;
   private _alpha = 1;
   private _alphaCutoff: number = 0.5;
   protected _alphaMode: AlphaMode = 'opaque';
 
   /**
-   * Render passes this material draws in, as pass bits
-   *
-   * Holds `OPAQUE` or `TRANSPARENT` from `alphaMode` (`Material3D` puts `TRANSMISSION` in their
-   * place), plus a bit for each custom pass joined through the `passes` option or `enablePass`.
-   * Meshes read it live through {@link Mesh3D#renderPassMask}, so adding a bit after construction
-   * must also call `_markDescriptorDirty`: a mesh that joins a pass needs its cache entry for that
-   * pass built the same frame. Removing one needs nothing; the stale entry is just no longer read.
+   * The passes the material draws in, read live by meshes; joining one goes through
+   * `_markDescriptorDirty` so a joining mesh builds its pass cache that frame; leaving one only queues meshes
    * @internal
    */
   public _passBit: number = RenderPassBit.OPAQUE;
 
   /**
-   * Row of this material in its renderer's material store, or `-1` before its first render
-   *
-   * Each mesh's store row carries it, so the shader can find the material's data.
+   * The scene meshes drawing this material; batch slots aren't listed
+   * @internal
+   */
+  public readonly _meshes = new UnstableList<Mesh3D>('_materialMeshIndex');
+
+  /**
+   * First texel of the material's place in its store, `-1` while it has none
    * @internal
    */
   public _materialIndex = -1;
 
-  private _textureCacheKey = -1;
+  /** @internal */
+  public _lastTextureDirtyId = -1;
 
   /**
-   * Version bumped whenever this material's shader variant or pass membership changes
-   *
-   * Each mesh keeps the version it last rebuilt against (`Mesh3D._lastDescriptorDirtyId`) and
-   * compares its own copy, so every mesh sharing the material rebuilds, not only the first one the
-   * scene walk reaches. Batch slots aren't walked and don't read it; `BatchedMesh3D.invalidate` is
-   * their manual equivalent. Bump it only through `_markDescriptorDirty`.
+   * The store's `BufferResource` over the material's place, `null` until the store makes one; `unload`
+   * keeps it, as it keeps the place
+   * @internal
+   */
+  public _uniformResource: BufferResource | null = null;
+
+  /**
+   * Each mesh compares it with its `_lastDescriptorDirtyId`; bump it only through `_markDescriptorDirty`
    * @internal
    */
   public _descriptorDirtyId = 0;
@@ -497,25 +554,47 @@ export class BaseMaterial3D<
   public readonly doubleSided: boolean;
 
   /**
-   * Whether the view's tone-mapping curve applies to this material
-   *
-   * Turn it off for unlit, overlay and gizmo materials. It's read when a mesh builds its shader,
-   * so set it before the material first renders; a later change needs {@link Mesh3D#invalidate}
-   * on each mesh.
-   * @default true
-   * @example
-   * ```ts
-   * class MySkyMaterial extends BaseMaterial3D {
-   *   public override toneMapped = false;
-   * }
-   * ```
+   * Set on a material whose colour already went through the view's curve, such as a portal's; it
+   * takes the display encode alone
+   * @internal
    */
-  public toneMapped = true;
+  public _skipsToneCurve = false;
 
   /**
-   * Whether the view's fog may reach this material; set by the {@link BaseMaterial3DOptions#fog | fog} option
+   * The colour space this material's shader works in; see {@link ColorSpace}
    *
-   * The fog settings themselves live on {@link View3D#fog}.
+   * `'display'` takes effect only on an unlit material, in a view with `toneMapping: 'none'` and no
+   * enabled `'beforeToneMapping'` effect, on a mesh no fog or vertex colours reach. Anywhere else
+   * the shader works in linear light. To change it after the material has rendered, see
+   * {@link BaseMaterial3D}.
+   *
+   * Bits on a `'display'` material should read colours through these helpers, which exist in both
+   * shader stages and return the colour in the shader's space:
+   *
+   * - `decodeColor(c: vec3)`: a display colour, such as a texture sample.
+   * - `inputTint(linearTint: vec4, displayTint: vec4)`: pass `material.baseColor` and
+   *   `material.displayBaseColor`, which the material fills once a bit declares them in
+   *   `bindings.material`.
+   * - `decodeFrame(c: vec3)`: a colour from a frame this view drew, such as a render-texture feed.
+   *
+   * Multiplying colours read this way gives the same bytes in both spaces. Adding, blending or
+   * scaling them by a number doesn't, so the result changes when fog moves the shader to linear
+   * light. On the display path, a {@link SceneOutput} bit that reads `albedo` sees display colours.
+   * @default 'linear'
+   * @example
+   * ```ts
+   * class MyStickerMaterial extends BaseMaterial3D {
+   *   public override colorSpace: ColorSpace = 'display';
+   *   public override lit = false;
+   * }
+   * ```
+   * @advanced
+   */
+  public colorSpace: ColorSpace = 'linear';
+
+  /**
+   * Whether the view's {@link View3D#fog | fog} may reach this material; set by the
+   * {@link BaseMaterial3DOptions#fog | fog} option
    * @example
    * ```ts
    * const sky = new Material3D({ baseColorTexture: skyTexture, fog: false });
@@ -536,14 +615,11 @@ export class BaseMaterial3D<
   /**
    * Whether a geometry's vertex colours (its `colors`) tint this material
    *
-   * Off by default because exporters often fill the colour set with data that isn't colour, such
-   * as a wind stiffness mask, a texture blend weight or baked occlusion, and tinting by those is
-   * wrong. The glTF loader turns it on, since glTF defines `COLOR_0` as a base colour multiplier.
-   * The second set, `colors1`, never tints, so it's the place for data when the exporter allows
-   * it.
-   *
-   * It's read when a mesh builds its shader; changing it after the material has rendered needs
-   * {@link Mesh3D#invalidate} on each mesh.
+   * Off by default, since exporters often fill the colour set with masks or weights; put data that
+   * isn't colour in {@link Geometry3DOptions#colors1 | colors1} when you can. The glTF loader turns
+   * it on, as glTF's `COLOR_0` is a base colour multiplier in linear light; convert colours picked
+   * in sRGB with {@link srgbToLinear}. To change it after the material has rendered, see
+   * {@link BaseMaterial3D}.
    * @default false
    * @example
    * ```ts
@@ -556,12 +632,9 @@ export class BaseMaterial3D<
   /**
    * Whether the material's shader does lighting
    *
-   * When `true`, the engine adds `calculateShadow` for the shader's light loop to call, and a
-   * billboarded mesh turns its normal with it. A shader that does no lighting sets it to `false`,
-   * as {@link FlatMaterial} does; `calculateShadow` is then left out, so a shader calling it fails
-   * to compile. Which lighting model a lit shader uses is up to the material.
-   *
-   * Like {@link BaseMaterial3D#toneMapped}, it's read when a mesh builds its shader.
+   * Set it to `false` for a shader that does none, as {@link FlatMaterial} does. That leaves out
+   * `calculateShadow`, so a shader that calls it fails to compile. To change it after the material
+   * has rendered, see {@link BaseMaterial3D}.
    * @default true
    * @example
    * ```ts
@@ -572,34 +645,37 @@ export class BaseMaterial3D<
    */
   public lit = true;
 
-  /** `data.uvTransformRow0`, held directly; `undefined` when the bits declare no UV transform (no `uvTransformBit`) */
+  /**
+   * Name for debugging and for finding the material, such as the glTF material name the loader
+   * gives it; a {@link Model3DOptions#materials} record matches it
+   * @example
+   * ```ts
+   * const paint = source.materials.filter((material) => material.label === 'Paint');
+   * ```
+   */
+  public label?: string;
+
+  /** `undefined` when the bits have no `uvTransformBit` */
   private _uvTransformRow0?: Float32Array;
 
-  /** `data.uvOffset`, held alongside `_uvTransformRow0` */
   private _uvOffset?: Float32Array;
 
-  /** Whether `uvTransform` holds a matrix the user set, which suspends frame derivation */
   private _uvTransformExplicit: boolean;
 
   private _uvTransform?: Matrix;
 
-  /** Construction `uvTransform` value, applied once `_deriveLayoutFromBits` wires the data views */
   private _initialUvTransform?: Matrix;
 
   /**
-   * Snapshot of this material's packed struct, as merged from its construction bits
-   *
-   * `validateMaterialStruct` checks every compiled shader's struct against it.
+   * The construction bits' merged struct, which `validateMaterialStruct` holds every compiled shader
+   * to; `'{}'` when it has no fields
    * @internal
    */
   public _materialStructSnapshot = '{}';
 
   /**
-   * The values the material's shader reads, laid out exactly as its packed GPU struct
-   *
-   * One field per struct member; assigning a field queues the upload ({@link MaterialData} covers
-   * vector fields). Built from the material's bits during construction; a material with no bits
-   * gets an empty one.
+   * The values the material's shader reads, one property per field its bits declare; see
+   * {@link MaterialData} for how they read and write
    * @example
    * ```ts
    * const toon = new ToonMaterial({ bands: 3 });
@@ -612,8 +688,12 @@ export class BaseMaterial3D<
    * The material's textures by slot name, the same names the `textures` option takes
    *
    * Assigning swaps the slot, and a name the material doesn't have throws. A swap reuses the
-   * compiled shader, except that putting a real map into the `normal` slot, or the default back,
-   * switches between the normal-mapped and plain variants.
+   * compiled shader, except that a real map in the `normal` slot, or the default put back, switches
+   * normal mapping on or off.
+   *
+   * Wrap mode, filtering and anisotropy come from each texture's `source.style`, which clamps by
+   * default. To tile a texture, set `texture.source.style.addressMode = 'repeat'`, then call
+   * `style.update()`.
    * @example
    * ```ts
    * material.textures.baseColor = crateTexture;
@@ -622,29 +702,22 @@ export class BaseMaterial3D<
   public textures!: TTextures;
 
   /**
-   * The store this material's data uploads through, wired by the store's `register` on first render
-   *
-   * Another renderer's store re-wires it when it first draws the material. `destroy` clears it, so
-   * a late `update()` does nothing.
+   * The store the data uploads through, `null` until a mesh first draws the material and after `destroy`
    * @internal
    */
   public _uploadQueue: MaterialUploadQueue | null = null;
 
   /**
-   * Coalescing flag owned by the upload queue
-   *
-   * Raised on enqueue, lowered by the queue's per-frame update; `destroy` lowers it too, since
-   * the drain drops a destroyed material's entry without touching it.
+   * Whether the material waits in its store's upload queue
    * @internal
    */
   public _storeQueued = false;
 
   /**
-   * Queues this material's data for upload, as `Texture.update()` does for a texture
+   * Queues this material's data for upload
    *
    * Property setters and `data` field assignments call it for you. Call it yourself after writing
-   * into a `data` vector in place. Calls in one frame upload once, and calls before the first render
-   * do nothing because that render uploads the whole row.
+   * into a `data` vector in place. Calls in one frame upload once.
    * @example
    * ```ts
    * const scroll = material.data.scrollOffset;
@@ -657,30 +730,35 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Whether `getPrimaryDescriptor` has to rebuild its bit list before returning
-   *
-   * Set by `_invalidateDescriptor`; the override that rebuilds clears it.
+   * Whether `getPrimaryDescriptor` must rebuild its bit list; the override that rebuilds clears it
    * @internal
    */
   protected _variantDirty = true;
 
   /**
-   * The material's overrides for each pass, keyed by pass bit, from the `passes` option
-   *
-   * A pass reads `_passes[bit]` and falls back to its own descriptor when there's no entry.
-   * Construction-only: each mesh resolves its entry once (see {@link PassDescriptor}), and a
-   * material doesn't know its meshes to tell them about a change.
+   * The `passes` overrides by pass bit, fixed at construction since each mesh resolves its entry only
+   * when it builds its draw data
    * @internal
    */
   public _passes: Record<number, PassDescriptor> = {};
 
-  /** Construction-fixed user extension bits, see {@link BaseMaterial3DOptions#extraBits} */
-  protected readonly _extraBits: readonly ShaderBit[];
-
   /**
-   * Stored descriptor for the default `getPrimaryDescriptor`
-   * @internal
+   * The shader bits this material was built with on top of its own, from the
+   * {@link BaseMaterial3DOptions#extraBits | extraBits} option
+   *
+   * Fixed for the material's lifetime. {@link BaseMaterial3D#clone} makes a copy with more.
+   * @example
+   * ```ts
+   * const dissolving = materials.filter((material) => material.extraBits.includes(dissolveBit));
+   * ```
+   * @advanced
    */
+  public readonly extraBits: readonly ShaderBit[];
+
+  /** The `descriptor` option as given, without the extra bits, for `_toOptions` to pass again */
+  private readonly _descriptorOptions?: ShaderDescriptorOptions;
+
+  /** @internal */
   protected _descriptor?: ShaderDescriptor;
 
   constructor(options: BaseMaterial3DOptions = {}) {
@@ -695,14 +773,16 @@ export class BaseMaterial3D<
     this.state.culling = !this.doubleSided;
     this.flatShading = options.flatShading ?? false;
     this.fog = options.fog ?? true;
-    this._extraBits = options.extraBits ?? [];
+    this.label = options.label;
+    this.vertexColors = options.vertexColors ?? false;
+    this.extraBits = options.extraBits ?? [];
 
     this._uvTransformExplicit = !!options.uvTransform;
     this._initialUvTransform = options.uvTransform;
 
     if (options.descriptor) {
-      const descriptor = options.descriptor;
-      const extra = this._extraBits;
+      const descriptor = (this._descriptorOptions = options.descriptor);
+      const extra = this.extraBits;
 
       this._descriptor = new ShaderDescriptor(
         extra.length === 0
@@ -724,7 +804,7 @@ export class BaseMaterial3D<
       if (glNames !== gpuNames) {
         throw new Error(
           `[BaseMaterial3D] descriptor.bitsGl declares textures [${glNames}] but bitsGpu declares ` +
-            `[${gpuNames}] — both backends pack from the same derived slots, so the sequences must match.`,
+            `[${gpuNames}]. Both backends bind from the same derived slots, so the sequences must match.`,
         );
       }
     }
@@ -746,44 +826,62 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Sort key that places materials sharing a first texture next to each other
-   *
-   * Built from the first slot's source uid, which is the base colour on every built-in material,
-   * so meshes with the same albedo sort together and the batcher reuses texture slots. A locality
-   * hint only; it's rebuilt on the first read after `_markDescriptorDirty` resets it.
+   * Texture `t` at `2t`, its style at `2t + 1`, then the row if the struct has fields (`materialBindingsBit`);
+   * the row is re-fetched each call and bound unwatched, since the store destroys the one it replaces
    * @internal
    */
-  get textureCacheKey() {
-    if (this._textureCacheKey !== -1) return this._textureCacheKey;
+  public _getBindGroup(): BindGroup {
+    let group = this._bindGroup;
+    const textures = this._textures;
 
-    this._textureCacheKey = this._textures.length > 0 ? this._textures[0].source.uid & 0xffff : 0;
-    return this._textureCacheKey;
+    if (!group) {
+      group = this._bindGroup = new BindGroup();
+      this._refreshTextureBindingsOf(group);
+    }
+
+    if (this._materialStructSnapshot !== '{}') {
+      const queue = this._uploadQueue;
+      if (!queue) {
+        throw new Error(
+          '[BaseMaterial3D] _getBindGroup on a material no store has registered; a mesh drawing it registers it first',
+        );
+      }
+      const binding = textures.length * 2;
+      const resource = queue.uniformResource(this);
+      if (group.getResource(binding) !== resource) group.setResourceUnwatched(resource, binding);
+    }
+
+    return group;
   }
 
   /**
-   * Lays out this material's packed data and texture slots from `bits`, once, at construction
+   * The textures of `_getBindGroup` with no row; a merged run binds its first material's group for
+   * every material in it
+   * @internal
+   */
+  public _getMergedBindGroup(): BindGroup {
+    let group = this._mergedBindGroup;
+
+    if (!group) {
+      group = this._mergedBindGroup = new BindGroup();
+      this._refreshTextureBindingsOf(group);
+    }
+
+    return group;
+  }
+
+  /**
+   * Lays out `data` and `textures` from `bits`; a subclass that builds its own bits calls it once,
+   * from its constructor
    *
-   * The packed struct merges every bit's `bindings.material` fields; `data` is created in that
-   * layout and `_materialStructSnapshot` records it. The texture slots come from walking the bits'
-   * `textures` declarations in order, which builds `_textures`, `_slotByName` and `textures`; the
-   * `textures` argument fills them by name, and a name it leaves out gets `Texture.WHITE`. The
-   * base colour, alpha and cutoff staged before `data` existed are copied in, and the UV transform
-   * is pointed at its fields. Slots are filled directly rather than through `_setTextureSlot`, so
-   * the UV frame is derived once, at the end.
-   *
-   * `bits` must hold every bit `getPrimaryDescriptor()` compiles that declares material fields or
-   * textures. Leave one out (`uvTransformBit` declares two fields and no textures) and
-   * `validateMaterialStruct` rejects the shader when it's built. A bit added only at compile time,
-   * such as the alpha-mask or environment bits, must declare nothing the list doesn't already.
-   *
-   * `data` and `textures` are cast to `TData` and `TTextures` unchecked, so a subclass's type
-   * arguments have to describe what its bits declare.
-   *
-   * Subclasses that assemble their own bits call this from their constructor; a raw `descriptor`
-   * is laid out automatically. Throws if two bits declare the same texture name, which would
-   * otherwise fail later, less legibly, as two `sampleX` functions in one shader.
-   * @param bits - The bits the primary descriptor compiles that declare fields or textures.
-   * @param textures - Slot content by declared texture name.
+   * `bits` must declare every material field and texture that
+   * {@link BaseMaterial3D#getPrimaryDescriptor} can compile, such as the fields of
+   * {@link uvTransformBit}, with the textures in the same order, or the shader is rejected when it's
+   * built. `data` and `textures` are cast to `TData` and `TTextures` unchecked, so the type
+   * arguments must match what the bits declare. A raw `descriptor` is laid out for you.
+   * @param bits - The bits that declare the material's fields and textures
+   * @param textures - Slot contents by texture name; the rest get `Texture.WHITE`
+   * @throws If two bits declare the same texture name.
    */
   protected _deriveLayoutFromBits(
     bits: readonly ShaderBit[],
@@ -802,6 +900,11 @@ export class BaseMaterial3D<
     if (baseColor) {
       baseColor.set(this._baseColorLinear);
       baseColor[3] = this._alpha;
+    }
+    const displayBaseColor = this.data.displayBaseColor;
+    if (displayBaseColor) {
+      for (let i = 0; i < 3; i++) displayBaseColor[i] = linearToSrgb(this._baseColorLinear[i]);
+      displayBaseColor[3] = this._alpha;
     }
     if (typeof this.data.alphaCutoff === 'number') this.data.alphaCutoff = this._alphaCutoff;
     if (this.data.uvTransformRow0 !== undefined) {
@@ -831,23 +934,14 @@ export class BaseMaterial3D<
     }
 
     this.textures = new (getOrCreateMaterialTexturesClass(slotNames))(this) as TTextures;
+    this._textureSetId = textureSetId(_textures);
 
     this._deriveUvFrame();
   }
 
   /**
-   * Puts a texture in one slot; every write through `textures` comes here
-   *
-   * A swap to another frame of the same source (an atlas frame flip) re-keys nothing: batch
-   * slots, bind group hashes and the sort key all follow the source's uid. A swap to a different
-   * source marks the descriptor dirty so meshes re-key. The swap never touches the packed data;
-   * only the UV frame can, and `_deriveUvFrame` queues its own upload.
-   *
-   * A framed texture in a slot other than `baseColor` warns unless its frame matches the current
-   * transform. There is one UV transform for every slot, derived from `baseColor`, so a secondary
-   * map packed in a different frame would sample the wrong part of its atlas.
-   * @param index - Slot index into `_textures`.
-   * @param value - The texture to place in the slot.
+   * Re-keys only when the source changes, since bind groups and sort keys follow the source, so an
+   * atlas frame flip costs at most a UV data write
    * @internal
    */
   public _setTextureSlot(index: number, value: Texture): void {
@@ -855,7 +949,11 @@ export class BaseMaterial3D<
     if (prev === value) return;
     this._textures[index] = value;
 
-    if (prev?.source !== value.source) this._markDescriptorDirty();
+    if (prev?.source !== value.source) {
+      this._textureSetId = textureSetId(this._textures);
+      this._releaseBindGroup();
+      this._markDescriptorDirty();
+    }
 
     if (index === this._slotByName.baseColor) {
       this._deriveUvFrame();
@@ -877,7 +975,6 @@ export class BaseMaterial3D<
    * changes the answer. Bits that declare material fields or textures must also go through
    * `_deriveLayoutFromBits` in the constructor.
    * @param _view - The view about to render this material.
-   * @returns The shader descriptor for the material's main pass.
    * @example
    * ```ts
    * class MyWaterMaterial extends BaseMaterial3D {
@@ -904,12 +1001,14 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Adds this material to a custom render pass, such as an {@link OutlinePass}
+   * Adds this material to a custom render pass, such as an {@link OutlinePass}, as naming it `true`
+   * in the `passes` option does
    *
-   * Does what naming the pass `true` in the `passes` option does, after construction. Meshes using
-   * the material draw in the pass from the next render. {@link BatchedMesh3D} slots don't follow:
-   * their passes come from {@link BatchedMesh3D#setItemActive}. Per-material overrides for a pass
-   * can only be given at construction, through `passes`.
+   * Meshes using the material draw in the pass from the next render, except one that left it
+   * through {@link Mesh3D#disablePass}. {@link BatchedMesh3D} slots take their passes from
+   * {@link BatchedMesh3D#setPassesAt} instead. Overrides for the pass can only be given at
+   * construction, and the {@link BaseMaterial3DOptions#passes | passes} option has the limit on
+   * custom pass names.
    * @param name - The pass's `name`, such as `'outline'`.
    * @example
    * ```ts
@@ -927,9 +1026,9 @@ export class BaseMaterial3D<
   /**
    * Removes this material from a custom render pass
    *
-   * Meshes using the material leave the pass on the next render. An override given for the pass
-   * in the `passes` option is kept, so {@link BaseMaterial3D#enablePass} brings it back. Does
-   * nothing for a pass name nothing has used yet.
+   * Meshes using the material leave the pass on the next render, except one that joined it through
+   * {@link Mesh3D#enablePass}. An override given for the pass in the `passes` option is kept, so
+   * {@link BaseMaterial3D#enablePass} brings it back.
    * @param name - The pass's `name`, such as `'outline'`.
    * @example
    * ```ts
@@ -938,26 +1037,21 @@ export class BaseMaterial3D<
    */
   public disablePass(name: string): void {
     const bit = passBitRegistry.get(name);
-    if (bit !== undefined) this._passBit &= ~bit;
+    if (bit === undefined || (this._passBit & bit) === 0) return;
+    this._passBit &= ~bit;
+    const meshes = this._meshes.items;
+    for (let i = 0; i < meshes.length; i++) meshes[i]._queueMeshUpdate();
   }
 
-  /**
-   * Resets the sort key and bumps `_descriptorDirtyId`, so every mesh using the material rebuilds
-   *
-   * The two move together. `_textureCacheKey` is memoised, so on its own the first mesh to read it
-   * would consume the change and the others would keep a stale, or missing, pass cache entry.
-   * Every reset of `_textureCacheKey` goes through here.
-   */
   private _markDescriptorDirty(): void {
-    this._textureCacheKey = -1;
     this._descriptorDirtyId++;
+    const meshes = this._meshes.items;
+    for (let i = 0; i < meshes.length; i++) meshes[i]._markBatchDirty();
   }
 
   /**
-   * Marks the descriptor stale and makes every mesh using the material rebuild its shader
-   *
-   * The next `getPrimaryDescriptor()` call rebuilds the descriptor. Call it from a subclass setter
-   * whose value changes the bit list.
+   * Makes every mesh using the material rebuild its shader; call it from a subclass setter that
+   * changes what {@link BaseMaterial3D#getPrimaryDescriptor} returns
    */
   protected _invalidateDescriptor(): void {
     this._variantDirty = true;
@@ -967,13 +1061,9 @@ export class BaseMaterial3D<
   /**
    * How the material treats alpha; see {@link AlphaMode}
    *
-   * Setting it also sets blending and depth writes, and moves the material between the opaque and
-   * transparent passes. `'blend'` turns depth writes off, so a see-through surface doesn't hide
-   * what is drawn behind it later. With a raw `descriptor`, `'mask'` discards only if the
-   * descriptor's bits include `alphaMaskBit`.
-   *
-   * After switching to or from `'blend'`, call {@link Mesh3D#updateShadow} on each mesh using the
-   * material: blended materials cast no shadow, and the mesh doesn't recheck on its own.
+   * Setting it also sets the blending and depth writes of `state`. `'blend'` turns depth writes
+   * off, and its meshes cast no shadow. On a material built from a raw `descriptor`, `'mask'`
+   * discards only if the descriptor's bits include {@link alphaMaskBit}.
    * @example
    * ```ts
    * material.alphaMode = 'blend';
@@ -985,8 +1075,8 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Switches the alpha mode, updating blending, depth writes, pass membership and the shader variant
-   * @param value - How alpha is treated: ignored, cut off, or blended
+   * Sets the alpha mode
+   * @param value - How alpha is treated
    */
   set alphaMode(value: AlphaMode) {
     if (this._alphaMode === value) return;
@@ -1004,8 +1094,8 @@ export class BaseMaterial3D<
   /**
    * Base colour tint, read back as a hex number
    *
-   * Takes any `ColorSource` in display (sRGB) space, like `Container.tint`; the shader gets it in
-   * linear light. The source's alpha is ignored; {@link BaseMaterial3D#alpha} is the opacity.
+   * Takes any `ColorSource` in display (sRGB) space, like `Container.tint`. The source's alpha is
+   * ignored; {@link BaseMaterial3D#alpha} is the opacity.
    * @example
    * ```ts
    * material.baseColor = 'tomato';
@@ -1017,8 +1107,8 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Sets the tint from any display-space `ColorSource`, syncing the packed linear-light rgb
-   * @param value - Display-space tint; its alpha is ignored
+   * Sets the base colour tint
+   * @param value - Display colour; its alpha is ignored
    */
   public set baseColor(value: ColorSource) {
     const colour = Color.shared.setValue(value);
@@ -1027,12 +1117,14 @@ export class BaseMaterial3D<
     const packed = this.data?.baseColor;
     if (packed) {
       packed.set(this._baseColorLinear);
+      const displayBaseColor = this.data.displayBaseColor;
+      if (displayBaseColor) colour.toRgbArray(displayBaseColor);
       this.update();
     }
   }
 
   /**
-   * Base opacity, from 0 to 1
+   * Base opacity, from 0 to 1; `alphaMode: 'opaque'` ignores it
    * @default 1
    * @example
    * ```ts
@@ -1045,8 +1137,8 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Sets the base opacity, syncing the alpha lane of the packed base colour
-   * @param value - Opacity from 0 (transparent) to 1 (opaque)
+   * Sets the base opacity
+   * @param value - From 0 (transparent) to 1 (opaque)
    */
   public set alpha(value: number) {
     if (this._alpha === value) return;
@@ -1054,6 +1146,8 @@ export class BaseMaterial3D<
     const packed = this.data?.baseColor;
     if (packed) {
       packed[3] = value;
+      const display = this.data.displayBaseColor;
+      if (display) display[3] = value;
       this.update();
     }
   }
@@ -1072,7 +1166,7 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Sets the discard threshold used while {@link BaseMaterial3D#alphaMode} is `'mask'`
+   * Sets the alpha cutoff
    * @param value - Alpha below which fragments are discarded
    */
   public set alphaCutoff(value: number) {
@@ -1084,21 +1178,16 @@ export class BaseMaterial3D<
   /**
    * The UV transform you set, or `undefined` while the base colour texture's frame sets it
    *
-   * It implements glTF's `KHR_texture_transform`. One transform applies to every texture of the
-   * material, in the vertex shader; there is no per-texture transform.
+   * One transform, as glTF's `KHR_texture_transform` defines it, applies to every texture of the
+   * material. Setting a matrix takes over from a framed (spritesheet) base colour texture, and a
+   * framed texture assigned while it's set warns that its frame is ignored; setting `undefined`
+   * hands it back. Either is a data write, never a shader rebuild. On a material whose bits lack
+   * {@link uvTransformBit}, setting a matrix warns and does nothing.
    *
-   * Setting a matrix takes over: a framed (spritesheet) base colour texture no longer sets the
-   * transform, and warns. Setting `undefined` hands it back, deriving it again from whatever is in
-   * the `baseColor` slot. Either way it's a data write, never a shader rebuild. On a material whose
-   * bits have no `uvTransformBit`, setting a matrix warns and does nothing.
-   *
-   * The 2x2 part applies transposed relative to pixi's `Matrix.apply`: a UV `(u, v)` becomes
-   * `(a * u + b * v + tx, c * u + d * v + ty)`. A matrix built as
-   * `new Matrix().scale(sx, sy).rotate(rotation).translate(x, y)` then gives the
-   * `KHR_texture_transform` result for those values, which is how the glTF loader builds it.
-   *
-   * The getter returns the material's own copy. Changing it in place does nothing until you assign
-   * it again.
+   * A UV `(u, v)` becomes `(a * u + b * v + tx, c * u + d * v + ty)`, transposed from pixi's
+   * `Matrix.apply`, so `new Matrix().rotate(rotation).scale(sx, sy).translate(x, y)` gives the
+   * `KHR_texture_transform` result for those values. The getter returns the material's own matrix;
+   * changing it in place does nothing until you assign it again.
    * @example
    * ```ts
    * material.uvTransform = new Matrix().scale(4, 4);
@@ -1110,8 +1199,8 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Sets the UV transform, or `undefined` to derive it from the base colour frame again
-   * @param m - Transform shared by every texture binding, or `undefined` to hand it back
+   * Sets the UV transform
+   * @param m - The transform, or `undefined` to follow the base colour texture's frame
    */
   public set uvTransform(m: Matrix | undefined) {
     if (!this._uvTransformRow0) {
@@ -1138,10 +1227,10 @@ export class BaseMaterial3D<
     this._uvTransform ??= new Matrix();
 
     this._uvTransform.copyFrom(m);
-    this._uvTransformRow0![0] = m.a;
-    this._uvTransformRow0![1] = m.b;
-    this._uvTransformRow0![2] = m.c;
-    this._uvTransformRow0![3] = m.d;
+    this._uvTransformRow0[0] = m.a;
+    this._uvTransformRow0[1] = m.b;
+    this._uvTransformRow0[2] = m.c;
+    this._uvTransformRow0[3] = m.d;
     this._uvOffset![0] = m.tx;
     this._uvOffset![1] = m.ty;
 
@@ -1149,18 +1238,8 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Sets the UV transform from the base colour texture's frame, so a spritesheet frame maps onto
-   * the mesh's UVs as pixi maps it onto a sprite
-   *
-   * The frame's corner UVs give the affine exactly: the edges from the top-left corner to the
-   * top-right and to the bottom-left are the 2x2 columns, which covers rotated frames with no
-   * special case, and the top-left corner is the offset. The values are rounded to float32 first,
-   * so comparing them with the stored row is exact and an unchanged frame queues no upload. An
-   * unframed texture, or no `baseColor` slot, resets to identity; a trimmed one warns, since only
-   * its frame applies. A user-set `uvTransform` suspends all of this.
-   *
-   * Public because owners that change a texture's frame in place, such as {@link Sprite3D}, make
-   * no slot write to trigger it, so they call it themselves.
+   * Call after changing the base colour texture's frame in place; rounds to float32 so an unchanged
+   * frame queues no upload
    * @internal
    */
   public _deriveUvFrame(): void {
@@ -1222,10 +1301,6 @@ export class BaseMaterial3D<
     this.update();
   }
 
-  /**
-   * Whether a texture's frame maps to exactly the transform currently in the material row (f32 compare)
-   * @param texture - Texture whose UVs are compared against the material row
-   */
   private _frameMatchesTransform(texture: Texture): boolean {
     const row0 = this._uvTransformRow0!;
     const offset = this._uvOffset!;
@@ -1241,36 +1316,163 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Give the GPU memory of this material's textures back now — for content that is out of
-   * rotation for a while. Each texture source's GPU copy is freed and re-uploaded from its
-   * CPU-side resource by the next frame that samples it, so the material keeps rendering
-   * identically; the cost is that one frame's re-upload.
+   * Makes a material of the same class that draws as this one does now, with the options you pass
+   * changed
    *
-   * Texture sources are shared freely between materials, and this frees the source, not the
-   * material's claim on it: every other material pointing at the same source gives up its GPU
-   * copy too, and gets it back the same way. That is the same contract as calling
-   * `texture.source.unload()` yourself. Each source is unloaded once, however many of the
-   * material's textures share it. The engine's default textures (white, empty and flat
-   * normal) are process-wide singletons bound by views that never asked for this, and are
-   * always skipped.
+   * `options` are the class's constructor options. `clone` reads this material's current values
+   * back as those options, merges yours over them, and passes the result to the class's
+   * constructor. An option left out, or set to `undefined`, keeps this material's value. One that
+   * takes an object, such as a feature group or `passes`, is merged one level deep:
+   * `emissive: { strength: 2 }` on a {@link Material3D} keeps its emissive colour. `descriptor` is
+   * replaced whole. A group the material doesn't have, such as `clearcoat`, adds the feature.
    *
-   * So is any source with nothing to re-upload from — a `ContainerSource` or a
-   * `RenderTexture`, whose pixels exist only on the GPU. Unloading one would leave the
-   * material sampling an empty texture until its owner renders it again, so those are the
-   * owner's to re-render, not this method's to unload.
+   * `extraBits` adds to this material's {@link BaseMaterial3D#extraBits}, skipping a bit it already
+   * has. Fields a new bit declares start at 0 and its texture slots hold `Texture.WHITE`, so set
+   * them on the copy. The fields of the extra bits it already had keep their values.
    *
-   * The material's own CPU state — the packed struct, its store row, the compiled shaders —
-   * is untouched. Idempotent, and a no-op once destroyed.
+   * A raw-`descriptor` material, or any class that inherits `BaseMaterial3D`'s `_toOptions`
+   * unchanged, keeps every field value and texture it has, except those an option you pass sets.
+   *
+   * What isn't an option comes across too: `colorSpace`, `lit`, the passes joined with
+   * {@link BaseMaterial3D#enablePass}, and `state` with any change made through it, except the
+   * flags an option you pass sets, such as `alphaMode`'s blending. Colour options read back as
+   * 8-bit hex, as their getters return them.
+   *
+   * Textures are shared, not copied. Everything else belongs to the copy: assign it to meshes and
+   * `destroy()` it when you're done, which leaves the shared textures alive. Materials with the same
+   * bits share compiled shaders, so a copy compiles nothing new unless its bits are new.
+   * @param options - Constructor options to change on the copy; left out, it's a plain copy.
+   * @returns The copy, of the same class.
+   * @example
+   * ```ts
+   * const dissolving = mesh.material.clone({ extraBits: [dissolveBit] });
+   * dissolving.data.dissolve = 0.5;
+   * mesh.material = dissolving;
+   *
+   * const ghost = mesh.material.clone({ alphaMode: 'blend', alpha: 0.4 });
+   * ```
+   */
+  public clone(options?: TOptions): this {
+    const merged = this._toOptions() as Record<string, unknown>;
+    const overrides: BaseMaterial3DOptions = definedProps(options ?? {});
+
+    for (const [key, value] of Object.entries(overrides)) {
+      const current = merged[key];
+      merged[key] =
+        key !== 'descriptor' && isPlainObject(value) && isPlainObject(current)
+          ? { ...current, ...definedProps(value) }
+          : value;
+    }
+
+    const extraBits = this.extraBits;
+    const added = overrides.extraBits?.filter((bit) => !extraBits.some((own) => own.name === bit.name)) ?? [];
+    merged.extraBits = [...extraBits, ...added];
+
+    const copy = new (this.constructor as new (options: object) => this)(merged);
+    const data = copy.data as MaterialData;
+
+    if (this._toOptions === BaseMaterial3D.prototype._toOptions) {
+      for (const name of Object.keys(Object.getPrototypeOf(this.data))) {
+        if (!BASE_OWNED_FIELDS.has(name) && name in data) data[name] = this.data[name];
+      }
+
+      const textures = overrides.textures ?? {};
+      for (const name in this._slotByName) {
+        const index = copy._slotByName[name];
+        const named = name === 'baseColor' ? (overrides.baseColorTexture ?? textures.baseColor) : textures[name];
+        if (index !== undefined && named === undefined) {
+          copy._setTextureSlot(index, this._textures[this._slotByName[name]]);
+        }
+      }
+    } else {
+      for (const bit of extraBits) {
+        for (const name in bit.bindings?.material) data[name] = this.data[name];
+      }
+    }
+
+    const state = copy.state;
+    const { blend, depthMask, culling, blendMode } = state;
+
+    copyState(state, this.state);
+
+    if ('alphaMode' in overrides) {
+      state.blend = blend;
+      state.depthMask = depthMask;
+    }
+    if ('doubleSided' in overrides) state.culling = culling;
+    if ('blendMode' in overrides) state.blendMode = blendMode;
+
+    copy.colorSpace = this.colorSpace;
+    copy.lit = this.lit;
+
+    return copy;
+  }
+
+  /**
+   * This material's current values as its constructor's options, for {@link BaseMaterial3D#clone}
+   *
+   * The base reads back its own options, the texture slots of its `extraBits` as `textures`, and
+   * the custom passes it's in as `passes`. While a class keeps this method, `clone` copies every
+   * other field and texture slot onto the copy after building it. A subclass with options of its
+   * own overrides this and adds them to `super`'s. `clone` then copies only the `extraBits` fields,
+   * so the override has to read back every value and texture its constructor sets.
+   * @returns Options that build a material like this one.
+   * @advanced
+   */
+  protected _toOptions(): TOptions {
+    const passes: NonNullable<BaseMaterial3DOptions['passes']> = {};
+    for (let custom = this._passBit & ~RenderPassBit.MATERIAL_PASS_MASK; custom; custom &= custom - 1) {
+      const bit = custom & -custom;
+      const name = passBitRegistry.nameOf(bit);
+      if (name) passes[name] = this._passes[bit] ?? true;
+    }
+
+    const textures: Record<string, Texture> = {};
+    for (const name of collectTextureNames(this.extraBits)) textures[name] = this._textures[this._slotByName[name]];
+
+    const options: BaseMaterial3DOptions = {
+      label: this.label,
+      descriptor: this._descriptorOptions,
+      baseColor: this.baseColor,
+      alpha: this.alpha,
+      baseColorTexture: this._textures[this._slotByName.baseColor],
+      textures,
+      alphaMode: this.alphaMode,
+      alphaCutoff: this.alphaCutoff,
+      doubleSided: this.doubleSided,
+      flatShading: this.flatShading,
+      fog: this.fog,
+      vertexColors: this.vertexColors,
+      topology: this.topology,
+      passes,
+      uvTransform: this._uvTransformExplicit ? this.uvTransform : undefined,
+    };
+
+    return options as TOptions;
+  }
+
+  /**
+   * Frees the GPU memory of this material's textures until a frame draws them again
+   *
+   * The next frame that draws the material re-uploads them from their CPU copies, so it keeps
+   * drawing the same. Texture sources are shared, so every other material using one re-uploads it
+   * too, as with `texture.source.unload()`. The engine's default textures are skipped, and so are
+   * render textures and {@link ContainerTexture}s, whose pixels exist only on the GPU.
+   *
+   * Call {@link BatchedMesh3D#invalidate} for each batch slot that draws the material. Does nothing
+   * once the material is destroyed.
    * @example
    * ```ts
    * view.root.removeChild(model);
    * material.unload(); // hand the texture memory back until the model is shown again
    * ```
    * @see {@link Model3D.unload} For giving back a whole model's geometry and textures at once.
-   * @see {@link BaseMaterial3D.destroy} For permanent teardown.
    */
   public unload(): void {
     if (this.destroyed) return;
+
+    this._releaseBindGroup();
+    this._markDescriptorDirty();
 
     const seenSources = new Set<TextureSource>();
     for (const texture of this._textures) {
@@ -1284,17 +1486,12 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Releases this material's own CPU state and its row in the material store
+   * Frees the material for good; a second call does nothing
    *
-   * That state is the packed {@link MaterialData}, the texture slots, and the cached descriptor
-   * and pass overrides. Idempotent.
-   *
-   * Shared resources stay, as with pixi's `destroy`. With `texture` set, the material's textures
-   * are destroyed too, except the engine's shared default textures; with `textureSource` as well,
-   * each source behind them is destroyed once, however many textures share it. Compiled shaders
-   * belong to the renderer and stay cached.
-   * @param options - Teardown flags; `texture` destroys referenced textures and `textureSource`
-   * widens that to their underlying sources. `textureSource` alone frees nothing.
+   * Its textures stay alive unless `options` asks for them. The engine's default textures are never
+   * destroyed, and compiled shaders stay cached in the renderer.
+   * @param options - `{ texture: true }` destroys the material's textures; add `textureSource: true`,
+   * or pass `true`, to destroy their sources too
    * @example
    * ```ts
    * mesh.material = new Material3D({ baseColor: 0x3366ff });
@@ -1304,6 +1501,8 @@ export class BaseMaterial3D<
   public destroy(options?: TypeOrBool<TextureDestroyOptions>): void {
     if (this.destroyed) return;
     this.destroyed = true;
+
+    this._releaseBindGroup();
 
     if (resolveDestroy3DFlag(options, 'texture')) {
       const destroySource = resolveDestroy3DFlag(options, 'textureSource');
@@ -1326,14 +1525,49 @@ export class BaseMaterial3D<
     this._uploadQueue?.remove(this);
     this._uploadQueue = null;
     this._storeQueued = false;
+    // oxlint-disable-next-line pixi3d/destroy-release -- a mesh still using the destroyed material removes itself from this list when it detaches or swaps material, and clear() resets its index so that remove is a no-op
+    this._meshes.clear();
+    this._uniformResource?.destroy(false);
+    this._uniformResource = null;
 
-    (this.data as any) = undefined;
-    (this.textures as any) = undefined;
-    (this._textures as any) = undefined;
-    (this._slotByName as any) = undefined;
-    (this._descriptor as any) = undefined;
-    (this._passes as any) = undefined;
+    (this.data as TData | null) = null;
+    (this.textures as TTextures | null) = null;
+    (this._textures as Texture[] | null) = null;
+    (this._slotByName as Record<string, number> | null) = null;
+    this._descriptor = undefined;
+    (this._passes as Record<number, PassDescriptor> | null) = null;
     this._uvTransformRow0 = undefined;
     this._uvOffset = undefined;
+    (this._descriptorOptions as ShaderDescriptorOptions | null) = null;
+  }
+
+  /**
+   * The bind groups hold their resources unwatched, since a listener per material on a shared texture
+   * makes teardown N²; `DrawCommandList.refreshMaterialBindings` calls this once a texture changes
+   * @internal
+   */
+  public _refreshTextureBindings(): void {
+    if (this._bindGroup) this._refreshTextureBindingsOf(this._bindGroup);
+    if (this._mergedBindGroup) this._refreshTextureBindingsOf(this._mergedBindGroup);
+  }
+
+  /**
+   * Binds a destroyed source too, so the draw fails loudly rather than sampling the slot's previous
+   * source; such a source has no style, so the previous style binding stays
+   */
+  private _refreshTextureBindingsOf(group: BindGroup): void {
+    const textures = this._textures;
+    for (let t = 0; t < textures.length; t++) {
+      const source = textures[t].source;
+      group.setResourceUnwatched(source, t * 2);
+      if (source.style) group.setResourceUnwatched(source.style, t * 2 + 1);
+    }
+    refreshBindGroup(group);
+  }
+
+  /** Drops the groups without destroying them, since a draw command built earlier may still bind one */
+  private _releaseBindGroup(): void {
+    this._bindGroup = null;
+    this._mergedBindGroup = null;
   }
 }

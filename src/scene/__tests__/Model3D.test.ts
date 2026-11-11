@@ -1,6 +1,8 @@
+import type { Ticker } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { Animation } from '~/animation/Animation';
+import { Vector3Track } from '~/animation/tracks/Vector3Track';
 import type { Scene3DDescriptor } from '~/assets/Scene3DDescriptor';
 import { Scene3DSource } from '~/assets/Scene3DSource';
 import { Geometry3D } from '~/geometry/Geometry3D';
@@ -11,7 +13,6 @@ import { Container3D } from '~/scene/Container3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { Model3D } from '~/scene/Model3D';
 
-/** A right triangle in the z = 0 plane, spanning 0 to 1 on x and y */
 function createTriangleGeometry(): Geometry3D {
   return new Geometry3D({ positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) });
 }
@@ -27,7 +28,6 @@ function createIdentityMatrix4(): Float32Array {
   return matrix;
 }
 
-/** A source with one named mesh node in its only scene */
 function createBoxSource(): Scene3DSource {
   const source = new Scene3DSource({
     scenes: [{ children: [0] }],
@@ -98,7 +98,6 @@ describe('new Model3D', () => {
           skeletonNodes: new Int32Array([25, 23]),
           skeletonJoints: new Int16Array([1]),
           skeletonLabels: ['Armature', 'Hips'],
-          skeletonToModelRoot: true,
         },
       ],
     };
@@ -121,10 +120,6 @@ describe('new Model3D', () => {
   });
 
   it('binds a kept ancestor container to its bone, re-posing the skeleton whenever it moves', () => {
-    /**
-     * `Root` is the skeleton's root bone and has the skinned mesh beneath it, so it is not a joint
-     * node and stays a Container3D
-     */
     const descriptor: Scene3DDescriptor = {
       scenes: [{ children: [0], name: 'Scene' }],
       nodes: [
@@ -139,7 +134,6 @@ describe('new Model3D', () => {
           skeletonNodes: new Int32Array([0, 2]),
           skeletonJoints: new Int16Array([1]),
           skeletonLabels: ['Root', 'Hips'],
-          skeletonToModelRoot: true,
         },
       ],
     };
@@ -175,7 +169,6 @@ describe('new Model3D', () => {
   });
 
   it('keeps the seeded bind pose of a bone that is also a detached skinned mesh', () => {
-    /** A skin with no skeleton root whose skinned mesh node is itself the root bone, with the joint beneath it */
     const descriptor: Scene3DDescriptor = {
       scenes: [{ children: [0], name: 'Scene' }],
       nodes: [
@@ -196,7 +189,6 @@ describe('new Model3D', () => {
           skeletonNodes: new Int32Array([0, 1]),
           skeletonJoints: new Int16Array([1]),
           skeletonLabels: ['meshRoot', 'Bone'],
-          skeletonToModelRoot: true,
         },
       ],
     };
@@ -232,7 +224,6 @@ describe('new Model3D', () => {
           skeletonNodes: new Int32Array([1]),
           skeletonJoints: new Int16Array([0]),
           skeletonLabels: ['Bone'],
-          skeletonToModelRoot: true,
         },
       ],
     };
@@ -256,6 +247,130 @@ describe('new Model3D', () => {
       expect(child).toBeInstanceOf(Mesh3D);
       expect((child as Mesh3D).skeleton).toBe(model.skeletons[0]);
     }
+  });
+
+  it("gives a skinned mesh its skin's bind shape matrix in place of its node transform, and the bones cancel it", () => {
+    const inverseBindMatrices = createIdentityMatrix4();
+    const bindShapeMatrix = createIdentityMatrix4();
+
+    inverseBindMatrices[0] = inverseBindMatrices[5] = inverseBindMatrices[10] = 100;
+    bindShapeMatrix[0] = bindShapeMatrix[5] = bindShapeMatrix[10] = 100;
+
+    const descriptor: Scene3DDescriptor = {
+      scenes: [{ children: [0, 1], name: 'Scene' }],
+      nodes: [
+        {
+          label: 'mesh',
+          children: [],
+          geometry: 0,
+          materials: [0],
+          skin: 0,
+          scale: new Float32Array([100, 100, 100]),
+          rotation: new Float32Array([-Math.SQRT1_2, 0, 0, Math.SQRT1_2]),
+        },
+        { label: 'Hips', children: [], isJoint: true },
+      ],
+      skins: [
+        {
+          inverseBindMatrices,
+          skeletonParent: new Int16Array([-1]),
+          skeletonNodes: new Int32Array([1]),
+          skeletonJoints: new Int16Array([0]),
+          skeletonLabels: ['Hips'],
+          bindShapeMatrix,
+        },
+      ],
+    };
+
+    const source = new Scene3DSource(descriptor);
+
+    source.geometries[0] = [createTriangleGeometry()];
+    source.materials[0] = new Material3D({});
+
+    const model = new Model3D(source);
+    const mesh = model.children.find((c) => c instanceof Mesh3D) as Mesh3D;
+    const skeleton = model.skeletons[0];
+
+    skeleton.updateWorld();
+
+    expect(mesh.parent).toBe(model);
+    expect(mesh.scale.x, 'the mesh carries the bind scale the inverse binds hold').toBe(100);
+    expect(mesh.quaternion.w, 'the node rotation is ignored').toBe(1);
+    expect(skeleton.worldMatrix[0], 'the bones cancel it, so the scale applies once').toBe(1);
+  });
+
+  it('gives two meshes on one skin the same skeleton, so a shared joint drives both', () => {
+    const descriptor: Scene3DDescriptor = {
+      scenes: [{ children: [0, 1, 2], name: 'Scene' }],
+      nodes: [
+        { label: 'body', children: [], geometry: 0, materials: [0], skin: 0 },
+        { label: 'hat', children: [], geometry: 0, materials: [0], skin: 0 },
+        { label: 'Hips', children: [], isJoint: true },
+      ],
+      skins: [
+        {
+          inverseBindMatrices: createIdentityMatrix4(),
+          skeletonParent: new Int16Array([-1]),
+          skeletonNodes: new Int32Array([2]),
+          skeletonJoints: new Int16Array([0]),
+          skeletonLabels: ['Hips'],
+        },
+      ],
+    };
+
+    const source = new Scene3DSource(descriptor);
+
+    source.geometries[0] = [createTriangleGeometry()];
+    source.materials[0] = new Material3D({});
+    source.animations.move = new Animation({
+      label: 'move',
+      tracks: [new Vector3Track({ label: '2.position', times: [0, 1], values: [0, 0, 0, 10, 0, 0] })],
+    });
+
+    const model = new Model3D({ source, autoUpdate: false });
+    const [body, hat] = model.children.filter((c) => c instanceof Mesh3D);
+
+    expect(model.skeletons).toHaveLength(1);
+    expect(hat.skeleton).toBe(body.skeleton);
+
+    model.player!.play('move');
+    model.player!.update({ deltaMS: 500 } as Ticker);
+
+    expect(body.skeleton!.localPosition[0]).toBe(5);
+  });
+
+  it("puts a skinned mesh under its skin's parent node, so it follows that node", () => {
+    const descriptor: Scene3DDescriptor = {
+      scenes: [{ children: [0, 1], name: 'Scene' }],
+      nodes: [
+        { label: 'mesh', children: [], geometry: 0, materials: [0], skin: 0, position: new Float32Array([5, 0, 0]) },
+        { label: 'Armature', children: [2], position: new Float32Array([0, 3, 0]) },
+        { label: 'Hips', children: [], isJoint: true },
+      ],
+      skins: [
+        {
+          inverseBindMatrices: createIdentityMatrix4(),
+          skeletonParent: new Int16Array([-1]),
+          skeletonNodes: new Int32Array([2]),
+          skeletonJoints: new Int16Array([0]),
+          skeletonLabels: ['Hips'],
+          parentNode: 1,
+        },
+      ],
+    };
+
+    const source = new Scene3DSource(descriptor);
+
+    source.geometries[0] = [createTriangleGeometry()];
+    source.materials[0] = new Material3D({});
+
+    const model = new Model3D(source);
+    const armature = model.children.find((c) => c.label === 'Armature')!;
+    const mesh = armature.children.find((c) => c instanceof Mesh3D) as Mesh3D;
+
+    expect(mesh, 'the mesh hangs from the Armature').toBeDefined();
+    expect(mesh.position.x, 'its own node transform is ignored').toBe(0);
+    expect(model.skeletons[0].nodeCount, 'the Armature stays out of the skeleton').toBe(1);
   });
 
   it('passes autoPlay through to created animation players', () => {
@@ -313,16 +428,15 @@ describe('new Model3D', () => {
 });
 
 describe('Model3D cameras', () => {
-  /** A source whose only scene holds one camera node, placed at z = 5 */
   function createCameraSource(far?: number): Scene3DSource {
     return new Scene3DSource({
       scenes: [{ children: [0] }],
       nodes: [{ label: 'Rig', children: [], camera: 0, position: new Float32Array([0, 0, 5]) }],
-      cameras: [{ fov: Math.PI / 2, near: 0.5, far, mode: 0 }],
+      cameras: [{ fov: 90, near: 0.5, far, mode: 0 }],
     });
   }
 
-  it('instantiates a camera node as a Camera3D in degrees, at its node transform', () => {
+  it('instantiates a camera node as a Camera3D at its node transform', () => {
     const model = new Model3D(createCameraSource(50));
     const camera = model.children[0] as Camera3D;
 
@@ -347,7 +461,7 @@ describe('Model3D cameras', () => {
 
     model.destroy({ children: true });
 
-    expect(model.cameras).toHaveLength(0);
+    expect(model.cameras).toBeNull();
     expect(camera.destroyed).toBe(true);
   });
 });

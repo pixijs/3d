@@ -5,14 +5,7 @@ type MeshoptDecoder = typeof import('meshoptimizer/decoder').MeshoptDecoder;
 
 let decoderPromise: Promise<MeshoptDecoder> | undefined;
 
-/**
- * Imports the meshoptimizer decoder on first use and starts its worker pool
- *
- * It imports the decoder entry alone, as the package root also pulls in the encoder and the
- * simplifier. That chunk carries the decoder's WASM inline, so a page that never loads a
- * meshopt-compressed file never downloads it. Decoding runs on one worker fewer than the device has
- * cores, between one and four, so a large mesh doesn't stall the main thread.
- */
+/** Imports `meshoptimizer/decoder` alone, as the package root also bundles the encoder and simplifier */
 function getDecoder(): Promise<MeshoptDecoder> {
   if (!decoderPromise) {
     decoderPromise = (async () => {
@@ -28,15 +21,10 @@ function getDecoder(): Promise<MeshoptDecoder> {
 }
 
 /**
- * Decodes every bufferView compressed with `EXT_meshopt_compression` or `KHR_meshopt_compression`
- *
- * Meshopt compresses whole bufferViews, so each decodes on its own, ahead of parsing. Its decoded
- * bytes are appended to `buffers`, and the view's `buffer`, `byteOffset` and `byteLength` are
- * rewritten to point at them; `byteStride` stays, as interleaved accessors read it. The extension
- * entry is then deleted, so nothing decodes the view twice. The decoder reads both extensions'
- * encodings.
- * @param gltfRaw - Parsed glTF JSON whose compressed bufferViews are rewritten in place
- * @param buffers - Binary buffers holding the compressed source; decoded payloads are appended
+ * Keeps each view's `byteStride`, which interleaved accessors read. `normalizeMeshopt` relies on
+ * this deleting each decoded view's extension entry
+ * @param gltfRaw - Parsed glTF JSON, rewritten in place
+ * @param buffers - By glTF buffer index; decoded views are appended
  * @internal
  */
 export async function decodeMeshoptBufferViews(gltfRaw: GltfFormat, buffers: ArrayBuffer[]): Promise<void> {

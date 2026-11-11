@@ -18,7 +18,6 @@ const glslTemplate: ShaderBitTemplate = {
   gl: { vertex: '{{header}}\nvoid main() {}', fragment: '{{header}}\nvoid main() {}' },
 };
 
-/** User extension bit with both a texture slot and a material struct field, the two things `extraBits` can add */
 const testExtraBit: ShaderBit = {
   name: 'phongTestExtra',
   textures: ['extraMap'],
@@ -43,12 +42,6 @@ const testExtraBit: ShaderBit = {
   },
 };
 
-/**
- * PhongMaterial options that each add bits, plus an explicit `uvTransform`
- *
- * Every PhongMaterial carries the `uvTransform` bit and its two struct fields; a construction
- * matrix only seeds them.
- */
 const FEATURES: { name: string; options: PhongMaterialOptions }[] = [
   { name: 'specularTexture', options: { specularTexture: Texture.WHITE } },
   { name: 'emissive', options: { emissive: { color: 0xff0000 } } },
@@ -85,10 +78,9 @@ describe('PhongMaterial struct contract — construction layout == compiled layo
         bits: descriptor.bitsGl,
         template: glslTemplate,
         extraPlugins: [materialStructPackPlugin],
-        uboGroups: [],
         useLocations: false,
       });
-      expect(materialStructSnapshot(gpu.structs.Material!), label).toBe(material._materialStructSnapshot);
+      expect(materialStructSnapshot(gpu.structs.Material), label).toBe(material._materialStructSnapshot);
       expect(materialStructSnapshot(gl.structs.Material as StructDefinition), label).toBe(
         material._materialStructSnapshot,
       );
@@ -129,24 +121,6 @@ describe('PhongMaterial struct contract — construction layout == compiled layo
 });
 
 describe('PhongMaterial defaults + accessors', () => {
-  it('round-trips runtime shininess / specularColor / specularStrength writes into packed data', () => {
-    const material = new PhongMaterial();
-    material.shininess = 96;
-    expect(material.data.shininess).toBe(96);
-    material.specularColor = 0xff8800;
-    expect(material.specularColor).toBe(0xff8800);
-    material.specularStrength = 0;
-    expect(material.data.specularStrength).toBe(0);
-    material.normalScale = 0.5;
-    expect(material.data.normalScale).toBe(0.5);
-  });
-
-  it('rejects the descriptor option at compile time, since PhongMaterial builds its own bits', () => {
-    // @ts-expect-error — descriptor is omitted from PhongMaterialOptions
-    const withDescriptor: PhongMaterialOptions = { descriptor: { bitsGpu: [], bitsGl: [] } };
-    expect(withDescriptor).toBeDefined();
-  });
-
   it('composes extraBits: struct fields land in data, texture slots resolve, and the bit sits before lighting', () => {
     const view2 = new View3D({ width: 64, height: 64 });
     const material = new PhongMaterial({

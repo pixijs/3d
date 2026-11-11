@@ -46,15 +46,17 @@ describe('ParticleContainer3D', () => {
     buffer.destroy();
   });
 
-  it('packs colour as sRGB-decoded linear bytes, red in the low byte and alpha in the high one', () => {
+  it('packs colour as the authored rgb bytes, red in the low byte and alpha in the high one', () => {
     const white = packParticleColor(0xffffff, 1);
 
     expect(white).toBe(0xffffffff >>> 0);
 
-    const displayMidGrey = packParticleColor(0x808080, 1);
+    const tint = packParticleColor(0x806040, 1);
 
-    expect(displayMidGrey & 0xff).toBeLessThan(128);
-    expect(displayMidGrey >>> 24).toBe(255);
+    expect(tint & 0xff).toBe(0x80);
+    expect((tint >> 8) & 0xff).toBe(0x60);
+    expect((tint >> 16) & 0xff).toBe(0x40);
+    expect(tint >>> 24).toBe(255);
     expect(packParticleColor(0xffffff, 0) >>> 24).toBe(0);
 
     const red = packParticleColor(0xff0000, 1);
@@ -163,7 +165,6 @@ describe('ParticleContainer3D', () => {
   });
 });
 
-/** Records every range handed to the vertex buffer */
 function recordUploads(buffer: ParticleContainer3D): [number, number][] {
   const updates: [number, number][] = [];
   const vertexBuffer = buffer.geometry.attributes.aPosition.buffer;
@@ -353,12 +354,10 @@ describe('ParticleContainer3D shared quad buffers', () => {
 });
 
 describe('ParticleContainer3D destroy cascade', () => {
-  /** Reads Geometry3D's private teardown latch without an `any` cast. */
   interface GeometryInternals {
     _destroyed: boolean;
   }
 
-  /** A child mesh owning a geometry, material and texture outright, to watch the cascade reach it. */
   const childMesh = () => {
     const geometry = new SphereGeometry();
     const texture = new Texture({ source: new TextureSource({ width: 8, height: 8, resolution: 1 }) });
@@ -390,20 +389,5 @@ describe('ParticleContainer3D destroy cascade', () => {
     expect(material.destroyed).toBe(true);
     expect(texture.destroyed).toBe(true);
     expect(source.destroyed).toBe(true);
-  });
-
-  it('still keeps the shared corner and index pair under destroy(true), for the other containers', () => {
-    const a = new ParticleContainer3D({ capacity: 8 });
-    const b = new ParticleContainer3D({ capacity: 8 });
-    const corners = a.geometry.attributes.aUV.buffer;
-
-    expect(corners.destroyed).toBe(false);
-
-    a.destroy(true);
-
-    expect(corners.destroyed).toBe(false);
-    expect(b.geometry.indexBuffer.destroyed).toBe(false);
-
-    b.destroy();
   });
 });

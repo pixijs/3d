@@ -12,10 +12,18 @@ if (command !== '--check' && command !== '--write') {
 }
 
 /**
- * A `gl/` or `gpu/` path segment marks backend code; see docs/architecture.md
+ * The backend folders. Each gets its own barrel, which its `init.ts` re-exports as `@pixi/3d/webgl`
+ * or `@pixi/3d/webgpu`, and no other barrel exports their files. `src/init.ts` loads each `init.ts`
+ * lazily; a folder barrel that also imported a backend would put it on the entry's static graph, and
+ * esbuild and Turbopack then load both backends upfront.
+ */
+const BACKENDS = ['gl', 'gpu'];
+
+/**
+ * Whether a file sits in a backend folder
  * @param file - Source file path
  */
-const isBackend = (file: string): boolean => /(^|\/)(gl|gpu)\//.test(file);
+const isBackend = (file: string): boolean => BACKENDS.some((backend) => file.startsWith(`${backend}/`));
 
 function writeBarrel(directory: string, name: string, files: string[]): void {
   const output = [
@@ -30,15 +38,17 @@ function writeBarrel(directory: string, name: string, files: string[]): void {
   if (existing === output) return;
 
   if (command === '--check') {
-    console.error(`ERROR: File ${localFile} is out of date, run 'npm run build' to update it.\n`);
+    console.error(
+      `ERROR: File ${localFile} is out of date, run 'node scripts/build/index.mts --write' to update it.\n`,
+    );
     process.exit(1);
   }
   console.log(`Updating ${localFile}`);
   fs.writeFileSync(filePath, output, 'utf-8');
 }
 
-// find all directories in src
-const directories = glob.sync('*/', { cwd: directoryPath, absolute: true });
+// find all directories in src, except the guides that span modules
+const directories = glob.sync('*/', { cwd: directoryPath, absolute: true, ignore: '__docs__/' });
 
 // Use glob to find all TypeScript files recursively in the directory
 directories.forEach((directory) => {
@@ -51,7 +61,6 @@ directories.forEach((directory) => {
         '**/*.worker.ts',
         // Ignore circular imports
         '**/index.ts',
-        '**/index.bundle.ts',
         // Tests
         '**/__tests__/**',
         // Docs / examples (internal only, not part of public API)
@@ -60,14 +69,20 @@ directories.forEach((directory) => {
     })
     .sort((a, b) => a.localeCompare(b));
 
-  writeBarrel(directory, 'index.ts', files);
+  writeBarrel(
+    directory,
+    'index.ts',
+    files.filter((file) => !isBackend(file)),
+  );
+  for (const backend of BACKENDS) {
+    const backendFiles = files.filter((file) => file.startsWith(`${backend}/`));
 
-  // The CDN entry re-exports this barrel instead, so the backends stay in their lazy chunks.
-  if (files.some(isBackend)) {
-    writeBarrel(
-      directory,
-      'index.bundle.ts',
-      files.filter((file) => !isBackend(file)),
-    );
+    if (backendFiles.length > 0) {
+      writeBarrel(
+        path.join(directory, backend),
+        'index.ts',
+        backendFiles.map((file) => file.slice(backend.length + 1)),
+      );
+    }
   }
 });

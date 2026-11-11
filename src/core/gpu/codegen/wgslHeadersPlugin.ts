@@ -23,13 +23,7 @@ function warnUnprefixedSlots(templateSource: string): void {
   }
 }
 
-/**
- * Collects each bit's WGSL `gpu.header` block and injects them into the template's `{{header}}` slot
- *
- * Also warns when a template slot lacks the `vertex`/`fragment` stage prefix the single-source
- * WGSL format expects.
- * @internal
- */
+/** @internal */
 export const wgslHeadersPlugin: ShaderCompilerPlugin = {
   collectData(context) {
     warnUnprefixedSlots(context.templateString);

@@ -1,5 +1,44 @@
 import { defineConfig } from 'oxlint';
 
+/**
+ * A regex for a relative import that climbs to a folder and enters it, such as `./gl/x`, `../gpu/x` or
+ * `../../core/gl/x`
+ * @param segment - Regex source for the folder path the import enters
+ */
+const relativeImportOf = (segment: string): string => `^\\.{1,2}/(\\.\\./)*${segment}(/|$)`;
+
+/**
+ * Runtime imports of a backend stay inside its folder, so each backend loads only when its renderer does
+ * (`npm run test:bundle` checks the built chunks). Shared code programs against `View3DPipe` and types.
+ */
+const BACKEND_IMPORTS = {
+  regex: relativeImportOf('(core/)?(gl|gpu)'),
+  allowTypeImports: true,
+  message:
+    'Shared code imports core/gl and core/gpu with `import type` only; runtime backend code stays in those folders.',
+};
+
+/** `extras` is its own package entry, so nothing outside `src/extras` imports it. */
+const EXTRAS_IMPORTS = {
+  regex: relativeImportOf('extras'),
+  message: 'Only src/extras imports extras; it ships as the separate @pixi/3d/extras entry.',
+};
+
+/** Guides and their example snippets are user code, linted like `examples/` rather than as engine source */
+const DOCS = 'src/**/__docs__/**';
+
+/** Code pixijs.com publishes, which wraps its body in an async IIFE as pixi.js's examples do */
+const SITE_CODE = [DOCS, 'examples/tutorials/**'];
+
+/**
+ * The WebGL and WebGPU backends never import each other.
+ * @param other - The backend folder the importing backend must not reach
+ */
+const crossBackendImports = (other: 'gl' | 'gpu'): { regex: string; message: string } => ({
+  regex: relativeImportOf(other),
+  message: 'core/gl and core/gpu never import each other; shared code for both lives outside them.',
+});
+
 export default defineConfig({
   options: {
     typeAware: true,
@@ -7,11 +46,7 @@ export default defineConfig({
     reportUnusedDisableDirectives: 'error',
   },
   plugins: ['eslint', 'typescript', 'import', 'jsdoc', 'unicorn', 'vitest'],
-  jsPlugins: [
-    './scripts/lint/pixi3d-plugin.ts',
-    // oxlint's native `jsdoc` plugin lacks these rules, so the real one loads under an alias.
-    { name: 'jsdoc-js', specifier: 'eslint-plugin-jsdoc' },
-  ],
+  jsPlugins: ['./scripts/lint/pixi3d-plugin.ts'],
   settings: {
     jsdoc: {
       tagNamePreference: {
@@ -38,7 +73,6 @@ export default defineConfig({
     'jsdoc/check-tag-names': 'off',
     'jsdoc/empty-tags': 'warn',
     'jsdoc/implements-on-classes': 'warn',
-    'jsdoc/require-param': 'warn',
     'jsdoc/require-param-description': 'off',
     'jsdoc/require-param-name': 'warn',
     'jsdoc/require-property': 'warn',
@@ -46,24 +80,8 @@ export default defineConfig({
     'jsdoc/require-property-name': 'warn',
     'jsdoc/require-property-type': 'warn',
     'jsdoc/require-returns-description': 'warn',
-    'jsdoc-js/multiline-blocks': [
-      'warn',
-      {
-        noMultilineBlocks: true,
-        minimumLengthForMultiline: 115,
-        multilineTags: ['param', 'returns', 'see', 'deprecated', 'typeParam'],
-      },
-    ],
-    'jsdoc-js/check-alignment': 'warn',
-    'jsdoc-js/check-param-names': 'warn',
-    'jsdoc-js/check-types': 'warn',
-    'jsdoc-js/check-values': 'warn',
-    'jsdoc-js/tag-lines': 'warn',
-    'jsdoc-js/no-multi-asterisks': ['warn', { allowWhitespace: true }],
-    // The native rule has no `contexts` option.
-    'jsdoc-js/require-param-type': ['warn', { contexts: ['TSMethodSignature'] }],
-    'jsdoc-js/require-hyphen-before-param-description': 'warn',
-    'jsdoc-js/valid-types': 'warn',
+    'pixi3d/jsdoc-format': 'error',
+    'pixi3d/jsdoc-params': 'error',
   },
   overrides: [
     {
@@ -91,33 +109,52 @@ export default defineConfig({
     },
     {
       files: ['src/**/*.ts'],
+      excludeFiles: [DOCS, 'src/index.docs.ts'],
+      rules: {
+        'pixi3d/no-comments': 'error',
+        'pixi3d/shader-reserved-words': 'error',
+      },
+    },
+    {
+      files: ['tests/**/*.scene.ts', 'tests/**/*.test.ts'],
       rules: {
         'pixi3d/no-comments': 'error',
       },
     },
     {
-      files: ['examples/**/*', 'scripts/**/*'],
+      files: ['examples/**/*', 'scripts/**/*', DOCS],
       rules: {
         'no-console': 'off',
       },
     },
     {
       files: ['src/**/*.ts'],
-      excludeFiles: ['src/**/*.test.ts', 'src/**/__tests__/**'],
+      excludeFiles: ['src/**/*.test.ts', 'src/**/__tests__/**', DOCS],
       rules: {
         'pixi3d/require-export-jsdoc': 'error',
         'pixi3d/require-member-api-doc': 'error',
         'pixi3d/require-standard-example': 'error',
         'pixi3d/jsdoc-style': 'error',
         'pixi3d/number-field-initializer': 'error',
+        'pixi3d/destroy-release': 'error',
+        'eslint/max-classes-per-file': ['error', { ignoreExpressions: true }],
+        'typescript/no-deprecated': 'error',
+        'typescript/no-explicit-any': 'error',
       },
     },
     {
       files: ['src/**/*.ts'],
-      excludeFiles: ['**/*.test.ts'],
+      excludeFiles: ['**/*.test.ts', DOCS],
       rules: {
+        'no-console': 'off',
         'no-restricted-globals': [
-          'warn',
+          'error',
+          {
+            name: 'console',
+            message:
+              "Warn through `warn` from 'pixi.js', or `warnOnce` (src/utils/warnOnce.ts) for a warning that repeats " +
+              'every frame. console is for examples/ and scripts/.',
+          },
           { name: 'document', message: 'Do not use document. Use DOMAdapter instead.' },
           { name: 'Image', message: 'Do not use Image. Use DOMAdapter instead.' },
         ],
@@ -128,7 +165,41 @@ export default defineConfig({
             property: 'createObjectURL',
             message: 'Avoid using URL.createObjectURL. See https://github.com/pixijs/pixijs/pull/11599.',
           },
+          {
+            object: 'Math',
+            property: 'random',
+            message:
+              'Draw from a seeded stream (`seededRandom`, or the `createRandom` option) so runs can repeat. ' +
+              'Called through a field, Math.random allocates a boxed number per draw (#445, #519).',
+          },
         ],
+      },
+    },
+    {
+      files: ['src/**/*.ts'],
+      excludeFiles: ['src/core/gl/**', 'src/core/gpu/**', 'src/index.docs.ts', '**/*.test.ts', '**/__tests__/**'],
+      rules: {
+        'no-restricted-imports': ['error', { patterns: [BACKEND_IMPORTS, EXTRAS_IMPORTS] }],
+      },
+    },
+    {
+      files: ['src/init.ts'],
+      rules: {
+        'no-restricted-imports': ['error', { patterns: [EXTRAS_IMPORTS] }],
+      },
+    },
+    {
+      files: ['src/core/gl/**/*.ts'],
+      excludeFiles: ['**/*.test.ts', '**/__tests__/**'],
+      rules: {
+        'no-restricted-imports': ['error', { patterns: [crossBackendImports('gpu'), EXTRAS_IMPORTS] }],
+      },
+    },
+    {
+      files: ['src/core/gpu/**/*.ts'],
+      excludeFiles: ['**/*.test.ts', '**/__tests__/**'],
+      rules: {
+        'no-restricted-imports': ['error', { patterns: [crossBackendImports('gl'), EXTRAS_IMPORTS] }],
       },
     },
     {
@@ -145,9 +216,22 @@ export default defineConfig({
       },
     },
     {
-      files: ['**/*.test.ts', '**/__tests__/**', 'tests/**', 'examples/**', 'bench/**'],
+      files: ['src/**/*.ts', 'tests/**/*.ts'],
       rules: {
-        'jsdoc/require-param': 'off',
+        'typescript/no-unnecessary-type-assertion': 'error',
+      },
+    },
+    {
+      files: SITE_CODE,
+      rules: {
+        'typescript/no-floating-promises': 'off',
+      },
+    },
+    {
+      // A tutorial step's starting code leaves gaps for the reader to fill, so its names can go unused
+      files: ['examples/tutorials/**'],
+      rules: {
+        'no-unused-vars': 'off',
       },
     },
   ],

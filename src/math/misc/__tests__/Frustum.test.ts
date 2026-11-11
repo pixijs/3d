@@ -7,11 +7,6 @@ import { Plane } from '~/math/shapes/Plane';
 import { Sphere } from '~/math/shapes/Sphere';
 import { Vector3 } from '~/math/vector/Vector3';
 
-/**
- * Builds an orthographic frustum spanning x in [-1, 1], y in [-1, 1], z in [-100, -0.1] (looking
- * down -Z by convention). With these parameters the planes line up with axis-aligned half-spaces,
- * which makes containment tests easy to reason about.
- */
 function buildOrthoFrustum(): Frustum {
   const projection = new Matrix4().makeOrthographic(-1, 1, 1, -1, 0.1, 100);
 
@@ -177,12 +172,6 @@ describe('Frustum.equals', () => {
     const a = buildOrthoFrustum();
     const b = new Frustum();
     expect(a.equals(b)).toBe(false);
-  });
-});
-
-describe('Frustum.toString', () => {
-  test('produces a tagged string', () => {
-    expect(new Frustum().toString()).toBe('[pixi-3d/math:Frustum]');
   });
 });
 

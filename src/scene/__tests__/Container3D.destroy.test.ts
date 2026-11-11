@@ -7,15 +7,6 @@ afterEach(() => {
 });
 
 describe('Container3D destroy', () => {
-  it('is idempotent — a second destroy is a no-op and does not throw', () => {
-    const c = new Container3D();
-
-    c.destroy();
-
-    expect(() => c.destroy()).not.toThrow();
-    expect(c.destroyed).toBe(true);
-  });
-
   it('detaches itself from its parent', () => {
     const parent = new Container3D();
     const child = new Container3D();

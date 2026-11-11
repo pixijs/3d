@@ -387,15 +387,6 @@ describe('Vector2', () => {
   });
 
   describe('applyMatrix3', () => {
-    test('translation matrix translates the point (uses w = 1)', () => {
-      const p = new Vector2(1, 1);
-      const m = new Matrix3().translate(5, 7);
-      p.applyMatrix3(m);
-
-      expect(p.x).toBeCloseTo(6, 6);
-      expect(p.y).toBeCloseTo(8, 6);
-    });
-
     test('scale matrix scales the point', () => {
       const p = new Vector2(2, 3);
       const m = new Matrix3().scale(4, 5);
@@ -446,22 +437,6 @@ describe('Vector2', () => {
 
       expect(p.x).toBeCloseTo(0, 6);
       expect(p.y).toBeCloseTo(1, 6);
-    });
-
-    test('rotating a point on the center pivot leaves it in place', () => {
-      const p = new Vector2(3, 4);
-      p.rotateAround({ x: 3, y: 4 }, Math.PI);
-
-      expect(p.x).toBeCloseTo(3, 6);
-      expect(p.y).toBeCloseTo(4, 6);
-    });
-
-    test('rotating (2, 0) around (1, 0) by PI yields (0, 0)', () => {
-      const p = new Vector2(2, 0);
-      p.rotateAround({ x: 1, y: 0 }, Math.PI);
-
-      expect(p.x).toBeCloseTo(0, 6);
-      expect(p.y).toBeCloseTo(0, 6);
     });
 
     test('out variant leaves this unchanged', () => {

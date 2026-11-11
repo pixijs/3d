@@ -6,13 +6,17 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
+import { model } from '../../examples/assets/manifest';
+
+const AVOCADO = model('gltf.Avocado');
+
 export const scene: TestScene = {
-  assets: ['avocado.glb'],
+  assets: [AVOCADO],
   create: async (app, _context) => {
     const container = new Container();
     app.stage.addChild(container);
 
-    const source = Assets.get<Scene3DSource>('avocado.glb');
+    const source = Assets.get<Scene3DSource>(AVOCADO);
     const model = new Model3D(source);
 
     model.scale.set(10, 10, 10);
@@ -23,7 +27,6 @@ export const scene: TestScene = {
     container.addChild(view3d);
     view3d.root.addChild(model);
 
-    // Directional light (sun) - not affected by distance
     const light2 = new DirectionalLight({
       color: 0xffffff,
       intensity: 10,
@@ -32,7 +35,6 @@ export const scene: TestScene = {
     view3d.root.addChild(light2);
 
     const camera = view3d.camera;
-    // TODO set default camera position z to be 10
     camera.position.set(0, 0, 1);
   },
 };

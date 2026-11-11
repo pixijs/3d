@@ -6,14 +6,9 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '../../../core/shader/ShaderBitTemplate';
 import type { ShaderDescriptorOptions } from '../../../core/shader/ShaderDescriptor';
 
-/**
- * Vertex stage shaped like the shadow pass's: declare the locals the engine's deform bits write
- * (`position`, `normal`, `tangent`), let `{{vertexInput}}` in WGSL or `{{input}}` in GLSL decode,
- * skin and morph them, then push the position `SOLID_EXTRUDE` local units along the deformed
- * normal and transform it. With `SOLID_EXTRUDE` at 0 that is a plain draw.
- */
+/** Declares `position`, `normal` and `tangent` with the material template's types, for the morph and skinning bits */
 const solidMeshTemplate: ShaderBitTemplate = {
-  bindGroups: ['global', 'camera'],
+  bindGroups: [{ name: 'global', ubo: true }, 'camera'],
   gpu: /* wgsl */ `
 {{header}}
 {{vertexHeader}}
@@ -82,11 +77,7 @@ void main() {
   },
 };
 
-/**
- * Colour and extrusion as shader constants: pipeline overrides on WebGPU, `#define`s on WebGL
- *
- * They are fixed per pass, so a constant is cheaper than a uniform block.
- */
+/** Override constants rather than uniforms, since each pass fixes them: cheaper than a uniform block */
 const solidMeshBit: ShaderBit = {
   name: 'solidMesh',
   attributes: {
@@ -107,7 +98,7 @@ const solidMeshBit: ShaderBit = {
  */
 export interface SolidMeshDescriptorOptions {
   /**
-   * Flat colour every fragment outputs
+   * Colour the meshes draw in
    * @default 0x000000
    */
   color?: ColorSource;
@@ -119,20 +110,16 @@ export interface SolidMeshDescriptorOptions {
 }
 
 /**
- * Shader recipe for a {@link MeshPass} that draws meshes in one flat colour
+ * Shader for a {@link MeshPass} that draws meshes in one flat colour, such as a selection mask
  *
- * {@link OutlinePass} and {@link WireframePass} draw with it, and it suits any flat-colour redraw
- * such as a selection mask. It runs the engine's own vertex path, so skinning, morph targets and
- * batching apply, with no lighting, no textures, and an optional push along the normal.
- *
- * Colour and extrusion are baked in as shader constants, so every distinct pair is a separate
- * shader. Pick them once per pass rather than animating them.
+ * Skinning and morph targets apply; lighting and textures don't. Each colour and extrusion pair
+ * compiles its own shader, so pick them once per pass rather than animating them.
  * @example
  * ```ts
  * new MeshPass({ name: 'mask', descriptor: { shaderDescriptor: solidMeshDescriptor({ color: 0xffffff }) } });
  * ```
  * @param options - Colour and extrusion.
- * @returns Descriptor options ready for a pass or material `passes` entry.
+ * @returns The `shaderDescriptor` for a pass's `descriptor` or a material's `passes` entry.
  * @category extras:post-processing
  * @advanced
  */

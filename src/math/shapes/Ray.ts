@@ -10,13 +10,10 @@ import type { Sphere } from './Sphere';
  * A half-line that starts at `origin` and runs along `direction`, for picking and line-of-sight
  * tests
  *
- * {@link View3D#screenToRay} builds one through a pointer position.
- *
- * Keep `direction` unit length. The distance and sphere methods measure along it and say so in
- * their docs; call `direction.normalize()` after changing it by hand.
- *
- * Methods that change the ray do so in place, or write into an `out` ray when you pass one and
- * leave this ray as it is.
+ * {@link View3D#screenToRay} builds one through a pointer position, in world space. Test a ray
+ * against shapes in its own space; {@link Ray#applyMatrix4} moves it into a mesh's local space.
+ * Keep `direction` unit length, and call `direction.normalize()` after changing it by hand; the
+ * distance, closest-point and sphere methods give wrong results otherwise.
  * @example
  * ```ts
  * const hit = new Vector3();
@@ -27,9 +24,6 @@ import type { Sphere } from './Sphere';
  *   if (ray.intersectPlane(ground, hit)) unit.moveTo(hit);
  * });
  * ```
- * @see {@link Box} For ray-box hit tests
- * @see {@link Sphere} For ray-sphere hit tests
- * @see {@link Plane} For ray-plane hit tests
  * @category maths
  * @standard
  */
@@ -74,8 +68,6 @@ export class Ray {
 
   /**
    * Sets the origin and direction of this ray, copying their values
-   *
-   * The direction is assumed to be normalized.
    * @example
    * ```ts
    * camera.worldTransform.extractForward(forward);
@@ -150,9 +142,9 @@ export class Ray {
   }
 
   /**
-   * Writes the point at distance `t` along this ray (`origin + direction * t`) into `out`
+   * Writes the point `origin + direction * t` into `out`
    *
-   * With a unit-length `direction`, `t` is in world units.
+   * With a unit-length `direction`, `t` is the distance from `origin`.
    * @example
    * ```ts
    * const reticle = new Vector3();
@@ -246,11 +238,7 @@ export class Ray {
   /**
    * Intersects this ray with `sphere`
    *
-   * Both must be in the same space; the hit point is written into `out` (or a new `Vector3`) in
-   * that space. When the ray origin is inside the sphere the exit point is used instead, so
-   * callers always get a forward-facing hit. An empty sphere (negative radius) never intersects.
-   *
-   * Requires a unit-length `direction`.
+   * An empty sphere is never hit. Requires a unit-length `direction`.
    * @example
    * ```ts
    * const hit = new Vector3();
@@ -271,10 +259,9 @@ export class Ray {
   /**
    * Intersects this ray with `sphere` and returns the distance to the hit rather than the point
    *
-   * Same hit as {@link Ray#intersectSphere}, including the exit point from inside; call
-   * {@link Ray#at} when you need the point. Compare distances to find the nearest of several hits
-   * without making a point for each. Requires a unit-length `direction`, which also makes `t` the
-   * Euclidean distance from `origin` to the hit.
+   * Same hit as {@link Ray#intersectSphere}; {@link Ray#at} turns the distance into the point.
+   * Compare distances to find the nearest of several hits without making a point for each.
+   * Requires a unit-length `direction`.
    * @example
    * ```ts
    * let nearest: Mesh3D | null = null;
@@ -316,7 +303,7 @@ export class Ray {
   /**
    * Returns true when this ray hits `sphere`
    *
-   * Requires a unit-length `direction`. An empty sphere (negative radius) is never hit.
+   * Requires a unit-length `direction`. An empty sphere is never hit.
    * @example
    * ```ts
    * const hovered = enemies.filter((enemy: Mesh3D) => pointerRay.intersectsSphere(enemy.boundingSphere));
@@ -385,8 +372,7 @@ export class Ray {
   /**
    * Intersects this ray with `box`
    *
-   * When the ray origin is inside the box, the exit point is returned. Works with a `direction` of
-   * any length.
+   * Works with a `direction` of any length.
    * @example
    * ```ts
    * const hit = new Vector3();
@@ -395,7 +381,7 @@ export class Ray {
    * ```
    * @param box - The box to intersect
    * @param out - Optional vector to write into; a new `Vector3` when omitted
-   * @returns The entry point, or `null` when there is no intersection
+   * @returns The entry point (or the exit point from inside), or `null` when the ray misses
    * @see {@link Ray#intersectBoxT} For the distance to the same hit, without the point.
    */
   public intersectBox(box: Box, out?: Vector3): Vector3 | null {
@@ -420,12 +406,11 @@ export class Ray {
   /**
    * Transforms this ray by an affine `matrix`
    *
-   * The origin moves as a point. The direction turns and scales with the matrix, ignoring
-   * translation, and is normalized again. Distances measured along the new ray are therefore in
-   * the new space's units: under scale, compare hits as points, not as `t` values.
+   * The direction comes out unit length, so a `t` measured along the new ray is in the new space's
+   * units: under scale, compare hits as points, not as `t` values.
    *
    * `matrix` must be affine (bottom row `[0, 0, 0, 1]`), as a {@link Container3D#worldTransform}
-   * always is. Projection matrices are not supported.
+   * always is and a projection matrix isn't.
    * @example
    * ```ts
    * const worldToLocal = new Matrix4().getInverse(mesh.worldTransform);
@@ -447,13 +432,9 @@ export class Ray {
   /**
    * Intersects this ray with `box` and returns the distance to the hit rather than the point
    *
-   * Same hit as {@link Ray#intersectBox}, including the exit point from inside; call
-   * {@link Ray#at} when you need the point. The result is in units of `direction`, so with a
-   * unit-length `direction` it is the Euclidean distance from `origin` to the hit.
-   *
-   * A zero direction component makes that axis's bounds infinite, or `NaN` when the origin sits
-   * exactly on one of the box's faces; the method skips a `NaN` bound rather than letting it
-   * spread.
+   * Same hit as {@link Ray#intersectBox}; {@link Ray#at} turns `t` into the point. With a
+   * unit-length `direction`, `t` is the distance from `origin`. A ray that runs along one of the
+   * box's faces still gets the right entry or exit distance.
    * @example
    * ```ts
    * const t = sightLine.intersectBoxT(wallBounds);

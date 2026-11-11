@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { Container3D } from '~/scene/Container3D';
 import { Skeleton } from '~/scene/Skeleton';
 
-/** A one-node skeleton whose node is the only joint, with an identity inverse bind, bound to a fresh container */
 function createBoundRig(): { skeleton: Skeleton; bone: Container3D } {
   const skeleton = new Skeleton({
     parent: new Int16Array([-1]),
@@ -17,10 +16,8 @@ function createBoundRig(): { skeleton: Skeleton; bone: Container3D } {
   return { skeleton, bone };
 }
 
-/** Written into the first joint slot; a rebuild rewrites every slot, so a marker that survives proves none ran */
 const MARKER = 7;
 
-/** Joint matrices are stored as three rows of four, so slot 3 holds the x translation */
 const X_TRANSLATION_SLOT = 3;
 
 describe('Skeleton with a container-bound bone', () => {

@@ -1,11 +1,15 @@
 import type { TestScene } from '@test-utils';
 import { AlphaFilter, Container, Matrix, RenderTexture } from 'pixi.js';
 
+import type { RenderGraph } from '~/core/render-graph/RenderGraph';
+import { BackgroundPass } from '~/core/render-passes/background/BackgroundPass';
 import { ConeGeometry } from '~/geometry/ConeGeometry';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
+import { Pass3D } from '~/post-processing/Pass3D';
+import type { PassContext } from '~/post-processing/Pass3D';
 import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Container3D } from '~/scene/Container3D';
@@ -28,7 +32,9 @@ import { View3D } from '~/scene/View3D';
  * - the feed camera's projection is built in the *texture's* space — full width, its own
  *   aspect — not in the view's;
  * - the white marker cone stands at the eye, where only the feed can see it, and appears on the
- *   monitor.
+ *   monitor;
+ * - a `BackgroundPass` on the feed camera fills the feed's sky, so every texel the opaque screen
+ *   shows has alpha 1 and the floor's horizon stays anti-aliased.
  *
  * The pair proves the winding parity is decided per target. Pixi resolves it as
  * `flipY XOR (isWebGL && !isRoot)`, and a texture is never root — so straight to the canvas the
@@ -37,6 +43,31 @@ import { View3D } from '~/scene/View3D';
  * filter, which makes the *outer* target non-root too: the view camera's parity flips and the
  * feed's stays put, and the monitor shows the same picture in both scenes.
  */
+
+/** The colour behind everything: the app's clear, the view's background and the feed's sky */
+const SKY = 0x101418;
+
+/**
+ * Draws the view's background into the feed before its scene
+ *
+ * A feed camera draws no sky of its own, and its texture clears to transparent black. The screen
+ * is opaque, so it would show the floor's colour at full strength on every edge texel with any
+ * coverage, and the horizon would step and spread into the sky.
+ */
+class FeedSkyPass extends Pass3D {
+  public readonly stage = 'beforeOpaque';
+
+  private readonly _camera: Camera3D;
+
+  constructor(camera: Camera3D) {
+    super();
+    this._camera = camera;
+  }
+
+  public build(graph: RenderGraph, { renderer }: PassContext): void {
+    graph.addPass(new BackgroundPass({ renderer, camera: this._camera }));
+  }
+}
 
 /** Where the monitor hangs, and how big its screen is in world units */
 const TV_X = 0;
@@ -68,7 +99,7 @@ export function securityCameraScene(options: { filter?: boolean } = {}): TestSce
 
   return {
     app: {
-      backgroundColor: 0x101418,
+      backgroundColor: SKY,
     },
     create: async (app, context) => {
       const size = app.screen.width;
@@ -77,6 +108,7 @@ export function securityCameraScene(options: { filter?: boolean } = {}): TestSce
         width: size,
         height: size,
         environment: { skyColor: 0x9fb8d8, groundColor: 0x2b2418 },
+        background: SKY,
       });
 
       if (filter) {
@@ -150,8 +182,10 @@ export function securityCameraScene(options: { filter?: boolean } = {}): TestSce
       feedCamera.lookAt({ x: 0.8, y: 0.5, z: -1.6 });
       view3d.root.addChild(feedCamera);
 
-      // The same memberships the main camera draws, from the wall camera, before the scene.
+      // The sky, then the same memberships the main camera draws, from the wall camera, before the
+      // scene.
       const feedPasses = [
+        new FeedSkyPass(feedCamera),
         new MeshPass({ name: 'opaque', camera: feedCamera }),
         new MeshPass({ name: 'transparent', camera: feedCamera, sort: 'distance' }),
       ];

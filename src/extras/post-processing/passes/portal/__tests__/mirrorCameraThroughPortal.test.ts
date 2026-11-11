@@ -8,31 +8,25 @@ import { Matrix4 } from '~/math/matrix/Matrix4';
 import type { Plane } from '~/math/shapes/Plane';
 import { Vector3 } from '~/math/vector/Vector3';
 
-/** A rigid pose: yaw about Y, then a translation. Portal nodes and cameras are both built this way. */
 function pose(x: number, y: number, z: number, yaw = 0): Matrix4 {
   return new Matrix4().makeRotationY(yaw).setPosition({ x, y, z });
 }
 
-/** Where `world` sits in `frame`'s own coordinates */
 function localPoint(frame: Matrix4, world: Vector3): Vector3 {
   return world.clone().applyMatrix4(new Matrix4().getInverse(frame));
 }
 
-/** Which way `frame`'s local axis `column` points, in world space */
 function axis(frame: Matrix4, column: 0 | 1 | 2): Vector3 {
   return new Vector3().setFromMatrixColumn(frame, column).normalize();
 }
 
-/** Signed distance from a world-space point to a plane already expressed in `cameraWorld`'s view space */
 function clipDistance(plane: Plane, cameraWorld: Matrix4, world: Vector3): number {
   return plane.distanceToPoint(localPoint(cameraWorld, world));
 }
 
 const position = (m: Matrix4) => m.extractPosition(new Vector3());
-/** A camera's own forward is its negated Z; a portal's facing side is its positive Z. */
 const forward = (m: Matrix4) => m.extractForward(new Vector3());
 
-/** An entry, an exit and a viewer, each yawed and moved off the axes */
 function rotatedPair(): { entry: Matrix4; exit: Matrix4; viewer: Matrix4; camera: Matrix4 } {
   const entry = pose(-3, 1.6, 2, 0.7);
   const exit = pose(12, 0.4, -8, -2.1);

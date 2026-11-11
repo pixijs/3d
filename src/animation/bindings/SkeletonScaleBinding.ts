@@ -1,10 +1,7 @@
 import type { Skeleton } from '../../scene/Skeleton';
 import { Binding } from './Binding';
 
-/**
- * Writes three-component scale samples directly into a skeleton's local scale buffer
- * @internal
- */
+/** @internal */
 export class SkeletonScaleBinding extends Binding {
   constructor(
     private readonly _skel: Skeleton,

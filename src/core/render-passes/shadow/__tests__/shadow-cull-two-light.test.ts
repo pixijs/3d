@@ -12,15 +12,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 256;
 
-/**
- * Two directional lights, both casting from clearly different angles (so their cull volumes genuinely
- * differ), over a row of cubes that sit inside *both* lights' volumes. A correct per-view caster cull
- * keeps every cube for every shadow map that needs it, so the shadows are identical to an unculled
- * render.
- *
- * This exercises the per-light cull on both backends: every casting light culls against its own light
- * frustum — WebGPU into its own survivor + args buffers, WebGL via its per-light compacting uploads.
- */
 function buildScene(app: Application<Renderer>, cull: CullMode): View3D {
   const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'medium', cull });
   app.stage.addChild(view3d);
@@ -70,7 +61,6 @@ function buildScene(app: Application<Renderer>, cull: CullMode): View3D {
   return view3d;
 }
 
-/** Render the two-light scene on a backend at a cull mode and copy the pixels out before the app goes. */
 async function renderPixels(preference: 'webgl' | 'webgpu', cull: CullMode): Promise<Uint8Array> {
   const app = await getApp<Renderer>({
     id: `2light-${preference}-${cull}`,
@@ -85,7 +75,6 @@ async function renderPixels(preference: 'webgl' | 'webgpu', cull: CullMode): Pro
   }
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -103,7 +92,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       const cpu = await renderPixels(preference, 'cpu');
       const gpu = await renderPixels(preference, 'gpu');
 
-      /** Room for GPU shading jitter between three renders on one adapter; a dropped shadow changes far more */
       const budget = Math.round((off.length / 4) * 0.005);
 
       expect(differingPixels(off, cpu), "'cpu' cull matches no cull").toBeLessThan(budget);

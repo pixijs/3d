@@ -8,14 +8,16 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** Uids of the scene batch's opaque meshes in draw order */
 function drawOrder(view3d: View3D): number[] {
-  const view = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE].view;
-  const order: number[] = [];
+  const list = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
+  const view = list.view;
+  const uidByRow = new Map<number, number>();
+  for (let i = 0; i < view.count; i++) {
+    const item = view.items[view.renderableIndices[i]];
+    uidByRow.set(item._storeIndex, item.uid);
+  }
 
-  for (let i = 0; i < view.count; i++) order.push(view.items[view.indices[i]].uid);
-
-  return order;
+  return Array.from(list.records.subarray(0, view.count), (row) => uidByRow.get(row)!);
 }
 
 for (const preference of ['webgl', 'webgpu'] as const) {

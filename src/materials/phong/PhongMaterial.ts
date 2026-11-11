@@ -10,6 +10,7 @@ import { NORMAL_MAP } from '../../core/textures/DefaultTextures';
 import type { View3D } from '../../scene/View3D';
 import { BaseMaterial3D, writeLinearRgb } from '../BaseMaterial3D';
 import type { BaseMaterial3DOptions } from '../BaseMaterial3D';
+import { readFeatureProps } from '../utils/createFeaturePropsClass';
 import type { MaterialData } from '../utils/createMaterialDataClass';
 import type { MaterialTextures } from '../utils/createMaterialTexturesClass';
 import { EmissivePropsClass } from '../utils/emissiveProps';
@@ -20,8 +21,6 @@ import { phongSpecularTextureBit } from './bits/phongSpecularTextureBit';
 
 /**
  * Options for {@link PhongMaterial}
- *
- * Passing the `emissive` group turns the glow on, as on {@link Material3D}.
  * @example
  * ```ts
  * const options: PhongMaterialOptions = { baseColor: 0x8a5a2b, shininess: 12 };
@@ -32,10 +31,10 @@ import { phongSpecularTextureBit } from './bits/phongSpecularTextureBit';
  */
 export interface PhongMaterialOptions extends Omit<BaseMaterial3DOptions, 'descriptor'> {
   /**
-   * Specular tint (rgb)
+   * Specular tint; the default gives a faint highlight
    *
-   * The default gives a faint highlight. Fresnel lifts the tint toward white at grazing angles, so
-   * a black tint doesn't remove the highlight; {@link PhongMaterialOptions#specularStrength} does.
+   * Fresnel lifts even a black tint toward white at grazing angles, so remove the highlight with
+   * {@link PhongMaterialOptions#specularStrength} instead.
    * @default 0x111111
    * @example
    * ```ts
@@ -44,9 +43,7 @@ export interface PhongMaterialOptions extends Omit<BaseMaterial3DOptions, 'descr
    */
   specularColor?: ColorSource;
   /**
-   * Specular exponent: higher gives a smaller, sharper highlight
-   *
-   * Values below 1 act as 1.
+   * Specular exponent: higher gives a smaller, sharper highlight; values below 1 act as 1
    * @default 30
    * @example
    * ```ts
@@ -66,7 +63,7 @@ export interface PhongMaterialOptions extends Omit<BaseMaterial3DOptions, 'descr
   /**
    * Map whose red channel scales `specularStrength` per texel
    *
-   * Pass it here to have one; afterwards it can be swapped through `material.textures.specular`.
+   * Only a material built with one can swap it later, through `material.textures.specular`.
    * @example
    * ```ts
    * const tiles = new PhongMaterial({ baseColorTexture: tilesTexture, specularTexture: groutMask });
@@ -74,10 +71,10 @@ export interface PhongMaterialOptions extends Omit<BaseMaterial3DOptions, 'descr
    */
   specularTexture?: Texture;
   /**
-   * Tangent-space normal map
+   * Tangent-space normal map with green pointing up the image, as glTF and OpenGL use
    *
-   * Needs UVs on the geometry, and uses its tangents when it has them. Can also be assigned later
-   * through `material.textures.normal`.
+   * Invert the green channel of a DirectX-style map, or its bumps light from the wrong side. Needs
+   * UVs on the geometry. Can also be assigned later through `material.textures.normal`.
    * @example
    * ```ts
    * const stone = new PhongMaterial({ baseColorTexture: stoneTexture, normalTexture: stoneNormals });
@@ -134,9 +131,6 @@ export interface PhongData extends MaterialData {
 
 /**
  * The texture slots of a {@link PhongMaterial}, as `material.textures`
- *
- * `baseColor` and `normal` always exist. `specular` and `emissive` exist only when the material
- * was built with `specularTexture` or an `emissive` group.
  * @example
  * ```ts
  * const material = new PhongMaterial({ specularTexture: shineMask });
@@ -184,15 +178,13 @@ export interface PhongMaterialTextures extends MaterialTextures {
  * A Blinn-Phong material: diffuse shading plus a specular highlight
  *
  * Cheaper than {@link Material3D} and easy to art-direct: `shininess` sets the size of the
- * highlight and `specularColor` its tint. It follows the engine's lighting conventions, so a Phong
- * mesh and a PBR mesh read at the same brightness under the same lights.
+ * highlight and `specularColor` its tint. A Phong mesh and a PBR mesh read at the same brightness
+ * under the same lights.
  *
- * It takes direct lights, ambient lights and the view's `environment`. A cube map or hemisphere
- * adds diffuse fill only: highlights come from direct lights alone, so use {@link Material3D} for
- * surfaces that should reflect their surroundings.
- *
- * The specular and emissive maps cost nothing unless you pass them at construction. The normal map
- * can be assigned at any time; until there is one, no normal mapping is compiled in.
+ * The view's `environment` adds diffuse fill only; highlights come from direct lights, so use
+ * {@link Material3D} for surfaces that should reflect their surroundings. The specular and emissive
+ * maps cost nothing unless you pass them at construction, and the normal map costs nothing until
+ * you assign one.
  *
  * `extraBits` run after the material's own maps and before lighting, so they see the textured
  * `albedo` and `alpha`. Their `end` code runs after lighting and before tone mapping.
@@ -207,7 +199,7 @@ export interface PhongMaterialTextures extends MaterialTextures {
  * @category materials
  * @standard
  */
-export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextures> {
+export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextures, PhongMaterialOptions> {
   /**
    * Runtime glow controls; present only when the material was built with an `emissive` group
    * @example
@@ -218,15 +210,9 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
    */
   public readonly emissive?: EmissiveProps;
 
-  /**
-   * The specular-map and emissive bits this material was built with
-   *
-   * The constructor derives the layout from them and {@link PhongMaterial#getPrimaryDescriptor}
-   * compiles the same list, so the two can't drift.
-   */
+  /** Both the layout and `getPrimaryDescriptor` read it, so the two can't drift */
   private readonly _featureBits: ShaderBit[] = [];
 
-  /** Hex value `specularColor` reads back */
   private _specularColorTint = 0x111111;
 
   constructor(options: PhongMaterialOptions = {}) {
@@ -248,7 +234,7 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
       this._featureBits.push(emissiveBit);
     }
 
-    this._deriveLayoutFromBits([phongMaterialBit, uvTransformBit, ...this._featureBits, ...this._extraBits], textures);
+    this._deriveLayoutFromBits([phongMaterialBit, uvTransformBit, ...this._featureBits, ...this.extraBits], textures);
 
     this.shininess = options.shininess ?? 30;
     this.specularStrength = options.specularStrength ?? 1;
@@ -261,17 +247,11 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
     }
   }
 
-  /**
-   * Descriptors keyed by the name of the view's environment bit, so views with the same kind of
-   * environment share one; cleared when the variant goes stale
-   */
+  /** One per environment bit; env bits declare no material fields or textures, so each fits the layout */
   private _descriptorByEnvKey: Record<string, ShaderDescriptor> = Object.create(null);
 
   /**
-   * The shader descriptor for a view, cached per kind of environment
-   *
-   * The environment bit only supplies `sampleEnvironment`, with no struct field or texture, so
-   * every kind of environment fits the layout derived at construction.
+   * The shader descriptor for a view, one per kind of environment
    * @param view - View whose environment picks the descriptor
    * @advanced
    */
@@ -287,7 +267,7 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
 
     const bits: ShaderBit[] = [phongMaterialBit, envBit, uvTransformBit];
     for (let i = 0; i < this._featureBits.length; i++) bits.push(this._featureBits[i]);
-    for (let i = 0; i < this._extraBits.length; i++) bits.push(this._extraBits[i]);
+    for (let i = 0; i < this.extraBits.length; i++) bits.push(this.extraBits[i]);
     bits.push(phongLightingBit);
     if (this._alphaMode === 'mask') bits.push(alphaMaskBit);
 
@@ -295,6 +275,25 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
     descriptor.update({ bitsGpu: bits, bitsGl: bits });
     this._descriptorByEnvKey[envBit.name] = descriptor;
     return descriptor;
+  }
+
+  /**
+   * The base options plus the specular values, maps and emissive group
+   * @advanced
+   */
+  protected override _toOptions(): PhongMaterialOptions {
+    const { emissive, textures } = this;
+
+    return {
+      ...super._toOptions(),
+      specularColor: this.specularColor,
+      shininess: this.shininess,
+      specularStrength: this.specularStrength,
+      normalScale: this.normalScale,
+      specularTexture: textures.specular,
+      normalTexture: textures.normal,
+      emissive: emissive && readFeatureProps(emissive),
+    };
   }
 
   /**
@@ -312,7 +311,7 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
 
   /**
    * Sets the specular exponent
-   * @param value - Specular exponent; higher values tighten the highlight
+   * @param value - Specular exponent
    */
   public set shininess(value: number) {
     this.data.shininess = value;
@@ -321,8 +320,7 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   /**
    * Scales the whole highlight, Fresnel rim included; 0 removes it
    *
-   * `specularColor` alone can't remove it: Fresnel lifts any tint toward white at grazing angles,
-   * so even black leaves a rim. A specular map multiplies on top of this.
+   * A specular map multiplies on top of it.
    * @example
    * ```ts
    * material.specularStrength = 0.5;
@@ -333,18 +331,16 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   }
 
   /**
-   * Sets the scale on the whole highlight
-   * @param value - Scale on the whole specular lobe; 0 removes the highlight
+   * Sets the highlight scale
+   * @param value - Scale; 0 removes the highlight
    */
   public set specularStrength(value: number) {
     this.data.specularStrength = value;
   }
 
   /**
-   * Strength of the normal map's bumps
-   *
-   * Matches glTF's `normalTextureInfo.scale`. 1 leaves the map as authored, and no value has an
-   * effect without a map.
+   * Strength of the normal map's bumps, as glTF's `normalTextureInfo.scale`; 1 leaves the map as
+   * authored
    * @example
    * ```ts
    * material.normalScale = 2;
@@ -356,7 +352,7 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
 
   /**
    * Sets the strength of the normal map's bumps
-   * @param value - Multiplier on the normal map's tangent-space xy; 1 is a no-op
+   * @param value - Multiplier on the bumps
    */
   public set normalScale(value: number) {
     this.data.normalScale = value;
@@ -376,7 +372,7 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
 
   /**
    * Sets the specular tint
-   * @param value - Display-space specular tint
+   * @param value - Display colour
    */
   public set specularColor(value: ColorSource) {
     const colour = Color.shared.setValue(value);
@@ -389,10 +385,8 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
   }
 
   /**
-   * Frees the material for good
-   *
-   * Its textures stay alive unless `options` asks for them. Calling it again does nothing.
-   * @param options - Whether to destroy the textures too, as {@link BaseMaterial3D#destroy} takes them
+   * Frees the material for good, as {@link BaseMaterial3D#destroy} does
+   * @param options - Whether to destroy the textures too
    * @example
    * ```ts
    * mesh.material.destroy();
@@ -402,8 +396,8 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
     if (this.destroyed) return;
     super.destroy(options);
 
-    (this._descriptorByEnvKey as any) = null;
-    this._featureBits.length = 0;
+    (this._descriptorByEnvKey as Record<string, ShaderDescriptor> | null) = null;
+    (this._featureBits as ShaderBit[] | null) = null;
     (this as { /** @internal */ emissive?: EmissiveProps }).emissive = undefined;
   }
 }

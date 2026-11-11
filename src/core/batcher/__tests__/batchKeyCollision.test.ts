@@ -11,10 +11,6 @@ import { View3D } from '~/scene/View3D';
 
 import { RenderPassBit } from '../../render-passes/RenderPass';
 
-/**
- * Burns uids so the next `Geometry3D` built lands `gap` above `from`; pixi hands geometry uids out
- * in order and never reuses one
- */
 function burnGeometryUids(from: number, gap: number): void {
   for (let i = 0; i < gap - 1; i++) uid('geometry');
 }

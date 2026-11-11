@@ -1,11 +1,20 @@
 import { Color, CubeTexture, ExtensionType, Rectangle, Shader, State } from 'pixi.js';
-import type { Geometry, InstructionPipe, InstructionSet, Texture, WebGLRenderer, WebGPURenderer } from 'pixi.js';
+import type {
+  Geometry,
+  GPU,
+  InstructionPipe,
+  InstructionSet,
+  Texture,
+  TextureSource,
+  WebGLRenderer,
+  WebGPURenderer,
+} from 'pixi.js';
 
 import { GeometryAtlasPool } from '../../geometry/GeometryAtlasPool';
 import { writeLinearRgb } from '../../materials/BaseMaterial3D';
 import type { Vector3 } from '../../math/vector/Vector3';
 import { updateView3DScene } from '../../scene/utils/updateView3DScene';
-import type { View3D } from '../../scene/View3D';
+import type { ToneMapping, View3D } from '../../scene/View3D';
 import type { Mesh3DBatch } from '../batcher/Mesh3DBatch';
 import type { Mesh3DData } from '../batcher/Mesh3DData';
 import type { SortedMesh3DView } from '../batcher/SortedMesh3DView';
@@ -18,30 +27,28 @@ import { generateBrdfLut } from '../ibl/generateBrdfLut';
 import { generateIblSpecialCubemap } from '../ibl/generateIblSpecialCubemap';
 import type { DrawTarget } from '../render-graph/RenderGraph';
 import type { ColorHandle, DepthHandle } from '../render-graph/ResourceHandle';
+import { ColorOutputDraw } from '../render-passes/output/ColorOutputDraw';
 import { cachesDrawWork } from '../render-passes/RenderForwardDescriptor';
 import type { RenderForwardDescriptor } from '../render-passes/RenderForwardDescriptor';
 import type { ReadonlyRect, RenderSession } from '../render-passes/RenderSession';
 import { calculateTransparentDistances } from '../render-passes/transparent/transparentSortUtils';
+import { CUBETEXTURE_EMPTY } from '../textures/DefaultTextures';
 import { View3DGCRegistry } from '../View3DGCRegistry';
-import type { GlobalSlots, View3DPipe } from '../View3DPipe';
+import type { View3DPipe } from '../View3DPipe';
 import { computeForwardBatchesGpu, prepareForwardBatchesGpu, renderForwardBatchesGpu } from './renderForwardBatchesGpu';
 import { getGlobalGpuData } from './shader/globalBitGpu';
 import { ShadowRenderPassGpu } from './ShadowRenderPassGpu';
 
-/** Fallback fog tint when `Fog.color` is omitted */
+/** Default `Fog.color`, which `Fog.color` in `View3D.ts` states */
 const DEFAULT_FOG_COLOR = 0xcccccc;
-/** Reused for the per-frame fog sRGB → linear decode; never escapes this module */
 const scratchFogColor = new Color();
+/** Refilled per copy, since pixi clamps the rect in place */
+const scratchCopyRegion = new Rectangle();
+const scratchCopyDest = { x: 0, y: 0 };
 
-/**
- * The WebGPU instruction pipe that renders each View3D
- *
- * Each frame it updates the view's scene, packs its lights and global uniforms, and runs its
- * render graph. It owns what every view on the renderer shares: the material, morph and
- * per-geometry stores, the BRDF table and the prefiltered environment maps. The passes draw
- * through it as their `View3DPipe`.
- * @internal
- */
+type ForwardOptionsGpu = Parameters<typeof renderForwardBatchesGpu>[0];
+
+/** @internal */
 export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
   /** @ignore */
   public static extension = {
@@ -53,21 +60,21 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
 
   private _brdfLutTexture?: Texture;
 
-  private _iblEnvironmentMap: Record<number, CubeTexture> = {};
+  private readonly _iblEnvironmentMap = new Map<TextureSource, CubeTexture>();
 
   /**
-   * Storage for `RenderSession.viewport`, filled when the scene update builds the view camera;
-   * one rect serves every view because views render one at a time
+   * Unloads rather than destroys the cube, since a view's bind group may hold it until its next frame,
+   * and pixi warns when a resource dies under a bind group
    */
+  private readonly _onEnvironmentDestroy = (source: TextureSource): void => {
+    this._iblEnvironmentMap.get(source)?.source.unload();
+    this._iblEnvironmentMap.delete(source);
+  };
+
+  /** `RenderSession.viewport` for every view, since views render one at a time */
   private readonly _viewport = new Rectangle();
 
-  /**
-   * The per-batch sort of the distance-sorted forward passes, bound once so a frame allocates no
-   * closure
-   * @param renderables - The batch's draw list for the pass
-   * @param batch - The batch whose store holds the instances' matrices
-   * @param cameraPosition - The drawing camera's eye
-   */
+  /** Bound once, so a frame allocates no closure */
   private readonly _sortForwardByDistance = (
     renderables: SortedMesh3DView<Mesh3DData>,
     batch: Mesh3DBatch,
@@ -76,162 +83,109 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     calculateTransparentDistances(renderables, batch.storeBuffer.data, cameraPosition);
   };
 
-  /** The renderer's material rows, shared by every view, with the dirty queue in front of them */
-  public materialStoreBuffer = new MaterialDataStoreBuffer();
+  /** Refilled per call so a pass allocates none, and cleared after so the pipe holds no frame's objects */
+  private readonly _forwardOptions: ForwardOptionsGpu = {
+    pipe: this,
+    bit: 0,
+    bindsMaterial: false,
+    cullResults: null!,
+    camera: null,
+    session: null!,
+    useBundles: false,
+    sortBatch: undefined,
+  };
 
-  /** The renderer's morph deltas and weights, shared by every view and bound at global slot 13 */
+  /** Made in `contextChange`, since its alignment comes from device limits that don't exist yet here */
+  public materialStoreBuffer!: MaterialDataStoreBuffer;
+
   public _morphStoreBuffer = new MorphStoreBuffer();
 
-  /**
-   * The renderer's per-geometry rows, shared by every view: the bounding sphere the cull compute
-   * reads, and the morph facts the morph bits read
-   */
   public geometryDataStoreBuffer = new GeometryDataStoreBuffer();
 
-  /** This backend's bindings for the textures passes sample; `globalBitGpu` lists the whole group */
-  public readonly globalSlots: GlobalSlots = { opaqueColor: 8, opaqueDepth: 7, shadowMap: 5 };
-
-  /**
-   * The process-wide atlas pool for WebGPU's packing, which keeps indices geometry-local because
-   * each draw passes its `baseVertex`; `GeometryAtlasPool.from` says why no renderer owns it
-   */
   public readonly atlasPool = GeometryAtlasPool.from({ rebaseIndices: false });
 
-  /** Views this renderer draws, enrolled in pixi's GC so an idle one gives its GPU memory back */
   private readonly _managedViews: View3DGCRegistry;
 
-  /**
-   * Whether `execute` has checked the device for the `indirect-first-instance` feature
-   *
-   * The batched indirect draws start most commands at a non-zero `firstInstance`, and without the
-   * feature WebGPU treats such a draw as a no-op. pixi requests the feature whenever the adapter
-   * has it.
-   */
-  private _indirectChecked = false;
-
   private _destroyed = false;
+  private _colorOutputDraw: ColorOutputDraw | null = null;
 
-  /**
-   * Takes the renderer union pixi constructs every pipe with; only a WebGPU renderer builds this one
-   * @param renderer - The WebGPU renderer this pipe serves
-   */
+  /** Joins the `contextChange` runner itself, since pixi joins only systems to it */
   constructor(renderer: WebGLRenderer | WebGPURenderer) {
     this.renderer = renderer as WebGPURenderer;
     this._managedViews = new View3DGCRegistry(this.renderer);
+    this.renderer.runners.contextChange.add(this);
   }
 
   /**
-   * Construct the WebGPU shadow pass
-   *
-   * The shadow pass is the one default pass with a class per backend, and `createDefaultGraph3D`
-   * can't import either without bundling that backend, so the pipe builds it. The pipe supplies
-   * its own renderer; the caller passes the graph's shadow-map handle.
-   * @param options - Shadow pass options
-   * @param options.shadowMapHandle - The graph's shadow-map handle
+   * Runs after the limits system, which joined the runner first, and keeps the store across a device
+   * restore, since materials hold places in it
    */
+  public contextChange(gpu: GPU): void {
+    if (!gpu.device.features.has('indirect-first-instance')) {
+      throw new Error(
+        "@pixi/3d requires the WebGPU 'indirect-first-instance' feature (used by the batched indirect draw path).",
+      );
+    }
+
+    this.materialStoreBuffer ??= new MaterialDataStoreBuffer({
+      alignment: this.renderer.limits.minUniformBufferOffsetAlignment,
+      rendererType: this.renderer.type,
+    });
+  }
+
   public createShadowPass(options: { shadowMapHandle: DepthHandle }): ShadowRenderPassGpu {
     return new ShadowRenderPassGpu({ renderer: this.renderer, shadowMapHandle: options.shadowMapHandle });
   }
 
-  /**
-   * The forward mesh-draw seam
-   *
-   * A pass that caches its draws (`cachesDrawWork`, the default for `sort: 'key'`) replays a
-   * render bundle. One that doesn't, the default for `sort: 'distance'`, re-sorts by camera
-   * distance and replays its command list every frame. `useBundles` and `alwaysRebuild` are
-   * always complements, as `renderForwardBatchesGpu` requires.
-   * @param desc - The pass's forward descriptor: bit, sort mode, and cache policy
-   * @param session - The current frame's render session
-   */
   public renderForward(desc: RenderForwardDescriptor, session: RenderSession): void {
-    const useBundles = cachesDrawWork(desc);
-    const skipTextureBatching = desc.textures === false;
-
-    if (desc.sort === 'distance') {
-      renderForwardBatchesGpu({
-        pipe: this,
-        bit: desc.bit,
-        cullResults: desc.cullResults,
-        camera: desc.camera,
-        session,
-        useBundles,
-        alwaysRebuild: !useBundles,
-        sortBatch: this._sortForwardByDistance,
-        skipTextureBatching,
-      });
-      return;
-    }
-
-    renderForwardBatchesGpu({
-      pipe: this,
-      bit: desc.bit,
-      cullResults: desc.cullResults,
-      camera: desc.camera,
-      session,
-      useBundles,
-      alwaysRebuild: !useBundles,
-      skipTextureBatching,
-    });
+    renderForwardBatchesGpu(this._fillForwardOptions(desc, session, desc.sort === 'distance'));
+    this._releaseForwardOptions();
   }
 
-  /**
-   * Prepare phase (graph pre-sweep): build and upload the cached passes' draw data and run their
-   * culls before their render pass opens
-   *
-   * Only passes that cache their draws get here, and they sort by key: a sort by camera distance
-   * changes every frame, so a bundle can't keep it. A pass declaring `sort: 'distance'` with
-   * `cache: 'auto'` would therefore draw in key order. Passes that don't cache return early and
-   * prepare inline in `renderForward`.
-   * @param desc - The pass's forward descriptor: bit, sort mode, and cache policy
-   * @param session - The current frame's render session
-   */
   public prepareForward(desc: RenderForwardDescriptor, session: RenderSession): void {
     if (!cachesDrawWork(desc)) return;
 
-    const options = {
-      pipe: this,
-      bit: desc.bit,
-      cullResults: desc.cullResults,
-      camera: desc.camera,
-      session,
-      useBundles: true,
-      alwaysRebuild: false,
-      skipTextureBatching: desc.textures === false,
-    };
+    const options = this._fillForwardOptions(desc, session, false);
     prepareForwardBatchesGpu(options);
     computeForwardBatchesGpu(options);
+    this._releaseForwardOptions();
   }
 
-  /**
-   * Draw a single geometry with a shader + state directly (the background pass, post effects)
-   * @param geometry - The geometry to draw
-   * @param shader - The shader to draw it with
-   * @param state - The blend, depth, and culling state for the draw
-   */
+  private _fillForwardOptions(
+    desc: RenderForwardDescriptor,
+    session: RenderSession,
+    sortByDistance: boolean,
+  ): ForwardOptionsGpu {
+    const options = this._forwardOptions;
+    options.useBundles = cachesDrawWork(desc);
+    options.bit = desc.bit;
+    options.bindsMaterial = desc.bindsMaterial;
+    options.cullResults = desc.cullResults;
+    options.camera = desc.camera;
+    options.session = session;
+    options.sortBatch = sortByDistance ? this._sortForwardByDistance : undefined;
+    return options;
+  }
+
+  private _releaseForwardOptions(): void {
+    this._forwardOptions.cullResults = null!;
+    this._forwardOptions.camera = null;
+    this._forwardOptions.session = null!;
+  }
+
   public renderGeometry(geometry: Geometry, shader: Shader, state: State): void {
     this.renderer.encoder.draw({ geometry, shader, state });
   }
 
-  /**
-   * Narrows the open render pass's viewport (see `View3DPipe.setViewport`)
-   *
-   * pixi's encoder types the rect as a `Rectangle` but reads only its four numbers.
-   * @param viewport - The rect to narrow to, in the bound target's physical pixels
-   */
+  /** Casts, since pixi's encoder reads only the rect's four numbers */
   public setViewport(viewport: ReadonlyRect): void {
     this.renderer.encoder.setViewport(viewport as Rectangle);
   }
 
-  /** The shader `clearDepth` draws with, built on first use and shared by every view */
   private _depthClearShader: Shader | null = null;
   private _depthClearState: State | null = null;
 
-  /**
-   * Resets depth by drawing a fullscreen triangle at the far plane with colour writes masked off
-   *
-   * The executor has already set the live viewport to the pass's rect, which clips the triangle.
-   * @param _session - Unused; the live viewport already bounds the clear
-   */
+  /** Draws at the far plane with colour masked off, clipped by the viewport the executor already set */
   public clearDepth(_session: RenderSession): void {
     if (!this._depthClearShader) this._buildDepthClear();
     const { encoder, pipeline } = this.renderer;
@@ -244,14 +198,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     pipeline.setColorMask(0b1111);
   }
 
-  /**
-   * Builds the depth clear's state and shader
-   *
-   * `depthTest: false` makes pixi compare with `'always'` and `depthMask: true` keeps depth
-   * writes on, so every covered pixel takes the triangle's depth. The vertex shader puts the
-   * triangle at `z = w = 1`, the far plane. The fragment shader must return a colour even though
-   * the colour mask discards it.
-   */
+  /** `depthTest: false` is pixi's compare `'always'`, so with `depthMask` every pixel takes the far plane */
   private _buildDepthClear(): void {
     const state = new State();
     state.depthTest = false;
@@ -288,66 +235,57 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     });
   }
 
-  /**
-   * Copies the colour (see `View3DPipe.copyColor`)
-   *
-   * WebGPU can't copy inside an open render pass, so the pass is closed first; pixi's
-   * `copyToTexture` would close it too. No pass is open afterwards, so `activeTarget` is nulled
-   * and the executor opens one for whatever draws next.
-   * @param source - The camera's draw target to copy from
-   * @param dest - The texture whose frame receives the copy
-   * @param session - The frame's render session
-   */
+  /** Closes the open pass, since WebGPU can't copy inside one, and nulls `activeTarget` for the executor to reopen */
   public copyColor(source: DrawTarget, dest: Texture, session: RenderSession): void {
     const { target, viewport } = source;
     if (!target.colorTexture) return;
     this.renderer.renderTarget.finishRenderPass();
     const frame = dest.frame;
     const resolution = dest.source.resolution;
+    scratchCopyDest.x = Math.round(frame.x * resolution);
+    scratchCopyDest.y = Math.round(frame.y * resolution);
     this.renderer.renderTarget.copyToTexture(
       target,
       dest,
-      { x: viewport.x, y: viewport.y },
-      { width: viewport.width, height: viewport.height },
-      { x: Math.round(frame.x * resolution), y: Math.round(frame.y * resolution) },
+      scratchCopyRegion.copyFrom(viewport),
+      scratchCopyRegion,
+      scratchCopyDest,
     );
     session.activeTarget = null;
   }
 
-  /**
-   * Fills the mip chain (see `View3DPipe.generateMips`)
-   *
-   * `MipChainSystemGpu` records its own render passes on the frame encoder, and WebGPU can't begin
-   * one while another is open. A copy has already closed the pass, but an effect that drew the
-   * texture leaves its pass open, so this closes it and nulls `activeTarget` for the executor to
-   * reopen the target for the next pass.
-   * @param handle - The colour whose mips to fill from level 0
-   * @param session - The frame's render session
-   */
+  /** Closes the open pass, as `copyColor` does */
+  public outputColor(source: DrawTarget, dest: Texture, session: RenderSession, toneMapping: ToneMapping | null): void {
+    if (!source.target.colorTexture) return;
+    this.renderer.renderTarget.finishRenderPass();
+    (this._colorOutputDraw ??= new ColorOutputDraw(this.renderer)).draw(this, source, dest, toneMapping);
+    session.activeTarget = null;
+  }
+
+  /** Closes the pass an effect may have left open, as `MipChainSystemGpu` begins passes of its own */
   public generateMips(handle: ColorHandle, session: RenderSession): void {
-    const source = session.view3d._graph._texture(handle, session).source;
+    const source = session.view3d._graph.getTexture(handle, session).source;
     this.renderer.renderTarget.finishRenderPass();
     session.activeTarget = null;
     this.renderer.mipChain3d.generate(source);
   }
 
-  /**
-   * Copies the depth (see `View3DPipe.copyDepth`), closing the pass and nulling `activeTarget` as
-   * `copyColor` does
-   * @param source - The camera's draw target to copy from
-   * @param dest - The depth texture that receives the copy
-   * @param session - The frame's render session
-   */
+  /** WebGPU resolves into the texture when the render pass ends */
+  public resolveColor(): void {}
+
+  /** Closes the open pass, as `copyColor` does */
   public copyDepth(source: DrawTarget, dest: Texture, session: RenderSession): void {
     const { target, viewport } = source;
     if (!target.depthStencilTexture) return;
     this.renderer.renderTarget.finishRenderPass();
+    scratchCopyDest.x = 0;
+    scratchCopyDest.y = 0;
     this.renderer.renderTarget.copyDepthTexture(
       target,
       dest,
-      { x: viewport.x, y: viewport.y },
-      { width: viewport.width, height: viewport.height },
-      { x: 0, y: 0 },
+      scratchCopyRegion.copyFrom(viewport),
+      scratchCopyRegion,
+      scratchCopyDest,
     );
     session.activeTarget = null;
   }
@@ -366,62 +304,31 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
   public updateRenderable() {}
 
   /**
-   * Renders one View3D: updates its scene, settles the shared stores, then runs its graph
-   *
-   * The BRDF table is the renderer's, made the first time any view has an environment, and each
-   * cubemap source gets one prefiltered cube. Until a view has an environment its slots hold
-   * placeholders that are safe to sample as zero light. A hemisphere needs only the table.
-   *
-   * A view with no meshes and no batched meshes returns before its scene update, so its graph
-   * never runs and it draws nothing, not even its background.
-   *
-   * After the scene update, the stores are re-bound every frame, so a buffer or texture this
-   * frame's growth replaced is the one bound. Then the material and geometry stores and the atlas
-   * pool upload, and `detectSharedCacheInvalidation` drops every recorded draw if a store or atlas
-   * buffer was replaced. A change of target (attachment formats, sample count, winding) needs no
-   * check here: a bundle carries a stamp of the state it baked, and each pass checks it with
-   * `encoder.isBundleValid` before replaying.
-   * @param view3d - The view to render
+   * Re-records the bundles when the environment cube changes, and re-binds the stores every frame, after
+   * the scene update may have grown them. A view with no meshes draws nothing, background included.
    */
   public execute(view3d: View3D) {
     if (!view3d.isRenderable) return;
 
-    if (!this._indirectChecked) {
-      this._indirectChecked = true;
-      if (!this.renderer.gpu.device.features.has('indirect-first-instance')) {
-        throw new Error(
-          "@pixi/3d requires the WebGPU 'indirect-first-instance' feature (used by the batched indirect draw path).",
-        );
-      }
-    }
-
-    view3d._ensureInitialized(this.renderer);
-
     const gpuData = getGlobalGpuData(view3d, this.renderer);
+
+    const defaultTarget = this.renderer.renderTarget.renderTarget;
+
+    view3d._ensureInitialized(this.renderer, gpuData, defaultTarget.colorTexture.source.resolution);
 
     this._managedViews.track(view3d);
 
     const env = view3d.environment;
 
     if (env) {
-      this._brdfLutTexture ||= generateBrdfLut({
-        renderer: this.renderer,
-        size: 512,
-      });
-      gpuData.globalBindGroup.setResource(this._brdfLutTexture.source, 3);
+      this._brdfLutTexture ||= generateBrdfLut({ renderer: this.renderer });
+      gpuData.globalBindGroup.setResource(this._brdfLutTexture.source, 'uBrdfLutTexture');
+    }
 
-      if (env instanceof CubeTexture) {
-        const sourceId = env.source.uid;
-        if (!this._iblEnvironmentMap[sourceId]) {
-          this._iblEnvironmentMap[sourceId] = generateIblSpecialCubemap({
-            renderer: this.renderer,
-            sourceTexture: env,
-            size: 256,
-            sampleCount: 1024,
-          });
-        }
-        gpuData.globalBindGroup.setResource(this._iblEnvironmentMap[sourceId].source, 2);
-      }
+    const environmentSource = this._prefilteredEnvironment(env);
+    if (gpuData.globalBindGroup.getResource('uEnvironmentTexture') !== environmentSource) {
+      gpuData.globalBindGroup.setResource(environmentSource, 'uEnvironmentTexture');
+      view3d._invalidateBundleCaches();
     }
 
     const lights = view3d.lights;
@@ -430,7 +337,8 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     const renderSession: RenderSession = {
       view3d,
       lights,
-      defaultTarget: this.renderer.renderTarget.renderTarget,
+      defaultTarget,
+      defaultFrontFaceInverted: false,
       activeTarget: null,
       needsDepthClear: true,
       viewport: this._viewport,
@@ -441,10 +349,10 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
 
     if (!updateView3DScene(view3d, this, renderSession)) return;
 
-    gpuData.globalBindGroup.setResource(this.materialStoreBuffer.texture.source, 9);
-    gpuData.globalBindGroup.setResource(view3d._bonePit.bufferResource, 12);
-    gpuData.globalBindGroup.setResource(this._morphStoreBuffer.bufferResource, 13);
-    gpuData.globalBindGroup.setResource(this.geometryDataStoreBuffer.bufferResource, 14);
+    gpuData.globalBindGroup.setResource(this.materialStoreBuffer.texture.source, 'uMaterialStorage');
+    gpuData.globalBindGroup.setResource(view3d._bonePit.bufferResource, 'uBonePitStorage');
+    gpuData.globalBindGroup.setResource(this._morphStoreBuffer.bufferResource, 'uMorphStorage');
+    gpuData.globalBindGroup.setResource(this.geometryDataStoreBuffer.bufferResource, 'uGeometryStorage');
     this.materialStoreBuffer.update();
     this.geometryDataStoreBuffer.update();
     this.atlasPool.update();
@@ -466,28 +374,29 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
   }
 
   /**
-   * Release every renderer-scoped GPU resource this pipe owns
-   *
-   * Invoked by `renderer.destroy()` through the `destroy` runner, so the renderer (and its
-   * device) is going away with us; all of these are exclusively owned and freed
-   * unconditionally. Idempotent: a second call is a no-op.
-   *
-   * The enrolled views' global bind groups go first, before the BRDF table, environment maps and
-   * stores they bind. `atlasPool` is left alone: it outlives the renderer by design.
+   * Unloads the views first, so their bind groups go before what they bind; `atlasPool` outlives the
+   * renderer, as `GeometryAtlasPool.from` says
    */
   public destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
 
     this._managedViews.destroy();
+    this._colorOutputDraw?.destroy();
+    this._colorOutputDraw = null;
 
     this._brdfLutTexture?.destroy(true);
     this._brdfLutTexture = undefined;
 
-    for (const sourceId in this._iblEnvironmentMap) this._iblEnvironmentMap[sourceId].destroy(true);
-    this._iblEnvironmentMap = {};
+    for (const [source, cube] of this._iblEnvironmentMap) {
+      source.off('destroy', this._onEnvironmentDestroy);
+      cube.destroy(true);
+    }
+    (this._iblEnvironmentMap as Map<TextureSource, CubeTexture> | null) = null;
 
+    this.renderer.runners.contextChange.remove(this);
     this.materialStoreBuffer.destroy();
+    (this.materialStoreBuffer as MaterialDataStoreBuffer | null) = null;
     this._morphStoreBuffer.destroy();
     this.geometryDataStoreBuffer.destroy();
 
@@ -496,10 +405,18 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     this._depthClearState = null;
   }
 
-  /**
-   * Readies the view for this frame (see `View3DPipe.prepareView`)
-   * @param session - The frame's render session
-   */
+  private _prefilteredEnvironment(env: View3D['environment']): TextureSource {
+    if (!(env instanceof CubeTexture) || env.source.destroyed) return CUBETEXTURE_EMPTY.source;
+
+    let cube = this._iblEnvironmentMap.get(env.source);
+    if (!cube) {
+      cube = generateIblSpecialCubemap({ renderer: this.renderer, sourceTexture: env });
+      this._iblEnvironmentMap.set(env.source, cube);
+      env.source.once('destroy', this._onEnvironmentDestroy);
+    }
+    return cube.source;
+  }
+
   public prepareView(session: RenderSession): void {
     const { view3d, lights } = session;
 
@@ -508,14 +425,8 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
   }
 
   /**
-   * Writes the view's time, exposure and fog into its global uniforms and uploads them
-   *
-   * The fog colour is decoded to linear and scaled by exposure here, once, rather than per
-   * fragment (`uFogColor` says why), and rewritten every frame while fog is on, since exposure can
-   * change when the colour doesn't. The upload happens here because render bundles replay without
-   * pixi's per-draw bind-group sync, and the group is static, so pixi uploads it only after
-   * `update()` marks it dirty.
-   * @param view3d - The view whose uniforms to write
+   * Uploads the static group itself, since bundles replay without pixi's per-draw sync, and rewrites the
+   * fog colour every frame, since it carries `exposure`, which can change alone
    */
   private _updateGlobalUniforms(view3d: View3D): void {
     const { fog } = view3d;
@@ -526,6 +437,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
 
     globalUniforms.uTime = performance.now() / 1000;
     globalUniforms.uExposure = view3d.exposure;
+    globalUniforms.uDisplayExposure = Math.pow(view3d.exposure, 1 / 2.2);
 
     if (fog) {
       scratchFogColor.setValue(fog.color ?? DEFAULT_FOG_COLOR);
@@ -544,7 +456,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
 declare global {
   namespace PixiMixins {
     interface WebGPUPipes {
-      /** The 3D scene pipe — types `renderer.renderPipes.view3d` on WebGPU renderers */
+      /** The 3D scene pipe; types `renderer.renderPipes.view3d` on WebGPU renderers */
       view3d: View3DPipeGpu;
     }
   }

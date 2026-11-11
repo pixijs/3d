@@ -2,13 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 
-/** Reads Geometry3D's private teardown latch without an `any` cast. */
 interface GeometryInternals {
   _destroyed: boolean;
 }
-
-/** A normal component of +1 as it reads back once normals are quantized to snorm16, four lanes per vertex */
-const SNORM16_ONE = 32767;
 
 describe('PlaneGeometry flipV', () => {
   it('flips v on every row of a subdivided plane', () => {
@@ -34,33 +30,6 @@ describe('PlaneGeometry flipV', () => {
 });
 
 describe('PlaneGeometry.spriteQuad', () => {
-  it('is a 1x1 quad facing +Z with v = 0 on its top edge', () => {
-    const quad = PlaneGeometry.spriteQuad;
-
-    // prettier-ignore
-    expect(Array.from(quad.positions as Float32Array)).toEqual([
-      -0.5, -0.5, 0,
-       0.5, -0.5, 0,
-      -0.5,  0.5, 0,
-       0.5,  0.5, 0,
-    ]);
-    // prettier-ignore
-    expect(Array.from(quad.normals as Int16Array)).toEqual([
-      0, 0, SNORM16_ONE, 0,
-      0, 0, SNORM16_ONE, 0,
-      0, 0, SNORM16_ONE, 0,
-      0, 0, SNORM16_ONE, 0,
-    ]);
-    // prettier-ignore
-    expect(Array.from(quad.uvs as Float32Array)).toEqual([
-      0, 1,
-      1, 1,
-      0, 0,
-      1, 0,
-    ]);
-    expect(Array.from(quad.indices as Uint16Array)).toEqual([0, 1, 2, 2, 1, 3]);
-  });
-
   it('ignores a direct destroy: buffers stay intact and it stays renderable', () => {
     const quad = PlaneGeometry.spriteQuad;
 

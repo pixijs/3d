@@ -23,7 +23,7 @@ describe('compileWgslSource, checked by the device: CI skips WebGPU scenes, but 
       view3d.camera.position.set(0, 0, 4);
       app.render();
 
-      const programs = [...app.renderer.material3d._shaderCache.values()].map((s) => s.shader.gpuProgram!);
+      const programs = [...app.renderer.material3d._shaderCache.values()].map((s) => s.shader.gpuProgram);
       expect(programs.length).toBeGreaterThan(0);
       for (const program of programs) {
         const source = program.fragment!.source;

@@ -44,7 +44,7 @@ export function cullFrustumBatchedScene(cull: CullMode): TestScene {
           batched.setGeometryAt(i, geometry);
           batched.setMaterialAt(i, material);
           batched.setMatrixAt(i, local.makeTranslation(x * SPACING - half, y * SPACING - half, 0));
-          batched.setItemActive(i, RenderPassBit.OPAQUE);
+          batched.setPassesAt(i, RenderPassBit.OPAQUE);
         }
       }
       // Non-identity batch matrix `B` (container spin about Z) → the cull must transform the frustum

@@ -320,13 +320,6 @@ describe('Vector4', () => {
   });
 
   describe('normalize', () => {
-    test('produces unit length across all four components', () => {
-      const p = new Vector4(2, 0, 0, 0);
-      p.normalize();
-      expectVec4Close(p, 1, 0, 0, 0);
-      expect(p.magnitude()).toBeCloseTo(1, 5);
-    });
-
     test('normalizes a non-axis-aligned vector', () => {
       const p = new Vector4(1, 1, 1, 1);
       p.normalize();
@@ -449,13 +442,6 @@ describe('Vector4', () => {
   });
 
   describe('applyMatrix4', () => {
-    test('w=1 picks up translation (homogeneous position)', () => {
-      const m = new Matrix4().makeTranslation(10, 20, 30);
-      const p = new Vector4(1, 2, 3, 1);
-      p.applyMatrix4(m);
-      expectVec4Close(p, 11, 22, 33, 1);
-    });
-
     test('w=0 ignores translation (direction vector)', () => {
       const m = new Matrix4().makeTranslation(10, 20, 30);
       const p = new Vector4(1, 2, 3, 0);

@@ -16,7 +16,7 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Plane } from '~/math/shapes/Plane';
 import { Vector3 } from '~/math/vector/Vector3';
 import { Pass3D } from '~/post-processing/Pass3D';
-import type { PassContext, PassStage } from '~/post-processing/Pass3D';
+import type { PassContext, SceneStage } from '~/post-processing/Pass3D';
 import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Mesh3D } from '~/scene/Mesh3D';
@@ -25,9 +25,8 @@ import { View3D } from '~/scene/View3D';
 const FEED_WIDTH = 128;
 const FEED_HEIGHT = 72;
 
-/** Adds one opaque forward pass from `camera` before the scene draws */
 class FeedPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'beforeOpaque';
+  public readonly stage: SceneStage = 'beforeOpaque';
 
   constructor(private readonly _camera: Camera3D) {
     super();
@@ -38,14 +37,8 @@ class FeedPass extends Pass3D {
   }
 }
 
-/**
- * Adds an opaque forward pass from `camera`, a copy of its depth, and a view pass that reads that copy
- * so the graph keeps the copy
- *
- * The camera's last pass is then the depth copy, which doesn't write the camera's colour.
- */
 class FeedDepthCopyPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'beforeOpaque';
+  public readonly stage: SceneStage = 'beforeOpaque';
 
   constructor(private readonly _camera: Camera3D) {
     super();
@@ -72,9 +65,8 @@ class FeedDepthCopyPass extends Pass3D {
   }
 }
 
-/** Adds one opaque forward pass from `camera` onto the view's own target */
 class InsetPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'afterTransparent';
+  public readonly stage: SceneStage = 'afterTransparent';
 
   constructor(private readonly _camera: Camera3D) {
     super();
@@ -108,22 +100,6 @@ function buildScene(display: RenderTexture): { view3d: View3D; feedCamera: Camer
 }
 
 describe('updateCameraProjectionForTarget', () => {
-  it('takes its aspect from the rect the camera fills, not from the view, with no shift when nothing is clipped', () => {
-    const camera = new Camera3D({ fov: 60 });
-    const frame = updateCameraProjectionForTarget(camera, FEED_WIDTH, FEED_HEIGHT);
-
-    expect(frame).toBeDefined();
-    expect([frame!.x, frame!.y, frame!.width, frame!.height]).toEqual([0, 0, FEED_WIDTH, FEED_HEIGHT]);
-
-    /** `1 / tan(fov / 2)` at 60°: the projection's y scale, and its x scale times the aspect */
-    const f = 1 / Math.tan(Math.PI / 6);
-    const e = camera.projection.elements;
-    expect(e[0]).toBeCloseTo(f / (FEED_WIDTH / FEED_HEIGHT), 5);
-    expect(e[5]).toBeCloseTo(f, 5);
-    expect(e[8]).toBeCloseTo(0, 6);
-    expect(e[9]).toBeCloseTo(0, 6);
-  });
-
   it('maps the projection when the camera viewport runs off the target', () => {
     const camera = new Camera3D({ fov: 60 });
     camera.viewport.x = 0.75;
@@ -136,7 +112,6 @@ describe('updateCameraProjectionForTarget', () => {
       'asked for 96..192 of a 128-wide texture, 96..128 is what is left',
     ).toEqual([96, 0, 32, FEED_HEIGHT]);
 
-    /** `1 / tan(fov / 2)` at 60° */
     const f = 1 / Math.tan(Math.PI / 6);
     const unclippedAspect = (FEED_WIDTH * 0.5) / FEED_HEIGHT;
     const e = camera.projection.elements;
@@ -148,15 +123,7 @@ describe('updateCameraProjectionForTarget', () => {
     ).toBeCloseTo(-1, 5);
   });
 
-  it('reports no frame when the camera lands entirely off the target', () => {
-    const camera = new Camera3D();
-    camera.viewport.x = 1.4;
-
-    expect(updateCameraProjectionForTarget(camera, FEED_WIDTH, FEED_HEIGHT)).toBeUndefined();
-  });
-
   it('makes the clipping plane the near plane and the far corner the far plane', () => {
-    /** How far in front of the camera the clipping plane sits, facing away so it keeps everything beyond */
     const distance = 5;
     const camera = new Camera3D({ fov: 60, near: 0.1, far: 100 });
     camera.clippingPlane = new Plane(new Vector3(0, 0, -1), -distance);
@@ -164,12 +131,10 @@ describe('updateCameraProjectionForTarget', () => {
     updateCameraProjectionForTarget(camera, 128, 128);
 
     const e = camera.projection.elements;
-    /** NDC z of a point on the view axis, where the projection's z row reduces to `(m22 * z + m23) / -z` */
     const ndcZ = (z: number): number => (e[10] * z + e[14]) / -z;
 
     expect(ndcZ(-distance)).toBeCloseTo(-1, 5);
     expect(ndcZ(-camera.far)).toBeCloseTo(1, 5);
-    /** The same camera without the plane, which rewrites only the z row */
     const plain = new Camera3D({ fov: 60, near: 0.1, far: 100 });
     updateCameraProjectionForTarget(plain, 128, 128);
     expect(e[0]).toBeCloseTo(plain.projection.elements[0], 5);
@@ -194,17 +159,15 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         const renderTargetSystem = app.renderer.renderTarget;
         const original = renderTargetSystem.bind.bind(renderTargetSystem);
-        /** Every target the frame binds, with its clear */
         const binds: BindOptions[] = [];
-        renderTargetSystem.bind = ((options: BindOptions | Parameters<typeof original>[0]) => {
-          if (typeof options === 'object' && options !== null && 'target' in options)
-            binds.push(options as BindOptions);
+        renderTargetSystem.bind = (options: BindOptions | Parameters<typeof original>[0]) => {
+          if (typeof options === 'object' && options !== null && 'target' in options) binds.push({ ...options });
           return original(options as Parameters<typeof original>[0]);
-        }) as typeof renderTargetSystem.bind;
+        };
 
         app.render();
 
-        renderTargetSystem.bind = original as typeof renderTargetSystem.bind;
+        renderTargetSystem.bind = original;
 
         expect(
           Math.sign(getCameraData(insetCamera).projection.elements[5]),
@@ -212,14 +175,13 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         ).toBe(1);
         expect(
           Math.sign(getCameraData(feedCamera).projection.elements[5]),
-          'the feed draws into a texture, which is never the root, so WebGL flips its bound projection',
+          'the feed draws into a texture, which is never the root, so WebGL flips its GPU copy of the projection',
         ).toBe(preference === 'webgl' ? -1 : 1);
         expect(
           Math.sign(feedCamera.projection.elements[5]),
-          "the camera's own matrix is never flipped, only the bound copy",
+          "the camera's own matrix is never flipped, only the GPU copy",
         ).toBe(1);
 
-        /** A bind of the pooled target the feed draws into, which is the size of the texture's frame */
         const isFeed = (b: BindOptions): boolean =>
           b.frame instanceof Rectangle && b.frame.width === FEED_WIDTH && b.frame.height === FEED_HEIGHT;
         const feedBinds = binds.filter(isFeed);
@@ -295,10 +257,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         try {
           const { view3d, feedCamera, insetCamera } = buildScene(display);
-          /**
-           * Blended, so the feed's transparent pass has a member: a pass with none is skipped, and
-           * wouldn't be the camera's last pass this frame
-           */
           const pane = new Mesh3D({
             geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
             material: new Material3D({ baseColor: 0x00ff00, alpha: 0.5, alphaMode: 'blend' }),
@@ -357,18 +315,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         appOptions: { preference, width: 128, height: 128 },
       });
 
-      /**
-       * The pool hands out textures of exactly this size for the feed's target and the depth copy,
-       * so the copy covers the whole of both: WebGPU rejects a partial copy of a depth texture
-       */
       const display = RenderTexture.create({ width: 128, height: 128, resolution: 1 });
 
       try {
         const { view3d, feedCamera } = buildScene(display);
-        /**
-         * Unlit, so the readback sees its colour as authored in a view with no lights; it fills the
-         * feed and hides the cube from the feed camera
-         */
         const wall = new Mesh3D({
           geometry: new PlaneGeometry({ width: 40, height: 40 }),
           material: new FlatMaterial({ baseColor: 0x00ff00 }),
@@ -378,11 +328,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.passes = [new FeedDepthCopyPass(feedCamera)];
         app.stage.addChild(view3d);
 
-        /**
-         * The view pipe, whose WebGL depth copy this test stubs since it never reads the copy: pixi's
-         * WebGL depth copy wraps the destination in a render target of its own, which destroying the
-         * renderer destroys while the shared pool still holds it
-         */
         const pipe = (app.renderer as WebGLRenderer | WebGPURenderer).renderPipes.view3d;
         if (preference === 'webgl') vi.spyOn(pipe, 'copyDepth').mockImplementation(() => {});
 

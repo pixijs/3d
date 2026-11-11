@@ -26,6 +26,8 @@ const DOCUMENTED_NODES = [
   'ExportDefaultDeclaration',
 ];
 
+const TEST_FILE = /[\\/]__tests__[\\/]|\.test\.ts$|\.scene\.ts$/;
+
 function key(comment: AstComment): string {
   return `${comment.loc.start.line}:${comment.loc.start.column}`;
 }
@@ -33,8 +35,8 @@ function key(comment: AstComment): string {
 /**
  * The only comments are JSDoc blocks on declarations and tool directives (lint and TypeScript
  * suppressions, formatter ignores, bundler annotations, license headers, shader language tags). An
- * explanation that would be a comment moves into a name, a type, a test, or the JSDoc of an
- * extracted declaration.
+ * explanation that would be a comment moves into a name, a type or a test. Tests carry directives
+ * alone: no JSDoc either.
  */
 export const noComments: Rule = {
   meta: {
@@ -42,6 +44,7 @@ export const noComments: Rule = {
     docs: { description: 'Allow only JSDoc on declarations and tool directives as comments' },
   },
   create(context) {
+    const testFile = TEST_FILE.test(context.filename);
     const attached = new Set<string>();
     const visitor: Record<string, (node: AstNode) => void> = {};
 
@@ -59,6 +62,13 @@ export const noComments: Rule = {
     visitor['Program:exit'] = (node) => {
       for (const comment of node.comments ?? []) {
         if (isDirective(comment)) continue;
+        if (testFile) {
+          context.report({
+            loc: { start: comment.loc.start },
+            message: 'Tests carry no comments; say it in the test title, an expect message, a name, or `skipReason`',
+          });
+          continue;
+        }
         if (comment.type === 'Block' && comment.value.startsWith('*')) {
           if (attached.has(key(comment))) continue;
           context.report({
@@ -70,7 +80,8 @@ export const noComments: Rule = {
         context.report({
           loc: { start: comment.loc.start },
           message:
-            'Code comments are not allowed; move the explanation into a name, a type, a test, or the JSDoc of a declaration',
+            'Code comments are not allowed; move the explanation into a name, a type, a test, or the JSDoc of a ' +
+            'declaration. History (the bug that prompted the code, what was tried) goes in the PR description.',
         });
       }
     };

@@ -16,13 +16,13 @@ function createBatch(geometry: CubeGeometry, material: Material3D): BatchedMesh3
   batch.setGeometryAt(0, geometry);
   batch.setMaterialAt(0, material);
   batch.setMatrixAt(0, new Matrix4());
-  batch.setItemActive(0, RenderPassBit.OPAQUE);
+  batch.setPassesAt(0, RenderPassBit.OPAQUE);
   return batch;
 }
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`batch/pass dirty isolation (${preference})`, () => {
-    it('rebuilds only the batch whose draw data changed', async () => {
+    it('changes only the draw work of the batch whose draw data changed', async () => {
       const app = await getApp<Renderer>({
         id: `batch-dirty-isolation-${preference}`,
         appOptions: { preference, width: 128, height: 128 },
@@ -46,12 +46,18 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const passB = batchB.batch.drawLists[RenderPassBit.OPAQUE];
         const commandDirtyA = passA.commandList.dirtyId;
         const commandDirtyB = passB.commandList.dirtyId;
+        const rangesDirtyA = passA.rangesDirtyId;
+        const rangesDirtyB = passB.rangesDirtyId;
 
         batchA.setMaterialAt(0, materialB);
         app.render();
 
-        expect(passA.commandList.dirtyId).toBeGreaterThan(commandDirtyA);
-        expect(passB.commandList.dirtyId).toBe(commandDirtyB);
+        expect(
+          passA.commandList.dirtyId !== commandDirtyA || passA.rangesDirtyId !== rangesDirtyA,
+          "A's draw work changed, rebuilt or edited",
+        ).toBe(true);
+        expect(passB.commandList.dirtyId, "B's commands are the ones built").toBe(commandDirtyB);
+        expect(passB.rangesDirtyId, "B's ranges did not move").toBe(rangesDirtyB);
         expect(passA.lastDrawDirtyId).toBe(passA.drawDirtyId);
         expect(passB.lastDrawDirtyId).toBe(passB.drawDirtyId);
       } finally {

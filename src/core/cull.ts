@@ -1,71 +1,45 @@
+import { isMobile, isSafari } from 'pixi.js';
+
 import type { CullMode } from '../scene/View3D';
 
 /**
- * Concrete producer a batch resolves to for a frame, which the render side routes on
- *
- * `'off'` binds the raw instance buffer and draws every instance; `'cpu'` and
- * `'gpu'` bind the compacted buffer (survivors only), produced on the CPU or in a
- * compute pass respectively.
+ * A batch's cull mode in one pass: `'gpu'` falls back to `'cpu'` where the pass can't compact on the GPU
  * @internal
  */
-type CullProducer = 'off' | 'cpu' | 'gpu';
+export function resolveCullProducer(mode: CullMode, gpuCompaction: boolean): CullMode {
+  return mode === 'gpu' && !gpuCompaction ? 'cpu' : mode;
+}
 
 /**
- * Largest batch, in instances, that `'auto'` draws without culling, on the bet that drawing a
- * batch this small costs less than culling it
- *
- * The gate counts instances only, so a batch of heavy meshes and a batch of quads resolve alike,
- * though culling pays far more for the meshes. Issue #242 tracks weighing in geometry.
- */
-const AUTO_OFF_MAX = 300;
-
-/**
- * Resolves a batch's {@link CullMode} to the concrete `CullProducer` it uses
- *
- * Decided per batch from the backend and the batch's instance count. `'gpu'`
- * needs a compute pass, so it degrades to `'cpu'` on WebGL. `'auto'` draws a batch of up to
- * `AUTO_OFF_MAX` instances without culling, and culls a larger one on the GPU where there is a
- * compute pass, on the CPU where there isn't.
- * @param mode - The batch's cull mode: its view's for the scene batch, its own for a `BatchedMesh3D`.
- * @param isWebGPU - Whether the active backend is WebGPU.
- * @param instanceCount - The batch's instance count (drives the `'auto'` gate).
- * @returns The producer the batch uses this frame.
+ * Per pass, the largest batch in instances that culls on the CPU and draws direct, rather than on the GPU and
+ * indirect; it works around WebKit's GPU cost per indirect draw, and an unset entry takes the browser's default
  * @internal
  */
-export function resolveCullProducer(mode: CullMode, isWebGPU: boolean, instanceCount: number): CullProducer {
-  switch (mode) {
-    case 'off':
-      return 'off';
-    case 'cpu':
-      return 'cpu';
-    case 'gpu':
-      return isWebGPU ? 'gpu' : 'cpu';
-    default:
-      if (instanceCount <= AUTO_OFF_MAX) return 'off';
-      if (!isWebGPU) return 'cpu';
-      return 'gpu';
-  }
+export const cpuSubmission: {
+  forward?: number;
+  shadow?: number;
+} = {};
+
+const CPU_SUBMISSION_WEBKIT = { forward: 50_000, shadow: 20_000 } as const;
+
+let _webKit: boolean | undefined;
+
+/**
+ * The pass's {@link cpuSubmission} cap: its override, or the browser's default, `0` outside WebKit
+ * @internal
+ */
+export function cpuSubmissionLimit(pass: 'forward' | 'shadow'): number {
+  const set = cpuSubmission[pass];
+  if (set !== undefined) return set;
+  _webKit ??= isMobile.apple.device || isSafari();
+  return _webKit ? CPU_SUBMISSION_WEBKIT[pass] : 0;
 }
 
 const _batchPlanes = new Float32Array(24);
 
 /**
- * Transforms the six world-space frustum `planes` into a batch's local frame
- *
- * Applies `Bᵀ` (the transpose of the batch world matrix `B` = store row 0), renormalized so signed
- * distances stay comparable to a batch-local sphere's radius. `B` is column-major, so `bCR` is
- * column `C`, row `R`. `Bᵀ`'s rows are `B`'s columns, so the transformed normal is
- * `(col0·n, col1·n, col2·n)` and the offset is `translation·n + d`, all divided by the new
- * normal's length. Returns `planes` unchanged when `B` is identity (scene batches). Otherwise the
- * result is a shared scratch: copy it (into a uniform, say) or finish with it before the next call.
- *
- * Both cull producers use this so they test in the same frame as the cached bounding spheres: the
- * CPU cull (`produceCpuCompaction`) and the GPU compaction, which uploads the result per batch and
- * so drops the per-instance `B × L` combine from its kernel. WebGL culls in the same frame too, in
- * the batcher's replay.
- * @param planes - The six world-space frustum planes, 4 floats each.
- * @param f32 - The batch's store f32 view; row 0 holds the batch world matrix.
- * @returns The batch-local planes: `planes` itself, or the shared scratch.
+ * The six world-space frustum planes in a batch's local frame, renormalized to compare with local sphere radii;
+ * `planes` itself for an identity batch, or else a shared scratch that the next call overwrites
  * @internal
  */
 export function transformFrustumToBatch(planes: Float32Array, f32: Float32Array): Float32Array {

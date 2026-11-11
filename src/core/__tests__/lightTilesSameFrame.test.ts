@@ -14,18 +14,10 @@ const WALL_Z = -8;
 const LIGHT_Z = WALL_Z + 1.5;
 const FOV = 75;
 
-/** Half the view's width at the light's depth */
 const EDGE = Math.tan((FOV * Math.PI) / 360) * (EYE_Z - LIGHT_Z);
 
-/** Where the light stands, as a fraction of the way from the screen's centre to its edge */
 const OFFSET = 0.6;
 
-/**
- * Brightness, 0 to 255, of the canvas pixels at `xs` along row `y`
- *
- * Read straight off the canvas, because a reference image of a still scene can't show masks a
- * frame late: it draws the same picture from last frame's masks.
- */
 function canvasBrightness(canvas: HTMLCanvasElement, xs: number[], y: number): number[] {
   const data = readCanvasPixels(canvas, 0, y, canvas.width, 1);
   return xs.map((x) => Math.max(data[x * 4], data[x * 4 + 1], data[x * 4 + 2]));

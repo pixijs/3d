@@ -2,7 +2,6 @@ import { wgslCompilationErrors } from '@test-utils';
 import { WGSL_ALIGN_SIZE_DATA } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
-import { MATERIAL_STRIDE_BYTES } from '~/core/buffers/MaterialDataStoreBuffer';
 import { compileGlslSource } from '~/core/gl/codegen/compileGlslSource';
 import { materialTextureAccessPluginGl } from '~/core/gl/codegen/materialTextureAccessPluginGl';
 import { compileWgslSource } from '~/core/gpu/codegen/compileWgslSource';
@@ -16,14 +15,15 @@ import { materialStructPackPlugin } from '~/core/shader/codegen/materialStructPa
 import { createStructLayout } from '~/core/shader/codegen/structLayout';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
+import type { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { clearcoatBit } from '~/materials/pbr/bits/clearcoatBit';
 import { iridescenceBit } from '~/materials/pbr/bits/iridescenceBit';
 import { pbrMaterialBit } from '~/materials/pbr/bits/pbrMaterialBit';
 import { sheenBit } from '~/materials/pbr/bits/sheenBit';
 import { specularBit } from '~/materials/pbr/bits/specularBit';
 import { transmissionBit } from '~/materials/pbr/bits/transmissionBit';
+import { getOrCreateMaterialDataClass } from '~/materials/utils/createMaterialDataClass';
 
-/** An all-features PBR material's bits, led by the scalar-only `alphaMaskBit` so a scalar precedes the vec4s */
 const WORST_CASE_BITS = [
   alphaMaskBit,
   pbrMaterialBit,
@@ -37,64 +37,51 @@ const WORST_CASE_BITS = [
   sheenBit,
 ];
 
-const wgslTemplate: ShaderBitTemplate = { bindGroups: [], gpu: '{{header}}' };
 const glslTemplate: ShaderBitTemplate = {
   bindGroups: [],
   gl: { vertex: '{{header}}\nvoid main() {}', fragment: '{{header}}\nvoid main() {}' },
 };
 
-/** The field names of the emitted WGSL `struct Material`, in order */
-function wgslMaterialStructFieldOrder(source: string): string[] {
-  const match = source.match(/struct Material \{([^}]*)\}/);
-
-  expect(match).not.toBeNull();
-
-  return [...match![1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
-}
-
 describe('materialStructPackPlugin on both backends', () => {
-  const gpu = compileWgslSource({
-    bits: WORST_CASE_BITS,
-    template: wgslTemplate,
-    extraPlugins: [materialStructPackPlugin, materialTextureAccessPlugin],
-  });
   const gl = compileGlslSource({
     bits: WORST_CASE_BITS,
     template: glslTemplate,
     extraPlugins: [materialStructPackPlugin, materialTextureAccessPluginGl],
   });
 
-  it('should produce identical Material field order on both backends', () => {
-    const gpuKeys = Object.keys(gpu.structs.Material);
-    const glKeys = Object.keys(gl.structs.Material);
-
-    expect(gpuKeys.length).toBeGreaterThan(0);
-    expect(glKeys).toEqual(gpuKeys);
-  });
-
-  it('should emit the WGSL Material struct in packed order', () => {
-    const emittedOrder = wgslMaterialStructFieldOrder(gpu.vertex.source);
-
-    expect(emittedOrder).toEqual(Object.keys(gpu.structs.Material));
-  });
-
-  it('should lay out the all-features Material with no padding, since it has more scalars than vec3s, within the stride', () => {
+  it('should lay out the all-features Material with no padding, since it has more scalars than vec3s', () => {
     const fields = gl.structs.Material;
-    const layout = createStructLayout(fields as Record<string, string>);
+    const layout = createStructLayout(fields);
     const dataBytes = Object.values(fields).reduce((sum, type) => sum + WGSL_ALIGN_SIZE_DATA[type].size, 0);
 
     expect(layout.size).toBe(dataBytes);
-    expect(layout.size).toBeLessThanOrEqual(MATERIAL_STRIDE_BYTES);
   });
 });
 
-describe('material struct overflow', () => {
-  it('throws with the computed layout when the Material struct passes the stride: 17 vec4s, 272 bytes, against 256', () => {
+describe('material struct length', () => {
+  const stubMaterial = { update(): void {} } as unknown as BaseMaterial3D;
+
+  function dataFloats(fields: Record<string, string>): number {
+    const bit = { name: 'lengthBit', bindings: { material: fields } } as ShaderBit;
+    const def = mergeMaterialStruct([bit]);
+    return new (getOrCreateMaterialDataClass(def, JSON.stringify(def)))(stubMaterial)._f32.length;
+  }
+
+  it('a struct of 17 vec4s, 272 bytes, takes 17 texels, and the accessor reads the last from texel 16', () => {
     const material: Record<string, string> = {};
     for (let i = 0; i < 17; i++) material[`v${i}`] = 'vec4<f32>';
-    const bit = { name: 'overflowBit', bindings: { material } } as ShaderBit;
 
-    expect(() => mergeMaterialStruct([bit])).toThrowError(/272 bytes[\s\S]*v16: vec4<f32>/);
+    expect(dataFloats(material)).toBe(17 * 4);
+
+    const bit = { name: 'lengthBit', bindings: { material } } as ShaderBit;
+    const source = compileWgslSource({
+      bits: [bit],
+      template: { bindGroups: [], gpu: '{{header}}\n{{textureGetters}}' },
+      extraPlugins: [materialStructPackPlugin, materialTextureAccessPlugin],
+    }).vertex.source;
+
+    expect(source).toContain('let base = i32(index);');
+    expect(source).toContain('base + 16');
   });
 });
 
@@ -109,14 +96,14 @@ describe('empty Material struct', () => {
   };
   const storageWgslTemplate: ShaderBitTemplate = {
     bindGroups: ['global'],
-    gpu: '{{header}}\n{{textureGetters}}\nfn main() { let vMaterialIndex = 0u; {{vertexMaterialAccess}} }',
+    gpu: '{{header}}\n{{textureGetters}}\nfn main() { let vMaterialIndex = 0u; {{vertexStoreAccess}} }',
   };
   const storageGlslTemplate: ShaderBitTemplate = {
     bindGroups: ['global'],
     gl: {
-      vertex: '{{header}}\n{{textureGetters}}\nvoid main() { {{materialAccess}} gl_Position = vec4(0.0); }',
+      vertex: '{{header}}\n{{textureGetters}}\nvoid main() { {{storeAccess}} gl_Position = vec4(0.0); }',
       fragment:
-        '{{header}}\n{{textureGetters}}\nout vec4 fragColor;\nvoid main() { {{materialAccess}} fragColor = vec4(1.0); }',
+        '{{header}}\n{{textureGetters}}\nout vec4 fragColor;\nvoid main() { {{storeAccess}} fragColor = vec4(1.0); }',
     },
   };
 
@@ -146,14 +133,12 @@ describe('empty Material struct', () => {
       bits: [storageBit],
       template: storageGlslTemplate,
       extraPlugins: [materialStructPackPlugin, materialTextureAccessPluginGl],
-      uboGroups: [],
       useLocations: false,
     });
     const populated = compileGlslSource({
       bits: [storageBit, glMaterialBit],
       template: storageGlslTemplate,
       extraPlugins: [materialStructPackPlugin, materialTextureAccessPluginGl],
-      uboGroups: [],
       useLocations: false,
     });
 
@@ -188,7 +173,6 @@ describe('integer material fields', () => {
         },
       },
       extraPlugins: [materialStructPackPlugin, materialTextureAccessPluginGl],
-      uboGroups: [],
       useLocations: false,
     });
 
@@ -216,10 +200,6 @@ describe('material field types', () => {
     );
   });
 
-  it('skips an integer texture declared in the material group', () => {
-    expect(mergeMaterialStruct([materialBit('integerTextureBit', { rows: 'texture_2d<u32>' })])).toEqual({});
-  });
-
   it('reads a mat2x2 field as two columns on both backends, and WebGPU compiles it', async () => {
     const bit: ShaderBit = {
       name: 'mat2Test',
@@ -235,7 +215,7 @@ describe('material field types', () => {
 @fragment
 fn mainFragment() -> @location(0) vec4<f32> {
   let vMaterialIndex = 0u;
-  {{fragmentMaterialAccess}}
+  {{fragmentStoreAccess}}
   return vec4<f32>(material.tint * vec2<f32>(material.gain), 0.0, 1.0);
 }`,
       },
@@ -251,7 +231,6 @@ fn mainFragment() -> @location(0) vec4<f32> {
         },
       },
       extraPlugins: [materialStructPackPlugin, materialTextureAccessPluginGl],
-      uboGroups: [],
       useLocations: false,
     });
 

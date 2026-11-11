@@ -32,8 +32,12 @@ function pointer(overrides: Partial<FederatedPointerEvent> & { x: number; y: num
   } as unknown as FederatedPointerEvent;
 }
 
-function wheel(deltaY: number): FederatedWheelEvent {
-  return { deltaY, deltaMode: 0, ctrlKey: false, global: { x: 400, y: 300 } } as unknown as FederatedWheelEvent;
+function wheel(deltaY: number, global = { x: 400, y: 300 }): FederatedWheelEvent {
+  return { deltaY, deltaMode: 0, ctrlKey: false, global } as unknown as FederatedWheelEvent;
+}
+
+function span(view: View3D): number {
+  return view.worldToScreen({ x: 2, y: 0, z: 0 })!.x - view.worldToScreen({ x: 0, y: 0, z: 0 })!.x;
 }
 
 describe('OrbitCamera', () => {
@@ -79,6 +83,24 @@ describe('OrbitCamera', () => {
     expect(controls.distance).toBeCloseTo(10);
   });
 
+  it("emits 'change' once per pointer move when a damped 'change' listener calls update()", () => {
+    const controls = make({ enableDamping: true, dampingFactor: 0.033 });
+    const view = controls.view;
+    let changes = 0;
+
+    controls.on('change', () => {
+      changes++;
+      controls.update();
+    });
+
+    view.emit('pointerdown', pointer({ x: 400, y: 300 }));
+    view.emit('globalpointermove', pointer({ x: 500, y: 300 }));
+
+    expect(changes).toBe(1);
+    expect(controls.update()).toBe(true);
+    expect(changes).toBe(2);
+  });
+
   it('zooms in on a wheel-up and respects minDistance', () => {
     const controls = make({ minDistance: 9.5 });
     const view = controls.view;
@@ -89,6 +111,50 @@ describe('OrbitCamera', () => {
     view.emit('wheel', wheel(-10000));
     expect(controls.distance).toBeCloseTo(9.5);
   });
+
+  it('keeps the point under the cursor in place as an orthographic camera zooms toward it', () => {
+    const controls = make({ zoomToCursor: true });
+
+    controls.camera.mode = 'orthographic';
+
+    const cursor = { x: 600, y: 200 };
+    const underCursor = controls.view.screenToWorld(cursor, 10);
+
+    controls.view.emit('wheel', wheel(-100, cursor));
+
+    const after = controls.view.worldToScreen(underCursor)!;
+
+    expect(controls.camera.zoom).toBeGreaterThan(1);
+    expect(after.x).toBeCloseTo(cursor.x);
+    expect(after.y).toBeCloseTo(cursor.y);
+    expect(controls.target.x).toBeGreaterThan(0);
+    expect(controls.target.x).toBeLessThan(underCursor.x);
+  });
+
+  it('zoom(1.25) magnifies an orthographic view 1.25 times', () => {
+    const controls = make();
+
+    controls.camera.mode = 'orthographic';
+
+    const before = span(controls.view);
+
+    controls.zoom(1.25);
+
+    expect(span(controls.view)).toBeCloseTo(before * 1.25);
+  });
+
+  it.each(['perspective', 'orthographic'] as const)(
+    'pan(100, 0) moves the scene 100 px with a %s camera at a zoom of 2',
+    (mode) => {
+      const controls = make();
+
+      controls.camera.mode = mode;
+      controls.camera.zoom = 2;
+      controls.pan(100, 0);
+
+      expect(controls.view.worldToScreen({ x: 0, y: 0, z: 0 })!.x).toBeCloseTo(500);
+    },
+  );
 
   it('ignores input while disabled', () => {
     const controls = make({ enabled: false });

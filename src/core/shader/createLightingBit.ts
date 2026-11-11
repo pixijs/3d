@@ -2,12 +2,7 @@ import { MAX_LIGHTS } from '../../scene/View3D';
 import { LIGHT_DEPTH_BINS, LIGHT_TILES_X, LIGHT_TILES_Y } from '../LightTiles';
 import type { ShaderBit } from './ShaderBit';
 
-/**
- * GLSL `getLight(index)`, which unpacks one light's four `vec4`s from `uLightData` into a `Light`
- *
- * The WGSL loop builds its `Light` inline instead. The include guard lets two lighting bits share a
- * shader without declaring the helper twice.
- */
+/** Unpacks a light in `LightDataList`'s layout; the include guard lets two lighting bits share a shader */
 const GL_GET_LIGHT_HELPER = /*glsl*/ `
 #ifndef PIXI3D_GET_LIGHT_DEFINED
 #define PIXI3D_GET_LIGHT_DEFINED
@@ -22,44 +17,41 @@ Light getLight(int index) {
   l.position = d0.xyz;
   l.type = d0.w;
   l.color = d1.xyz;
-  l.range = d1.w;
+  l.rangeSq = d1.w;
   l.direction = d2.xyz;
   l.coneCos = d2.w;
   l.innerConeCos = d3.x;
   l.shadowDataIndex = d3.y;
+  l.radiusPow4 = d3.w;
   return l;
 }
 #endif
 `;
 
 /**
- * Options for {@link createLightingBit}
+ * Options for {@link createLightingBit}: the shading math of a lighting model, such as toon or
+ * Blinn-Phong, around a light loop the factory writes
  *
- * Every lighting model, whether PBR, toon or Blinn-Phong, walks the same lights, attenuates them
- * the same way and samples the same shadow maps. Only the shading math differs. The factory writes
- * the light loop, and these options supply the math.
- *
- * Roughly, the generated fragment `lighting` slot looks like this:
+ * The generated fragment `lighting` slot runs:
  *
  * ```text
  * preLighting
- * for (each light that can reach this fragment's screen tile and depth interval) {
+ * for (each light that can reach this fragment) {
  *   work out light, lightDir, attenuation, nDotL and shadow, or skip the light
  *   perLight
  * }
  * postLighting
  * ```
  *
- * ## Writing a lighting model
- *
  * 1. In `preLighting`, declare and zero your accumulators, such as `directLight`, and work out
  *    anything that doesn't depend on the light, such as `nDotV`.
- * 2. In `perLight`, add this light's share to the accumulators. The code runs inside the loop, so
- *    its locals are fresh each iteration and `continue;` skips the rest of this light. Lights that
- *    don't reach the fragment (`attenuation <= 0`) or that the surface faces away from
- *    (`nDotL <= 0`) never get here.
+ * 2. In `perLight`, add this light's share to them. `continue;` skips the rest of this light.
+ *    Lights that don't reach the fragment or that the surface faces away from never get here.
  * 3. In `postLighting`, write `finalColor` from the accumulators and whatever the material bit
- *    declared, such as `emissive`. Exposure, fog and tone mapping run on `finalColor` after it.
+ *    declared, such as `emissive`. Exposure, fog and tone mapping run after it.
+ *
+ * The loop sits in a block of its own, so names these snippets declare aren't visible to later
+ * slots such as `end`.
  *
  * ## What `perLight` can read
  *
@@ -74,40 +66,20 @@ Light getLight(int index) {
  * | `viewDir`     | `vec3`  | normalized, toward the camera; declared by the material bit   |
  *
  * Anything else the model needs, such as `albedo` and `roughness`, comes from the material bit
- * that runs before it. The light's kind is `light.kind` in WGSL and `light.type` in GLSL.
+ * that runs before it. The light's kind is `light.kind` in WGSL and `light.type` in GLSL; compare
+ * it with `LIGHT_DIRECTIONAL`, `LIGHT_POINT` or `LIGHT_SPOT`.
  *
  * ## Lobes
  *
- * Another bit in the descriptor can add per-light math to this loop without a second loop, which
- * would sample every shadow again. It writes into three fragment slots: `lobePreLighting`,
- * `lobePerLight` and `lobePostLighting`. Each runs after the matching snippet of these options,
- * and lobes run in the order their bits are listed. So a lobe's `lobePostLighting` sees
- * `finalColor` already assembled and can rewrite it, which is how clearcoat dims the layer beneath
- * it.
- *
- * ## Light kinds
- *
- * The global bit declares three constants for branching on the light's kind:
- *
- * | Name                | Value | Matches                  |
- * |---------------------|-------|--------------------------|
- * | `LIGHT_DIRECTIONAL` | `0.0` | `DirectionalLight`       |
- * | `LIGHT_POINT`       | `1.0` | `PointLight`             |
- * | `LIGHT_SPOT`        | `2.0` | `SpotLight`              |
- *
- * ```wgsl
- * if (light.kind == LIGHT_DIRECTIONAL) {
- *   // sun-specific math, such as sharper toon bands
- * }
- * ```
+ * Another bit in the descriptor can add per-light math to this loop, rather than run a second loop
+ * that samples every shadow again, through the fragment slots `lobePreLighting`, `lobePerLight`
+ * and `lobePostLighting`. Each runs after the matching snippet here, in the order the lobe bits are
+ * listed, so `lobePostLighting` sees the assembled `finalColor` and can rewrite it.
  *
  * ## Requirements
  *
- * The loop needs the backend's global bit, which declares `Light` and the packed light list
- * `uLightData`, and the camera bit, which holds the light masks. A {@link ShaderDescriptor} adds
- * both unless {@link ShaderDescriptorOptions#includeGlobal} or
- * {@link ShaderDescriptorOptions#includeCamera} turns them off. It also calls `calculateShadow`,
- * which the renderer supplies for lit materials.
+ * Use the bit in a material with {@link BaseMaterial3D#lit} on, the default. A pass's own shader
+ * can't run it.
  * @category rendering
  * @advanced
  */
@@ -121,6 +93,9 @@ export interface CreateLightingBitOptions {
   structs?: ShaderBit['structs'];
   /** Textures the model samples, such as a lookup table */
   textures?: string[];
+
+  /** Bits the model needs in the shader, such as {@link mathConstantsBit} for `PI` and `INV_PI` */
+  requires?: ShaderBit[];
 
   /** Code for the `{{header}}` slot, such as helper functions and constants */
   header?: {
@@ -143,12 +118,7 @@ export interface CreateLightingBitOptions {
     gl?: string;
   };
 
-  /**
-   * The shading math for one light, run inside the loop
-   *
-   * It adds the light's share to the accumulators `preLighting` declared. See the table above for
-   * what it can read.
-   */
+  /** The shading math for one light, run inside the loop; {@link CreateLightingBitOptions} lists what it reads */
   perLight: {
     /** WGSL source (WebGPU) */
     gpu?: string;
@@ -173,30 +143,8 @@ export interface CreateLightingBitOptions {
 /**
  * Builds a lighting `ShaderBit` around the shading math in `opts`
  *
- * Call it once at module scope and list the bit in a material's `bitsGpu` and `bitsGl`. See
- * {@link CreateLightingBitOptions} for what each snippet can read.
- *
- * For each light, the loop works out:
- *
- * - The direction. A directional or spot light's `direction` arrives normalized and is used as is.
- * - Distance falloff, for point and spot lights: inverse square, with the squared distance floored
- *   at 0.01 so a light at the surface doesn't divide by zero. A light with a `range` also fades to
- *   zero there, by `saturate(1 - (d / range)⁴)²`, the window from Karis 2013, "Real Shading in
- *   Unreal Engine 4". A fragment past the range skips the light before any other work.
- * - The spot cone: `saturate((cos θ - coneCos) / (innerConeCos - coneCos))`, squared, as
- *   `KHR_lights_punctual` recommends. `coneCos` is the outer edge, where the light ends, and
- *   `innerConeCos` is where full intensity starts. With no penumbra the two meet, and a 1e-6 floor
- *   on their difference keeps that hard edge from dividing by zero.
- *
- * The lights come from a bit mask, with bit `i` set when light `i` can reach the fragment's
- * screen tile and depth interval (see `binLightTiles`). The loop visits only the set bits but
- * keeps a fixed trip count of `MAX_LIGHTS`, because some GL compilers make an unbounded loop far
- * slower. WGSL finds the lowest set bit with `firstTrailingBit`. GLSL ES 3.00 has no `findLSB`, so
- * it isolates the bit, an exact power of two, and reads the light's index off its float exponent.
- *
- * The loop sits in its own block, so the names it, `preLighting` and the lobes declare don't leak
- * into the code after the slot. Its lobe markers are slots nested in this slot's code, filled in a
- * second pass; with no lobe bits they come out empty.
+ * Call it once at module scope and list the bit in a material's `bitsGpu` and `bitsGl`.
+ * {@link CreateLightingBitOptions} says what each snippet can read.
  * @example A diffuse-only Lambert model
  *
  * ```ts
@@ -214,8 +162,8 @@ export interface CreateLightingBitOptions {
  *   },
  *
  *   postLighting: {
- *     gpu: 'finalColor = directLight + ambient * albedo + emissive;',
- *     gl:  'finalColor = directLight + ambient * albedo + emissive;',
+ *     gpu: 'finalColor = directLight;',
+ *     gl:  'finalColor = directLight;',
  *   },
  * });
  * ```
@@ -266,15 +214,14 @@ ${opts.preLighting?.gpu ?? ''}
       let toLight = light.position - input.vPosition;
       let distanceSq = dot(toLight, toLight);
 
-      if (light.range > 0.0) {
-        let rangeSq = light.range * light.range;
-        if (distanceSq >= rangeSq) { continue; }
+      if (light.rangeSq > 0.0) {
+        if (distanceSq >= light.rangeSq) { continue; }
 
-        let distRatio = distanceSq / rangeSq;
+        let distRatio = distanceSq / light.rangeSq;
         let windowFalloff = saturate(1.0 - distRatio * distRatio);
-        attenuation = windowFalloff * windowFalloff / max(distanceSq, 0.01);
+        attenuation = windowFalloff * windowFalloff * inverseSqrt(distanceSq * distanceSq + light.radiusPow4);
       } else {
-        attenuation = 1.0 / max(distanceSq, 0.01);
+        attenuation = inverseSqrt(distanceSq * distanceSq + light.radiusPow4);
       }
 
       lightDir = toLight * inverseSqrt(distanceSq);
@@ -302,6 +249,10 @@ ${opts.postLighting?.gpu ?? ''}
 }
 `;
 
+  /**
+   * Keeps a fixed `MAX_LIGHTS` trip count, since some GL compilers make an unbounded loop far slower,
+   * and reads the light index off the lowest bit's float exponent, as GLSL ES 3.00 has no `findLSB`
+   */
   const glslLoop = /*glsl*/ `
 {
 ${opts.preLighting?.gl ?? ''}
@@ -336,15 +287,14 @@ ${opts.preLighting?.gl ?? ''}
       vec3 toLight = light.position - vPosition;
       float distanceSq = dot(toLight, toLight);
 
-      if (light.range > 0.0) {
-        float rangeSq = light.range * light.range;
-        if (distanceSq >= rangeSq) continue;
+      if (light.rangeSq > 0.0) {
+        if (distanceSq >= light.rangeSq) continue;
 
-        float distRatio = distanceSq / rangeSq;
+        float distRatio = distanceSq / light.rangeSq;
         float windowFalloff = clamp(1.0 - distRatio * distRatio, 0.0, 1.0);
-        attenuation = windowFalloff * windowFalloff / max(distanceSq, 0.01);
+        attenuation = windowFalloff * windowFalloff * inversesqrt(distanceSq * distanceSq + light.radiusPow4);
       } else {
-        attenuation = 1.0 / max(distanceSq, 0.01);
+        attenuation = inversesqrt(distanceSq * distanceSq + light.radiusPow4);
       }
 
       lightDir = toLight * inversesqrt(distanceSq);
@@ -374,6 +324,7 @@ ${opts.postLighting?.gl ?? ''}
 
   return {
     name: opts.name,
+    requires: opts.requires,
     structs: opts.structs,
     bindings: opts.bindings,
     textures: opts.textures,

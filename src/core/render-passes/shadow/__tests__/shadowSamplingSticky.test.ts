@@ -1,5 +1,5 @@
 import { getApp } from '@test-utils';
-import type { Application, Shader, WebGLRenderer, WebGPURenderer } from 'pixi.js';
+import type { Application, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Mesh3DData } from '~/core/batcher/Mesh3DData';
@@ -18,15 +18,10 @@ import { MAX_LIGHTS, View3D } from '~/scene/View3D';
 
 const RENDERERS = ['webgl', 'webgpu'] as const;
 
-/** Text only the real shadow sampler emits, per backend; the no-shadow stub has neither */
 const SAMPLER_MARK = { webgl: 'sampleShadowLayer', webgpu: 'textureSampleCompareLevel' } as const;
 
-/**
- * The fragment source of the shader a mesh draws the opaque pass with
- * @param mesh - A mesh that has rendered at least once
- */
 function fragmentSource(mesh: Mesh3DData): string {
-  const shader = mesh._passCache[RenderPassBit.OPAQUE].shader as Shader;
+  const shader = mesh._passCache[RenderPassBit.OPAQUE].shader;
   const fragment: unknown = shader.gpuProgram ? shader.gpuProgram.fragment?.source : shader.glProgram.fragment;
 
   return fragment as string;
@@ -91,11 +86,11 @@ for (const preference of RENDERERS) {
         batch.setGeometryAt(i, geometry);
         batch.setMaterialAt(i, material);
         batch.setMatrixAt(i, matrix);
-        batch.setItemActive(i, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+        batch.setPassesAt(i, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
       }
 
-      const receiver = batch.items[0];
-      const optedOut = batch.items[1];
+      const receiver = batch.batch.items[0];
+      const optedOut = batch.batch.items[1];
 
       optedOut.receiveShadow = false;
       sun.position.set(5, 8, 5);
@@ -111,6 +106,8 @@ for (const preference of RENDERERS) {
 
       const drawList = batch.batch.drawLists[RenderPassBit.OPAQUE];
       const commandDirtyId = drawList.commandList.dirtyId;
+      const rangesDirtyId = drawList.rangesDirtyId;
+      const bundleDirtyId = drawList.gpuData.bundleDirtyId;
       const pass = view.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass;
       const originalBundle = pass.cullResults.get(batch.batch)?.bundle ?? null;
 
@@ -120,14 +117,22 @@ for (const preference of RENDERERS) {
       expect(view._hasShadows).toBe(true);
       expect(fragmentSource(receiver)).toContain(mark);
       expect(fragmentSource(optedOut)).not.toContain(mark);
-      expect(drawList.commandList.dirtyId).toBeGreaterThan(commandDirtyId);
+      expect(
+        drawList.commandList.dirtyId !== commandDirtyId || drawList.rangesDirtyId !== rangesDirtyId,
+        'the cached draw work changed, rebuilt or edited',
+      ).toBe(true);
 
       const nextBundle = pass.cullResults.get(batch.batch)?.bundle ?? null;
 
       expect(originalBundle !== null).toBe(preference === 'webgpu');
-      expect(originalBundle !== null && nextBundle !== null && nextBundle !== originalBundle).toBe(
-        preference === 'webgpu',
-      );
+      expect(
+        drawList.gpuData.bundleDirtyId,
+        'binding the shadow map into the global group invalidates every bundle',
+      ).toBeGreaterThan(bundleDirtyId);
+      expect(
+        originalBundle !== null && nextBundle !== null && nextBundle !== originalBundle,
+        'so the bundle re-records, whether the list rebuilt or was edited',
+      ).toBe(preference === 'webgpu');
 
       const shadowShader = receiver._passCache[RenderPassBit.OPAQUE].shader;
 

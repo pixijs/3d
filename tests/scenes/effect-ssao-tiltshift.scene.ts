@@ -10,14 +10,6 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * The voxel-demo chain shape: `[ssao, tiltShift]`. SSAO's merge writes the
- * ping-pong transient, tilt-shift blits THAT (a mid-chain input, not
- * sceneColor) into its mip transient and presents — so the contact shadows
- * are baked into the bokeh. Exercises two depth consumers sharing the
- * scene-depth transient in one chain.
- */
-
 const SIZE = 200;
 
 export const scene: TestScene = {
@@ -26,8 +18,6 @@ export const scene: TestScene = {
     height: 260,
     backgroundColor: 0x242c36,
   },
-  // SSAO's depth sampling lands a couple of hundred pixels apart on the CI
-  // runner's GPU, all of it on the silhouettes and the contact shadows.
   pixelMatch: 250,
   delay: 120,
   create: async (app) => {

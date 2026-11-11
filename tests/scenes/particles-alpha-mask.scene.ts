@@ -6,17 +6,12 @@ import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
 import type { AlphaMode } from '~/materials/BaseMaterial3D';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
 import { wedgeTexture } from './helpers/particleTextures';
 
-// The three alpha modes side by side, each column threaded through an opaque
-// sphere so depth shows: 'blend' keeps the wedge's soft edge and composites,
-// 'mask' cuts a hard silhouette at the cutoff and writes depth, 'opaque'
-// draws the whole quad solid, transparent texels included. The mask column
-// also asks for additive blending, which mask ignores; if it ever took
-// effect the wedges would brighten over the sphere.
 const COLUMNS: { alphaMode: AlphaMode; color: number }[] = [
   { alphaMode: 'blend', color: 0xffaa44 },
   { alphaMode: 'mask', color: 0x66ddff },
@@ -60,7 +55,7 @@ export const scene: TestScene = {
         blendMode: alphaMode === 'mask' ? 'add' : 'normal',
         color,
         capacity: 8,
-        seed: `alpha-${alphaMode}`,
+        createRandom: () => seededRandom(`alpha-${alphaMode}`),
         autoUpdate: false,
         emitRate: 0,
         shape: new PointShape(),
@@ -72,8 +67,6 @@ export const scene: TestScene = {
 
       view3d.root.addChild(system);
 
-      // Six wedges down the column, alternating in front of and behind the
-      // sphere's centre so some are cut by it.
       for (let p = 0; p < 6; p++) {
         system.spawn(1, { position: { x, y: 1.9 - p * 0.76, z: p % 2 === 0 ? 0.5 : -0.5 } });
       }

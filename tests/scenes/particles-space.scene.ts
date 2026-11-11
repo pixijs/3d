@@ -2,14 +2,12 @@ import type { TestScene } from '@test-utils';
 
 import { ConeShape } from '~/extras/particles/emitterShapes/ConeShape';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
+import { seededRandom } from '~/math/utils/seededRandom';
 import type { ParticleSpace } from '~/scene/particles/ParticleContainer3D';
 import { View3D } from '~/scene/View3D';
 
 import { puffTexture } from './helpers/particleTextures';
 
-// The same emitter swept along the same arc twice, once per space. World-space
-// particles are dropped where they were born and leave a trail; local-space
-// ones ride the emitter's transform and stay bunched around where it ended up.
 const STEPS = 90;
 const SWEEP = 3.2;
 
@@ -29,7 +27,7 @@ export const scene: TestScene = {
         space,
         blendMode: 'add',
         capacity: 200,
-        seed: 'space',
+        createRandom: () => seededRandom('space'),
         autoUpdate: false,
         emitRate: 60,
         shape: new ConeShape({ angle: 20, radius: 0.05 }),

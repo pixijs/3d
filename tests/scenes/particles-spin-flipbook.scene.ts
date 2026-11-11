@@ -12,13 +12,6 @@ import { View3D } from '~/scene/View3D';
 
 import { ringSheetTexture, wedgeTexture } from './helpers/particleTextures';
 
-// Top row: wedges spinning. Same spin rate, staggered births, so the row reads
-// as one wedge turning through a full revolution left to right.
-//
-// Bottom row: a four-frame ring flipbook spread over life. The container is
-// built with the whole strip as its one texture, and the bit computes each
-// particle's frame window in the shader from progress, so there is no
-// per-particle frame attribute and nothing for the CPU to advance.
 export const scene: TestScene = {
   create: async (app) => {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
@@ -37,8 +30,6 @@ export const scene: TestScene = {
     wall.position.set(0, 0, -2);
     view3d.root.addChild(wall);
 
-    // --- spin ---
-
     const spinning = new ParticleContainer3D({
       texture: wedgeTexture(),
       capacity: 6,
@@ -49,7 +40,6 @@ export const scene: TestScene = {
     spinning.uniforms.uParticleTime = 3;
 
     for (let i = 0; i < 6; i++) {
-      // Age i/5 · 3s at spin π·(2/3) rad/s → rotation i/5 · 2π: one turn across the row.
       spinning.setParticle(i, {
         aPosition: { x: (i - 2.5) * 1.1, y: 1.3, z: 0 },
         aParticleSizeRot: { x: 0.9, y: 0 },
@@ -61,8 +51,6 @@ export const scene: TestScene = {
     }
 
     spinning.upload();
-
-    // --- flipbook ---
 
     const frames = ringSheetTexture(4);
     const sheet = new Texture({ source: frames[0].source });
@@ -78,7 +66,6 @@ export const scene: TestScene = {
     flipping.uniforms.uFlipbookGrid = [4, 1, 4];
 
     for (let i = 0; i < 4; i++) {
-      // Progress i/4 + a hair, so each particle sits squarely inside frame i.
       flipping.setParticle(i, {
         aPosition: { x: (i - 1.5) * 1.6, y: -1.3, z: 0 },
         aParticleSizeRot: { x: 1.2, y: 0 },

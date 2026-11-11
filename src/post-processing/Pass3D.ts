@@ -2,21 +2,51 @@ import type { WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
 import type { RenderGraph } from '../core/render-graph/RenderGraph';
 import type { ColorHandle, DepthHandle } from '../core/render-graph/ResourceHandle';
+import type { SceneOutput } from '../core/render-graph/SceneOutput';
+
+/**
+ * The stages where a pass draws meshes into the scene; see {@link PassStage}
+ * @example
+ * ```ts
+ * new MeshPass({ name: 'gizmo', stage: 'afterTransparent' });
+ * ```
+ * @category rendering
+ * @standard
+ */
+export type SceneStage = 'beforeOpaque' | 'afterOpaque' | 'afterTransparent';
+
+/**
+ * The stages of the post chain, before and after the view's tone curve, reserved for
+ * {@link PostEffect}; see {@link PassStage}
+ * @example
+ * ```ts
+ * view.passes = [new BloomEffect(), new TintEffect({ stage: 'beforeToneMapping' })];
+ * ```
+ * @category rendering
+ * @standard
+ */
+export type EffectStage = 'beforeToneMapping' | 'afterToneMapping';
 
 /**
  * Where in the default graph a {@link Pass3D} contributes its passes
  *
- * - `'beforeOpaque'` — before the view's own depth reset and any scene draw. Nothing in the
- *   frame has been drawn yet, so this is where a pass fills a texture the scene then samples:
- *   a security-camera feed, a mirror, a portal.
- * - `'afterOpaque'` — straight after the opaque draw, before the opaque colour and depth
- *   copies are taken. The pass is part of the opaque world: glass refracts it and
- *   transparents draw over it. The natural slot for hull outlines and decals. A pass on a
- *   camera with a render texture draws into that camera's own target at every stage, so the
- *   view's copies leave it out.
- * - `'afterTransparent'` — after every scene draw, before the post chain. Overlays, gizmos,
+ * The first three are scene stages ({@link SceneStage}), where a pass usually draws meshes into the
+ * scene's colour and depth. The last two are the post chain ({@link EffectStage}), where
+ * full-screen effects each read the image the one before wrote.
+ *
+ * - `'beforeOpaque'`: before the view clears its depth and draws the scene, so a pass here can fill
+ *   a texture the scene then samples: a security-camera feed, a mirror, a portal.
+ * - `'afterOpaque'`: straight after the opaque draw, so glass refracts what the pass draws and
+ *   transparent surfaces draw over it. Suits outlines and decals. A pass whose camera has a render
+ *   texture draws into that texture instead, so glass doesn't refract it.
+ * - `'afterTransparent'`: after every scene draw, before the post chain. Overlays, gizmos,
  *   debug wireframes.
- * - `'post'` — the fullscreen post chain, reserved for {@link PostEffect}.
+ * - `'beforeToneMapping'`: post effects that read the scene as light, in a float texture, before
+ *   the view's tone curve, so brightness above 1 is still there: bloom, depth of field, motion
+ *   blur, ambient occlusion. A {@link PostEffect} runs here unless it says otherwise.
+ * - `'afterToneMapping'`: post effects that read the picture as it will show, after the curve,
+ *   such as antialiasing that finds edges by their brightness on screen, a tint, or a viewer that
+ *   shows data as colours.
  * @example
  * ```ts
  * view.passes = [new MeshPass({ name: 'gizmo', stage: 'afterTransparent' })];
@@ -24,23 +54,22 @@ import type { ColorHandle, DepthHandle } from '../core/render-graph/ResourceHand
  * @category rendering
  * @standard
  */
-export type PassStage = 'beforeOpaque' | 'afterOpaque' | 'afterTransparent' | 'post';
+export type PassStage = SceneStage | EffectStage;
 
 /**
- * What the default graph hands a {@link Pass3D} at build time
+ * What a {@link Pass3D} receives at build time
  *
- * Scene-stage passes draw into `graph.sceneColor` / `graph.sceneDepth` and may sample the
- * opaque copies from here. The post chain extends this with its input/output handles
- * (see {@link EffectIO}).
+ * Scene-stage passes draw into `graph.sceneColor` and `graph.sceneDepth`. Post effects receive
+ * {@link EffectIO}, which adds their input and output.
  * @category rendering
  * @advanced
  */
 export interface PassContext {
   /** Renderer the graph is being built for */
   readonly renderer: WebGLRenderer | WebGPURenderer;
-  /** Mip-chained copy of the opaque colour buffer, shared with the glass passes */
+  /** Copy of the scene's colour after the opaque draw, with mips; the image glass refracts */
   readonly opaqueColor: ColorHandle;
-  /** Copy of the opaque depth buffer */
+  /** Copy of the scene's depth after the opaque draw */
   readonly opaqueDepth: DepthHandle;
 }
 
@@ -57,7 +86,7 @@ export interface PassContext {
  */
 export interface Pass3DOptions {
   /**
-   * Whether the pass runs; {@link Pass3D#enabled} covers what toggling it costs
+   * Whether the pass starts enabled; see {@link Pass3D#enabled}
    * @default true
    * @example
    * ```ts
@@ -70,16 +99,13 @@ export interface Pass3DOptions {
 /**
  * Base class for everything added to {@link View3D#passes}
  *
- * A pass object is the handle on an extra rendering step. It is constructed without a renderer,
- * survives every graph rebuild, can be shared across views, and carries the live properties you
- * tune. When a view builds its graph it calls {@link Pass3D#build} at the pass's
- * {@link PassStage}, and the pass adds its render passes there. The stage places the pass, so
- * scene passes are never ordered against post effects by hand; array order only matters between
+ * A pass needs no renderer to construct, can be shared across views, and holds the properties you
+ * tune. When a view builds its render graph, it calls {@link Pass3D#build} at the pass's
+ * {@link PassStage}, and the pass adds its render passes there. Array order only matters between
  * passes at the same stage.
  *
- * Two built-in shapes cover most needs: {@link MeshPass} redraws opted-in meshes with an
- * override shader, and {@link PostEffect} runs a fullscreen fragment over the frame. Anything
- * else subclasses this directly and talks to the graph.
+ * {@link MeshPass} redraws opted-in meshes with an override shader, and {@link PostEffect} runs a
+ * fullscreen fragment over the frame. Subclass this directly for anything else.
  * @example
  * ```ts
  * class MyRearViewPass extends Pass3D {
@@ -101,9 +127,9 @@ export abstract class Pass3D {
   /**
    * Whether this pass runs
    *
-   * Flipping it rebuilds the view's graph on the next render and re-keys every mesh against
-   * the new pass set: fine for a settings toggle, not a per-frame lever. Animate an effect's
-   * own properties instead; those are plain uniform writes.
+   * Flipping it rebuilds the view's render graph on the next render, which suits a settings toggle
+   * but not a change every frame; animate an effect's own properties instead. It can also
+   * recompile the view's materials; {@link View3D#passes} says when.
    * @example
    * ```ts
    * const wireframe = new MeshPass({ name: 'wireframe' });
@@ -113,18 +139,37 @@ export abstract class Pass3D {
    */
   public enabled: boolean;
 
-  /** Stage of the default graph at which {@link Pass3D#build} is called */
+  /** The {@link PassStage} at which the view calls {@link Pass3D#build} */
   public abstract readonly stage: PassStage;
+
+  /**
+   * Extra outputs the view's scene draw writes beside its colour while this pass is enabled
+   *
+   * Each costs the scene draw a texture and the shader work to fill it, and any output makes the
+   * view draw its scene into a texture first, as a post effect does. Reach an output's texture with
+   * {@link RenderGraph#getSceneOutput}, to read it or draw into it.
+   * @example
+   * ```ts
+   * const objectIdOutput: SceneOutput = { name: 'objectId', format: 'r32uint' };
+   *
+   * class MyPickingPass extends Pass3D {
+   *   public readonly stage = 'afterTransparent';
+   *   public readonly requiredOutputs = [objectIdOutput];
+   *   public build(): void {}
+   * }
+   * ```
+   */
+  public readonly requiredOutputs?: readonly SceneOutput[];
 
   constructor(options: Pass3DOptions = {}) {
     this.enabled = options.enabled ?? true;
   }
 
   /**
-   * Contribute this pass's graph passes and transients
+   * Adds this pass's render passes and textures to the graph
    *
-   * Called once per graph build at this pass's stage. Handles resolve to textures only inside
-   * a pass's `render(session)` — never here.
+   * Called once per graph build at this pass's stage. Handles become textures only inside a render
+   * pass's `render(session)`, through {@link RenderGraph#getTexture}, never here.
    * @param graph - Render graph being built; add passes and transients to it.
    * @param ctx - Renderer and shared handles for this build.
    * @advanced
@@ -132,12 +177,12 @@ export abstract class Pass3D {
   public abstract build(graph: RenderGraph, ctx: PassContext): void;
 
   /**
-   * Release GPU resources the pass owns outside the graph; the base implementation does nothing
+   * Releases GPU resources the pass made outside the graph; the base class has none
    *
-   * Override it only for such resources: the passes added in `build` and their shaders are torn
-   * down with the view's graph, and a plain `UniformGroup` needs no release. The view never calls
-   * this, on reassigning `view.passes` or on its own destroy, because a pass may be shared across
-   * views. Call it yourself when the pass is retired.
+   * The view never calls it, not on replacing `view.passes` nor on its own destroy, since a pass
+   * can be shared. Call it yourself once the pass is retired. Override it only for resources of your
+   * own: the render passes added in `build` go with the view's graph, and a plain `UniformGroup`
+   * needs no release.
    * @example
    * ```ts
    * view.passes = [];

@@ -1,15 +1,19 @@
+import { CompressedSource } from 'pixi.js';
 import type { SCALE_MODE, Texture, WRAP_MODE } from 'pixi.js';
 
 import type { Scene3DSource } from '../../../Scene3DSource';
 import type { GltfFormat } from '../GltfFormat';
 
+/** The glTF default sampler, written to every texture, since pixi's own default clamps to the edge */
+const DEFAULT_SAMPLER: Required<Pick<GltfFormat.Sampler, 'wrapS' | 'wrapT' | 'magFilter' | 'minFilter'>> = {
+  wrapS: 10497,
+  wrapT: 10497,
+  magFilter: 9729,
+  minFilter: 9987,
+};
+
 /**
- * Applies glTF sampler state to the loaded textures and stores them on the source
- *
- * A texture with no sampler keeps pixi's default wrapping and filtering.
- * @param gltfRaw - Parsed glTF JSON
- * @param images - Loaded textures indexed by glTF image index
- * @param source - Receives the textures
+ * A `CompressedSource` keeps the mips it shipped with, as the GPU can't generate them
  * @internal
  */
 export function processTextures(gltfRaw: GltfFormat, images: Texture[], source: Scene3DSource): void {
@@ -17,18 +21,17 @@ export function processTextures(gltfRaw: GltfFormat, images: Texture[], source: 
     gltfRaw.textures.forEach((rawTexture, index) => {
       const texture = images[rawTexture.source!];
 
-      const sampler = gltfRaw.samplers?.[rawTexture.sampler!];
+      const sampler = { ...DEFAULT_SAMPLER, ...gltfRaw.samplers?.[rawTexture.sampler!] };
 
-      if (sampler) {
-        const style = texture.source.style;
+      const style = texture.source.style;
 
-        style.addressModeU = sampler.wrapS ? getWrapMode(sampler.wrapS) : 'repeat';
-        style.addressModeV = sampler.wrapT ? getWrapMode(sampler.wrapT) : 'repeat';
-        style.magFilter = sampler.magFilter ? getMagFilter(sampler.magFilter) : 'linear';
-        style.minFilter = sampler.minFilter ? getMinFilter(sampler.minFilter) : 'linear';
-      }
+      style.addressModeU = getWrapMode(sampler.wrapS);
+      style.addressModeV = getWrapMode(sampler.wrapT);
+      style.magFilter = getMagFilter(sampler.magFilter);
+      style.minFilter = getMinFilter(sampler.minFilter);
 
-      texture.source.autoGenerateMipmaps = wantsMipmaps(sampler?.minFilter);
+      texture.source.autoGenerateMipmaps =
+        !(texture.source instanceof CompressedSource) && wantsMipmaps(sampler.minFilter);
 
       source.textures[index] = texture;
 
@@ -63,14 +66,6 @@ function getMinFilter(mode: number): SCALE_MODE {
   return 'linear';
 }
 
-/**
- * Whether a texture generates mipmaps, from its sampler's `minFilter`
- *
- * Yes unless `minFilter` is 9728 NEAREST or 9729 LINEAR, which asks for none, as pixel art does.
- * Pixi leaves mipmaps off by default, but a texture seen at a distance or at an angle needs them,
- * and so does anisotropic filtering.
- * @param minFilter - The sampler's `minFilter` GL enum, when the texture has one
- */
-function wantsMipmaps(minFilter?: number): boolean {
+function wantsMipmaps(minFilter: number): boolean {
   return minFilter !== 9728 && minFilter !== 9729;
 }

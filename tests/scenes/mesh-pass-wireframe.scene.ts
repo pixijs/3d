@@ -10,12 +10,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * A {@link MeshPass} with a topology override: the {@link WireframePass} redraws every mesh
- * whose material opts into `wireframe` as line primitives over the shaded result. Two meshes
- * opt in and one doesn't, so the opt-in reads straight off the frame.
- */
-
 const SIZE = 220;
 
 export const scene: TestScene = {

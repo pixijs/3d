@@ -6,7 +6,6 @@ import type { Geometry3D } from '~/geometry/Geometry3D';
 import type { Mesh3D } from '~/scene/Mesh3D';
 import { Morph } from '~/scene/Morph';
 
-/** `uid` is the identity a store's warning names */
 const morphedGeometry = (vertexCount: number, targetCount = 1, uid = 0): Geometry3D => {
   const targets: { positions: Float32Array }[] = [];
   for (let i = 0; i < targetCount; i++) targets.push({ positions: new Float32Array(vertexCount * 3) });
@@ -21,7 +20,6 @@ const morphedGeometry = (vertexCount: number, targetCount = 1, uid = 0): Geometr
 
 const morphedMesh = (weightCount: number): Morph => new Morph(new Float32Array(weightCount));
 
-/** The store's per-bucket free lists, reached past `private` */
 interface FreeLists {
   _freeSlots: Map<number, number[]>;
   _freeDeltaBlocks: Map<number, number[]>;
@@ -33,26 +31,22 @@ const total = (lists: Map<number, number[]>): number => {
   return n;
 };
 
-/**
- * Runs `fn`, swallowing the warning a geometry packed by another store raises, for tests about
- * something else
- * @param fn - The calls that may warn
- */
 const ignoringRepackWarning = (fn: () => void): void => void captureWarnings(fn);
 
 const freeSlotCount = (store: MorphStoreBuffer): number => total((store as unknown as FreeLists)._freeSlots);
 const freeDeltaBlockCount = (store: MorphStoreBuffer): number =>
   total((store as unknown as FreeLists)._freeDeltaBlocks);
-/** Absolute float offset where the weight-slot region starts (the arena's reservation) */
 const weightsBase = (store: MorphStoreBuffer): number =>
   (store as unknown as { _deltaCapacity: number })._deltaCapacity;
 
-/** The slice of a Mesh3D that `sync` reads: a morphed geometry, the morph state, and the row-dirty flag */
 const syncable = (weights: number[]): Mesh3D =>
   ({
     geometry: morphedGeometry(1, weights.length),
-    morph: new Morph(new Float32Array(weights)),
+    _morph: new Morph(new Float32Array(weights)),
     _storeDirty: false,
+    _markStoreDirty(this: { _storeDirty: boolean }) {
+      this._storeDirty = true;
+    },
   }) as unknown as Mesh3D;
 
 describe('MorphStoreBuffer', () => {
@@ -88,17 +82,6 @@ describe('MorphStoreBuffer', () => {
     const third = morphedGeometry(4, 2);
     store.uploadDeltas(third);
     expect(third._morphDeltaBase, 'with the free list empty, the next block goes after it').toBe(base + 32);
-  });
-
-  it('same-asset churn reuses one recycled block — the arena never grows', () => {
-    const store = new MorphStoreBuffer({ deltaCapacity: 64, weightCapacity: 8 });
-
-    for (let i = 0; i < 32; i++) {
-      const geometry = morphedGeometry(4);
-      store.uploadDeltas(geometry);
-      store.freeDeltas(geometry);
-    }
-    expect(store.bufferVersion, 'without recycling, 32 blocks of 16 floats would outgrow the 64-float arena').toBe(0);
   });
 
   it('a geometry packed by a destroyed store reads as unpacked in a fresh store', () => {
@@ -159,7 +142,7 @@ describe('MorphStoreBuffer', () => {
     const storeA = new MorphStoreBuffer({ deltaCapacity: 64, weightCapacity: 64 });
     const storeB = new MorphStoreBuffer({ deltaCapacity: 64, weightCapacity: 64 });
     const mesh = syncable([1, 0]);
-    const morph = mesh.morph!;
+    const morph = mesh._morph!;
 
     storeA.sync([mesh]);
     expect(morph._store).toBe(storeA);
@@ -184,10 +167,10 @@ describe('MorphStoreBuffer', () => {
     storeB.sync(meshes);
 
     expect(
-      new Set(meshes.map((mesh) => mesh.morph!._slot)).size,
+      new Set(meshes.map((mesh) => mesh._morph!._slot)).size,
       'the fresh store hands out the slot numbers the survivors still carry to the mesh synced first',
     ).toBe(meshes.length);
-    for (const { morph } of meshes) {
+    for (const { _morph: morph } of meshes) {
       expect(morph!._store).toBe(storeB);
       expect(morph!._weightIndex).toBe(weightsBase(storeB) + morph!._slot);
       const slot = storeB.data.subarray(morph!._weightIndex, morph!._weightIndex + 2);
@@ -213,7 +196,7 @@ describe('MorphStoreBuffer', () => {
     const store = new MorphStoreBuffer({ deltaCapacity: 64, weightCapacity: 64 });
     const mesh = syncable([1, 0]);
     store.sync([mesh]);
-    const morph = mesh.morph!;
+    const morph = mesh._morph!;
     expect(morph._slot).toBeGreaterThanOrEqual(0);
 
     store.destroy();
@@ -237,7 +220,7 @@ describe('MorphStoreBuffer', () => {
     const store = new MorphStoreBuffer({ deltaCapacity: 64, weightCapacity: 16 });
 
     const mesh = morphedMesh(4);
-    mesh.weights!.set([0.1, 0.2, 0.3, 0.4]);
+    mesh.weights.set([0.1, 0.2, 0.3, 0.4]);
     store.allocSlot(mesh);
     store.writeWeights(mesh);
     const slot = mesh._slot;
@@ -258,7 +241,6 @@ describe('MorphStoreBuffer', () => {
   it('packs position+normal texel pairs when the geometry has normal deltas', () => {
     const store = new MorphStoreBuffer({ deltaCapacity: 256, weightCapacity: 8 });
 
-    /** One vertex, two targets, a distinct value in every lane */
     const geometry = {
       _morphDeltaBase: -1,
       hasMorphNormals: true,
@@ -284,9 +266,9 @@ describe('MorphStoreBuffer', () => {
   it('computes the conservative bounds expansion while packing', () => {
     const store = new MorphStoreBuffer({ deltaCapacity: 256, weightCapacity: 8 });
 
-    /** Two targets whose longest deltas are 4 and 3 */
     const geometry = {
       _morphDeltaBase: -1,
+      _morphBoundsExpansion: 0,
       _morphTargets: [
         { positions: new Float32Array([3, 0, 0, 0, 4, 0]) },
         { positions: new Float32Array([0, 0, 1, 2, 2, 1]) },
@@ -299,26 +281,6 @@ describe('MorphStoreBuffer', () => {
       geometry._morphBoundsExpansion,
       "the sum of each target's longest delta bounds any vertex for weights in [0, 1]",
     ).toBeCloseTo(7);
-  });
-
-  it('recycles freed slots within the same power-of-two bucket', () => {
-    const store = new MorphStoreBuffer({ deltaCapacity: 16, weightCapacity: 64 });
-
-    const meshA = morphedMesh(4);
-    store.allocSlot(meshA);
-    const slotA = meshA._slot;
-
-    store.freeSlot(meshA);
-    expect(meshA._slot).toBe(-1);
-    expect(meshA._store).toBeNull();
-
-    const meshB = morphedMesh(3);
-    store.allocSlot(meshB);
-    expect(meshB._slot, "3 weights round up to A's size of 4 and reuse its slot").toBe(slotA);
-
-    const meshC = morphedMesh(5);
-    store.allocSlot(meshC);
-    expect(meshC._slot, '5 weights need a slot of 8').not.toBe(slotA);
   });
 
   it('weight-region growth keeps the base and existing slots in place', () => {

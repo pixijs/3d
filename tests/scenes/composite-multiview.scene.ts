@@ -7,17 +7,7 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Three composite-mode View3Ds side by side in one renderer, each with a
- * distinctly-coloured cube. Same size → all three recycle one pooled scene
- * transient, then blit it to the screen via OutputPass.
- *
- * Guards that every composite inset survives to the screen. Correct: red |
- * green | blue, left to right. If only the last cube shows (or earlier insets
- * are blank), the composite present path is dropping prior views.
- */
-
-const SIZE = 200; // non-pow2 → 256 bucket, exercises uViewportUVScale sub-rect blit
+const SIZE = 200;
 const ACCENTS = [0xff4455, 0x44dd66, 0x4488ff];
 
 function buildView(color: number, x: number): View3D {
@@ -52,7 +42,6 @@ export const scene: TestScene = {
   },
   delay: 120,
   create: async (app) => {
-    // Centres 130/360/590 at 200px wide → [30,230] [260,460] [490,690], non-overlapping.
     app.stage.addChild(buildView(ACCENTS[0], 130), buildView(ACCENTS[1], 360), buildView(ACCENTS[2], 590));
   },
 };

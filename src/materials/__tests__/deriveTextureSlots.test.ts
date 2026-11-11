@@ -17,12 +17,6 @@ import { View3D } from '~/scene/View3D';
 const makeView = () => new View3D({ width: 64, height: 64 });
 const makeTexture = () => new Texture({ source: new TextureSource({ width: 1, height: 1 }) });
 
-/**
- * The six optional Material3D features and a minimal option set that enables each
- *
- * An empty group still turns its feature on. An empty clearcoat group has no coat normal map, so
- * it gets no `clearcoatNormal` slot.
- */
 const FEATURES: { name: string; options: Material3DOptions; textures: string[] }[] = [
   { name: 'emissive', options: { emissive: { color: 0xff0000 } }, textures: ['emissive'] },
   { name: 'specular', options: { specular: { factor: 0.5 } }, textures: ['specular'] },
@@ -153,6 +147,20 @@ describe('Material3D texture slot derivation', () => {
     expect(() => validateMaterialTextureSlots(getMaterialLayout(descriptor.bitsGpu), material)).not.toThrow();
   });
 
+  it('fills Material3D extraBits slots from the textures option', () => {
+    const view = makeView();
+    const noise = makeTexture();
+    const noiseBit: ShaderBit = { name: 'noise', textures: ['noise'] };
+
+    const material = new Material3D({ extraBits: [noiseBit], textures: { noise } });
+
+    expect(material.textures.noise).toBe(noise);
+    expect(material.textures.normal).toBe(NORMAL_MAP);
+
+    const descriptor = material.getPrimaryDescriptor(view);
+    expect(() => validateMaterialTextureSlots(getMaterialLayout(descriptor.bitsGpu), material)).not.toThrow();
+  });
+
   it('fills raw-descriptor slots from their bits and the name-keyed textures option, swappable by name', () => {
     const albedo = makeTexture();
     const customBit: ShaderBit = { name: 'custom', textures: ['albedo', 'mask'] };
@@ -214,11 +222,11 @@ describe('material.textures — keyed slot surface', () => {
 
     expect(material.textures.baseColor).toBe(material._textures[material._slotByName.baseColor]);
 
-    material['_textureCacheKey'] = 0;
+    const dirtyId = material._descriptorDirtyId;
     material.textures.emissive = texture;
 
     expect(material.textures.emissive).toBe(texture);
     expect(material.emissive!.texture).toBe(texture);
-    expect(material['_textureCacheKey']).toBe(-1);
+    expect(material._descriptorDirtyId, 'a slot swap marks every mesh to rebuild').toBeGreaterThan(dirtyId);
   });
 });

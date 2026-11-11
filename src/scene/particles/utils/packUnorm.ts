@@ -1,9 +1,5 @@
 /**
- * A 0..1 value as a clamped byte
- *
- * Clamped per channel so an overshoot can't spill into the neighbouring
- * channel of a packed word.
- * @param v - Value to pack, clamped to 0..1
+ * A 0 to 1 value as a byte, clamped so an overshoot can't spill into the next channel of a packed word
  * @internal
  */
 export function unorm8(v: number): number {
@@ -11,8 +7,7 @@ export function unorm8(v: number): number {
 }
 
 /**
- * A 0..1 value as a clamped short
- * @param v - Value to pack, clamped to 0..1
+ * A 0 to 1 value as a clamped 16-bit integer
  * @internal
  */
 export function unorm16(v: number): number {

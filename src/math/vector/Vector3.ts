@@ -26,9 +26,6 @@ import type { PointLike3D } from './PointLike3D';
  *   enemy.position.addScaledVector(toPlayer, enemy.speed * (ticker.deltaMS / 1000));
  * });
  * ```
- * @see {@link PointData3D} For basic x,y,z interface
- * @see {@link PointLike3D} For point manipulation interface
- * @see {@link ObservableVector3} For the observable counterpart
  * @category maths
  * @standard
  */
@@ -97,7 +94,6 @@ export class Vector3 implements PointLike3D {
    * @param x - The x component
    * @param y - The y component, defaults to `x`
    * @param z - The z component, defaults to `x`
-   * @returns This vector, for chaining
    */
   public set(x = 0, y = x, z = x): this {
     this.x = x;
@@ -114,7 +110,6 @@ export class Vector3 implements PointLike3D {
    * respawnPoint.copyFrom(player.position);
    * ```
    * @param p - The point to copy from
-   * @returns This vector, for chaining
    */
   public copyFrom(p: PointData3D): this {
     this.x = p.x;
@@ -140,13 +135,12 @@ export class Vector3 implements PointLike3D {
   }
 
   /**
-   * Checks if another point is equal to this vector
+   * Checks whether `x`, `y` and `z` all match `p` exactly, with no tolerance
    * @example
    * ```ts
    * if (!aimPoint.equals(lastAimPoint)) recomputeAim();
    * ```
-   * @param p - The point to check
-   * @returns `true` when `x`, `y` and `z` all match exactly (no epsilon tolerance)
+   * @param p - The point to compare against
    */
   public equals(p: PointData3D): boolean {
     return p.x === this.x && p.y === this.y && p.z === this.z;
@@ -158,7 +152,6 @@ export class Vector3 implements PointLike3D {
    * ```ts
    * const startVelocity = velocity.clone();
    * ```
-   * @returns A new `Vector3` with the same component values
    */
   public clone(): Vector3 {
     return new Vector3(this.x, this.y, this.z);
@@ -170,7 +163,6 @@ export class Vector3 implements PointLike3D {
    * ```ts
    * console.log(velocity.toString());
    * ```
-   * @returns A string describing the vector's components
    */
   public toString(): string {
     return `[pixi-3d/math:Vector3 x=${this.x} y=${this.y} z=${this.z}]`;
@@ -184,7 +176,6 @@ export class Vector3 implements PointLike3D {
    * ```
    * @param array - The array to read from
    * @param offset - The index of the first component
-   * @returns This vector, for chaining
    */
   public fromArray(array: number[] | Float32Array, offset = 0): this {
     this.x = array[offset];
@@ -474,7 +465,6 @@ export class Vector3 implements PointLike3D {
    * ```ts
    * const speed = velocity.magnitude();
    * ```
-   * @returns The length
    */
   public magnitude(): number {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z);
@@ -489,7 +479,6 @@ export class Vector3 implements PointLike3D {
    * ```ts
    * if (velocity.magnitudeSquared() < 0.0001) velocity.set(0);
    * ```
-   * @returns The squared length
    */
   public magnitudeSquared(): number {
     return this.x * this.x + this.y * this.y + this.z * this.z;
@@ -502,7 +491,6 @@ export class Vector3 implements PointLike3D {
    * const reached = waypoint.distanceTo(player.position) < 0.5;
    * ```
    * @param v - The point to measure to
-   * @returns The distance
    */
   public distanceTo(v: PointData3D): number {
     return Math.sqrt(this.distanceToSquared(v));
@@ -517,7 +505,6 @@ export class Vector3 implements PointLike3D {
    * if (bulletPosition.distanceToSquared(target.position) < hitRadius * hitRadius) hit(target);
    * ```
    * @param v - The point to measure to
-   * @returns The squared distance
    */
   public distanceToSquared(v: PointData3D): number {
     const dx = this.x - v.x;
@@ -537,7 +524,6 @@ export class Vector3 implements PointLike3D {
    * const targetIsAhead = forward.dot(toTarget) > 0;
    * ```
    * @param v - The other vector
-   * @returns The dot product
    */
   public dot(v: PointData3D): number {
     return this.x * v.x + this.y * v.y + this.z * v.z;
@@ -615,12 +601,14 @@ export class Vector3 implements PointLike3D {
    *
    * The divide is what a projection matrix needs: with a camera's
    * {@link Camera3D#viewProjection | viewProjection}, x and y come out from -1 to 1 across the
-   * visible area. Use {@link Vector3#applyAffineMatrix4} for transforms that don't project, and
+   * visible area, and z from -1 at the near plane to 1 at the far plane. A point behind the camera
+   * can land inside that x and y range too, so check z as well. Use
+   * {@link Vector3#applyAffineMatrix4} for transforms that don't project, and
    * {@link Vector3#transformDirection} for directions.
    * @example
    * ```ts
    * point.applyMatrix4(camera.viewProjection, ndc);
-   * const onScreen = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1;
+   * const onScreen = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && Math.abs(ndc.z) <= 1;
    * ```
    * @param m - The matrix to apply
    * @param out - The target to write the result into, defaults to this vector
@@ -643,8 +631,7 @@ export class Vector3 implements PointLike3D {
    * Transforms this point by `m`, translation included, without the divide
    * {@link Vector3#applyMatrix4} does
    *
-   * Cheaper, and correct for any transform that doesn't project, such as a node's world transform. A
-   * projection matrix needs {@link Vector3#applyMatrix4}.
+   * Cheaper, and correct for any transform that doesn't project, such as a node's world transform.
    * @example
    * ```ts
    * muzzleOffset.applyAffineMatrix4(gun.worldTransform, muzzleWorldPosition);
@@ -734,7 +721,6 @@ export class Vector3 implements PointLike3D {
    * cameraOffset.setFromSpherical(orbit);
    * ```
    * @param s - The spherical coordinate to convert
-   * @returns This vector, for chaining
    */
   public setFromSpherical(s: Spherical): this {
     const sinPhiRadius = Math.sin(s.phi) * s.radius;
@@ -761,7 +747,6 @@ export class Vector3 implements PointLike3D {
    * }
    * ```
    * @param c - The cylindrical coordinate to convert
-   * @returns This vector, for chaining
    */
   public setFromCylindrical(c: Cylindrical): this {
     this.x = c.radius * Math.sin(c.theta);
@@ -781,7 +766,6 @@ export class Vector3 implements PointLike3D {
    * ```
    * @param m - The matrix to read from
    * @param index - The column index, `0` to `3`
-   * @returns This vector, for chaining
    */
   public setFromMatrixColumn(m: Matrix4, index: number): this {
     return this.fromArray(m.elements, index * 4);

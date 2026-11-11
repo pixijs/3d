@@ -4,7 +4,6 @@ import type { VertexFormat } from 'pixi.js';
 import { collectAttributes } from '../../shader/codegen/collectAttributes';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
-/** Maps VertexFormat to WGSL types */
 const FORMAT_TO_WGSL: Record<VertexFormat, string> = {
   float32: 'f32',
   float32x2: 'vec2<f32>',
@@ -58,12 +57,6 @@ function toWgslType(format: VertexFormat): string {
   return mapped;
 }
 
-/**
- * Generates a WGSL `struct VertexInput { ... }` from collected attribute data
- * @param attributes - Attribute name → vertex format map from `collectAttributes`
- * @returns The struct declaration, or an empty string if there are no attributes
- * @internal
- */
 function emitAttributesWgsl(attributes: Record<string, VertexFormat>): string {
   const names = Object.keys(attributes);
   if (names.length === 0) return '';
@@ -81,11 +74,7 @@ function emitAttributesWgsl(attributes: Record<string, VertexFormat>): string {
   return out.join('\n');
 }
 
-/**
- * WGSL compiler plugin that collects attribute declarations and injects the
- * `VertexInput` struct into the `{{header}}` slot
- * @internal
- */
+/** @internal */
 export const wgslAttributesPlugin: ShaderCompilerPlugin = {
   collectData(context) {
     context.data.attributes = collectAttributes(context.bits);

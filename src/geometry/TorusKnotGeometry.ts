@@ -55,9 +55,7 @@ export interface TorusKnotGeometryOptions extends Geometry3DOptions {
    */
   radialSegments: number;
   /**
-   * The number of times the knot winds around its axis of rotational symmetry
-   *
-   * Share no factor with `q` for a true `(p, q)` torus knot.
+   * How many times the knot winds around the +Y axis; {@link TorusKnotGeometry} says which values to use
    * @default 2
    * @example
    * ```ts
@@ -66,9 +64,7 @@ export interface TorusKnotGeometryOptions extends Geometry3DOptions {
    */
   p: number;
   /**
-   * The number of times the knot winds around a circle in the interior of the torus
-   *
-   * Together with `p` chooses the knot type; `(2, 3)` is a trefoil, `(3, 7)` is more wound.
+   * How many times the knot winds through the torus's hole; {@link TorusKnotGeometry} says which values to use
    * @default 3
    * @example
    * ```ts
@@ -81,11 +77,10 @@ export interface TorusKnotGeometryOptions extends Geometry3DOptions {
 /**
  * A torus knot geometry, formed by sweeping a circular tube along a `(p, q)` torus knot path
  *
- * The centerline winds `p` times around the +Y axis (the torus's axis of symmetry) and `q` times
- * through its hole; for example `(2, 3)` is a trefoil and `(3, 7)` produces a more tightly wound
- * knot. When `p` and `q` share a factor, the tube runs over the same loop more than once.
- *
- * For whole-number `p` and `q` the tube's two ends meet exactly.
+ * The centerline winds `p` times around the +Y axis and `q` times through the torus's hole: `(2, 3)`
+ * is a trefoil, and `(3, 7)` is more tightly wound. Use whole numbers that share no factor: other
+ * numbers leave a gap where the tube's ends should meet, and a shared factor runs the tube over the
+ * same loop more than once.
  * @example
  * ```ts
  * const trefoil = new TorusKnotGeometry({
@@ -97,15 +92,12 @@ export interface TorusKnotGeometryOptions extends Geometry3DOptions {
  *   q: 3,
  * });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
- * @see {@link TorusGeometry} For a plain torus without the knot winding
  * @category geometry
  * @standard
  */
 export class TorusKnotGeometry extends Geometry3D {
   /**
-   * Default options for {@link TorusKnotGeometry}
+   * Defaults for every new `TorusKnotGeometry`
    * @example
    * ```ts
    * TorusKnotGeometry.defaultOptions.tubularSegments = 128;

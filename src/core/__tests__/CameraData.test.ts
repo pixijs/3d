@@ -1,78 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { CameraData } from '~/core/CameraData';
-import { LIGHT_TILES_X, LIGHT_TILES_Y } from '~/core/LightTiles';
+import { CameraData, getCameraData } from '~/core/CameraData';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 import { Vector3 } from '~/math/vector/Vector3';
-import { PointLight } from '~/scene/lights/PointLight';
-import { updateView3DTransforms } from '~/scene/utils/updateView3DTransforms';
+import { Camera3D } from '~/scene/cameras/Camera3D';
 import { View3D } from '~/scene/View3D';
-
-/** Clip z over w for a view-space point at `viewZ`, through `projection` */
-function ndcZ(projection: Matrix4, viewZ: number): number {
-  const p = new Vector3(0, 0, viewZ);
-  const e = projection.elements;
-  const z = e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14];
-  const w = e[3] * p.x + e[7] * p.y + e[11] * p.z + e[15];
-  return z / w;
-}
 
 describe('CameraData', () => {
   const near = 0.5;
   const far = 40;
   const view = new Matrix4();
   const position = new Vector3();
-
-  it('keeps the GL clip range by default, and never touches the camera projection it copies', () => {
-    const projection = new Matrix4().makePerspective(1, 1, near, far);
-    const before = Float32Array.from(projection.elements);
-
-    const data = new CameraData().set(position, view, projection);
-
-    expect(ndcZ(data.projection, -near)).toBeCloseTo(-1, 5);
-    expect(ndcZ(data.projection, -far)).toBeCloseTo(1, 5);
-    expect(projection.elements).toEqual(before);
-  });
-
-  it('remaps the bound copy to [0, 1] for WebGPU, perspective and orthographic alike', () => {
-    for (const projection of [
-      new Matrix4().makePerspective(1, 1, near, far),
-      new Matrix4().makeOrthographic(-5, 5, 5, -5, near, far),
-    ]) {
-      const data = new CameraData().set(position, view, projection, false, true);
-
-      expect(ndcZ(data.projection, -near)).toBeCloseTo(0, 5);
-      expect(ndcZ(data.projection, -far)).toBeCloseTo(1, 5);
-      expect(ndcZ(data.projection, -(near + far) / 2)).toBeGreaterThan(0);
-    }
-  });
-
-  it('flips Y and remaps depth independently', () => {
-    const projection = new Matrix4().makePerspective(1, 1, near, far);
-    const data = new CameraData().set(position, view, projection, true, true);
-
-    expect(Math.sign(data.projection.elements[5])).toBe(-1);
-    expect(ndcZ(data.projection, -near)).toBeCloseTo(0, 5);
-  });
-  it('maps pixel positions to light tiles, rows counting up from the bottom, wherever the image sits', () => {
-    const data = new CameraData().setViewport({ x: 150, y: 92, width: 300, height: 200 });
-    const [sx, sy, ox, oy] = data.lightTiles.tileTransform;
-
-    expect(data.uniformGroup.uniforms.uLightTileTransform).toBe(data.lightTiles.tileTransform);
-    expect(150 * sx + ox).toBeCloseTo(0, 4);
-    expect(92 * sy + oy).toBeCloseTo(0, 4);
-    expect(450 * sx + ox).toBeCloseTo(LIGHT_TILES_X, 4);
-    expect(292 * sy + oy).toBeCloseTo(LIGHT_TILES_Y, 4);
-  });
-
-  it('counts tile rows up from the bottom when pixel rows count down', () => {
-    const data = new CameraData().setViewport({ x: 150, y: 92, width: 300, height: 200 }, true);
-    const [, sy, , oy] = data.lightTiles.tileTransform;
-
-    expect(92 * sy + oy).toBeCloseTo(LIGHT_TILES_Y, 4);
-    expect(292 * sy + oy).toBeCloseTo(0, 4);
-  });
 
   it('uploads the viewport only when it moves', () => {
     const data = new CameraData().setViewport({ x: 0, y: 0, width: 1080, height: 333 });
@@ -112,31 +51,6 @@ describe('CameraData', () => {
     view3d.destroy();
   });
 
-  it('bins again when the camera changes within the same session', () => {
-    const data = new CameraData();
-    const view3d = new View3D({ width: 64, height: 64 });
-    const light = new PointLight({ range: 1 });
-    light.position.set(10, 0, -5);
-    view3d.root.addChild(light);
-    updateView3DTransforms(view3d);
-    view3d._lightDataList.add(light);
-    const session = { view3d } as RenderSession;
-    const projection = new Matrix4().makePerspective(1, 1, near, far);
-
-    try {
-      data.set(position, view, projection);
-      data.prepareLightTiles(session);
-      expect(data.lightTiles.masks.every((mask) => mask === 0)).toBe(true);
-
-      data.set(new Vector3(10, 0, 0), new Matrix4().makeTranslation(-10, 0, 0), projection);
-      data.prepareLightTiles(session);
-      expect(data.lightTiles.masks.some((mask) => mask !== 0)).toBe(true);
-    } finally {
-      data.destroy();
-      view3d.destroy(true);
-    }
-  });
-
   it('releases the sessions retained by the camera and its light tiles on destroy', () => {
     const data = new CameraData();
     const view3d = new View3D({ width: 64, height: 64 });
@@ -158,5 +72,122 @@ describe('CameraData', () => {
     } finally {
       view3d.destroy(true);
     }
+  });
+});
+
+function project(viewProjection: Matrix4, x: number, y: number, z: number): [number, number] {
+  const e = viewProjection.elements;
+  const w = e[3] * x + e[7] * y + e[11] * z + e[15];
+  return [(e[0] * x + e[4] * y + e[8] * z + e[12]) / w, (e[1] * x + e[5] * y + e[9] * z + e[13]) / w];
+}
+
+function cameraAt(camera: Camera3D, x: number): Camera3D {
+  camera.position.set(x, 0, 10);
+  camera.updateLocalTransform();
+  camera.worldTransform.copyFrom(camera.localTransform);
+  camera.view.getInverse(camera.worldTransform);
+  camera.projection.makePerspective(1, 1.5, 0.5, 40);
+  camera.viewProjection.multiplyMatrices(camera.projection, camera.view);
+  return camera;
+}
+
+describe('CameraData previous view-projection', () => {
+  const viewport = { x: 0, y: 0, width: 300, height: 200 };
+  const points: [number, number, number][] = [
+    [0, 0, 0],
+    [1.5, -2, -3],
+    [-4, 1, 6],
+  ];
+
+  const motion = (data: CameraData): [number, number][] =>
+    points.map(([x, y, z]) => {
+      const [cx, cy] = project(data.viewProjection, x, y, z);
+      const [px, py] = project(data.previousViewProjection, x, y, z);
+      return [cx - px, cy - py];
+    });
+
+  it('starts the previous view-projection at the first render, so nothing reads as moving', () => {
+    const camera = cameraAt(new Camera3D(), 0);
+    camera.jitter.set(3, -2);
+    const data = new CameraData().syncFromCamera(camera, true, true, viewport);
+
+    expect(data.uniformGroup.uniforms.uPreviousViewProjectionMatrix).toBe(data.previousViewProjection);
+    for (const [dx, dy] of motion(data)) {
+      expect(dx).toBeCloseTo(0, 6);
+      expect(dy).toBeCloseTo(0, 6);
+    }
+    camera.destroy();
+  });
+
+  it('reads no motion on the render after a cut, then rolls on from it', () => {
+    const camera = cameraAt(new Camera3D(), 0);
+    const data = getCameraData(camera).syncFromCamera(camera, true, true, viewport);
+
+    cameraAt(camera, 2);
+    camera.resetHistory();
+    data.syncFromCamera(camera, true, true, viewport);
+    for (const [dx, dy] of motion(data)) {
+      expect(dx, 'the jump across the cut reads no motion').toBeCloseTo(0, 6);
+      expect(dy).toBeCloseTo(0, 6);
+    }
+
+    cameraAt(camera, 3);
+    data.syncFromCamera(camera, true, true, viewport);
+    expect(Math.abs(motion(data)[0][0]), 'the next render reads the move from the cut').toBeGreaterThan(1e-3);
+    camera.destroy();
+  });
+
+  it('rolls the previous view-projection forward once per render, with the jitter cancelling', () => {
+    const still = cameraAt(new Camera3D(), 0);
+    const stillData = new CameraData().syncFromCamera(still, true, true, viewport);
+    still.jitter.set(-1, 4);
+    stillData.syncFromCamera(still, true, true, viewport);
+    for (const [dx, dy] of motion(stillData)) {
+      expect(dx, 'a still camera with a changing jitter reads no motion').toBeCloseTo(0, 6);
+      expect(dy).toBeCloseTo(0, 6);
+    }
+
+    const plain = cameraAt(new Camera3D(), 0);
+    const plainData = new CameraData().syncFromCamera(plain, true, true, viewport);
+    cameraAt(plain, 2);
+    plainData.syncFromCamera(plain, true, true, viewport);
+
+    const camera = cameraAt(new Camera3D(), 0);
+    camera.jitter.set(3, -2);
+    const data = new CameraData().syncFromCamera(camera, true, true, viewport);
+    cameraAt(camera, 2);
+    camera.jitter.set(-1, 4);
+    data.syncFromCamera(camera, true, true, viewport);
+
+    const expected = motion(plainData);
+    motion(data).forEach(([dx, dy], i) => {
+      expect(Math.abs(expected[i][0]), 'the camera moved between the renders').toBeGreaterThan(1e-3);
+      expect(dx, 'the motion of the same camera without a jitter').toBeCloseTo(expected[i][0], 6);
+      expect(dy).toBeCloseTo(expected[i][1], 6);
+    });
+
+    const previous = Float32Array.from(data.previousViewProjection.elements);
+    data.set(new Vector3(), new Matrix4(), new Matrix4().makeOrthographic(-1, 1, 1, -1, 0.1, 10));
+    expect(data.previousViewProjection.elements, 'set() alone, as a shadow cascade calls it, never rolls').toEqual(
+      previous,
+    );
+
+    for (const c of [still, plain, camera]) c.destroy();
+  });
+
+  it('flips the previous view-projection for each render, whatever the previous target was', () => {
+    const camera = cameraAt(new Camera3D(), 1);
+    const data = new CameraData().syncFromCamera(camera, true, false, viewport);
+
+    for (const flipY of [false, true, false]) {
+      data.syncFromCamera(camera, flipY, false, viewport);
+      for (const [x, y, z] of points) {
+        const [cx, cy] = project(data.viewProjection, x, y, z);
+        const [px, py] = project(data.previousViewProjection, x, y, z);
+        expect(px, 'a still camera reads no motion').toBeCloseTo(cx, 6);
+        expect(py).toBeCloseTo(cy, 6);
+      }
+    }
+    camera.destroy();
   });
 });

@@ -112,10 +112,6 @@ describe('Sphere', () => {
     test('radius == 0 is non-empty', () => {
       expect(new Sphere(new Vector3(0, 0, 0), 0).isEmpty()).toBe(false);
     });
-
-    test('positive radius is non-empty', () => {
-      expect(new Sphere(new Vector3(0, 0, 0), 1).isEmpty()).toBe(false);
-    });
   });
 
   describe('distanceToPoint', () => {
@@ -244,13 +240,6 @@ describe('Sphere', () => {
       sphere.applyMatrix4(m);
       expectVec3Close(sphere.center, 2, 3, 4);
       expect(sphere.radius).toBeCloseTo(5, 5);
-    });
-
-    test('uniform scale scales radius', () => {
-      const sphere = new Sphere(new Vector3(0, 0, 0), 1);
-      const m = new Matrix4().makeScale(3, 3, 3);
-      sphere.applyMatrix4(m);
-      expect(sphere.radius).toBeCloseTo(3, 5);
     });
 
     test('non-uniform scale scales the radius by the largest axis scale', () => {

@@ -5,3 +5,5 @@ import { MaterialSystemGl } from './shader/MaterialSystemGl';
 import { View3DPipeGl } from './View3DPipeGl';
 
 extensions.add(LightingSystemGl, MaterialSystemGl, View3DPipeGl);
+
+export * from './index';

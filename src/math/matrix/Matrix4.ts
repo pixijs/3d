@@ -23,7 +23,6 @@ import { Vector3 } from '../vector/Vector3';
  * const projection = new Matrix4().makePerspective(Math.PI / 3, width / height, 0.1, 500);
  * const viewProjection = new Matrix4().multiplyMatrices(projection, view);
  * ```
- * @see {@link Matrix3} For the 3x3 counterpart
  * @see {@link Vector3#applyMatrix4} For applying this matrix to a point
  * @category maths
  * @standard
@@ -41,8 +40,6 @@ export class Matrix4 {
   /**
    * A `Float64Array` over the same memory as {@link Matrix4#elements}, for copying the matrix as
    * eight 64-bit moves instead of sixteen 32-bit ones
-   *
-   * The renderer copies world matrices into its shared buffers through it.
    *
    * > [!IMPORTANT] Each entry is two of the matrix's floats read as one 64-bit number, which means
    * > nothing on its own. Use it only to copy into another `Float64Array` view of float data.
@@ -72,14 +69,9 @@ export class Matrix4 {
   /**
    * Multiplies two affine matrices, `out = a * b`, and writes the result as three rows of four
    *
-   * The fourth row of an affine matrix is always `(0, 0, 0, 1)`, so storing it wastes four floats
-   * per matrix and four loads per read. This writes the twelve values that carry information, row
-   * by row: `[m00 m01 m02 m03][m10 m11 m12 m13][m20 m21 m22 m23]`, the last value of each row being
-   * the translation. The bottom rows of `a` and `b` are never read.
-   *
-   * A shader reads the three rows as `vec4`s and transforms a point with three dot products. That
-   * takes fewer loads and fewer operations than a `mat4` multiply, which also computes a `w` that
-   * is always 1 and thrown away. Bone matrices for skinning are stored this way.
+   * The rows land as `[m00 m01 m02 m03][m10 m11 m12 m13][m20 m21 m22 m23]`, translation last in
+   * each, so a shader can read them as three `vec4`s and transform a point with three dot products.
+   * The bottom rows of `a` and `b` are never read.
    * @example
    * ```ts
    * const boneRows = new Float32Array(boneCount * 12);
@@ -150,8 +142,7 @@ export class Matrix4 {
    * Multiplies two affine matrices held in flat arrays, `out = a * b`, skipping the bottom row
    *
    * Reads only the top three rows of `a` and `b` and writes `0, 0, 0, 1` as the bottom row, so it
-   * does 36 multiplies where a full 4x4 product does 64. The engine's world-transform update uses
-   * it. `out` may be the same array as `a` or `b`.
+   * does 36 multiplies where a full 4x4 product does 64. `out` may be the same array as `a` or `b`.
    * @example
    * ```ts
    * for (let i = 0; i < nodeCount; i++) {
@@ -250,9 +241,9 @@ export class Matrix4 {
 
   /**
    * Creates a new `Matrix4`, defaulting to the identity matrix
-   * @param elements - Optional column-major backing array of 16 floats, kept rather than copied. It
-   *   must be a `Float32Array` whose byte offset is a multiple of 8, because
-   *   {@link Matrix4#elements64} views the same memory; any other offset throws.
+   * @param elements - Optional column-major `Float32Array` of 16 floats, used as is rather than
+   *   copied. Its byte offset must be a multiple of 8, or this throws, since
+   *   {@link Matrix4#elements64} views the same memory.
    */
   constructor(elements?: TypedFixedArray<16>) {
     this.elements =
@@ -263,9 +254,7 @@ export class Matrix4 {
   }
 
   /**
-   * Sets the 16 elements from row-major arguments (`nRC` = row R, column C)
-   *
-   * The arguments read like the matrix written out on paper; they are stored column by column.
+   * Sets the 16 elements from arguments given row by row, as the matrix is written on paper
    * @example
    * ```ts
    * const shearX = new Matrix4().set(
@@ -443,7 +432,7 @@ export class Matrix4 {
   }
 
   /**
-   * Checks whether all 16 elements of this matrix match `m` exactly (no epsilon tolerance)
+   * Checks whether all 16 elements of this matrix match `m` exactly, with no tolerance
    * @example
    * ```ts
    * const moved = !mesh.worldTransform.equals(previousWorld);
@@ -534,14 +523,14 @@ export class Matrix4 {
   /**
    * Writes this matrix's elements into a Float32Array
    *
-   * Without `out`, writes into and returns {@link Matrix4#array}, allocated on the first call.
+   * Without `out`, writes into and returns {@link Matrix4#array}.
    * @example
    * ```ts
    * const rowMajor = new Float32Array(16);
    *
    * mesh.worldTransform.toArray(true, rowMajor);
    * ```
-   * @param transpose - When `true`, writes row-major; default writes column-major (matching {@link Matrix4#elements})
+   * @param transpose - `true` writes row-major instead of column-major
    * @param out - Optional destination array
    * @returns The populated array
    */
@@ -702,7 +691,7 @@ export class Matrix4 {
   }
 
   /**
-   * Pixi-style alias for {@link Matrix4#multiplyMatrices}: this matrix becomes `a * b`
+   * Alias for {@link Matrix4#multiplyMatrices}: this matrix becomes `a * b`
    * @example
    * ```ts
    * viewProjection.appendFrom(camera.projection, camera.view);
@@ -811,14 +800,14 @@ export class Matrix4 {
   /**
    * Sets this matrix to the inverse of `m`
    *
-   * When `m` is non-invertible (determinant is 0) the matrix is reset to identity. By default this
-   * also logs a warning; pass `throwOnDegenerate = true` to throw instead.
+   * When `m` can't be inverted (its determinant is 0), the result is the identity and a warning is
+   * logged.
    * @example
    * ```ts
    * const worldToLocal = new Matrix4().getInverse(mesh.worldTransform);
    * ```
    * @param m - Matrix to invert
-   * @param throwOnDegenerate - When `true`, throws on a non-invertible matrix instead of warning
+   * @param throwOnDegenerate - `true` throws instead of warning when `m` can't be inverted
    * @param out - Optional target; defaults to writing into this matrix
    * @returns The matrix the result was written to
    */
@@ -986,8 +975,7 @@ export class Matrix4 {
   }
 
   /**
-   * Decomposes this matrix into translation, rotation and scale, writing each component into the
-   * corresponding output
+   * Splits this matrix into a translation, rotation and scale
    *
    * A mirroring matrix (negative determinant) comes back with a negative X scale, so the rotation
    * stays a rotation. A sheared matrix has no exact split; the result only approximates it.
@@ -1155,7 +1143,7 @@ export class Matrix4 {
   }
 
   /**
-   * Sets this matrix to a rotation of `angle` radians around the (unit) `axis`
+   * Sets this matrix to a rotation of `angle` radians around `axis`
    *
    * Positive angles turn counter-clockwise as seen from the tip of `axis`, like the single-axis
    * methods.
@@ -1266,12 +1254,10 @@ export class Matrix4 {
    * Sets this matrix to a perspective projection from a vertical field-of-view (radians), for a
    * camera looking down -Z
    *
-   * Clip-space depth runs from -1 at `near` to 1 at `far`, as WebGL expects. A {@link Camera3D}
-   * builds its projection this way too, and the renderer remaps the copy it binds on WebGPU, whose
-   * depth runs from 0 to 1. A matrix you bind yourself on WebGPU needs the same remap. Leave out
-   * `far`, or pass `Infinity`, to put the far plane at infinity.
-   *
-   * `fovy` is in radians, unlike {@link Camera3D#fov}, which is in degrees.
+   * Clip-space depth runs from -1 at `near` to 1 at `far`, as WebGL expects, and
+   * {@link Camera3D#projection} is built the same way. On WebGPU, whose depth runs from 0 to 1, the
+   * renderer remaps the copy it draws with, but a matrix you bind yourself, the camera's included,
+   * needs the same remap. `fovy` is in radians, unlike {@link Camera3D#fov}, which is in degrees.
    * @example
    * ```ts
    * const projection = new Matrix4().makePerspective(Math.PI / 3, width / height, 0.1, 500);
@@ -1279,7 +1265,7 @@ export class Matrix4 {
    * @param fovy - Vertical field-of-view in radians
    * @param aspect - Viewport width / height
    * @param near - Near clip distance
-   * @param far - Far clip distance; defaults to infinity
+   * @param far - Far clip distance; leave it out or pass `Infinity` for no far plane
    * @returns This matrix
    */
   public makePerspective(fovy: number, aspect: number, near: number, far?: number): this {
@@ -1524,8 +1510,7 @@ export class Matrix4 {
   /**
    * Writes the three basis vectors of this matrix into `xAxis`, `yAxis` and `zAxis`
    *
-   * They are the first three columns: the matrix's own axes, scale included. Reading them changes
-   * no matrix; `out`, when supplied, only receives a copy of this one.
+   * They are the first three columns: the matrix's own axes, scale included.
    * @example
    * ```ts
    * const right = new Vector3();
@@ -1552,7 +1537,8 @@ export class Matrix4 {
   /**
    * Sets this matrix using the three basis vectors as its columns, with no translation
    *
-   * Unit-length axes at right angles to each other make a rotation.
+   * Unit-length axes at right angles to each other make a rotation when `zAxis` is `xAxis` cross
+   * `yAxis`, and a mirror when it points the other way.
    * @example
    * ```ts
    * const orientation = new Matrix4().makeBasis(right, up, back);
@@ -1584,10 +1570,10 @@ export class Matrix4 {
   }
 
   /**
-   * Writes the rotation portion of `m` into this matrix (with each basis re-normalized)
+   * Sets this matrix to `m` with each axis scaled to unit length and the translation cleared
    *
-   * The translation is cleared. Scaling each column to unit length only removes scale: a mirroring
-   * matrix (negative determinant) gives a mirrored result, and shear stays.
+   * That removes only the scale: a mirroring matrix (negative determinant) gives a mirrored result,
+   * and shear stays.
    * @example
    * ```ts
    * const rotationOnly = new Matrix4().extractRotation(mesh.worldTransform);
@@ -1724,24 +1710,16 @@ export class Matrix4 {
   }
 
   /**
-   * Largest singular value of the upper-3x3, squared: the square of the most this matrix
+   * Largest singular value of the upper-left 3x3, squared: the square of the most this matrix
    * stretches any direction
    *
-   * Unlike {@link Matrix4#getMaxScaleOnAxis}, the length of the longest column, it stays exact
-   * under shear, as when a non-uniformly scaled parent holds a rotated child. A bounding radius
-   * scaled by its square root therefore always covers the transformed shape. Without shear it
-   * equals the square of `getMaxScaleOnAxis`. It comes back squared so callers comparing squared
-   * distances skip a square root.
-   *
-   * It is the largest eigenvalue of `MᵀM`, whose entries are the dot products of the columns,
-   * found with Smith's closed-form solution for symmetric 3x3 matrices. When the columns are at
-   * right angles, `MᵀM` is diagonal and the answer is its largest entry. The arccosine's input is
-   * clamped to `[-1, 1]` so rounding can't produce `NaN`.
+   * A bounding radius scaled by its square root covers the transformed shape even under shear,
+   * where {@link Matrix4#getMaxScaleOnAxis} can fall short; without shear, it's the square of that.
+   * It comes back squared so a comparison against squared distances skips a square root.
    * @example
    * ```ts
    * const worldRadius = localRadius * Math.sqrt(mesh.worldTransform.getMaxSingularValueSq());
    * ```
-   * @returns The squared largest singular value, clamped at 0
    */
   public getMaxSingularValueSq(): number {
     const e = this.elements;

@@ -1,5 +1,5 @@
 import { Texture } from 'pixi.js';
-import type { Container, Matrix, Renderer } from 'pixi.js';
+import type { Color, ColorSource, Container, Matrix, Renderer } from 'pixi.js';
 
 import { ContainerSource } from './ContainerSource';
 import type { ContainerSourceOptions } from './ContainerSource';
@@ -19,21 +19,23 @@ export type ContainerTextureOptions = ContainerSourceOptions;
 /**
  * A {@link Texture} that shows a live 2D PixiJS {@link Container}
  *
- * Use it in any material texture slot, on any geometry. It renders into a render target of its
- * own; to make several textures over one live container, build a {@link ContainerSource} and
- * create `Texture`s from it.
+ * Use it in any material texture slot, on any geometry. To make several textures over one
+ * container, build a {@link ContainerSource} and create `Texture`s from it.
  *
- * Nothing redraws it for you. Call {@link ContainerTexture#render} once after setup for static
- * content, or every frame for animated content, before you render your scene. Pass the renderer
- * each time, or keep one with the `renderer` option and call `render()` with no argument. With a
- * kept renderer, {@link ContainerTexture#autoUpdate} re-renders every frame instead.
- *
- * A texture that was never rendered is transparent black, so a mesh using it draws black. With
- * a `renderer` option, it renders once during construction unless
+ * Unless {@link ContainerTexture#autoUpdate | autoUpdate} is on, nothing redraws it. Call
+ * {@link ContainerTexture#render} after setup and after each change, before you render your scene,
+ * or keep a renderer and set `autoUpdate` for animated content. Until its first render it's
+ * transparent black; a `renderer` option renders it once as it's made, unless
  * {@link ContainerSourceOptions#firstRender | firstRender} is `false`.
  *
- * The picture is stored upright for 3D geometry with ordinary UVs, so no material needs a flip. On
- * a 2D `Sprite` it shows upside down; set `sprite.scale.y = -1`.
+ * In an opaque material, the parts the container leaves empty draw black;
+ * {@link ContainerSourceOptions#clearColor | clearColor} says how to keep their edges smooth.
+ *
+ * The picture is stored the other way up from an image texture. It shows upright where `v` grows
+ * upward, as on a default {@link PlaneGeometry} or a {@link CubeGeometry}'s sides, and upside down
+ * where an image shows upright, as on a {@link SphereGeometry}, a plane with `flipV`, a loaded
+ * model or a 2D `Sprite`. On a sprite, `sprite.scale.y = -1` with `sprite.anchor.y = 1` turns it
+ * over in place.
  * @example
  * ```ts
  * const label = new ContainerTexture({ container: labelText, resolution: 2 });
@@ -52,7 +54,7 @@ export class ContainerTexture extends Texture {
   }
 
   /**
-   * The {@link ContainerSource} that holds this texture's render target and does the rendering
+   * The {@link ContainerSource} behind this texture
    * @example
    * ```ts
    * import { Rectangle, Texture } from 'pixi.js';
@@ -78,8 +80,6 @@ export class ContainerTexture extends Texture {
 
   /**
    * The renderer kept for {@link ContainerTexture#render} calls with no argument, or `null`
-   *
-   * {@link ContainerTexture#autoUpdate} needs one, and stops while it is `null`.
    * @example
    * ```ts
    * screen.renderer = app.renderer;
@@ -91,8 +91,8 @@ export class ContainerTexture extends Texture {
   }
 
   /**
-   * Keeps a renderer, or releases it with `null`
-   * @param value - Renderer to keep, or `null` to release it
+   * Sets the kept renderer
+   * @param value - A renderer, or `null` to release it.
    */
   public set renderer(value: Renderer | null) {
     this.containerSource.renderer = value;
@@ -110,17 +110,16 @@ export class ContainerTexture extends Texture {
   }
 
   /**
-   * Starts or stops the per-frame render; warns when turned on with no kept renderer
-   * @param value - `true` to re-render every frame, `false` to stop
+   * Sets whether the texture re-renders every frame
+   * @param value - `true` to re-render every frame.
    */
   public set autoUpdate(value: boolean) {
     this.containerSource.autoUpdate = value;
   }
 
   /**
-   * The matrix applied to the container when it is captured; see {@link ContainerSourceOptions#transform}
-   *
-   * Assign a new matrix or change this one in place, then render again.
+   * The capture matrix {@link ContainerSourceOptions#transform} describes; change it or assign a new
+   * one, then render again
    * @example
    * ```ts
    * screen.transform = new Matrix().translate(-scrollX, 0);
@@ -132,24 +131,45 @@ export class ContainerTexture extends Texture {
   }
 
   /**
-   * Copies `value` into the texture's capture matrix, for the next render
-   * @param value - The new capture transform
+   * Sets the capture matrix, copying `value`
+   * @param value - The new capture matrix.
    */
   public set transform(value: Matrix) {
     this.containerSource.transform = value;
   }
 
   /**
-   * Swaps the {@link Container} this texture renders, reusing its render target
+   * The colour {@link ContainerSourceOptions#clearColor} describes; set it or change this one in place,
+   * then render again
+   * @example
+   * ```ts
+   * screen.clearColor = 'black';
+   * screen.render();
+   * ```
+   */
+  public get clearColor(): Color {
+    return this.containerSource.clearColor;
+  }
+
+  /**
+   * Sets the colour the next render clears to
+   * @param value - Any {@link ColorSource}, such as `'black'`.
+   */
+  public set clearColor(value: ColorSource) {
+    this.containerSource.clearColor = value;
+  }
+
+  /**
+   * Swaps the {@link Container} this texture renders, keeping its render target and size
    *
-   * The new container moves out of its current parent and the old one is left detached. The size
-   * stays the same, and the old picture stays until the next {@link ContainerTexture#render}.
+   * A container other than the current one leaves its parent, the old one is left detached, and the
+   * old picture stays until the next {@link ContainerTexture#render}.
    * @example
    * ```ts
    * screen.setContainer(pauseMenu);
    * screen.render();
    * ```
-   * @param container - The new container to render
+   * @param container - The new container to render.
    */
   public setContainer(container: Container): void {
     this.containerSource.setContainer(container);
@@ -166,7 +186,7 @@ export class ContainerTexture extends Texture {
    * scoreText.text = `${score}`;
    * scoreboard.render(app.renderer);
    * ```
-   * @param renderer - Renderer to draw with, kept for later calls; omit to use the kept one
+   * @param renderer - Renderer to draw with, kept for later calls; omit to use the kept one.
    */
   public render(renderer?: Renderer): void {
     this.containerSource.render(renderer);
@@ -176,14 +196,14 @@ export class ContainerTexture extends Texture {
    * Destroys this texture, and optionally its source and its container
    *
    * As with pixi's {@link Texture#destroy}, `destroy()` leaves the {@link ContainerSource} alive,
-   * since other textures may share it; a material's `destroy({ texture: true })` relies on that.
-   * `destroy(true)` also frees the source's render target. The container is yours unless you pass
-   * `{ container: true }`, which destroys it with its children and frees the source too.
+   * since other textures may share it, and with {@link ContainerTexture#autoUpdate} on, still
+   * rendering every frame. `destroy(true)` frees the source too. The container is yours unless you
+   * pass `{ container: true }`, which destroys it with its children and frees the source.
    * @example
    * ```ts
    * screen.destroy(true);
    * ```
-   * @param options - `true` also frees the source; an object picks `source` and `container` separately
+   * @param options - `true` also frees the source; an object picks `source` and `container` separately.
    */
   public override destroy(
     options:

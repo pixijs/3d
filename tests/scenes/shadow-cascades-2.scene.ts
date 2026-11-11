@@ -7,13 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Two-cascade CSM. A near caster (cascade 0) and a far caster (cascade 1) both
- * cast shadows, so cascade selection must pick the right slice for each. Guards
- * the 2-cascade case specifically — the branchless select is sensitive to how
- * unused split slots are padded, and the 3-cascade scene doesn't exercise it (a
- * regression would drop the near caster's shadow).
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,
@@ -35,8 +28,6 @@ export const scene: TestScene = {
     ground.rotation.set(-Math.PI / 2, 0, 0);
     view3d.root.addChild(ground);
 
-    // Near caster — falls in cascade 0. Offset right so its shadow casts toward
-    // frame centre (visible).
     const near = new Mesh3D({
       geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
       material: new Material3D({ baseColor: 0x4a7c59, metallic: 0, roughness: 0.5 }),
@@ -45,7 +36,6 @@ export const scene: TestScene = {
     near.position.set(1.2, 0, 0.5);
     view3d.root.addChild(near);
 
-    // Far caster — falls in cascade 1.
     const far = new Mesh3D({
       geometry: new CubeGeometry({ width: 1.4, height: 1.4, depth: 1.4 }),
       material: new Material3D({ baseColor: 0xc06c4a, metallic: 0, roughness: 0.5 }),

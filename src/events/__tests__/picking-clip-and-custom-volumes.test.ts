@@ -17,10 +17,8 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
-/** View-local point whose ray passes through the world origin (camera at z = 10, fov 60) */
 const CENTER = { x: 50, y: 50 };
 
-/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -36,7 +34,6 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -50,10 +47,6 @@ function makeView(): View3D {
   return view3d;
 }
 
-/**
- * An origin-centred sphere built on the structural `IHitVolume3D` interface, counting its `raycast`
- * calls; it has no `containsPoint`, so it never clips
- */
 class LocalSphereVolume implements IHitVolume3D {
   public raycastCalls = 0;
   protected readonly _sphere: Sphere;
@@ -77,14 +70,12 @@ class LocalSphereVolume implements IHitVolume3D {
   }
 }
 
-/** `LocalSphereVolume` with `containsPoint`, so it can also clip descendants */
 class ClippingSphereVolume extends LocalSphereVolume {
   public containsPoint(localPoint: Vector3): boolean {
     return this._sphere.containsPoint(localPoint);
   }
 }
 
-/** A plain-object stand-in for a pooled `FederatedPointerEvent`, with the fields the 3D dispatcher reads */
 function makeEvent(type: string): FederatedPointerEvent {
   return {
     type,

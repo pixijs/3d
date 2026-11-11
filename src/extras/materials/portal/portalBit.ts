@@ -1,49 +1,8 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Portal surface: an unlit quad showing a feed texture at each fragment's own screen position
- *
- * The far side has to sit still relative to the *viewer*, not to the quad: walk sideways and the
- * far room should slide past the opening the way it would through a hole in a wall. So the UV is
- * the fragment's screen position rather than the mesh's own, the same trick `screenSpaceFuncsBit`
- * uses, without its viewport scale (see below).
- *
- * What it declares: one texture slot, `portal`, sampled through the generated `samplePortal`;
- * and one material lane, `baseColor`, a linear RGBA tint. Compose it into any material the way
- * {@link PortalMaterial} does.
- *
- * The feed goes straight into `albedo`, tinted by `baseColor`: it is a finished frame, already
- * exposed and tone-mapped by the pass that drew it. The feed's own alpha is ignored, and
- * `baseColor.a` alone sets how solid the opening is.
- *
- * **The feed is assumed to be the view's own size.** There is no `uViewportUVScale` here. A
- * pooled transient holds its content in a `[0, vp]` corner of a power-of-two texture and needs
- * that scale to find it, but a camera's target is bound whole and copied into its render texture
- * texel for texel, so the texture's content *is* its `[0, 1]` UV space. Its aspect ratio must
- * match the view's or the far side is stretched; matching the pixel size too is what keeps it
- * sharp.
- *
- * **Y: one expression on both backends, for opposite reasons.**
- *
- * WGSL: `+Y` in NDC is the top of the surface and a texture's origin is its top-left, so a screen
- * position becomes a UV with Y flipped. The feed reads the same way round. WebGPU orients a
- * render texture exactly as it orients the screen, so the feed is filled the same way up the view
- * is drawn.
- *
- * GLSL: a framebuffer's origin is its bottom-left, which is what `gl_FragCoord.y` counts up from.
- * So the same screen position becomes a UV with *no* flip, which is why `screenSpaceFuncsBit`,
- * sampling a copy of the bound framebuffer, doesn't flip either. A feed is not that copy. It is a
- * non-root framebuffer, which WebGL orients the other way from the screen (pixi's
- * `RenderTargetSystem.isFrontFaceInverted` is the one spelling of that rule), so the bound
- * projection is flipped while filling it and its rows run against the screen's. Two opposite
- * conventions with one flip between them arrive back at the expression WGSL needs.
- *
- * One case this leaves out: a View3D drawn *into* a render texture on WebGL (inside a pixi
- * filter, or `renderer.extract`). The outer target is non-root there too, so the two orientations
- * agree rather than oppose and the feed lands upside down. The graph executor makes the same
- * root/non-root split for its transient binds.
- * @category extras:materials
- * @advanced
+ * Only a material with `_skipsToneCurve` set may use it, or the view's tone curve runs over the feed a second time
+ * @internal
  */
 export const portalBit: ShaderBit = {
   name: 'portal',
@@ -53,6 +12,7 @@ export const portalBit: ShaderBit = {
   bindings: {
     material: {
       baseColor: 'vec4<f32>',
+      displayBaseColor: 'vec4<f32>',
     },
   },
 
@@ -67,9 +27,10 @@ fn portalScreenUV(worldPos: vec3<f32>) -> vec2<f32> {
     fragment: {
       material: /*wgsl*/ `
   let portalFeed = samplePortal(portalScreenUV(input.vPosition));
+  let portalTint = inputTint(material.baseColor, material.displayBaseColor);
 
-  albedo *= portalFeed.rgb * material.baseColor.rgb;
-  alpha *= material.baseColor.a;
+  albedo *= decodeFrame(portalFeed.rgb) * portalTint.rgb;
+  alpha *= portalTint.a;
 `,
     },
   },
@@ -85,9 +46,10 @@ vec2 portalScreenUV(vec3 worldPos) {
     fragment: {
       material: /*glsl*/ `
   vec4 portalFeed = samplePortal(portalScreenUV(vPosition));
+  vec4 portalTint = inputTint(material.baseColor, material.displayBaseColor);
 
-  albedo *= portalFeed.rgb * material.baseColor.rgb;
-  alpha *= material.baseColor.a;
+  albedo *= decodeFrame(portalFeed.rgb) * portalTint.rgb;
+  alpha *= portalTint.a;
 `,
     },
   },

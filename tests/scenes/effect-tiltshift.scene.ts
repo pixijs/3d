@@ -8,23 +8,6 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Tilt-shift alone — the mip-copy `build()` shape: the effect blits the chain
- * input into a private mip-chained transient, GenerateMips fills the levels,
- * and the bokeh pass gathers LOD taps against the scene-depth transient while
- * presenting (single effect = elected presenter).
- *
- * The scene is a depth staircase: a line of saturated boxes receding from the
- * camera with the focal band pinned on the middle one — the near and far
- * boxes must smear while the middle stays crisp. A wrong depth convention,
- * missing mips, or a dropped copy all break this image grossly.
- *
- * The tall focal-depth pillar rises past the horizon so its top edge sits
- * against the empty (transparent) background — pinning the occlusion-weighted
- * gather: without it, the full-blur sky pixels average the pillar's colour
- * and the sharp silhouette smears into the backdrop.
- */
-
 const SIZE = 200;
 
 export const scene: TestScene = {
@@ -55,7 +38,6 @@ export const scene: TestScene = {
         geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
         material: new Material3D({ baseColor: colors[i], roughness: 0.85, metallic: 0 }),
       });
-      // Staggered x keeps every box visible down the line.
       box.position.set((i % 2 === 0 ? -0.7 : 0.7) * (1 + i * 0.12), 0.5, 3 - i * 1.6);
       view.root.addChild(box);
     }

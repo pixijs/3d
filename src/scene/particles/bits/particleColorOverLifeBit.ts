@@ -3,11 +3,9 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 /**
  * Ramps a particle's tint from its spawn colour to `aColorEnd` across its life
  *
- * Reads `particleProgress` from {@link particleLifetimeBit} and blends the RGB
- * of the `particleColor` local the particle bit seeds, leaving alpha to
- * {@link particleAlphaOverLifeBit}. `aColorEnd` is a normalized `unorm8x4`
- * holding linear RGB, the same encoding as the spawn tint, so the two blend in
- * one space.
+ * `aColorEnd` takes `{ x, y, z, w }`, each 0 to 1 in display (sRGB) space, not a `ColorSource`;
+ * `w` is unused, since {@link particleAlphaOverLifeBit} ramps opacity. Compose it after
+ * {@link particleLifetimeBit}.
  * @category scene
  * @advanced
  */

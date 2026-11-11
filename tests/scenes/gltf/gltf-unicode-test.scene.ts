@@ -5,11 +5,11 @@ import { renderGltfModel } from './frameModel';
 
 const URL = model('gltf.UnicodeTest');
 
-// Skipped on WebGL: the base colour texture is missing; WebGPU draws it.
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },
   skip: ['webgl'],
+  skipReason: 'the base colour texture is missing; WebGPU draws it',
   create: async (app) => {
     await renderGltfModel(app, { url: URL });
   },

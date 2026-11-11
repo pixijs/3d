@@ -2,20 +2,8 @@ import { glTexelAddress } from '../../buffers/dataTextureLayout';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * Blend-shape deformation for WebGL, the GLSL twin of `createMorphTargetBitGpu`, which documents
- * the algorithm: where it runs, the delta layout, the zero offset and zero weight skips, and the
- * atlas base vertex
- *
- * WebGL has no storage buffers, so both stores arrive as data textures read with `texelFetch`:
- *
- * - `uMorphTexture` is the shared morph store (`rgba32float`). A delta is one texel. A weight is one
- *   float, at texel `i >> 2`, channel `i & 3`.
- * - `uGeometryTexture` is the geometry data store (`rgba32uint`). Texel 1 of the geometry's row
- *   holds its delta base (in floats), target count and atlas base vertex.
- *
- * `morphData` comes from `instanceFetchBitGl`: `.x` is the mesh's weight offset and `.y` its
- * geometry row. The vertex index is `gl_VertexID`.
- * @param hasNormals - Whether each target also has a normal delta, taking two texels per target
+ * The GLSL twin of `createMorphTargetBitGpu`. Reads `morphData` (weight offset, geometry row) from
+ * `instanceFetchBitGl`, and that row's morph texel from `GeometryDataStoreBuffer`.
  */
 function createMorphTargetBitGl(hasNormals: boolean): ShaderBit {
   const step = hasNormals ? ' * 2' : '';
@@ -70,14 +58,8 @@ function createMorphTargetBitGl(hasNormals: boolean): ShaderBit {
   };
 }
 
-/**
- * Blend-shape deformation of positions, for a morphed mesh whose geometry has no normal deltas
- * @internal
- */
+/** @internal */
 export const morphTargetBitGl: ShaderBit = createMorphTargetBitGl(false);
 
-/**
- * Blend-shape deformation that also applies normal deltas, for geometry with `hasMorphNormals`
- * @internal
- */
+/** @internal */
 export const morphTargetNormalBitGl: ShaderBit = createMorphTargetBitGl(true);

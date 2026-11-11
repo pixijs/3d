@@ -2,7 +2,6 @@ import { definedProps, DOMAdapter } from 'pixi.js';
 
 import type { Geometry3D } from '../../geometry/Geometry3D';
 
-/** Canvas size, in pixels, that `PADDING` is authored at; other sizes scale the whole layout */
 const REFERENCE_SIZE = 64;
 const MAX_TRIANGLES = 20_000;
 const PADDING = 5;
@@ -91,18 +90,16 @@ export interface GeometryThumbnailGeneratorOptions {
 }
 
 /**
- * Generates and caches material-independent {@link Geometry3D} thumbnails by geometry ID
+ * Draws and caches small shaded previews of {@link Geometry3D}s, keyed by `uid`
  *
- * Renders a small shaded canvas preview on the CPU (no GPU resources), used by the debug
- * overlay to identify geometries at a glance.
+ * Each preview is drawn in one colour, whatever the material, on the CPU into a 2D canvas, so it
+ * needs no renderer.
  * @category extras:debug
  * @advanced
  */
 export class GeometryThumbnailGenerator {
   /**
-   * Default {@link GeometryThumbnailGeneratorOptions} merged under every constructor call
-   *
-   * `new GeometryThumbnailGenerator(opts)` resolves as `{ ...GeometryThumbnailGenerator.defaultOptions, ...opts }`.
+   * Defaults for every new `GeometryThumbnailGenerator`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * GeometryThumbnailGenerator.defaultOptions.size = 96;
@@ -115,7 +112,7 @@ export class GeometryThumbnailGenerator {
   private readonly _size: number = 0;
   private readonly _cache = new Map<number, GeometryThumbnailResult>();
 
-  /** @param options - Generator options; see {@link GeometryThumbnailGeneratorOptions} */
+  /** @param options - Options for the generator */
   constructor(options: GeometryThumbnailGeneratorOptions = {}) {
     const { size } = { ...GeometryThumbnailGenerator.defaultOptions, ...definedProps(options) };
 
@@ -123,9 +120,8 @@ export class GeometryThumbnailGenerator {
   }
 
   /**
-   * Returns the cached thumbnail for a geometry, generating (and caching) it on first request
-   * @param geometry - The geometry to thumbnail.
-   * @returns The ready thumbnail, or the reason it is unsupported.
+   * Returns the thumbnail for a geometry, drawing it on the first request and caching it after
+   * @param geometry - The geometry to thumbnail
    */
   public getThumbnail(geometry: Geometry3D): GeometryThumbnailResult {
     const cached = this._cache.get(geometry.uid);
@@ -137,9 +133,9 @@ export class GeometryThumbnailGenerator {
   }
 
   /**
-   * Returns the cached thumbnail for a geometry ID, if one was generated
-   * @param geometryId - The geometry `uid` to look up.
-   * @returns The cached result, or `undefined` when the geometry was never thumbnailed.
+   * Returns the cached result for a geometry `uid`, ready or unsupported, or `undefined` when none is
+   * cached
+   * @param geometryId - The geometry `uid` to look up
    */
   public getThumbnailById(geometryId: number): GeometryThumbnailResult | undefined {
     return this._cache.get(geometryId);
@@ -147,7 +143,7 @@ export class GeometryThumbnailGenerator {
 
   /**
    * Drops cached thumbnails for geometries no longer in use
-   * @param retainedGeometryIds - Geometry `uid`s to keep; everything else is evicted.
+   * @param retainedGeometryIds - Geometry `uid`s to keep; the rest are dropped
    */
   public prune(retainedGeometryIds: ReadonlySet<number>): void {
     for (const geometryId of this._cache.keys()) {

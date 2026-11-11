@@ -6,18 +6,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Regression scene for #73: a material constructed with transmission AND
- * clearcoat, with `transmission` set to 0 before the first frame. Feature
- * bits are locked at construction, so transmissionBit must stay in the
- * descriptor and the clearcoat texture slots must keep lining up with the
- * batcher's `_textures` packing.
- *
- * Pre-fix, dropping transmissionBit shifted the clearcoat samples down two
- * slots — `sampleClearcoatNormal` read WHITE instead of the flat NORMAL_MAP,
- * decoding to a garbage normal that relocated the lacquer highlight.
- * Expected render: a matte ball with a clean, sharp clearcoat highlight.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x202830,
@@ -35,8 +23,6 @@ export const scene: TestScene = {
       clearcoat: { factor: 1, roughness: 0.05 },
     });
 
-    // The #73 case: value write after construction — a pure data sync that
-    // must not rebuild the shader variant.
     material.transmission!.factor = 0;
 
     const sphere = new Mesh3D({

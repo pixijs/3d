@@ -7,12 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Live auto-fit: with no explicit `shadow.bounds` and a scene under the shadow pass's
- * caster cap, the auto-fit box re-measures every rendered frame. The caster renders on
- * one side for a few frames (any fit-once behaviour would latch there), then moves to
- * the other side — the shadow must follow to the final frame with no app call.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,
@@ -54,13 +48,10 @@ export const scene: TestScene = {
     view3d.camera.position.set(0, 3.5, 7);
     view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-    // A few static frames on the left — a fit-once box would freeze around this spot.
     app.render();
     app.render();
     app.render();
 
-    // Move to the right; the harness renders the final frame, where the shadow must
-    // sit under the cube's new position.
     caster.position.set(2, 0, 0);
   },
 };

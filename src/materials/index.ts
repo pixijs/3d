@@ -21,4 +21,5 @@ export * from './utils/createFeaturePropsClass';
 export * from './utils/createMaterialDataClass';
 export * from './utils/createMaterialTexturesClass';
 export * from './utils/emissiveProps';
+export * from './utils/refreshBindGroup';
 export * from './utils/validateMaterialTextureSlots';

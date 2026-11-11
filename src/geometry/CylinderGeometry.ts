@@ -14,10 +14,7 @@ import { buildCylinderBuffers } from './utils/buildCylinderBuffers';
  */
 export interface CylinderGeometryOptions extends Geometry3DOptions {
   /**
-   * The radius of the top ring (at `+height/2`)
-   *
-   * Set independently from `radiusBottom` to build truncated cones; set to `0` to collapse the
-   * top ring into an apex.
+   * The radius of the top ring, at `+height/2`; `0` collapses it to a point
    * @default 1
    * @example
    * ```ts
@@ -26,10 +23,7 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
    */
   radiusTop: number;
   /**
-   * The radius of the bottom ring (at `-height/2`)
-   *
-   * Set independently from `radiusTop` to build truncated cones; set to `0` to collapse the
-   * bottom ring into an apex.
+   * The radius of the bottom ring, at `-height/2`; `0` collapses it to a point
    * @default 1
    * @example
    * ```ts
@@ -39,8 +33,6 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
   radiusBottom: number;
   /**
    * The total height of the cylinder along the Y axis
-   *
-   * The mesh is centered on the origin, so the top sits at `+height/2` and the bottom at `-height/2`.
    * @default 2
    * @example
    * ```ts
@@ -72,8 +64,6 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
   heightSegments: number;
   /**
    * When `true`, the end caps are skipped and only the side surface is generated
-   *
-   * A ring with a radius of `0` never gets a cap.
    * @default false
    * @example
    * ```ts
@@ -87,13 +77,9 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
  * A cylinder geometry oriented along the +Y axis and centered on the origin, with the top ring at
  * `+height/2` and the bottom ring at `-height/2`
  *
- * `radiusTop` and `radiusBottom` are independent, so the same primitive covers cylinders,
- * truncated cones, and (with one radius set to `0`) cones.
- *
- * The side's normals are smooth and follow the slope between the two radii. Its UVs wrap once
- * around the circumference (`u` from 0 to 1), and `v` runs from 0 at the top to 1 at the bottom.
- * End caps are added unless `openEnded` is `true`; a cap's UVs map it onto the circle inscribed in
- * the texture.
+ * Unequal radii make a truncated cone. The side's normals are smooth and follow the slope between
+ * the two radii. Its UVs wrap once around the circumference (`u` from 0 to 1), and `v` runs from 0
+ * at the top to 1 at the bottom. A cap's UVs map it onto the circle inscribed in the texture.
  * @example
  * ```ts
  * const cylinder = new CylinderGeometry({
@@ -105,16 +91,13 @@ export interface CylinderGeometryOptions extends Geometry3DOptions {
  *   openEnded: false,
  * });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
- * @see {@link ConeGeometry} For a cylinder with `radiusTop = 0`
- * @see {@link CapsuleGeometry} For a cylinder with hemispherical caps
+ * @see {@link CapsuleGeometry} For rounded caps instead of flat ends
  * @category geometry
  * @standard
  */
 export class CylinderGeometry extends Geometry3D {
   /**
-   * Default options for {@link CylinderGeometry}
+   * Defaults for every new `CylinderGeometry`
    * @example
    * ```ts
    * CylinderGeometry.defaultOptions.radialSegments = 16;

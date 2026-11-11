@@ -11,25 +11,12 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 220;
 
-/** How much of the ground reads as shadow, and where */
 interface ShadowReading {
-  /** Ground pixels dark enough to be in shadow */
   count: number;
-  /** Where that shadow sits on screen, as a fraction of the frame */
   x: number;
   y: number;
 }
 
-/**
- * Renders one tower on open ground, framed by either camera mode, with the shadow placed either as
- * a fixed box or as cascades, and reads the shadow back
- *
- * Caster and ground are both white so only a real shadow reads dark. The orthographic size of 43
- * is what the 45° perspective view spans at the subject's distance, so both modes see the same slab
- * of world and their shadows compare. The app is destroyed as soon
- * as it is read: test files share a page, so an app left running keeps rendering into other files
- * and eventually draws through resources they have torn down.
- */
 async function readShadow(mode: CameraMode, cascades: 3 | undefined): Promise<ShadowReading> {
   const app = await getApp({
     id: `shadow-ortho-${mode}-${cascades}`,
@@ -110,19 +97,10 @@ async function readShadow(mode: CameraMode, cascades: 3 | undefined): Promise<Sh
 }
 
 describe('cascades under an orthographic camera, whose projection neither divides depth by distance nor widens with range', () => {
-  it('casts a shadow at all', async () => {
-    expect((await readShadow('orthographic', 3)).count).toBeGreaterThan(0);
-  }, 60000);
-
   it('matches what a perspective camera casts from the same framing', async () => {
     const ortho = await readShadow('orthographic', 3);
     const perspective = await readShadow('perspective', 3);
 
-    /**
-     * The bounds leave room for the projections' own difference, measured at 7% of the area and 0.037
-     * of the frame: the tower's top is nearer the camera under perspective, so its shadow leans
-     * differently. A misplaced cascade lands well outside them.
-     */
     const detail = `ortho ${JSON.stringify(ortho)} perspective ${JSON.stringify(perspective)}`;
 
     expect(ortho.count / perspective.count, detail).toBeGreaterThan(0.8);

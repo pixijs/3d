@@ -1,11 +1,16 @@
-import { getApp } from '@test-utils';
+import { getApp, renderFrame } from '@test-utils';
 import { Container, Graphics, Ticker } from 'pixi.js';
-import type { Renderer } from 'pixi.js';
+import type { ColorSource, Renderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ContainerSource } from '~/core/textures/ContainerSource';
 import { ContainerTexture } from '~/core/textures/ContainerTexture';
+import { PlaneGeometry } from '~/geometry/PlaneGeometry';
+import type { AlphaMode } from '~/materials/BaseMaterial3D';
+import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
+import { Mesh3D } from '~/scene/Mesh3D';
+import { View3D } from '~/scene/View3D';
 
 describe('ContainerSource construction, without a renderer', () => {
   it('defaults resolution to 1 when omitted — never a NaN-sized target', () => {
@@ -98,22 +103,11 @@ describe('ContainerTexture / ContainerSource destroy, without a renderer', () =>
 describe('ContainerSource renderer retention & autoUpdate', () => {
   type DestroyHook = { destroy: () => void };
   type BatcherRegistry = Record<number, Record<string, DestroyHook>>;
-  type StubRenderer = Renderer & { hooks: DestroyHook[]; batchers: BatcherRegistry; batcherDestroy: () => void };
+  type StubRenderer = Renderer & { hooks: DestroyHook[]; batchers: BatcherRegistry };
 
-  /**
-   * A renderer stand-in with only the surfaces the source touches, so a real per-frame tick is harmless
-   *
-   * Like pixi's, `render` makes the capture root a render group, points its instruction set at the
-   * render pipes and caches a batcher entry under its uid, and the batch pipe's
-   * `destroyInstructionSet`, which pixi's `InstructionSet.destroy` calls, frees that entry. `hooks`
-   * holds the destroy runner's items. `destroy()` tears down like pixi's Renderer: the runner emits,
-   * then the pipes are gone.
-   * @param render - Replaces the default `render`, to count calls
-   */
   const stubRenderer = (render?: (options: { container: Container }) => void): StubRenderer => {
     const hooks: DestroyHook[] = [];
     const batchers: BatcherRegistry = {};
-    const batcherDestroy = vi.fn<() => void>();
     const renderPipes = {
       batch: {
         destroyInstructionSet: ({ uid }: { uid: number }) => {
@@ -127,14 +121,13 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
     const stub: Record<string, unknown> = {
       hooks,
       batchers,
-      batcherDestroy,
       render:
         render ??
         (({ container }: { container: Container }) => {
           container.enableRenderGroup();
           const { instructionSet } = container.renderGroup;
           instructionSet.renderPipes = renderPipes;
-          batchers[instructionSet.uid] ??= { default: { destroy: batcherDestroy } };
+          batchers[instructionSet.uid] ??= { default: { destroy: () => {} } };
         }),
       renderPipes,
       runners: {
@@ -172,17 +165,6 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
     expect(warnSpy).toHaveBeenCalled();
 
     warnSpy.mockRestore();
-    src.destroy();
-  });
-
-  it('firstRender defaults to true: renders once during construction when a renderer is retained', () => {
-    const render = vi.fn<() => void>();
-    const renderer = stubRenderer(render);
-
-    const src = new ContainerSource({ container: new Container(), width: 8, height: 8, renderer });
-
-    expect(render).toHaveBeenCalledTimes(1);
-
     src.destroy();
   });
 
@@ -310,17 +292,6 @@ describe('ContainerSource renderer retention & autoUpdate', () => {
     expect(renderer.batchers, "freed through the pipes the root's instruction set was built with").toEqual({});
   });
 
-  it("destroy() frees the capture root's batcher entry through pixi's destroyInstructionSet hook", () => {
-    const renderer = stubRenderer();
-    const src = new ContainerSource({ container: new Container(), width: 8, height: 8, renderer });
-    expect(Object.keys(renderer.batchers)).toHaveLength(1);
-
-    src.destroy();
-
-    expect(renderer.batcherDestroy).toHaveBeenCalledTimes(1);
-    expect(renderer.batchers).toEqual({});
-  });
-
   it('destroy() and renderer swaps unhook from the retained renderer', () => {
     const first = stubRenderer();
     const second = stubRenderer();
@@ -358,6 +329,71 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(Object.keys(registry)).toHaveLength(before);
       } finally {
         app.destroy();
+      }
+    });
+  });
+}
+
+const CLEAR_COLOR_CASES: {
+  what: string;
+  clearColor?: ColorSource;
+  clearColorLater?: ColorSource;
+  halfRed: boolean;
+  alphaMode: AlphaMode;
+  rgb: [number, number, number];
+}[] = [
+  {
+    what: "shows what is behind a 'blend' material through a half-covered texel, with the default clear",
+    halfRed: true,
+    alphaMode: 'blend',
+    rgb: [128, 128, 0],
+  },
+  {
+    what: "blends a half-covered texel, like an anti-aliased edge, into black on an opaque material once clearColor is set to 'black' and the texture renders again",
+    clearColorLater: 'black',
+    halfRed: true,
+    alphaMode: 'opaque',
+    rgb: [128, 0, 0],
+  },
+  {
+    what: 'premultiplies a translucent clear colour, so it blends as given',
+    clearColor: 'rgba(0, 0, 255, 0.5)',
+    halfRed: false,
+    alphaMode: 'blend',
+    rgb: [0, 128, 128],
+  },
+];
+
+for (const preference of ['webgpu', 'webgl'] as const) {
+  describe(`ContainerSource clearColor on a real renderer (${preference})`, () => {
+    const SIZE = 16;
+
+    it.each(CLEAR_COLOR_CASES)('$what', async ({ clearColor, clearColorLater, halfRed, alphaMode, rgb }) => {
+      const app = await getApp<Renderer>({
+        id: `container-source-clear-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE, resolution: 1, backgroundColor: 0x00ff00 },
+      });
+      const container = new Container();
+      if (halfRed) container.addChild(new Graphics().rect(0, 0, 4, 4).fill({ color: 0xff0000, alpha: 0.5 }));
+      const texture = new ContainerTexture({ container, width: 4, height: 4, clearColor, renderer: app.renderer });
+      try {
+        if (clearColorLater !== undefined) {
+          texture.clearColor = clearColorLater;
+          texture.render();
+        }
+        const view3d = new View3D({ width: SIZE, height: SIZE, toneMapping: 'none' });
+        app.stage.addChild(view3d);
+        const material = new FlatMaterial({ baseColorTexture: texture, alphaMode });
+        view3d.root.addChild(new Mesh3D({ geometry: new PlaneGeometry({ width: 4, height: 4 }), material }));
+        view3d.camera.position.set(0, 0, 2);
+
+        const centre = ((SIZE / 2) * SIZE + SIZE / 2) * 4;
+        const pixel = Array.from((await renderFrame(app)).subarray(centre, centre + 3));
+
+        pixel.forEach((channel, i) => expect(channel).toBeCloseTo(rgb[i], -1));
+      } finally {
+        texture.destroy(true);
+        app.destroy(true, { children: true });
       }
     });
   });

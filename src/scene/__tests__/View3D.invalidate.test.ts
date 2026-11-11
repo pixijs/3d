@@ -20,7 +20,7 @@ describe('View3D view-wide shader invalidation', () => {
 
     keep._batchDirty = false;
 
-    expect(() => (view.toneMapping = 'none')).not.toThrow();
+    expect(() => (view.toneMapping = 'aces')).not.toThrow();
     expect(keep._batchDirty).toBe(true);
   });
 });

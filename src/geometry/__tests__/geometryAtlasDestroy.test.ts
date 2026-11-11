@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { GeometryAtlas } from '~/geometry/GeometryAtlas';
 
-/** Reads the atlas's private live buffer pair without an `any` cast. */
 interface AtlasBuffers {
   _vertexBuffer: Buffer;
   _indexBuffer: Buffer;

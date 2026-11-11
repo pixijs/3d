@@ -2,6 +2,8 @@ import { Rectangle } from 'pixi.js';
 import { describe, expect, test } from 'vitest';
 
 import { updateCameraProjectionForView } from '~/core/prepareCamera';
+import { CubeGeometry } from '~/geometry/CubeGeometry';
+import { Geometry3D } from '~/geometry/Geometry3D';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
@@ -42,5 +44,35 @@ describe("Mesh3D with hitVolume='geometry' — silhouette respect end-to-end", (
 
     expect(boxHit?.target).toBe(sphere);
     expect(geomHit).toBeNull();
+  });
+});
+
+describe("Mesh3D with hitVolume='geometry' — against an earlier, farther hit", () => {
+  test('a geometry whose bounds hold the camera still hits in front of a box picked before it', () => {
+    const view3d = new View3D({ ...SIZE });
+    view3d.camera.position.set(0, 0, 10);
+    view3d.camera.usePerspective(45, 0.1, 1000);
+
+    const box = new Mesh3D({ geometry: new CubeGeometry(), material: new Material3D({}) });
+    box.interactive = true;
+    view3d.root.addChild(box);
+
+    const room = new Mesh3D({
+      geometry: new Geometry3D({
+        positions: new Float32Array([
+          -1, -1, 5, 1, -1, 5, 0, 1, 5, -30, -30, -20, 30, -30, -20, 0, 30, -20, -30, -30, 20, 30, -30, 20, 0, 30, 20,
+        ]),
+      }),
+      material: new Material3D({}),
+    });
+    room.interactive = true;
+    room.hitVolume = 'geometry';
+    view3d.root.addChild(room);
+    tick(view3d);
+
+    const hit = view3d.raycast({ x: 50, y: 50 });
+
+    expect(hit?.target).toBe(room);
+    expect(hit?.distance).toBeCloseTo(5);
   });
 });

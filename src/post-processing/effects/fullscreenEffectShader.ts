@@ -2,32 +2,8 @@ import type { ShaderBit } from '../../core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '../../core/shader/ShaderBitTemplate';
 
 /**
- * The standard effect header, split into composable bits
- *
- * Every fullscreen effect pass compiles `[fxhBit, ...read bits, fragment bit]` through
- * {@link fullscreenEffectTemplate}. The contract effect bodies write against (content-space
- * UV, the sample helpers, uniform naming) is documented on `EffectFragment`.
- *
- * Header data (`fxh` group, pass-owned, auto-fed per frame):
- *
- *  - `uFxClip`  = (camera.near, camera.far, proj[0], proj[5])
- *  - `uFxTexel` = (1/vpWidth, 1/vpHeight, flipY, 0), flipY being 1 on WebGPU and 0 on WebGL
- *  - `uFxInputClamp` / `uFxInput2Clamp` = `(min.x, min.y, max.x, max.y)`, one per colour input:
- *    the bounds a tap on that input may reach, in its own texture's UV, inset half a texel from
- *    the content's edge. The input is a pooled texture that can be larger than its content, the
- *    same situation pixi's filters solve with `uInputClamp`.
- *
- *    The content sub-rect falls out of it rather than being stored twice: `min` is half a texel
- *    and `max` is the far edge less half a texel, so `min + max` is the content's extent in the
- *    texture exactly. `fxInputUv` below does both jobs in one expression, which is why a tap
- *    past the content edge replicates that edge instead of reading the pool's previous tenant.
- *
- *    Per input, not per view: a transient created at a `resolution` other than the view's rounds
- *    into a different pool bucket, so one shared rect cannot serve both.
- *
- * `linearDepth` inverts the stored depth `(ndc + 1) / 2` of a GL-convention perspective
- * projection. Both backends store that: GL by its fixed-function range, WebGPU because the
- * camera data remaps the bound projection's clip z to [0, w] (`CameraData.set`).
+ * `fxInputUv` needs each clamp rect inset half a texel, as `RenderGraph._inputClamp` writes it; `linearDepth`
+ * needs depth stored as `(ndc + 1) / 2`, which the depth remap in `CameraData.ts` gives WebGPU too
  * @internal
  */
 export const fxhBit: ShaderBit = {
@@ -57,6 +33,9 @@ fn linearDepth(d: f32) -> f32 {
 fn texel() -> vec2<f32> {
   return fxh.uFxTexel.xy;
 }
+fn viewTexel() -> vec2<f32> {
+  return fxh.uFxTexel.xy * fxh.uFxTexel.w;
+}
 fn fxInputUv(uv: vec2<f32>, clampRect: vec4<f32>) -> vec2<f32> {
   return clamp(uv * (clampRect.xy + clampRect.zw), clampRect.xy, clampRect.zw);
 }
@@ -73,6 +52,9 @@ float linearDepth(float d) {
 vec2 texel() {
   return uFxTexel.xy;
 }
+vec2 viewTexel() {
+  return uFxTexel.xy * uFxTexel.w;
+}
 vec2 fxInputUv(vec2 uv, vec4 clampRect) {
   return clamp(uv * (clampRect.xy + clampRect.zw), clampRect.xy, clampRect.zw);
 }
@@ -81,23 +63,8 @@ vec2 fxInputUv(vec2 uv, vec4 clampRect) {
 };
 
 /**
- * Chain-colour input — `sampleColor(contentUv)`, `sampleColorLod(contentUv, lod)` and
- * `inputTexel()`
- *
- * The LOD form addresses the mip chain when the bound handle is mip-chained (blur/bokeh
- * effects); on a single-level texture it clamps to 0. `inputTexel()` is one texel of the input
- * as a content-UV step, for kernels whose footprint must follow the input rather than the
- * target (`texel()` is the target's); the clamp rect's `min + max` is the content's extent in
- * the texture, so texture size × extent is the content's size in texels.
- *
- * `sampleColor` reads level 0 explicitly on both backends. GLSL's `texture()` picks its level
- * from quad derivatives, which are undefined inside a branch not every pixel takes, so a
- * mip-chained input would read a coarse level along the branch's edge.
- *
- * `sampleColorLod` clamps to level 0's bounds at every level. Insetting by the level's own half
- * texel would be the exact clamp, but on a coarse level that is a quarter of the content wide and
- * it crops the image rather than guarding its edge. Coarse levels already averaged the padding in
- * when the chain was generated, so a clamp has nothing left to protect there.
+ * `sampleColor` reads level 0 explicitly: `texture()` picks a level from derivatives, undefined in a divergent
+ * branch. `sampleColorLod` clamps every level to level 0's rect, since a per-level inset crops coarse levels.
  * @internal
  */
 export const colorReadBit: ShaderBit = {
@@ -137,7 +104,7 @@ vec2 inputTexel() {
 };
 
 /**
- * Second colour input for combine composites — `sampleColor2(contentUv)`
+ * Clamps with its own rect, since the second input can sit in a different pool bucket from the first
  * @internal
  */
 export const color2ReadBit: ShaderBit = {
@@ -165,30 +132,29 @@ vec4 sampleColor2(vec2 uv) {
 };
 
 /**
- * Scene-depth input — `sampleDepth(contentUv)` and `viewPos(contentUv)`
- *
- * `sampleDepth` is raw non-linear depth; `viewPos` reconstructs the view-space position via
- * the header's clip data, the standard input for AO/SSR-style effects.
- *
- * Both map through the view's `uViewportUVScale`, not a per-input clamp rect: the opaque depth
- * copy is always allocated at the viewport, so the view's scale is its scale.
- *
- * The bit is header-only, with no bindings. It samples the global group's opaque-depth copy,
- * `uOpaqueDepthTexture`, which the global bits declare per backend and the graph binds when the
- * pass declares `b.sample(depth, pipe.globalSlots.opaqueDepth)`. WGSL fetches with `textureLoad`
- * (depth textures pair only with non-filtering samplers, and depth wants nearest anyway); GL's
- * `sampler2D` reads depth in `.r`.
+ * `DEPTH_HELPER_CALL` in `PostEffect.ts` must name each helper here but `fxDepthContent`. The helpers map
+ * through the view's `uViewportUVScale`, not a clamp rect, since the scene depth is allocated at the scene's size.
  * @internal
  */
-export const depthReadBit: ShaderBit = {
+export const depthReadBitGpu: ShaderBit = {
   name: 'effectDepthRead',
+  bindings: {
+    fx: {
+      uFxDepthTexture: 'texture_depth_2d',
+    },
+  },
   gpu: {
     header: /* wgsl */ `
+fn fxDepthContent() -> vec2<f32> {
+  return round(camera.uViewportUVScale * vec2<f32>(textureDimensions(uFxDepthTexture, 0)));
+}
+fn depthTexel() -> vec2<f32> {
+  return 1.0 / fxDepthContent();
+}
 fn sampleDepth(uv: vec2<f32>) -> f32 {
-  let dims = vec2<f32>(textureDimensions(uOpaqueDepthTexture, 0));
-  let texUv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * camera.uViewportUVScale;
-  let coord = vec2<i32>(texUv * (dims - 1.0) + 0.5);
-  return textureLoad(uOpaqueDepthTexture, coord, 0);
+  let content = fxDepthContent();
+  let coord = min(vec2<i32>(clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * content), vec2<i32>(content) - 1);
+  return textureLoad(uFxDepthTexture, coord, 0);
 }
 fn viewPos(uv: vec2<f32>) -> vec3<f32> {
   let lz = linearDepth(sampleDepth(uv));
@@ -197,10 +163,31 @@ fn viewPos(uv: vec2<f32>) -> vec3<f32> {
 }
 `,
   },
+};
+
+/**
+ * WebGL form of {@link depthReadBitGpu}
+ * @internal
+ */
+export const depthReadBitGl: ShaderBit = {
+  name: 'effectDepthRead',
+  bindings: {
+    fx: {
+      uFxDepthTexture: 'texture_2d<f32>',
+    },
+  },
   gl: {
     header: /* glsl */ `
+vec2 fxDepthContent() {
+  return round(uViewportUVScale * vec2(textureSize(uFxDepthTexture, 0)));
+}
+vec2 depthTexel() {
+  return 1.0 / fxDepthContent();
+}
 float sampleDepth(vec2 uv) {
-  return texture(uOpaqueDepthTexture, clamp(uv, 0.0, 1.0) * uViewportUVScale).r;
+  vec2 content = fxDepthContent();
+  ivec2 coord = min(ivec2(clamp(uv, 0.0, 1.0) * content), ivec2(content) - 1);
+  return texelFetch(uFxDepthTexture, coord, 0).r;
 }
 vec3 viewPos(vec2 uv) {
   float lz = linearDepth(sampleDepth(uv));
@@ -212,14 +199,12 @@ vec3 viewPos(vec2 uv) {
 };
 
 /**
- * Fullscreen-triangle template for effect passes
- *
- * The fragment stage delegates to the pass fragment's `effect(uv)`. The vertex stage hands it
- * content-space `vUv`, flipping V by `uFxTexel.z`.
+ * `FullscreenPass.render` sets groups by their index in `bindGroups`. `end` code sees `fxColor`, `finalColor` and,
+ * in WGSL, `input`, as `toneOutputBits` needs.
  * @internal
  */
 export const fullscreenEffectTemplate: ShaderBitTemplate = {
-  bindGroups: ['global', 'camera', 'fx', 'fxh'],
+  bindGroups: [{ name: 'global', ubo: true }, 'camera', 'fx', 'fxh'],
   gpu: /* wgsl */ `
 {{header}}
 
@@ -234,7 +219,10 @@ fn mainVertex(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn mainFragment(input: FragmentInput) -> @location(0) vec4<f32> {
-  return effect(input.vUv);
+  let fxColor = effect(input.vUv);
+  var finalColor = fxColor.rgb;
+  {{fragmentEnd}}
+  return vec4<f32>(finalColor, fxColor.a);
 }
 `,
   gl: {
@@ -255,7 +243,10 @@ void main() {
 out vec4 fragColor;
 
 void main() {
-  fragColor = effect(vUv);
+  vec4 fxColor = effect(vUv);
+  vec3 finalColor = fxColor.rgb;
+  {{end}}
+  fragColor = vec4(finalColor, fxColor.a);
 }
 `,
   },

@@ -24,10 +24,9 @@ export interface IcosahedronGeometryOptions extends Geometry3DOptions {
   /**
    * The subdivision level
    *
-   * `0` keeps the bare 20-face icosahedron; each step quadruples the face count, so the result
-   * quickly approaches a sphere. The geometry has `10 * 4^detail + 2` vertices. Floored and
-   * clamped to the range 0 to 7, where 7 gives 163842 vertices; a value that isn't finite counts
-   * as 0.
+   * `0` is the bare 20-face icosahedron, and each step quadruples the face count. The geometry has
+   * `10 * 4^detail + 2` vertices. Floored and clamped to 0 to 7, where 7 gives 163842 vertices; a
+   * value that isn't finite counts as 0.
    * @default 0
    * @example
    * ```ts
@@ -37,23 +36,15 @@ export interface IcosahedronGeometryOptions extends Geometry3DOptions {
   detail: number;
 }
 
-/**
- * Highest `detail` an {@link IcosahedronGeometry} accepts
- *
- * Seven already gives 163842 vertices. The cap also keeps the midpoint cache key,
- * `min(i1, i2) * 0x100000 + max(i1, i2)`, unique, which needs every vertex index below `0x100000`.
- */
+/** Keeps every vertex index below `0x100000`, which the midpoint cache key needs */
 const MAX_DETAIL = 7;
 
 /**
  * An icosahedron geometry, the 20-faced regular polyhedron
  *
- * Subdividing produces a geodesic sphere with near-uniform face size, so it avoids the pole
- * pinching of a UV sphere; the cost is that vertex count grows as `O(4^detail)` (capped at
- * `detail = 7`).
- *
- * Vertices are projected onto the unit sphere and then scaled by `radius`, so normals match
- * positions. UVs are equirectangular: `u = 0.5 + atan2(nz, nx) / (2π)`, `v = 0.5 - asin(ny) / π`.
+ * Raising `detail` makes a geodesic sphere with near-uniform faces, without the pinched poles of a
+ * UV sphere. Normals point straight out from the center. UVs are equirectangular:
+ * `u = 0.5 + atan2(nz, nx) / (2π)`, `v = 0.5 - asin(ny) / π`.
  * The vertices along the seam where `u` wraps from 1 back to 0 are shared, so the triangles that
  * cross it squeeze the whole texture into one strip. Use {@link SphereGeometry} for a textured
  * sphere.
@@ -62,15 +53,12 @@ const MAX_DETAIL = 7;
  * const icosahedron = new IcosahedronGeometry({ radius: 1, detail: 0 });
  * const geodesicSphere = new IcosahedronGeometry({ radius: 1, detail: 2 });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
- * @see {@link SphereGeometry} For the UV-sphere counterpart
  * @category geometry
  * @standard
  */
 export class IcosahedronGeometry extends Geometry3D {
   /**
-   * Default options for {@link IcosahedronGeometry}
+   * Defaults for every new `IcosahedronGeometry`
    * @example
    * ```ts
    * IcosahedronGeometry.defaultOptions.detail = 2;

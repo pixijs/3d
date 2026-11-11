@@ -8,7 +8,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** pixi keeps one GPU copy per renderer of a buffer, keyed by renderer uid. */
 function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   let n = 0;
   for (const uid in resource._gpuData) {
@@ -17,7 +16,6 @@ function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   return n;
 }
 
-/** A sparse grid of the rendered frame, enough to tell a correct frame from a broken one. */
 function readPixels(app: Application<Renderer>, view3d: View3D): number[] {
   const { pixels, width, height } = app.renderer.extract.pixels(view3d);
   const samples: number[] = [];
@@ -30,11 +28,6 @@ function readPixels(app: Application<Renderer>, view3d: View3D): number[] {
   return samples;
 }
 
-/**
- * A column of four white quads at `x`. Mask mode puts them in the opaque pass, the one that
- * records bundles on WebGPU; a capacity past the 16-bit ceiling puts the container on the
- * 32-bit shared pair, whose growth is unbounded.
- */
 function column(view3d: View3D, x: number, capacity = MAX_U16_CAPACITY + 1): ParticleContainer3D {
   const particles = new ParticleContainer3D({ capacity, alphaMode: 'mask' });
   for (let i = 0; i < 4; i++) particles.setParticleAt(i, x, 1.8 - i * 1.2, 0, 1);

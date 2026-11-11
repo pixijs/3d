@@ -5,11 +5,6 @@ import { renderGltfModel } from './frameModel';
 
 const URL = model('gltf.BoxTexturedNonPowerOfTwo');
 
-/**
- * Basic glTF model regression — BoxTexturedNonPowerOfTwo.
- *
- * Loaded remotely from KhronosGroup/glTF-Sample-Models. Exercises a base-color texture with non-power-of-two dimensions.
- */
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },

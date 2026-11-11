@@ -8,18 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * P1 repro: a shadow-casting {@link View3D} inside a 2D container carrying a 2D
- * filter. The shadow pass push/pops its cascade render target internally; that
- * pop reverts the live binding off the bind-only filter surface to the
- * render-target stack's root, so the View3D drew into the back buffer and the
- * filter composite then hid it. Fixed by the executor re-establishing the
- * default surface for the first colour pass (and the shadow pass nulling
- * `session.activeTarget`). The lit, shadowed scene must appear — desaturated by
- * the filter — inside the card; the colour grid backdrop around it proves the
- * filter boundary. Non-power-of-two canvas also exercises the frame-vs-source
- * viewport/projection path. Static rotation + `delay` for determinism.
- */
 export const scene: TestScene = {
   app: {
     width: 320,
@@ -32,7 +20,6 @@ export const scene: TestScene = {
     const w = app.screen.width;
     const h = app.screen.height;
 
-    // Colour 2D grid backdrop (outside the filtered container — stays in colour).
     const backdrop = new Graphics();
     const step = 20;
     for (let x = 0; x <= w; x += step) backdrop.moveTo(x, 0).lineTo(x, h);
@@ -40,7 +27,6 @@ export const scene: TestScene = {
     backdrop.stroke({ color: 0x2e6c8c, width: 2, alpha: 1 });
     app.stage.addChild(backdrop);
 
-    // Filtered 2D container wrapping the shadow-casting View3D.
     const card = new Container();
     card.position.set(w / 2, h / 2);
     card.filters = [new ColorMatrixFilter()];

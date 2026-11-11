@@ -7,10 +7,6 @@ import { View3D } from '~/scene/View3D';
 
 import { createMorphGrid } from './helpers/morphGrid';
 
-/**
- * A morphed grid at a fixed blend of both targets: the surface shows the
- * peak + ramp on both backends (each keeps its own reference image).
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0xf4f1ea,

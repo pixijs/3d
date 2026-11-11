@@ -4,13 +4,9 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 /**
  * Sets up the inputs {@link toonLightingBit} reads
  *
- * Tints `albedo` and `alpha` by the base colour and its texture, then declares `viewDir`
- * (normalised) and the `bands`, `specularSize`, `rimPower` and `rimIntensity` scalars from the
- * material buffer. The texture sample is premultiplied, so it is divided by its alpha first.
- *
- * The texture is sampled only when the geometry has UVs. Both backends compare `HAS_UVS` with a
- * bare `1`: GLSL receives the flag as `#define HAS_UVS 1`, with no `u` suffix, and GLSL ES won't
- * compare an int with a uint.
+ * Declares the `baseColor` texture slot and the fields {@link ToonData} lists, tints `albedo` and
+ * `alpha` by the base colour and its texture, and declares `viewDir` and the toon values for the
+ * lighting bit. The texture is sampled only on geometry with UVs.
  * @category extras:materials
  * @advanced
  */
@@ -80,9 +76,8 @@ export const toonMaterialBit: ShaderBit = {
 /**
  * Cel-shaded lighting: quantised diffuse bands, a stepped specular highlight and a rim term
  *
- * Built with {@link createLightingBit}, which supplies the light loop, attenuation and shadows;
- * only the toon maths lives here. Expects `normal`, `viewDir`, `albedo` and the toon scalars
- * that {@link toonMaterialBit} declares.
+ * Needs the `viewDir` and toon values {@link toonMaterialBit} declares, so use the two together.
+ * It's built with {@link createLightingBit}, which supplies the light loop and shadows.
  * @category extras:materials
  * @advanced
  */

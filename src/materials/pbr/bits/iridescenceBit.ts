@@ -1,35 +1,11 @@
+import { mathConstantsBit } from '../../../core/shader/bits/mathConstantsBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
-/**
- * `KHR_materials_iridescence`: thin-film interference, the angle-dependent rainbow of soap bubbles
- * and oil slicks
- *
- * It runs in the `material` slot after `pbrMaterialBit` and `specularBit` and before the lighting
- * bits, and mixes the thin film's reflectance into `fresnelF0` by the iridescence factor.
- *
- * The model is Belcour & Barla 2017, "A Practical Extension to Microfacet Theory for the Modeling of
- * Varying Iridescence", with Fourier-fitted CIE XYZ sensitivity curves converted to Rec.709 RGB
- * (`evalSensitivity`, where X gets a second Gaussian because its curve has two lobes), as the
- * Khronos glTF Sample Renderer implements it. The Schlick terms use the spherical-Gaussian form
- * `pbrLightingBit` documents. In `evalIridescence`:
- *
- * - The substrate's IOR is derived per channel from `fresnelF0`, so a coloured metal such as gold or
- *   copper passes its tint into the interference colours. Averaging F0 to one value would make
- *   iridescence on metal look grey.
- * - The constant term, `R12 + Rs`, is broadband and isn't multiplied by `evalSensitivity(0, 0)`.
- *   The sensitivity curves only turn the interference terms into RGB; applied to the constant term
- *   they would add a warm tint to the base reflection that stays even at zero thickness, where
- *   iridescence should vanish.
- *
- * The factor packs into `transmissionVolume.w` and the film's IOR into `attenuationColorIrid.w`.
- * One texture slot stands in for the spec's two: `.r` scales the factor and `.g` picks the
- * thickness between `iridescenceThicknessMinimum` and `iridescenceThickness`, the maximum. Assets
- * pack them that way; when a glTF names two different images, the loader warns and keeps the factor
- * one, whose `.g` then sets the thickness. An unset slot holds `Texture.WHITE`.
- * @internal
- */
+/** @internal */
 export const iridescenceBit: ShaderBit = {
   name: 'iridescence',
+
+  requires: [mathConstantsBit],
 
   textures: ['iridescence'],
 
@@ -44,8 +20,6 @@ export const iridescenceBit: ShaderBit = {
 
   gpu: {
     header: /*wgsl*/ `
-const IRID_PI: f32 = 3.14159265359;
-
 const XYZ_TO_REC709 = mat3x3<f32>(
    3.2404542, -0.9692660,  0.0556434,
   -1.5371385,  1.8760108, -0.2040259,
@@ -53,12 +27,12 @@ const XYZ_TO_REC709 = mat3x3<f32>(
 );
 
 fn evalSensitivity(OPD: f32, shift: vec3<f32>) -> vec3<f32> {
-  let phase = 2.0 * IRID_PI * OPD * 1e-9;
+  let phase = 2.0 * PI * OPD * 1e-9;
   let val = vec3<f32>(5.4856e-13, 4.4201e-13, 5.2481e-13);
   let pos = vec3<f32>(1.6810e+06, 1.7953e+06, 2.2084e+06);
   let vr  = vec3<f32>(4.3278e+09, 9.3046e+09, 6.6121e+09);
-  var xyz = val * sqrt(2.0 * IRID_PI * vr) * cos(pos * phase + shift) * exp(-vr * phase * phase);
-  xyz.x += 9.7470e-14 * sqrt(2.0 * IRID_PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * phase * phase);
+  var xyz = val * sqrt(2.0 * PI * vr) * cos(pos * phase + shift) * exp(-vr * phase * phase);
+  xyz.x += 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * phase * phase);
   xyz /= 1.0685e-7;
   let srgb = XYZ_TO_REC709 * xyz;
   return srgb;
@@ -103,16 +77,16 @@ fn evalIridescence(outsideIor: f32, iridescenceIor: f32, cosTheta: f32,
   let R12s = F_Schlick_scalar(R12, 1.0, cosTheta);
   let T121 = 1.0 - R12s;
   var phi12: f32 = 0.0;
-  if (iridIor < outsideIor) { phi12 = IRID_PI; }
-  let phi21 = IRID_PI - phi12;
+  if (iridIor < outsideIor) { phi12 = PI; }
+  let phi21 = PI - phi12;
 
   let baseIor = Fresnel0ToIorV(baseF0);
   let R23 = IorToFresnel0v(baseIor, iridIor);
   let R23s = F_Schlick_v(R23, 1.0, cosTheta2);
   var phi23 = vec3<f32>(0.0);
-  if (baseIor.x < iridIor) { phi23.x = IRID_PI; }
-  if (baseIor.y < iridIor) { phi23.y = IRID_PI; }
-  if (baseIor.z < iridIor) { phi23.z = IRID_PI; }
+  if (baseIor.x < iridIor) { phi23.x = PI; }
+  if (baseIor.y < iridIor) { phi23.y = PI; }
+  if (baseIor.z < iridIor) { phi23.z = PI; }
 
   let OPD = 2.0 * iridIor * thinFilmThickness * cosTheta2;
   let phi = vec3<f32>(phi21) + phi23;
@@ -155,8 +129,6 @@ fn evalIridescence(outsideIor: f32, iridescenceIor: f32, cosTheta: f32,
 
   gl: {
     header: /*glsl*/ `
-const float IRID_PI = 3.14159265359;
-
 const mat3 XYZ_TO_REC709 = mat3(
    3.2404542, -0.9692660,  0.0556434,
   -1.5371385,  1.8760108, -0.2040259,
@@ -164,12 +136,12 @@ const mat3 XYZ_TO_REC709 = mat3(
 );
 
 vec3 evalSensitivity(float OPD, vec3 shift) {
-  float phase = 2.0 * IRID_PI * OPD * 1e-9;
+  float phase = 2.0 * PI * OPD * 1e-9;
   vec3 val = vec3(5.4856e-13, 4.4201e-13, 5.2481e-13);
   vec3 pos = vec3(1.6810e+06, 1.7953e+06, 2.2084e+06);
   vec3 vr  = vec3(4.3278e+09, 9.3046e+09, 6.6121e+09);
-  vec3 xyz = val * sqrt(2.0 * IRID_PI * vr) * cos(pos * phase + shift) * exp(-vr * phase * phase);
-  xyz.x += 9.7470e-14 * sqrt(2.0 * IRID_PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * phase * phase);
+  vec3 xyz = val * sqrt(2.0 * PI * vr) * cos(pos * phase + shift) * exp(-vr * phase * phase);
+  xyz.x += 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * phase * phase);
   xyz /= 1.0685e-7;
   vec3 srgb = XYZ_TO_REC709 * xyz;
   return srgb;
@@ -214,16 +186,16 @@ vec3 evalIridescence(float outsideIor, float iridescenceIor, float cosTheta,
   float R12s = F_Schlick_scalar(R12, 1.0, cosTheta);
   float T121 = 1.0 - R12s;
   float phi12 = 0.0;
-  if (iridIor < outsideIor) { phi12 = IRID_PI; }
-  float phi21 = IRID_PI - phi12;
+  if (iridIor < outsideIor) { phi12 = PI; }
+  float phi21 = PI - phi12;
 
   vec3 baseIor = Fresnel0ToIorV(baseF0);
   vec3 R23 = IorToFresnel0v(baseIor, iridIor);
   vec3 R23s = F_Schlick_v(R23, 1.0, cosTheta2);
   vec3 phi23 = vec3(0.0);
-  if (baseIor.x < iridIor) phi23.x = IRID_PI;
-  if (baseIor.y < iridIor) phi23.y = IRID_PI;
-  if (baseIor.z < iridIor) phi23.z = IRID_PI;
+  if (baseIor.x < iridIor) phi23.x = PI;
+  if (baseIor.y < iridIor) phi23.y = PI;
+  if (baseIor.z < iridIor) phi23.z = PI;
 
   float OPD = 2.0 * iridIor * thinFilmThickness * cosTheta2;
   vec3 phi = vec3(phi21) + phi23;

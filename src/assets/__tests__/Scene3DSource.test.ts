@@ -38,7 +38,6 @@ describe('Scene3DSource.destroy', () => {
   });
 });
 
-/** pixi keeps one GPU copy per renderer of a buffer or texture source, keyed by renderer uid. */
 interface GpuResident {
   _gpuData: Record<string, unknown>;
 }
@@ -59,12 +58,6 @@ function makeTexture(): Texture {
   return new Texture({ source: new CanvasSource({ resource: canvas }) });
 }
 
-/**
- * A one-mesh source filled the way the glTF loader fills it
- *
- * Its two textures share one image, so they are the same `Texture`, and the geometry is dynamic, so
- * it owns its GPU buffers.
- */
 function buildSource() {
   const source = new Scene3DSource({
     scenes: [{ name: 'Main', children: [0] }],

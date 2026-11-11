@@ -2,16 +2,10 @@ import type { GltfFormat } from '../GltfFormat';
 import { decodeMeshoptBufferViews } from './decodeMeshoptBufferViews';
 
 /**
- * Turns a glTF that uses meshopt compression into a plain one, in place
- *
- * Every compressed bufferView is decoded into a buffer of its own, and then `buffers` is compacted
- * to the buffers some bufferView still uses. That drops the fallback placeholders and the
- * compressed sources, and leaves a glTF the parser reads as if meshopt were never there.
- *
- * Compaction remaps only `bufferView.buffer`. An extension that pointed at a buffer directly would
- * need remapping too; meshopt is the only one, and its entries are gone by then.
- * @param gltfRaw - Parsed glTF JSON; its bufferViews are rewritten to the decoded, compacted buffers
- * @param buffers - Binary buffers indexed by glTF buffer index; decoded and compacted in place
+ * Compaction remaps only `bufferView.buffer`. That's enough while meshopt is the only extension that
+ * names a buffer, as `decodeMeshoptBufferViews` deletes its entries
+ * @param gltfRaw - Parsed glTF JSON, rewritten in place
+ * @param buffers - By glTF buffer index; decoded and compacted in place
  * @internal
  */
 export async function normalizeMeshopt(gltfRaw: GltfFormat, buffers: ArrayBuffer[]): Promise<void> {

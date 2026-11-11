@@ -16,43 +16,29 @@ import type { RenderSession } from '../RenderSession';
 export interface CopyOpaquePassOptions {
   /** Renderer the pass copies with: the {@link PassContext#renderer} a {@link Pass3D#build} call receives */
   renderer: WebGLRenderer | WebGPURenderer;
-  /**
-   * Camera whose picture is copied
-   *
-   * Omitted, the pass copies the view's own picture: the scene colour. Given one, it copies that
-   * camera's colour target, the one its passes draw into. See {@link RenderPassOptions#camera}.
-   */
+  /** Camera whose picture is copied, or the view's own when omitted; see {@link RenderPassOptions#camera} */
   camera?: Camera3D;
   /**
-   * Colour texture the copy lands in
+   * Colour texture the copy lands in; hand the same handle to the passes that sample it
    *
-   * Required. Hand the same handle to the passes that sample the copy, such as
-   * {@link TransmissionRenderPass}. The view camera's copy is {@link PassContext#opaqueColor}. A
-   * pass copying another camera allocates its own with {@link RenderGraph#createColor}, passing
-   * `autoGenerateMipmaps: true`: the graph then builds its mip levels right after the copy, and
-   * rough glass samples the blurred ones.
+   * For another camera, create it with {@link RenderGraph#createColor} and `autoGenerateMipmaps: true`,
+   * or rough glass refracts it unblurred.
    */
   opaqueColorHandle: ColorHandle;
 }
 
 /**
- * Copies a camera's opaque picture into a texture the glass passes sample
+ * Copies a camera's opaque picture into a texture for glass to sample
  *
- * Glass can't sample the target it draws into, so transmissive and blended-refractive materials
- * refract a copy taken after the opaque draw. The pass reads its camera's colour target, or the
- * scene colour when it has no camera, and writes {@link CopyOpaquePass#opaqueColorHandle}. It
- * declares no attachments, so the graph binds no target for it, and it copies its camera's
- * target whatever is bound.
+ * Glass can't sample the target it draws into, so transmissive and blended refractive materials
+ * refract a copy taken after the opaque draw. {@link createDefaultGraph3D} copies the view's camera
+ * into {@link PassContext#opaqueColor}. For another camera, add one after the draws it copies and
+ * before the passes that sample it; passes on other targets can run in between. The graph skips the
+ * copy on frames where nothing samples it.
  *
- * Add it after the draws it copies and before the passes that sample the copy; passes on other
- * targets can run in between. The default graph runs one for the view's camera after the opaque
- * draw, the `'afterOpaque'` passes and {@link CopyDepthPass}, and before
- * {@link TransmissionRenderPass}. The graph drops it on frames where no running pass samples the
- * copy.
- *
- * On WebGL, the first copy of the view's picture logs a warning when the renderer's
- * `useBackBuffer` is off. A view drawing straight to the canvas without the back buffer gets an
- * empty copy, so its glass refracts neither the 2D content behind the view nor the view's own 3D.
+ * On WebGL, give the renderer `useBackBuffer: true` when a view draws glass. Without it, a view
+ * drawn straight to an opaque canvas (the default `backgroundAlpha: 1`) gets an empty copy, so its
+ * glass refracts nothing. The pass warns once when it copies the view's picture with the setting off.
  * @category rendering
  * @advanced
  */
@@ -60,7 +46,7 @@ export class CopyOpaquePass extends RenderPass {
   /** Colour texture the copy lands in, as given in {@link CopyOpaquePassOptions#opaqueColorHandle} */
   public readonly opaqueColorHandle: ColorHandle;
 
-  /** Set by the first copy of the view's picture, so the back-buffer check runs once */
+  /** Set by the first copy of the view's picture, so later frames skip the check and build no warning key */
   private _backBufferWarned = false;
 
   constructor(options: CopyOpaquePassOptions) {
@@ -75,10 +61,7 @@ export class CopyOpaquePass extends RenderPass {
   }
 
   /**
-   * Declares a read of its camera's colour target and the copy it produces
-   *
-   * The read orders the copy after whatever drew the target, and keeps a pooled target alive
-   * until the copy has run.
+   * Reads its camera's colour target and produces {@link CopyOpaquePass#opaqueColorHandle}
    * @param b - The builder recording this pass's resource accesses
    */
   public override setup(b: PassBuilder): void {
@@ -88,8 +71,6 @@ export class CopyOpaquePass extends RenderPass {
 
   /**
    * Copies its camera's colour target into {@link CopyOpaquePass#opaqueColorHandle}
-   *
-   * The first copy of the view's picture warns first on WebGL with `useBackBuffer` off.
    * @param session - The current frame's render session
    */
   public override render(session: RenderSession): void {
@@ -99,9 +80,8 @@ export class CopyOpaquePass extends RenderPass {
       if (renderer.type === RendererType.WEBGL && !(renderer as WebGLRenderer).backBuffer.useBackBuffer) {
         warnOnce(
           `pixi3d-copy-opaque-backbuffer-${renderer.uid}`,
-          '[pixi-3d] A transmissive (glass) material is rendering with useBackBuffer off — ' +
-            "refraction can't sample 2D content drawn behind the View3D (only the view's own 3D). " +
-            'If your glass refracts the page behind it, enable useBackBuffer in Application/renderer init.',
+          '[pixi-3d] Glass is drawing with useBackBuffer off, so a View3D drawn straight to an opaque canvas ' +
+            'refracts nothing. Pass useBackBuffer: true when you create the Application or renderer.',
         );
       }
     }
@@ -109,7 +89,7 @@ export class CopyOpaquePass extends RenderPass {
     const graph = session.view3d._graph;
     this.pipe.copyColor(
       graph._drawTarget(this.camera, session),
-      graph._texture(this.opaqueColorHandle, session),
+      graph.getTexture(this.opaqueColorHandle, session),
       session,
     );
   }

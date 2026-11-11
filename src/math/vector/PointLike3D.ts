@@ -14,34 +14,29 @@ import type { PointData3D } from './PointData3D';
  * dropToGround(crate.position);
  * dropToGround(new Vector3(3, 5, 1));
  * ```
- * @see {@link PointData3D} For the read-only `{ x, y, z }` shape
- * @see {@link Vector3} For the standard implementation
- * @see {@link ObservableVector3} For the observable implementation
  * @category maths
  * @standard
  */
 export interface PointLike3D extends PointData3D {
   /**
-   * Sets the point to a new x, y and z position
+   * Sets the x, y and z components
    * @example
    * ```ts
    * node.position.set(0, 2, 0);
    * node.scale.set(2);
    * ```
-   * @param x - Position of the point on the x axis
-   * @param y - Position of the point on the y axis, defaults to `x`
-   * @param z - Position of the point on the z axis, defaults to `x`
-   * @returns The point instance itself
+   * @param x - The x component
+   * @param y - The y component, defaults to `x`
+   * @param z - The z component, defaults to `x`
    */
   set: (x?: number, y?: number, z?: number) => this;
   /**
-   * Copies `x`, `y`, `z` from `p` into this point
+   * Copies `x`, `y` and `z` from `p`
    * @example
    * ```ts
    * pickup.position.copyFrom({ x: 0, y: 1, z: -4 });
    * ```
    * @param p - The point to copy from
-   * @returns The point instance itself
    */
   copyFrom: (p: PointData3D) => this;
   /**
@@ -55,13 +50,12 @@ export interface PointLike3D extends PointData3D {
    */
   copyTo: <T extends PointLike3D>(p: T) => T;
   /**
-   * Checks if another point is equal to this point
+   * Checks whether `x`, `y` and `z` all match `p` exactly, with no tolerance
    * @example
    * ```ts
    * if (!player.position.equals(lastSentPosition)) sendPosition(player.position);
    * ```
-   * @param p - The point to check
-   * @returns `true` when `x`, `y` and `z` match `p` exactly (no epsilon tolerance)
+   * @param p - The point to compare against
    */
   equals: (p: PointData3D) => boolean;
 }

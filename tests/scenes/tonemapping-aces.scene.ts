@@ -7,17 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * ACES tone-mapping operator lock.
- *
- * Saturated spheres under a strong key light push channels into HDR, where the
- * ACES curve rolls highlights toward white. The operator is the Stephen Hill
- * RRT+ODT fit (rotate into ACEScg via `ACESInputMat`, curve, rotate back via
- * `ACESOutputMat`); those colour-space matrices preserve per-hue saturation. A
- * per-channel approximation without the matrices renders brighter and more
- * desaturated, shifting these pixels enough to fail the match. Also exercises
- * ambient (`1/PI`) + directional lighting together under the curve.
- */
 const COLORS = [0xff2d2d, 0xffd000, 0x29c24a, 0x2f6bff, 0xb84bd8];
 
 export const scene: TestScene = {

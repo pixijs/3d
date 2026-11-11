@@ -1,64 +1,41 @@
+import type { Geometry3D } from '../../geometry/Geometry3D';
 import type { Mesh3D } from '../../scene/Mesh3D';
 import { DataStoreBuffer } from './DataStoreBuffer';
 
 /**
- * 32-bit lanes per mesh store row
- *
- * Lanes 0 to 15 hold the mesh's matrix as floats, world space for a scene mesh and batch-local for
- * a batch slot. The `MESH3D_LANE_*` constants name lanes 16 to 20, and 21 to 23 are padding. The
- * CPU writers and the cull, the WGSL cull kernel and the GLSL instance fetch all read the layout
- * from these constants. The WGSL `RenderableStruct` doesn't: its fields must stay in lane order.
- * Lanes 16 to 18 must also stay in one texel, since `instanceFetchBitGl` reads the bone, material
- * and geometry lanes with a single fetch.
- *
- * It's 24 rather than 21 because WGSL rounds a struct's size up to its alignment, 16 bytes for a
- * `mat4x4<f32>`, so 16 matrix floats and 5 `u32`s take 96 bytes.
+ * 32-bit lanes per mesh store row, 24 as WGSL pads `RenderableStruct` to its `mat4x4` alignment. Its
+ * fields must stay in lane order, and lanes 16 to 18 in one texel, which `instanceFetchBitGl` fetches once
  * @internal
  */
 export const MESH3D_STORE_STRIDE = 24;
 /**
- * Lane of the skeleton's first bone in the bone pit; written for skinned meshes only, and only
- * skinned shaders read it
+ * Written for skinned meshes only, since only skinned shaders read it
  * @internal
  */
 export const MESH3D_LANE_BONES = 16;
-/**
- * Lane of the material's row in the material store
- * @internal
- */
+/** @internal */
 export const MESH3D_LANE_MATERIAL = 17;
 /**
- * Lane of the geometry's row in the geometry data store
- *
- * Holds -1 as a `u32`, which the cull kernel calls `NO_BOUNDS`, until the geometry has a row.
+ * Holds -1 as a `u32`, the cull kernel's `NO_BOUNDS`, until the geometry has a row
  * @internal
  */
 export const MESH3D_LANE_GEOMETRY = 18;
 /**
- * Lane of the mesh's visibility, 0 when hidden, copied from `Container3D.worldVisible`
- *
- * The draw-data compaction reads it to skip a hidden mesh without taking it out of the pass.
+ * 0 when hidden; {@link Mesh3DDataStoreBuffer.visible} holds the copy the CPU reads
  * @internal
  */
 export const MESH3D_LANE_VISIBILITY = 19;
 /**
- * Lane of the float offset of the mesh's morph weights in the shared morph store
- *
- * 0 means no weights, since real offsets start past the delta arena, and skips the shader's morph
- * loop. The geometry's morph facts are in its geometry row, through lane 18.
+ * 0 means no weights, since real offsets start past the delta arena; always written, so a reused row
+ * never keeps the last owner's offset
  * @internal
  */
 export const MESH3D_LANE_MORPH_WEIGHT = 20;
 
-/**
- * Writes a world matrix into lanes 0 to 15 of the row starting at `offset64`
- *
- * Moves the 16 floats as 8 f64 copies: `Matrix4.elements64` views the same memory as the floats,
- * so nothing is converted on either side.
- * @param fl64Buffer - Store data, viewed two floats at a time
- * @param offset64 - Row start in f64 units, half the float offset
- * @param elements64 - The world matrix's `elements64` view
- */
+/** @internal */
+export const MESH3D_SPHERE_STRIDE = 4;
+
+/** Moves the 16 floats as 8 f64s, which alias them, to halve the copies */
 const copyWorldTransform = (fl64Buffer: Float64Array, offset64: number, elements64: Float64Array) => {
   fl64Buffer[offset64] = elements64[0];
   fl64Buffer[offset64 + 1] = elements64[1];
@@ -70,18 +47,6 @@ const copyWorldTransform = (fl64Buffer: Float64Array, offset64: number, elements
   fl64Buffer[offset64 + 7] = elements64[7];
 };
 
-/**
- * Writes a scene mesh's whole row
- *
- * The bone lane is written only for a skinned mesh, since only skinned shaders read it. The morph
- * lane is always written, 0 without morph state, so a mesh moved onto a morphed geometry without
- * weights draws its base pose instead of reading the last owner's offset from a reused row.
- * @param renderable - The mesh
- * @param _buffer - The store as floats; unused, the matrix goes through `fl64Buffer`
- * @param u32Buffer - The store as `u32`s, for the index lanes
- * @param fl64Buffer - The store as f64s, for the matrix
- * @param offset - Float offset of the mesh's row
- */
 const copyMeshData = (
   renderable: Mesh3D,
   _buffer: Float32Array,
@@ -97,21 +62,72 @@ const copyMeshData = (
 
   u32Buffer[offset + MESH3D_LANE_MATERIAL] = renderable.material._materialIndex;
   u32Buffer[offset + MESH3D_LANE_GEOMETRY] = renderable.geometry._geometryDataIndex;
-  u32Buffer[offset + MESH3D_LANE_VISIBILITY] = renderable._worldVisible;
 
-  u32Buffer[offset + MESH3D_LANE_MORPH_WEIGHT] = renderable.morph ? renderable.morph._weightIndex : 0;
+  u32Buffer[offset + MESH3D_LANE_MORPH_WEIGHT] = renderable._morph ? renderable._morph._weightIndex : 0;
 };
 
 /**
- * A batch's mesh store, one row per mesh at its `_storeIndex`, laid out as `MESH3D_STORE_STRIDE`
- * describes
- *
- * A scene mesh's matrix lanes have two writers: the transform pass, through
- * {@link Mesh3DDataStoreBuffer.writeWorldTransform}, whenever the mesh moves, and the per-frame
- * scene update, which rewrites the whole row with `set` when one of its other lanes changes.
+ * Writes radius -1, which the cull always keeps, for dynamic geometry or an empty sphere
  * @internal
  */
-export class Mesh3DDataStoreBuffer extends DataStoreBuffer {
+export function transformBoundingSphere(
+  out: Float32Array,
+  o: number,
+  matrix: ArrayLike<number>,
+  matrixOffset: number,
+  geometry: Geometry3D,
+  radiusGrowth: number,
+): void {
+  const local = geometry.boundsSphere;
+  const radius = local.radius;
+
+  if (geometry.dynamic || radius < 0) {
+    out[o] = 0;
+    out[o + 1] = 0;
+    out[o + 2] = 0;
+    out[o + 3] = -1;
+
+    return;
+  }
+
+  const center = local.center;
+  const cx = center.x;
+  const cy = center.y;
+  const cz = center.z;
+  const m00 = matrix[matrixOffset];
+  const m01 = matrix[matrixOffset + 1];
+  const m02 = matrix[matrixOffset + 2];
+  const m10 = matrix[matrixOffset + 4];
+  const m11 = matrix[matrixOffset + 5];
+  const m12 = matrix[matrixOffset + 6];
+  const m20 = matrix[matrixOffset + 8];
+  const m21 = matrix[matrixOffset + 9];
+  const m22 = matrix[matrixOffset + 10];
+
+  out[o] = m00 * cx + m10 * cy + m20 * cz + matrix[matrixOffset + 12];
+  out[o + 1] = m01 * cx + m11 * cy + m21 * cz + matrix[matrixOffset + 13];
+  out[o + 2] = m02 * cx + m12 * cy + m22 * cz + matrix[matrixOffset + 14];
+
+  const sx = m00 * m00 + m01 * m01 + m02 * m02;
+  const sy = m10 * m10 + m11 * m11 + m12 * m12;
+  const sz = m20 * m20 + m21 * m21 + m22 * m22;
+  out[o + 3] = (radius + radiusGrowth) * Math.sqrt(Math.max(sx, sy, sz));
+}
+
+/** @internal */
+export class Mesh3DDataStoreBuffer extends DataStoreBuffer<Mesh3D> {
+  /**
+   * Each row's sphere for the CPU cull, in its matrix's space; `null` until {@link writesSpheres} first
+   * turns on, and never uploaded
+   */
+  public boundingSpheres: Float32Array | null = null;
+
+  /** While off, {@link boundingSpheres} go stale, so the batch sweeps every row when it turns this on */
+  public writesSpheres = false;
+
+  /** Each row's visibility lane as a byte, so a CPU walk reads 1 byte a row; write both through `_storeVisibility` */
+  public visible: Uint8Array;
+
   constructor(initialSize = 100) {
     super({
       stride: MESH3D_STORE_STRIDE,
@@ -119,19 +135,91 @@ export class Mesh3DDataStoreBuffer extends DataStoreBuffer {
       indexKey: '_storeIndex',
       copier: copyMeshData,
     });
+
+    this.visible = new Uint8Array(Math.floor(this.data.length / MESH3D_STORE_STRIDE));
   }
 
-  /**
-   * Writes only the matrix lanes of a mesh's row and marks the row for upload
-   *
-   * The transform pass calls it the moment it recomputes a mesh's world matrix, while the matrix is
-   * still in the CPU cache. Reading it again in the scene update later in the frame would cost a
-   * cache miss per moved mesh.
-   * @param index - The mesh's slot (`_storeIndex`); must be allocated.
-   * @param elements64 - The world matrix's f64 alias (`Matrix4.elements64`).
-   */
+  public enableSphereWrites(value: boolean): void {
+    this.writesSpheres = value;
+    if (value && this.boundingSpheres === null && this.data) {
+      this.boundingSpheres = new Float32Array(
+        Math.floor(this.data.length / MESH3D_STORE_STRIDE) * MESH3D_SPHERE_STRIDE,
+      );
+    }
+  }
+
+  public override set(item: Mesh3D): number {
+    const index = super.set(item);
+    if (index >= 0) {
+      this._storeVisibility(index, item._worldVisible);
+      const geometry = item.geometry;
+      this.writeBoundingSphere(
+        index,
+        this.data,
+        index * MESH3D_STORE_STRIDE,
+        geometry,
+        item._morph ? geometry._morphBoundsExpansion : 0,
+      );
+    }
+
+    return index;
+  }
+
+  public writeBoundingSphere(
+    index: number,
+    matrix: ArrayLike<number>,
+    matrixOffset: number,
+    geometry: Geometry3D,
+    radiusGrowth: number,
+  ): void {
+    if (!this.writesSpheres) return;
+    transformBoundingSphere(
+      this.boundingSpheres!,
+      index * MESH3D_SPHERE_STRIDE,
+      matrix,
+      matrixOffset,
+      geometry,
+      radiusGrowth,
+    );
+  }
+
+  /** Called as the transform pass computes the matrix, while it's still in the CPU cache */
   public writeWorldTransform(index: number, elements64: Float64Array): void {
     copyWorldTransform(this.fl64Data, index * (MESH3D_STORE_STRIDE >> 1), elements64);
-    this.markDirtyRange(index, index);
+    this.markDirty(index);
+  }
+
+  public writeVisibility(index: number, worldVisible: number): void {
+    this._storeVisibility(index, worldVisible);
+    this.markDirty(index);
+  }
+
+  /** Marks nothing for upload, since the block's allocation already did */
+  public writeVisibilityRange(first: number, count: number, worldVisible: number): void {
+    for (let i = first, end = first + count; i < end; i++) this._storeVisibility(i, worldVisible);
+  }
+
+  private _storeVisibility(index: number, worldVisible: number): void {
+    this.u32Data[index * MESH3D_STORE_STRIDE + MESH3D_LANE_VISIBILITY] = worldVisible;
+    this.visible[index] = worldVisible;
+  }
+
+  public override destroy(): void {
+    super.destroy();
+    (this.visible as Uint8Array | null) = null;
+    this.boundingSpheres = null;
+  }
+
+  protected override _expand(minSize?: number): void {
+    super._expand(minSize);
+
+    const visible = new Uint8Array(Math.floor(this.data.length / MESH3D_STORE_STRIDE));
+    visible.set(this.visible);
+    this.visible = visible;
+    if (this.boundingSpheres === null) return;
+
+    const spheres = new Float32Array(Math.floor(this.data.length / MESH3D_STORE_STRIDE) * MESH3D_SPHERE_STRIDE);
+    spheres.set(this.boundingSpheres);
+    this.boundingSpheres = spheres;
   }
 }

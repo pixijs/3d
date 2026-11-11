@@ -10,14 +10,12 @@ import { Sprite3D } from '~/scene/Sprite3D';
 const makeTexture = (width = 8, height = 8): Texture =>
   new Texture({ source: new TextureSource({ width, height, resolution: 1 }) });
 
-/** A `dynamic` texture, the only kind a sprite listens to for `update` */
 const makeDynamicTexture = (width = 8, height = 8): Texture => {
   const texture = makeTexture(width, height);
   texture.dynamic = true;
   return texture;
 };
 
-/** Geometry3D's private `_destroyed` flag, typed for reading through a cast instead of `any` */
 interface GeometryInternals {
   _destroyed: boolean;
 }
@@ -130,17 +128,6 @@ describe('Sprite3D.destroy', () => {
 
     expect(shared.destroyed).toBe(false);
     expect(texture.destroyed).toBe(true);
-  });
-
-  it('frees a supplied material and its texture once under `material` + `texture`', () => {
-    const texture = makeTexture();
-    const shared = new Material3D({ baseColorTexture: texture });
-    const textureDestroy = vi.spyOn(texture, 'destroy');
-
-    new Sprite3D({ material: shared }).destroy({ material: true, texture: true });
-
-    expect(shared.destroyed).toBe(true);
-    expect(textureDestroy).toHaveBeenCalledTimes(1);
   });
 
   it('frees the texture source once under `material` + `texture` + `textureSource`', () => {

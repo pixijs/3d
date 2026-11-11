@@ -20,7 +20,6 @@ const WALL_Z = -8;
 const LIGHT_Z = WALL_Z + 1.5;
 const FOV = 75;
 
-/** Read the rendered frame without issuing a second render through the extraction system. */
 function canvasPixels(canvas: HTMLCanvasElement): Uint8ClampedArray {
   const copy = document.createElement('canvas');
   copy.width = canvas.width;

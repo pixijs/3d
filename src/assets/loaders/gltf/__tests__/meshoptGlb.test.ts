@@ -1,20 +1,15 @@
 import { MeshoptEncoder } from 'meshoptimizer';
-import type { Loader, ResolvedAsset } from 'pixi.js';
+import { Loader } from 'pixi.js';
+import type { ResolvedAsset } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { loadGlb } from '~/assets/loaders/gltf/loadGlb';
 import type { Scene3DSource } from '~/assets/Scene3DSource';
 
+import { packGlb } from './gltfFixtures';
+
 const POSITIONS = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
 
-const GLB_MAGIC = 0x46546c67;
-const GLB_CHUNK_TYPE_JSON = 0x4e4f534a;
-const GLB_CHUNK_TYPE_BIN = 0x004e4942;
-
-/**
- * Builds a GLB shaped like gltfpack's output: the BIN chunk holds the meshopt-compressed
- * vertex bytes, and the bufferView points at a URI-less fallback buffer that carries no data.
- */
 async function meshoptGlb(): Promise<Blob> {
   await MeshoptEncoder.ready;
 
@@ -59,45 +54,12 @@ async function meshoptGlb(): Promise<Blob> {
   return packGlb(json, compressed);
 }
 
-/** Assembles a binary glTF container: 12-byte header, JSON chunk, BIN chunk. */
-function packGlb(json: unknown, bin: Uint8Array): Blob {
-  const jsonChunk = pad(new TextEncoder().encode(JSON.stringify(json)), 0x20);
-  const binChunk = pad(bin, 0);
-  const length = 12 + 8 + jsonChunk.byteLength + 8 + binChunk.byteLength;
-
-  const header = new ArrayBuffer(12 + 8);
-  const view = new DataView(header);
-
-  view.setUint32(0, GLB_MAGIC, true);
-  view.setUint32(4, 2, true);
-  view.setUint32(8, length, true);
-  view.setUint32(12, jsonChunk.byteLength, true);
-  view.setUint32(16, GLB_CHUNK_TYPE_JSON, true);
-
-  const binHeader = new ArrayBuffer(8);
-  const binView = new DataView(binHeader);
-
-  binView.setUint32(0, binChunk.byteLength, true);
-  binView.setUint32(4, GLB_CHUNK_TYPE_BIN, true);
-
-  return new Blob([header, jsonChunk, binHeader, binChunk]);
-}
-
-/** GLB chunks are 4-byte aligned; JSON pads with spaces, BIN with zeroes. */
-function pad(bytes: Uint8Array, fill: number): Uint8Array<ArrayBuffer> {
-  const padded = new Uint8Array(Math.ceil(bytes.byteLength / 4) * 4).fill(fill);
-
-  padded.set(bytes);
-
-  return padded;
-}
-
 describe('EXT_meshopt_compression in GLB', () => {
   it('decodes compressed bufferViews packed in a .glb container', async () => {
     const url = URL.createObjectURL(await meshoptGlb());
 
     try {
-      const source: Scene3DSource = await loadGlb.load(url, {} as ResolvedAsset, {} as Loader);
+      const source: Scene3DSource = await loadGlb.load(url, {} as ResolvedAsset, new Loader());
       const positions = source.geometries[0][0].positions;
 
       expect(Array.from(positions)).toEqual(Array.from(POSITIONS));

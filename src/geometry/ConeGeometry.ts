@@ -24,8 +24,6 @@ export interface ConeGeometryOptions extends Geometry3DOptions {
   radius: number;
   /**
    * The total height of the cone along the Y axis
-   *
-   * The mesh is centered on the origin, so the apex sits at `+height/2` and the base at `-height/2`.
    * @default 2
    * @example
    * ```ts
@@ -57,8 +55,6 @@ export interface ConeGeometryOptions extends Geometry3DOptions {
   heightSegments: number;
   /**
    * When `true`, the base cap is skipped and only the side surface is generated
-   *
-   * The apex never has a cap.
    * @default false
    * @example
    * ```ts
@@ -72,9 +68,6 @@ export interface ConeGeometryOptions extends Geometry3DOptions {
  * A cone geometry oriented along the +Y axis and centered on the origin, with the apex at
  * `+height/2` and the base ring at `-height/2`
  *
- * It is a {@link CylinderGeometry} with a top radius of 0: the apex is the top ring collapsed to a
- * point, so only the base gets a cap.
- *
  * Side normals are smooth and follow the slope. UVs wrap once around the circumference (`u` from
  * 0 to 1), and `v` runs from 0 at the apex to 1 at the base.
  * @example
@@ -87,16 +80,13 @@ export interface ConeGeometryOptions extends Geometry3DOptions {
  *   openEnded: false,
  * });
  * ```
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
- * @see {@link CylinderGeometry} The underlying primitive; a cone is a cylinder with `radiusTop = 0`
- * @see {@link CapsuleGeometry} For a cylinder with hemispherical caps
+ * @see {@link CylinderGeometry} For a cone with its top cut off
  * @category geometry
  * @standard
  */
 export class ConeGeometry extends Geometry3D {
   /**
-   * Default options for {@link ConeGeometry}
+   * Defaults for every new `ConeGeometry`
    * @example
    * ```ts
    * ConeGeometry.defaultOptions.radialSegments = 16;

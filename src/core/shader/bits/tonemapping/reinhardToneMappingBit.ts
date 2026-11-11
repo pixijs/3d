@@ -1,11 +1,7 @@
 import type { ShaderBit } from '../../ShaderBit';
 
 /**
- * Reinhard tone mapping, `x / (x + 1)` per channel, then the display encode `srgbEncodeBit`
- * describes
- *
- * It is the cheapest curve. It halves an input of 1 and only nears white for very bright input, so
- * scenes tend to look flat.
+ * Ends with the display encode, which must match `srgbEncodeBit`
  * @internal
  */
 export const reinhardToneMappingBit: ShaderBit = {

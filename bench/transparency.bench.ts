@@ -11,8 +11,8 @@
  * in depth rarely share a shape and a colour, so the blended frame breaks into far more draws than the cutout frame.
  *
  * The view culls on the CPU (`cull: 'cpu'`): a GPU cull compacts a draw's survivors in whatever order its threads
- * finish, which would undo the back-to-front sort inside the draw, so the frame would differ from run to run and
- * the blending would be wrong.
+ * finish, so the cutout frame would differ from run to run. The blended pass culls on the CPU under `'gpu'` as well,
+ * to keep its back-to-front order.
  *
  * The count is the question's setting rather than a rung: change `COUNT` to ask what the order costs at another.
  * The objects shrink as the count grows so the screen stays about as covered and the blended layers about as deep.

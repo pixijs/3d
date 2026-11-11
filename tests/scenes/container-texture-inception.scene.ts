@@ -9,8 +9,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Static snapshot of the `container-texture-inception` example: a 2D container holding a 3D view (inner
-// spinning cube) is rendered to a ContainerTexture, which textures an outer cube. 3D in 2D in 3D.
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x0c0e16,
@@ -18,7 +16,6 @@ export const scene: TestScene = {
   create: async (app) => {
     const SIZE = 512;
 
-    // Inner: a 2D container containing a 3D view of a cube + a 2D overlay.
     const innerContent = new Container();
     const innerView = new View3D({ width: SIZE, height: SIZE });
 
@@ -51,7 +48,6 @@ export const scene: TestScene = {
       resolution: 1,
     });
 
-    // Outer: a cube textured with the entire inner scene.
     const outerView = new View3D({ width: app.screen.width, height: app.screen.height });
     app.stage.addChild(outerView);
 
@@ -69,7 +65,6 @@ export const scene: TestScene = {
 
     outerView.camera.position.set(0, 0, 4.5);
 
-    // Rendered manually, before the harness draws the scene, so the outer cube samples the inner scene.
     innerTexture.render(app.renderer);
   },
 };

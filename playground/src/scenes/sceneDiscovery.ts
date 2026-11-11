@@ -6,6 +6,8 @@ const exampleGlobs = import.meta.glob([
   '../../../examples/*.ts',
   '../../../examples/*/index.ts',
   '../../../examples/**/*.example.ts',
+  '../../../src/**/__docs__/examples/*.ts',
+  '../../../src/**/__docs__/examples/*/index.ts',
 ]);
 
 function deriveId(filename: string): string {

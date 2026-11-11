@@ -6,10 +6,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// GRID_SIZE = 29 places 841 meshes in the scene batch, one more than the
-// 819-slot capacity left by `DataStoreBuffer._expand`'s texture-row
-// alignment with stride 20. This forces the second grow boundary and
-// catches regressions of the slot-overflow bug (issue #140).
 const GRID_SIZE = 29;
 const SPACING = 0.5;
 const CUBE_SIZE = 0.35;

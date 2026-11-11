@@ -16,7 +16,6 @@ function positionBuffer(): Buffer {
   return fullscreenTriangleGeometry().attributes.aPosition.buffer;
 }
 
-/** A View with a cube and a tint effect, so it draws through both the output and a fullscreen pass */
 function addView(app: Application<Renderer>, x: number): View3D {
   const view3d = new View3D({ width: SIZE, height: SIZE });
   view3d.x = x;

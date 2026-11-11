@@ -8,6 +8,10 @@ import { MeshPassCache } from '../batcher/Mesh3DData';
 import type { Mesh3DData } from '../batcher/Mesh3DData';
 import { updateMesh3DKeys } from '../batcher/updateMesh3DKeys';
 import type { PassBuilder } from '../render-graph/PassBuilder';
+import type { SceneOutput } from '../render-graph/SceneOutput';
+import { materialBitsFor } from '../render-graph/sceneOutputs';
+import { DEFAULT_OUTPUT_LOCATIONS } from '../shader/codegen/collectFragmentOutputs';
+import type { ShaderBit } from '../shader/ShaderBit';
 import type { View3DPipe } from '../View3DPipe';
 import { passBitRegistry } from './passBitRegistry';
 import type { RenderSession } from './RenderSession';
@@ -18,15 +22,16 @@ import type { RenderSession } from './RenderSession';
  * A mesh rarely needs these set by hand: its `castShadow` puts it in `SHADOW`, and its material
  * puts it in `OPAQUE`, in `TRANSPARENT` when its `alphaMode` is `'blend'`, or in `TRANSMISSION`
  * when it has `transmission`. {@link BatchedMesh3D} slots are the exception, and take these
- * through {@link BatchedMesh3D#setItemActive}.
+ * through {@link BatchedMesh3D#setPassesAt}.
  *
- * Bits 0 to 7 belong to the built-in passes, and 6 and 7 are spare. A custom pass, such as an
- * outline, gets bit 8 or above the first time anything uses its name: the pass itself, a
- * material's `passes` option, or {@link BaseMaterial3D#enablePass}. The built-in passes answer to
- * their names too, so `passes: { shadow: ... }` on a material overrides the shadow pass.
+ * A custom pass, such as an outline, gets its own bit, from bit 8 up, the first time anything uses
+ * its name: the pass itself, a material's `passes` option, {@link BaseMaterial3D#enablePass} or
+ * {@link Mesh3D#enablePass}. A page has room for 24 such names: a later name gets no bit, and its
+ * pass draws no meshes, with no warning. The built-in passes answer to their names too, so
+ * `passes: { shadow: ... }` on a material overrides the shadow pass.
  * @example
  * ```ts
- * batched.setItemActive(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+ * batched.setPassesAt(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
  * ```
  * @category rendering
  * @standard
@@ -35,9 +40,8 @@ export const RenderPassBit = {
   /**
    * No pass
    *
-   * A mesh with it draws nowhere. A pass with it takes no meshes, like the fullscreen effects,
-   * the copies, the depth clear and the output blit: it owns no draw list, uses up no custom bit,
-   * and any number of such passes can share a view.
+   * A mesh with it draws nowhere. Give it to a custom pass that draws no meshes, such as a
+   * fullscreen effect, so it uses up no bit; any number of such passes can share a view.
    */
   NONE: 0,
 
@@ -52,7 +56,7 @@ export const RenderPassBit = {
   /**
    * Glass and other transmissive materials, drawn over a copy of the opaque picture
    *
-   * Runs after the opaque copy and before {@link RenderPassBit.BLENDED_REFRACTION}, and writes depth.
+   * Runs after the opaque copy and before {@link RenderPassBit.BLENDED_REFRACTION}.
    */
   TRANSMISSION: 1 << 4,
   /**
@@ -62,13 +66,7 @@ export const RenderPassBit = {
    */
   BLENDED_REFRACTION: 1 << 5,
 
-  /**
-   * `OPAQUE`, `TRANSPARENT`, `TRANSMISSION` and `BLENDED_REFRACTION` together: the passes that draw
-   * a material with its own shader, one of which each material belongs to
-   *
-   * The material systems mask a material's `_passBit` with it to find that pass.
-   * @internal
-   */
+  /** @internal */
   MATERIAL_PASS_MASK: (1 << 1) | (1 << 2) | (1 << 4) | (1 << 5),
 } as const;
 
@@ -78,12 +76,7 @@ export const RenderPassBit = {
  * @advanced
  */
 export interface RenderPassOptions {
-  /**
-   * The renderer this pass will draw with
-   *
-   * Read in the constructor, so {@link RenderPass#pipe} is ready when the graph calls
-   * {@link RenderPass#setup}, which it does as soon as the pass is added.
-   */
+  /** Renderer the pass draws with: the {@link PassContext#renderer} a {@link Pass3D#build} call receives */
   renderer: WebGLRenderer | WebGPURenderer;
   /**
    * Stable string identifier for this pass, such as `'shadow'` or `'outline'`
@@ -95,65 +88,69 @@ export interface RenderPassOptions {
   name: string;
   /** Human-readable explanation shown by tooling that inspects the render graph */
   description?: string;
-  /** Bit for this pass; built-in passes give their {@link RenderPassBit}, custom passes leave it out */
+  /**
+   * Bit for this pass; leave it out on a custom pass that draws meshes, so its name gets one, and
+   * give {@link RenderPassBit.NONE} to one that draws none
+   */
   bit?: number;
   /**
    * Shader, state and topology this pass uses for every mesh it draws
    *
    * Each field is optional, and a material's own entry for this pass name, in its `passes`
    * option, wins over it; {@link PassDescriptor} lists the full order. Of the passes sharing a
-   * name, only the one that owns it may set this: the one with no `camera`, or the first one when
-   * they all have one.
+   * name, only the one with no `camera`, or the first when they all have one, may set this.
+   *
+   * On one of a material's main passes, such as `'opaque'`, a pass with a shader here must be the
+   * only pass with that name, or the others can throw on WebGL.
    */
   descriptor?: PassDescriptorOptions;
   /**
    * Camera this pass draws from
    *
    * Omit it and the pass draws from the view's own camera onto the view. Give it a `Camera3D` in
-   * the same view and the pass culls with that camera's frustum, uses its matrices, and lands
-   * its image in the rect the camera's `viewport` marks out: picture-in-picture and split-screen.
-   * Give the camera a `renderTexture` and the image lands in that texture instead, for a security
-   * feed, a mirror or a portal; add such a pass at the `'beforeOpaque'` stage so the scene can
-   * sample the texture the same frame.
+   * the same view and the pass culls and draws from that camera instead. Give the camera a
+   * `renderTexture` and the image lands in that texture, for a security feed, a mirror, a portal,
+   * or a minimap shown in a 2D sprite; add such a pass at the `'beforeOpaque'` stage so the scene
+   * can sample the texture the same frame.
    *
    * A feed with glass needs its own copies and glass passes. From the {@link Pass3D#build} that
    * adds the feed's draws, give this camera to a {@link CopyDepthPass}, a {@link CopyOpaquePass}, a
    * {@link TransmissionRenderPass} and a {@link BlendedRefractionPass}, in that order after the
-   * feed's opaque draw: the copies read this camera's target and the glass draws into it. Allocate
-   * the copies' textures with {@link RenderGraph#createColor} and {@link RenderGraph#createDepth};
-   * {@link PassContext#opaqueColor} and {@link PassContext#opaqueDepth} hold the view camera's.
+   * feed's opaque draw. Allocate the copies' textures with {@link RenderGraph#createColor} and
+   * {@link RenderGraph#createDepth}; {@link PassContext#opaqueColor} and
+   * {@link PassContext#opaqueDepth} hold the view camera's.
    */
   camera?: Camera3D;
+  /**
+   * The scene outputs this pass draws into after its colour, in order; see {@link SceneOutput}
+   *
+   * Output `i` is written by the shader's fragment output at location `i + 1`, and a draw leaves
+   * alone any output its shader doesn't write. This differs from {@link Pass3D#requiredOutputs},
+   * which only makes the outputs exist this frame. The default graph gives its scene outputs to its
+   * depth clear, background, opaque, transmission and transparent passes; see
+   * {@link DefaultGraph3DOptions#sceneOutputs}.
+   */
+  attachedOutputs?: readonly SceneOutput[];
 }
 
 /**
  * Base class for all render passes in the pipeline
  *
  * Each view runs its passes in order through its {@link RenderGraph}. A pass goes through these
- * steps, all but `setup` every frame inside {@link RenderGraph#run}:
- * - `setup(builder)` runs once, when the pass is added to the graph. It declares what the pass
- *   reads and writes through the {@link PassBuilder}, and the graph picks the render target from
- *   those declarations.
- * - `condition(session)`, if the pass has one, runs when the graph picks this frame's passes;
- *   returning `false` skips the pass for that frame. The view's camera and lights are already up
- *   to date for the frame.
- * - The graph then builds the camera of every pass still running.
+ * steps:
+ * - `setup(builder)` runs once, when the pass is added to the graph, and declares what the pass
+ *   reads and writes.
+ * - `condition(session)`, if the pass has one, can skip the pass for a frame.
  * - `prepare(session)` runs before any render target is bound.
  * - `render(session)` runs once the graph has bound the pass's target. A pass that declares only
- *   `produce`, `sample` or `read` accesses, such as the shadow pass and the copies, gets no target
- *   bound and does all its own GPU work.
+ *   `produce`, `sample` or `read` accesses gets no target bound and does its own GPU work.
  *
- * `P` is the pipe type. Leave it as the backend-neutral `View3DPipe` to run on both backends; a
- * pass that needs one backend's members names that backend's pipe instead.
+ * `P` is the pipe type. Leave it as `View3DPipe` to run on both backends.
  * @category rendering
  * @advanced
  */
 export class RenderPass<P extends View3DPipe = View3DPipe> {
-  /**
-   * Stable string identifier for this pass, such as `'shadow'` or `'outline'`
-   *
-   * Materials name the pass by it in their `passes` option.
-   */
+  /** The pass's name; see {@link RenderPassOptions#name} */
   public readonly name: string;
 
   /** Human-readable explanation of what this pass contributes to the frame */
@@ -162,7 +159,7 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
   /** Bit for this pass: the built-in one it was given, or the one its name was assigned */
   public bit = 0;
 
-  /** The view pipe of the renderer this pass was built for, which it keeps for life */
+  /** The view pipe of the renderer this pass was built for */
   public readonly pipe: P;
 
   /** Shader, state and topology this pass uses for every mesh, from {@link RenderPassOptions#descriptor} */
@@ -171,18 +168,26 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
   /**
    * Camera this pass draws from, or `null` to draw from the view's own camera
    *
-   * See {@link RenderPassOptions#camera}. While `render` runs, the graph narrows the GPU viewport
-   * to the camera's rect.
+   * See {@link RenderPassOptions#camera}. While `render` runs, the GPU viewport is the camera's rect.
    */
   public readonly camera: Camera3D | null;
 
-  /**
-   * Whether `onRenderableDirty` writes a re-keyed mesh's key into the pass's sorted view
-   *
-   * `true` for passes that draw in key order, such as opaque and shadow. A pass sorted by distance
-   * re-sorts every frame and never reads the key, so {@link ForwardRenderPass} turns this off for it.
-   */
+  /** Whether this pass draws in key order; `false` for a pass sorted by distance, which re-sorts every frame */
   protected _updatesViewKey = true;
+
+  /** The scene outputs attached after the target colour; see {@link RenderPassOptions#attachedOutputs} */
+  public readonly attachedOutputs: readonly SceneOutput[];
+
+  /**
+   * Shader bits a material adds when it draws in this pass, so it writes the attached outputs
+   *
+   * Each attached output's {@link SceneOutput#bits | bits} entry for this pass's name, in order. A
+   * material with a template of its own ignores them.
+   */
+  public readonly materialBits: readonly ShaderBit[];
+
+  /** The output each fragment location of a material shader in this pass writes: `color`, then each attached output */
+  public readonly outputLocations: readonly string[];
 
   constructor(options: RenderPassOptions) {
     this.name = options.name;
@@ -190,69 +195,75 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
     this.bit = passBitRegistry.getOrAllocate(options.name, options.bit);
     this.descriptor = options.descriptor ? normalizePassEntry(options.descriptor) : undefined;
     this.camera = options.camera ?? null;
+    this.attachedOutputs = options.attachedOutputs ?? [];
+    this.materialBits = materialBitsFor(this.attachedOutputs, this.name);
+    this.outputLocations =
+      this.attachedOutputs.length > 0
+        ? ['color', ...this.attachedOutputs.map((output) => output.name)]
+        : DEFAULT_OUTPUT_LOCATIONS;
     this.pipe = options.renderer.renderPipes.view3d as unknown as P;
+  }
+
+  /**
+   * Declares writes of its camera's whole target: the colour, the attached outputs, then the depth
+   * @param b - The builder recording this pass's resource accesses
+   */
+  protected _writeTarget(b: PassBuilder): void {
+    b.writeColor(b.targetColor);
+    for (let i = 0; i < this.attachedOutputs.length; i++) b.writeColor(b.getSceneOutput(this.attachedOutputs[i]));
+    b.writeDepth(b.targetDepth);
   }
 
   /**
    * Declares what resources this pass reads, writes, and samples
    *
-   * The graph calls it once, when the pass is added, with the graph's {@link PassBuilder}. The
-   * graph only runs a pass whose output the frame needs, so a pass that keeps this default, which
-   * declares nothing, never runs.
+   * The graph calls it once, when the pass is added. The graph only runs a pass whose output the
+   * frame needs, so a pass that keeps this default, which declares nothing, never runs.
    * @param _builder - The builder recording this pass's resource accesses
    */
   public setup(_builder: PassBuilder): void {}
 
   /**
-   * Optional per-frame check; returning `false` skips the pass for the frame
+   * Optional per-frame check; returning `false` skips the pass, `prepare` and `render` included
    *
-   * The graph calls it when it picks this frame's passes, before any of them draws. A skipped pass
-   * gets no `prepare` or `render` call. Without one, the pass runs every frame.
+   * The graph asks it before any pass draws, once the scene's transforms and the view's camera are
+   * up to date for the frame. Without one, the pass runs every frame.
    * @param session - The current frame's render session
    * @returns Whether the pass should run this frame
    */
   public condition?(session: RenderSession): boolean;
 
   /**
-   * Runs for every pass that runs this frame, after the graph builds the pass cameras and before
-   * any pass draws or any render target is bound
+   * Runs before any pass draws or any render target is bound, once every pass's camera is current
    *
-   * Override it to upload GPU buffers early, so a compute cull can run between this and `render`.
-   * The default does nothing.
+   * Override it to upload GPU buffers early. The default does nothing.
    * @param _session - The current frame's render session
    */
   public prepare(_session: RenderSession): void {}
 
   /**
-   * Draws this pass's contribution to the frame
+   * Draws this pass's contribution to the frame, once the graph has bound its target
    *
-   * Runs every frame the pass runs, once the graph has bound its target. The default does nothing.
+   * The default does nothing.
    * @param _session - The current frame's render session
    */
   public render(_session: RenderSession): void {}
 
   /**
    * Re-keys a mesh of this pass whose shader, material or geometry changed
-   *
-   * A pass with a shader of its own, from its descriptor or the material's entry for the pass
-   * (shadow, outline, custom passes), compiles that shader for the mesh and caches it with the
-   * resolved state and topology. The compile folds in the geometry's vertex formats and morph
-   * targets, and the topology is copied, so the entry is resolved again only when the mesh's
-   * geometry or material has changed since. It is refreshed in place rather than replaced, since
-   * other code holds the entry. A material's own pass (opaque, transparent, transmission, blended
-   * refraction) already has its shader, and only recomputes the mesh's batch key.
-   *
-   * A re-keyed mesh's sort key goes into the pass's sorted view when `_updatesViewKey` is on.
-   * @param item - The dirty mesh to (re)key
-   * @param batch - The batch the mesh belongs to
    * @internal
    */
-  public onRenderableDirty(item: Mesh3DData, batch: Mesh3DBatch): void {
+  public onRenderableDirty(item: Mesh3DData, batch: Mesh3DBatch, rebuildsLists: boolean): void {
     const bit = this.bit;
     const pd = batch.drawLists[bit];
     const material = item.material;
 
-    pd.drawDirtyId++;
+    if (rebuildsLists || !this._updatesViewKey) {
+      pd.drawDirtyId++;
+    } else {
+      pd.move(item);
+      batch._editsPending = true;
+    }
 
     const matPd = material._passes[bit];
     const passPd = this.descriptor;
@@ -260,26 +271,22 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
 
     if (descriptor) {
       const cached = item._passCache[bit];
-      if (cached && !cached.isStaleFor(item)) return;
+      if (!cached || cached.isStaleFor(item)) {
+        const shader = this.pipe.renderer.material3d.compileShader(descriptor, item, batch);
+        const state = (matPd && matPd.state) || (passPd && passPd.state) || material.state;
+        const topology =
+          (matPd && matPd.topology) || (passPd && passPd.topology) || material.topology || item.geometry.topology;
 
-      const shader = this.pipe.renderer.material3d.compileShader(descriptor, item);
-      const state = (matPd && matPd.state) || (passPd && passPd.state) || material.state;
-      const topology =
-        (matPd && matPd.topology) || (passPd && passPd.topology) || material.topology || item.geometry.topology;
-
-      let cache = cached;
-      if (cache) {
-        cache.shader = shader;
-        cache.state = state;
-        cache.topology = topology;
-      } else {
-        cache = item._passCache[bit] = new MeshPassCache(shader, state, topology);
+        if (cached) {
+          cached.shader = shader;
+          cached.mergedShader = null;
+          cached.state = state;
+          cached.topology = topology;
+          cached.claimBuiltFrom(item);
+        } else {
+          (item._passCache[bit] = new MeshPassCache(shader, state, topology)).claimBuiltFrom(item);
+        }
       }
-      cache.claimBuiltFrom(item);
-
-      updateMesh3DKeys(item, cache, shader.uid);
-      if (this._updatesViewKey) pd.view.updateKey(item.uid, item._sortKey);
-      return;
     }
 
     const cache = item._passCache[bit];
@@ -291,9 +298,8 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
   /**
    * Releases the GPU resources this pass owns alone
    *
-   * The graph calls it on every pass when it is destroyed. The default does nothing. A pass that
-   * owns shaders, bind groups or render targets overrides it, and leaves alone anything it only
-   * borrowed.
+   * The graph calls it when the graph is destroyed. Override it to free the shaders, bind groups
+   * or render targets your pass created, leaving alone anything it only borrowed.
    */
   public destroy(): void {}
 }

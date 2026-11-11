@@ -5,10 +5,10 @@ import type { LightOptions } from './Light';
 
 /**
  * Constructor options for {@link PointLight}: the {@link LightOptions} plus a
- * {@link PointLightOptions.range | range}
+ * {@link PointLightOptions.range | range} and a {@link PointLightOptions.radius | radius}
  * @example
  * ```ts
- * const options: PointLightOptions = { color: 0xffd180, intensity: 8, range: 12 };
+ * const options: PointLightOptions = { color: 0xffd180, intensity: 8, range: 12, radius: 0.25 };
  * const lamp = new PointLight(options);
  * ```
  * @category scene
@@ -24,6 +24,15 @@ export interface PointLightOptions extends LightOptions {
    * ```
    */
   range?: number;
+  /**
+   * Radius of the light's bulb, in world units; see {@link PointLight.radius}
+   * @default 0.1
+   * @example
+   * ```ts
+   * const lantern = new PointLight({ intensity: 4, range: 6, radius: 0.6 });
+   * ```
+   */
+  radius?: number;
 }
 
 /**
@@ -40,17 +49,13 @@ export interface PointLightOptions extends LightOptions {
  * lamp.position.set(0, 2, 0);
  * view.root.addChild(lamp);
  * ```
- * @see {@link Light} For the abstract base class.
  * @see {@link SpotLight} For a directional cone alternative.
  * @category scene
  * @standard
  */
 export class PointLight extends Light {
   /**
-   * Default {@link PointLightOptions} merged under every constructor call
-   *
-   * `new PointLight(opts)` resolves as `{ ...PointLight.defaultOptions, ...opts }`, ignoring
-   * options set to `undefined`. Mutate to change the defaults process-wide.
+   * Defaults for every new `PointLight`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * PointLight.defaultOptions.range = 10;
@@ -60,6 +65,7 @@ export class PointLight extends Light {
     color: 0xffffff,
     intensity: 1,
     range: 0,
+    radius: 0.1,
   };
 
   /** Always `'point'` */
@@ -69,9 +75,8 @@ export class PointLight extends Light {
   /**
    * Distance the light reaches, in world units, or `0` for no limit
    *
-   * The light fades smoothly to nothing at this distance. Without a range it never quite reaches
-   * zero, so the view shades it on every pixel. Give lights a range when you can: the view then
-   * shades each one only where it reaches, which matters with many lights. Change it at any time.
+   * The light fades smoothly to nothing at this distance. Give lights a range when you can: one
+   * without is shaded on every pixel, one with only where it reaches, which matters with many lights.
    * @default 0
    * @example
    * ```ts
@@ -81,17 +86,33 @@ export class PointLight extends Light {
   public range = 0;
 
   /**
+   * Radius of the light's bulb, in world units
+   *
+   * A surface stops getting brighter once it's closer to the light than about this distance. Raise
+   * it past the light's distance from a surface to soften the hot spot there: for a lantern 0.3
+   * above the ground, try 0.6. Surfaces farther than about twice the radius barely change. Values
+   * under 0.01 act as 0.01.
+   * @default 0.1
+   * @example
+   * ```ts
+   * lamp.radius = 0.6;
+   * ```
+   */
+  public radius = 0.1;
+
+  /**
    * Creates a new `PointLight`; add it under {@link View3D.root | view.root} to light the view
    *
    * Warns when `castShadow` is `true`, since point lights cast no shadows.
    * @param options - Construction options; see {@link PointLightOptions}.
    */
   constructor(options: PointLightOptions = {}) {
-    const { range, ...rest } = { ...PointLight.defaultOptions, ...definedProps(options) };
+    const { range, radius, ...rest } = { ...PointLight.defaultOptions, ...definedProps(options) };
 
     super({ label: 'PointLight', ...rest });
 
     this.range = range!;
+    this.radius = radius!;
 
     if (this.castShadow) {
       warn('PointLight does not cast shadows; `castShadow` has no effect.');

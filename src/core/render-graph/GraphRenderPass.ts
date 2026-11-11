@@ -3,61 +3,55 @@ import type { RenderSession } from '../render-passes/RenderSession';
 import type { PassBuilder } from './PassBuilder';
 
 /**
- * Contract for a pass added to the {@link RenderGraph}
- *
- * {@link RenderPass} satisfies it, and so does a plain object with `name`, `setup` and `render`.
+ * What {@link RenderGraph#addPass} takes: a {@link RenderPass}, or a plain object with `name`,
+ * `setup` and `render`
  * @category rendering
  * @advanced
  */
 export interface GraphRenderPass {
-  /** Pass name — identifies the pass in graph diagnostics and debug tooling */
+  /** Names the pass in errors and debug tools */
   readonly name: string;
-  /** Optional human-readable explanation of what the pass contributes to the frame */
+  /** What the pass adds to the frame, shown by debug tools */
   readonly description?: string;
-  /**
-   * The pass's {@link RenderPassBit}, which keys its draw lists
-   *
-   * When a texture the pass samples changes, the graph re-records the pass's WebGPU render
-   * bundles. A pass that draws no meshes leaves it out or uses `0`.
-   */
+  /** The {@link RenderPassBit} of the meshes the pass draws; give {@link RenderPassBit.NONE} on a pass that draws none */
   readonly bit?: number;
   /**
    * Camera this pass draws from, or `null` or absent for the view's own
    *
-   * A camera with a render texture draws into a target of its own, which the graph copies into the
-   * texture. Any other camera draws into its frame within the view: the graph narrows the GPU
-   * viewport and `session.activeViewport` to it for the duration of `render`.
+   * A camera with a render texture draws into that texture. Any other camera draws into its frame
+   * within the view: while `render` runs on a pass with attachments, the GPU viewport and
+   * `session.activeViewport` cover only that frame.
    */
   readonly camera?: Camera3D | null;
   /**
-   * Declare the pass's resource accesses
-   *
-   * Runs once at graph build time.
-   * @param {PassBuilder} builder - Access-declaration API scoped to this pass.
+   * Declares the textures the pass reads and writes; runs once, when the pass is added
+   * @param {PassBuilder} builder - Records the declarations for this pass.
    */
   setup(builder: PassBuilder): void;
   /**
-   * Optional upload step, run for every active pass before any render target is bound
-   *
-   * Cameras are already built, and no render pass is open, so a culling compute dispatch can run here.
+   * Runs on each frame the pass runs, before any pass renders, for uploads and compute work such as
+   * culling; the cameras are already updated
    */
   prepare?(session: RenderSession): void;
-  /** Record the pass's rendering; runs per frame, after the graph has bound the target and sample-slot resources */
+  /** Draws the pass on each frame it runs, after the graph binds the textures it samples and any target it declared */
   render(session: RenderSession): void;
   /**
-   * Optional per-frame cull
+   * Return `false` to skip the pass this frame, `prepare` included, and any pass that only feeds it
+   *
+   * A later pass that reads what this one writes isn't skipped with it, and sees whatever the texture
+   * last held. For a texture the graph allocates, that can be another pass's leftovers; to keep a
+   * result across skipped frames, write it into one you import with {@link RenderGraph#importColor}.
    * @param {RenderSession} session - The frame's render session.
-   * @returns `false` to drop the pass for this frame.
+   * @returns Whether the pass runs this frame.
    */
   condition?(session: RenderSession): boolean;
   /**
-   * Optional "give the memory back now" hook, forwarded by {@link RenderGraph#unload}
+   * Frees GPU memory the pass can rebuild, such as the shadow pass's map; {@link RenderGraph#unload} calls it
    *
-   * Free whatever the pass can rebuild lazily (the shadow pass frees its map); anything
-   * freed here must re-create itself on the next frame that needs it. Unlike `destroy`
-   * this may be called any number of times, and the pass keeps rendering afterwards.
+   * It can run any number of times and the pass keeps rendering, so whatever it frees must come
+   * back on the next frame that needs it.
    */
   unload?(): void;
-  /** Optional teardown; called once when the graph is destroyed */
+  /** Releases the pass; the graph calls it once, when it is destroyed */
   destroy?(): void;
 }

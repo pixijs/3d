@@ -35,9 +35,10 @@ export interface TrackOptions {
    *
    * The player splits the label at its last `.` and looks for a node with that label, or a bone
    * of a skinned mesh with that name, in the subtree of {@link AnimationPlayerOptions#target}.
-   * On a bone the property is `position`, `quaternion` or `scale`. On a node it is any vector,
-   * quaternion, number or numeric array property, such as `position`, `x` or `weights`. A label
-   * that matches nothing is ignored without a warning.
+   * On a bone the property is `position`, `quaternion` or `scale`. On a node it is a `Vector3` or
+   * `ObservableVector3`, quaternion, number or numeric array property, such as `position`, `x` or
+   * `weights`. A label that matches nothing, or a property of another type, is ignored without a
+   * warning.
    *
    * Tracks loaded from glTF name their node by its index in the file, which only the player of a
    * {@link Model3D} resolves.
@@ -51,6 +52,26 @@ export interface TrackOptions {
    * @default 1
    */
   valueSize?: number;
+}
+
+/**
+ * Kept out of {@link Track#evaluate} so V8 still inlines the forward search that forward playback takes
+ * @param times - Keyframe times, with `times[0] < time < times[after]`
+ * @param time - Time in seconds
+ * @param after - A keyframe index past `time`
+ */
+function bisectKeyframe(times: Float32Array, time: number, after: number): number {
+  let low = 0;
+  let high = after;
+
+  while (high - low > 1) {
+    const mid = (low + high) >> 1;
+
+    if (times[mid] <= time) low = mid;
+    else high = mid;
+  }
+
+  return low;
 }
 
 /**
@@ -97,11 +118,8 @@ export class Track {
   /**
    * Blends a freshly sampled value into a running weighted average
    *
-   * The player calls it every frame for each state after the first that drives the same
-   * property, so it is hot while animations crossfade. Subclasses override it to unroll their
-   * fixed width, which beats this generic loop even with the virtual dispatch, and to add
-   * whatever their representation needs beyond a component-wise lerp: {@link QuaternionTrack}
-   * aligns hemispheres first.
+   * The player calls it every frame while two or more playing states drive the same property.
+   * Override it where a component-wise lerp is wrong for the value, as {@link QuaternionTrack} does.
    * @param values - The running weighted average, updated in place
    * @param sample - The freshly evaluated value to blend in
    * @param t - Blend factor for `sample` against `values`
@@ -148,7 +166,7 @@ export class Track {
       return len - 2;
     }
 
-    if (times[index] > time) index = 0;
+    if (times[index] > time) index = bisectKeyframe(times, time, index);
     while (index < len - 1 && times[index + 1] <= time) index++;
 
     const nextIndex = index + 1;

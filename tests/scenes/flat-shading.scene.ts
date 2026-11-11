@@ -8,21 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * `flatShading` shades from face normals, on any material that reads a normal.
- *
- * Both columns share one geometry per row — only the material differs. The left
- * pair must read as smooth gradients, the right pair as hard-edged facets that
- * expose the tessellation. A broken derivative normal collapses the difference
- * (identical columns) or blows out to NaN (black facets), and either way fails
- * the pixel match.
- *
- * The flag lives on `BaseMaterial3D` and is injected by the material system, so
- * the second row uses `PhongMaterial` to pin that it isn't PBR-only.
- *
- * Low segment counts keep the facets large enough to survive the diff at
- * snapshot resolution.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x14161c,

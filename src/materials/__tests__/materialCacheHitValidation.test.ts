@@ -17,7 +17,6 @@ function addCube(view3d: View3D, material: Material3D): void {
 
 for (const preference of ['webgl', 'webgpu'] as const) {
   describe(`material validation on a shader-cache hit (${preference})`, () => {
-    /** Renders one red cube, then hands `run` the shader-cache size that render left */
     async function afterFirstCube(id: string, run: (app: App, view3d: View3D, cached: number) => void): Promise<void> {
       const app = await getApp<WebGLRenderer | WebGPURenderer>({
         id: `${id}-${preference}`,

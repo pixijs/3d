@@ -10,7 +10,6 @@ import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
-/** Pixels from the centre where N·H has fallen to about 0.8, well outside a smooth lobe */
 const OFF_PEAK = 36;
 
 function brightness(canvas: HTMLCanvasElement, x: number, y: number): number {
@@ -18,13 +17,6 @@ function brightness(canvas: HTMLCanvasElement, x: number, y: number): number {
   return Math.max(r, g, b);
 }
 
-/**
- * Smooth materials whose GGX peak must stay a saturated dot with a dark surface a little way off it
- *
- * Light and camera both sit on +Z, so N = L = V = H at the centre pixel. The GGX denominator is
- * alpha^4 at the peak, about 1.7e-11 at the 0.045 roughness floor, so any additive guard on it
- * swamps the peak and flattens the highlight of every smooth material.
- */
 const cases: { name: string; material: Material3DOptions; intensity: number }[] = [
   {
     name: 'a smooth clearcoat',

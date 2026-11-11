@@ -24,5 +24,8 @@ export * from './loaders/gltf/utils/glbToGltf';
 export * from './loaders/gltf/utils/gltfAttributeMap';
 export * from './loaders/gltf/utils/loadImages';
 export * from './loaders/gltf/utils/widenColorToRgba';
+export * from './loaders/hdr/equirectToCube';
+export * from './loaders/hdr/loadHdr';
+export * from './loaders/hdr/parseRadianceHdr';
 export * from './Scene3DDescriptor';
 export * from './Scene3DSource';

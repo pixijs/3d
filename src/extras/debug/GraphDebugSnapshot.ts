@@ -4,16 +4,22 @@ import type { Texture } from 'pixi.js';
 import type { Mesh3DBatch } from '../../core/batcher/Mesh3DBatch';
 import type { Mesh3DData, MeshPassCache } from '../../core/batcher/Mesh3DData';
 import { MESH3D_LANE_VISIBILITY } from '../../core/buffers/Mesh3DDataStoreBuffer';
-import { transformFrustumToBatch } from '../../core/cull';
+import { resolveCullProducer, transformFrustumToBatch } from '../../core/cull';
+import type { ShadowDataGpu } from '../../core/gpu/ShadowRenderPassGpu';
 import type { GraphRenderPass } from '../../core/render-graph/GraphRenderPass';
 import type { ResourceAccess } from '../../core/render-graph/PassBuilder';
 import type { RenderGraph } from '../../core/render-graph/RenderGraph';
 import type { ResourceHandle, ResourceKind } from '../../core/render-graph/ResourceHandle';
-import type { CullResult, CullResults } from '../../core/render-passes/CullResult';
+import type { CullResult } from '../../core/render-passes/CullResult';
+import type { CullResults } from '../../core/render-passes/CullResults';
 import type { DrawList } from '../../core/render-passes/DrawList';
+import { cachesDrawWork } from '../../core/render-passes/RenderForwardDescriptor';
+import type { RenderForwardDescriptor } from '../../core/render-passes/RenderForwardDescriptor';
 import { RenderPassBit } from '../../core/render-passes/RenderPass';
 import type { RenderPass } from '../../core/render-passes/RenderPass';
+import { cascadeCountFor, castsShadowThisFrame, updateRateFor } from '../../core/render-passes/shadow/shadowPassUtils';
 import type { Geometry3D } from '../../geometry/Geometry3D';
+import type { Light } from '../../scene/lights/Light';
 import type { View3D } from '../../scene/View3D';
 
 /**
@@ -42,8 +48,10 @@ export interface GraphDebugAccessSnapshot {
   handleId: number;
   /** Resource kind of the accessed handle */
   handleKind: ResourceHandle['_kind'];
-  /** Attachment slot, for attachment accesses */
-  slot?: number;
+  /** Name of the binding a `sample` access is bound as */
+  slot?: string;
+  /** Whether a sample access binds into the view's global group rather than one the pass owns */
+  globalGroup?: boolean;
   /** Resolved load op for attachment writes; null for other access modes or inactive passes */
   effectiveLoadOp: string | null;
 }
@@ -65,23 +73,17 @@ export interface GraphDebugPassSnapshot {
   /** Execution index among active passes; null when the pass was culled */
   passIdx: number | null;
   /**
-   * Whether the pass writes or produces an imported resource, or a camera target the graph
-   * copies out, and therefore always survives the cull
+   * Whether the pass always survives the cull: it called {@link PassBuilder#sideEffect}, or writes
+   * or produces an imported resource or a camera target the graph copies out
    */
   isAnchored: boolean;
   /**
-   * Ids of the colour resources this pass was the last to write in the frame
-   *
-   * Right after the pass, the graph generates mipmaps for those whose texture source has
-   * `autoGenerateMipmaps` set, so a non-empty list doesn't mean any were generated.
+   * Ids of the colour resources this pass writes last in the frame; after the pass the graph
+   * resolves the multisampled ones and generates mipmaps for those whose source has
+   * `autoGenerateMipmaps` set
    */
-  mipmapHandles: number[];
-  /**
-   * Declaration indices of the passes this pass depends on
-   *
-   * Indices, not names: two passes may share a name when they draw it from different cameras,
-   * so a name doesn't identify one.
-   */
+  finishedColors: number[];
+  /** Indices into {@link GraphDebugGraphSnapshot#passes} of the passes this one depends on; names can repeat */
   dependsOn: number[];
   /** Resource accesses declared by the pass */
   accesses: GraphDebugAccessSnapshot[];
@@ -137,9 +139,9 @@ export interface GraphDebugTextureSnapshot {
   sourceId: number;
   /** Texture or source label; null when unlabelled */
   label: string | null;
-  /** Source width in pixels */
+  /** Source width, in pixels divided by the source's `resolution` */
   width: number;
-  /** Source height in pixels */
+  /** Source height, in pixels divided by the source's `resolution` */
   height: number;
   /** GPU texture format; null when unknown */
   format: string | null;
@@ -216,7 +218,12 @@ export interface GraphDebugMeshSnapshot {
 }
 
 /**
- * Why a batch pass rebuilt its retained draw commands
+ * Why a batch pass rebuilt or repacked its draw commands
+ *
+ * - `'order-changed'`: the same meshes now draw in another order, as when a pass sorted by distance
+ *   sees the camera move past two of them.
+ * - `'tail'`: on a repacked list, the meshes drawn by commands added after the last build, since no
+ *   built command could draw them.
  * @category extras:debug
  * @advanced
  */
@@ -227,8 +234,10 @@ export type GraphDebugDrawRebuildCauseCode =
   | 'material-changed'
   | 'mesh-added'
   | 'mesh-removed'
+  | 'order-changed'
   | 'pipeline-changed'
   | 'shader-changed'
+  | 'tail'
   | 'texture-changed'
   | 'unknown';
 
@@ -254,20 +263,36 @@ export interface GraphDebugDrawRebuildCause {
  * @advanced
  */
 export interface GraphDebugDrawBuildSnapshot {
-  /** Whether the retained commands were reused, rebuilt, rebuilt-every-frame by design, or first captured */
-  status: 'dynamic' | 'first-capture' | 'rebuilt' | 'reused';
-  /** Revision of the pass's retained command list */
+  /**
+   * What happened to the pass's draw commands since the previous capture
+   *
+   * - `'reused'`: kept as they were.
+   * - `'repacked'`: kept while meshes joined or left; their instance ranges moved, and any mesh no
+   *   built command could draw got a new command after the built ones (the `'tail'` cause).
+   * - `'rebuilt'`: built again; `causes` says why.
+   * - `'dynamic'`: rebuilt every frame, as a pass sorted by key with `cache: 'never'` does.
+   * - `'first-capture'`: no previous capture to compare with.
+   */
+  status: 'dynamic' | 'first-capture' | 'rebuilt' | 'repacked' | 'reused';
+  /** Revision of the pass's draw commands */
   commandListDirtyId: number;
-  /** Attributed causes when the commands were rebuilt */
+  /** Attributed causes when the commands were rebuilt or repacked */
   causes: GraphDebugDrawRebuildCause[];
 }
 
 /**
  * Why a batch pass recorded or invalidated its WebGPU bundle
+ *
+ * - `'first-capture'`: the first capture to see the bundle, so earlier activity is unknown.
+ * - `'draws-rebuilt'`: the pass rebuilt its draw commands.
+ * - `'bundle-only-change'`: the draws weren't rebuilt, but a resource the bundle baked changed, such as
+ *   the environment map, the shadow map or a texture the pass samples.
+ * - `'counts-changed'`: hiding or showing a mesh changed an instance count the bundle baked in. Only
+ *   a batch with `cull: 'off'` drawn with direct draws, as on Safari and iOS, bakes its counts.
  * @category extras:debug
  * @advanced
  */
-export type GraphDebugBundleCauseCode = 'bundle-only-change' | 'draws-rebuilt' | 'first-capture';
+export type GraphDebugBundleCauseCode = 'bundle-only-change' | 'counts-changed' | 'draws-rebuilt' | 'first-capture';
 
 /**
  * One attributed reason for a bundle recording or invalidation
@@ -285,11 +310,31 @@ export interface GraphDebugBundleCause {
  * @advanced
  */
 export interface GraphDebugBundleSnapshot {
-  /** Whether the bundle was reused, recorded, invalidated, first captured, or not used at all */
+  /**
+   * What happened to the pass's bundle since the previous capture
+   *
+   * - `'reused'`: drawn again as recorded.
+   * - `'recorded'`: recorded anew; `causes` says why.
+   * - `'invalidated'`: still due to be recorded when the frame was captured. The shadow pass can stay
+   *   here for several frames, until every cascade that its {@link LightShadow.update} rate skipped
+   *   has drawn again.
+   * - `'first-capture'`: no previous capture to compare with.
+   * - `'not-used'`: the pass keeps no bundle for the batch: on WebGL, with `cache: 'never'` (the
+   *   default for a distance sort), for a frustum-culled batch drawn with direct draws, and in a
+   *   shadow pass where no visible shadow-casting light holds one.
+   */
   status: 'first-capture' | 'invalidated' | 'not-used' | 'recorded' | 'reused';
-  /** Bundle cache revision requested by the renderer; null when this pass does not use WebGPU bundles */
+  /** Bundle cache revision requested by the renderer; null when the status is `'not-used'` */
   bundleDirtyId: number | null;
-  /** Revision consumed by the recorded bundle cache; null when this pass does not use WebGPU bundles */
+  /**
+   * Revision the recorded bundle was built at; null when the status is `'not-used'`, `-1` when
+   * nothing is recorded yet
+   *
+   * In the shadow pass it's the oldest across the casting lights' cascades, and a cascade recorded
+   * before the draws last rebuilt counts as `-1`. It includes cascades waiting for
+   * {@link Light.refreshShadows}, which `status` ignores, so it can trail `bundleDirtyId` while
+   * `status` reads `'reused'`.
+   */
   lastBundleDirtyId: number | null;
   /** Attributed causes when the bundle was recorded or invalidated */
   causes: GraphDebugBundleCause[];
@@ -315,6 +360,14 @@ export interface GraphDebugDrawSnapshot {
   renderGeometryId: number | null;
   /** Primitive topology of the command */
   topology: string;
+  /** The batch key every instance of the command shares: its pipeline id times 2^32 plus its geometry uid */
+  batchKey: number;
+  /**
+   * How the command binds materials: `'direct'` binds one material's own group, `'merged'` one
+   * group for every material of a texture set, each instance reading its own row, and
+   * `'no-material'` none, for a pass with a shader of its own
+   */
+  form: 'direct' | 'merged' | 'no-material';
   /** Indices drawn per instance */
   indexCount: number;
   /** Offset into the index buffer */
@@ -327,7 +380,10 @@ export interface GraphDebugDrawSnapshot {
   sourceInstanceCount: number;
   /** Surviving instances when CPU-visible; null when the count only exists in a GPU-written buffer */
   drawnInstanceCount: number | null;
-  /** How `drawnInstanceCount` was obtained: exact CPU count, CPU mirror of GPU culling, or unavailable without readback */
+  /**
+   * How `drawnInstanceCount` was obtained: an exact CPU count, a CPU rerun of the GPU cull, or not at
+   * all without a GPU readback
+   */
   drawnInstanceCountStatus: 'cpu-mirror' | 'exact' | 'gpu-readback-required';
   /** Triangles the command would draw with no culling; null for non-triangle topologies */
   sourceTriangleCount: number | null;
@@ -420,19 +476,18 @@ export interface GraphDebugSummarySnapshot {
 }
 
 /**
- * Complete JSON-serialisable capture of one rendered frame
+ * JSON-serialisable capture of one rendered frame
  *
- * Combines the resolved graph structure with every batch, mesh, geometry, material, and texture
- * that contributed retained draw work. A scene pass keeps its draw commands from frame to frame
- * and rebuilds them only when something they depend on changes; those kept commands are what
- * "retained" means throughout these types.
+ * Holds the render graph and every batch, mesh, geometry, material and texture the scene passes
+ * drew. A scene pass keeps ("retains") its draw commands between frames and rebuilds them only
+ * when something they depend on changes.
  * @category extras:debug
  * @advanced
  */
 export interface GraphDebugSnapshot {
   /** Serialization version of this shape */
   version: typeof GRAPH_DEBUG_SNAPSHOT_VERSION;
-  /** Monotonic within one {@link RenderGraphDebugger}; starts at 1 and resets with the debugger */
+  /** Starts at 1 and counts up with each capture; {@link RenderGraphDebugger#reset} restarts it */
   captureId: number;
   /** Structure of the resolved render graph */
   graph: GraphDebugGraphSnapshot;
@@ -455,7 +510,7 @@ interface DebugAddedPass {
   record: { accesses: ResourceAccess[] };
   dependsOn: DebugAddedPass[];
   isAnchored: boolean;
-  mipmapHandles: { _id: number }[];
+  finishedColors: { _id: number }[];
 }
 
 interface DebugResourceEntry {
@@ -484,12 +539,21 @@ interface GraphDebugMeshInputState {
 interface GraphDebugBatchPassState {
   key: string;
   commandListDirtyId: number;
+  rangesDirtyId: number;
   bufferVersion: number;
   alwaysRebuild: boolean;
   usesBundle: boolean;
   bundleDirtyId: number | null;
   lastBundleDirtyId: number | null;
+  /** `null` unless a bundle of direct draws is kept; in the shadow pass, a sum over every light's cascades */
+  lastBundleCountsDirtyId: number | null;
+  /** `lastBundleDirtyId` without cascades waiting for `Light.refreshShadows`; `null` when they all wait */
+  scheduledBundleDirtyId: number | null;
+  /** Cause of a bundle still stale at this capture, reported when it finally records */
+  pendingBundleCause: GraphDebugBundleCauseCode | null;
+  /** Mesh uids in draw order, so a capture can tell `'order-changed'` */
   meshIds: number[];
+  tailMeshIds: number[];
   meshes: Map<number, GraphDebugMeshInputState>;
 }
 
@@ -497,8 +561,6 @@ interface GraphDebugCaptureResult {
   snapshot: GraphDebugSnapshot;
   states: Map<string, GraphDebugBatchPassState>;
 }
-
-type GraphDebugGeometryCapture = (geometry: Geometry3D) => void;
 
 /**
  * Capture the passes and resources of a render graph's last resolve as plain data
@@ -534,13 +596,16 @@ export function captureGraphDebugSnapshot(graph: RenderGraph): GraphDebugGraphSn
       active: passIdx !== null,
       passIdx,
       isAnchored: addedPass.isAnchored,
-      mipmapHandles: addedPass.mipmapHandles.map((handle) => handle._id),
+      finishedColors: addedPass.finishedColors.map((handle) => handle._id),
       dependsOn: addedPass.dependsOn.map((dependency) => declaredIdxByPass.get(dependency)!),
       accesses: addedPass.record.accesses.map((access) => ({
         mode: access.mode,
         handleId: access.handle._id,
         handleKind: access.handle._kind,
-        slot: access.slot,
+        slot: access.binding?.slot,
+        globalGroup: access.binding
+          ? access.binding.group === graph.globalTextureBindings.opaqueColor.group
+          : undefined,
         effectiveLoadOp:
           access.mode === 'write_attachment' && passIdx !== null ? internals._effectiveLoadOp(access, passIdx) : null,
       })),
@@ -568,18 +633,11 @@ function sceneWorkloadKind(pass: GraphRenderPass): GraphDebugScenePassKind | nul
   return null;
 }
 
-/**
- * Build the current JSON snapshot plus private comparison state used to explain later draw and bundle changes
- * @param view - View to capture
- * @param previous - Per-pass state from the previous capture, used to explain what changed
- * @param captureId - Sequence number stamped on this capture
- * @param captureGeometry - Called once per distinct geometry in this capture, before it is snapshotted
- */
 function captureViewDebugSnapshot(
   view: View3D,
   previous: ReadonlyMap<string, GraphDebugBatchPassState>,
   captureId: number,
-  captureGeometry?: GraphDebugGeometryCapture,
+  captureGeometry?: (geometry: Geometry3D) => void,
 ): GraphDebugCaptureResult {
   const graph = captureGraphDebugSnapshot(view._graph);
   const activePassNames = new Set(
@@ -591,7 +649,6 @@ function captureViewDebugSnapshot(
   const textures = new Map<number, GraphDebugTextureSnapshot>();
   const states = new Map<string, GraphDebugBatchPassState>();
   const batches: GraphDebugBatchSnapshot[] = [];
-  const cullPlanes = view.camera.cullFrustum.planesData;
 
   const passesByBit = new Map<number, RenderPass>();
   const graphPasses = view._graph.passes;
@@ -616,7 +673,7 @@ function captureViewDebugSnapshot(
       const passData = batch.drawLists[bit];
       if (!passData || passData.view.count === 0) continue;
 
-      const captured = captureBatchPass(batch, pass, passData, previous, cullPlanes);
+      const captured = captureBatchPass(batch, pass, passData, previous, view);
       passes.push(captured.snapshot);
       states.set(captured.state.key, captured.state);
       submittedMeshCount += captured.snapshot.renderableCount;
@@ -625,7 +682,7 @@ function captureViewDebugSnapshot(
       drawnInstanceCount = addNullable(drawnInstanceCount, captured.snapshot.drawnInstanceCount);
 
       for (let i = 0; i < captured.state.meshIds.length; i++) {
-        const mesh = passData.view.items[passData.view.indices[i]];
+        const mesh = passData.view.items[passData.view.renderableIndices[i]];
         captureMesh(mesh, meshes, geometries, materials, textures, captureGeometry);
         activeMeshIds.add(mesh.uid);
         geometryIds.add(mesh.geometry.uid);
@@ -636,7 +693,7 @@ function captureViewDebugSnapshot(
 
     batches.push({
       id: batch.uid,
-      label: batchIndex === 0 ? 'scene' : `batch ${batchIndex}`,
+      label: batchIndex === 0 ? 'scene' : batch.renderData.label || `batch ${batchIndex}`,
       slotCount: batch.items.length,
       meshCount: activeMeshIds.size,
       submittedMeshCount,
@@ -696,41 +753,66 @@ function captureBatchPass(
   pass: RenderPass,
   passData: DrawList,
   previous: ReadonlyMap<string, GraphDebugBatchPassState>,
-  cullPlanes: Float32Array,
+  view: View3D,
 ): { snapshot: GraphDebugBatchPassSnapshot; state: GraphDebugBatchPassState } {
-  const bit = pass.bit!;
+  const bit = pass.bit;
   const key = `${batch.uid}:${bit}`;
-  const meshIds: number[] = [];
   const meshStates = new Map<number, GraphDebugMeshInputState>();
   for (let i = 0; i < passData.view.count; i++) {
-    const mesh = passData.view.items[passData.view.indices[i]];
-    const cache = mesh._passCache[bit];
-    meshIds.push(mesh.uid);
-    meshStates.set(mesh.uid, captureMeshInput(mesh, cache));
+    const mesh = passData.view.items[passData.view.renderableIndices[i]];
+    meshStates.set(mesh.uid, captureMeshInput(mesh, mesh._passCache[bit]));
   }
+  const drawn = meshesInDrawOrder(passData);
+  const meshIds = drawn.flatMap((mesh) => (mesh ? [mesh.uid] : []));
+  const bodyCount = passData.commandList.bodyCount;
+  const tailStart =
+    bodyCount < passData.commandList.count ? passData.drawData.drawCalls[bodyCount * 5 + 4] : drawn.length;
+  const tailMeshIds = drawn.slice(tailStart).flatMap((mesh) => (mesh ? [mesh.uid] : []));
 
   const result = cullResultFor(pass, batch);
   const args = result ? result.indirectDrawData.drawCalls : passData.drawData.drawCalls;
-  const usesBundle = pass.pipe.renderer.type === RendererType.WEBGPU && passUsesBundle(pass);
+  const webGpu = pass.pipe.renderer.type === RendererType.WEBGPU;
+  const forward = forwardConfig(pass);
+  let lastBundleDirtyId: number | null = null;
+  let scheduledBundleDirtyId: number | null = null;
+  let lastBundleCountsDirtyId: number | null = null;
+  if (webGpu && bit === RenderPassBit.SHADOW) {
+    lastBundleDirtyId = shadowBundleWatermark(view.lights, batch, passData, true);
+    scheduledBundleDirtyId = shadowBundleWatermark(view.lights, batch, passData, false);
+    lastBundleCountsDirtyId = shadowBundleCountsDirtyId(view.lights, batch);
+  } else if (webGpu && forward && cachesDrawWork(forward) && !(result?.direct && batch.cull !== 'off')) {
+    lastBundleDirtyId = result?.lastBundleDirtyId ?? -1;
+    scheduledBundleDirtyId = lastBundleDirtyId;
+    if (result?.direct) lastBundleCountsDirtyId = result.lastBundleCountsDirtyId;
+  }
+  const usesBundle = lastBundleDirtyId !== null;
   const state: GraphDebugBatchPassState = {
     key,
     commandListDirtyId: passData.commandList.dirtyId,
+    rangesDirtyId: passData.rangesDirtyId,
     bufferVersion: batch.storeBuffer.bufferVersion,
-    alwaysRebuild: passAlwaysRebuilds(pass),
+    alwaysRebuild: passAlwaysRebuilds(forward),
     usesBundle,
     bundleDirtyId: usesBundle ? passData.gpuData.bundleDirtyId : null,
-    lastBundleDirtyId: usesBundle ? (result?.lastBundleDirtyId ?? null) : null,
+    lastBundleDirtyId,
+    lastBundleCountsDirtyId,
+    scheduledBundleDirtyId,
+    pendingBundleCause: null,
     meshIds,
+    tailMeshIds,
     meshes: meshStates,
   };
   const previousState = previous.get(key);
   const drawBuild = compareDrawBuildState(previousState, state);
   const bundle = compareBundleState(previousState, state, drawBuild);
-  const mirroredDrawCounts =
-    passData._cullProducer === 'gpu' && forwardConfig(pass)
-      ? mirrorGpuCullDrawCounts(passData, batch, cullPlanes)
-      : null;
-  const draws = captureDraws(passData, args, mirroredDrawCounts);
+  const producer = resolveCullProducer(batch.cull, webGpu && forward?.sort !== 'distance' && !result?.direct);
+  let mirroredDrawCounts: Uint32Array | null = null;
+  if (producer === 'gpu' && forward) {
+    mirroredDrawCounts = mirrorCullDrawCounts(passData, batch, drawn, view.camera.cullFrustum.planesData);
+  } else if (producer === 'off' && webGpu) {
+    mirroredDrawCounts = mirrorCullDrawCounts(passData, batch, drawn, null);
+  }
+  const draws = captureDraws(passData, drawn, args, mirroredDrawCounts, producer === 'gpu');
   let sourceInstanceCount = 0;
   let drawnInstanceCount: number | null = 0;
   for (let i = 0; i < draws.length; i++) {
@@ -754,29 +836,94 @@ function captureBatchPass(
   };
 }
 
-/** The slice of a forward pass the snapshot reads: its per-batch cull results, absent on other passes */
+/** Mirror of `ForwardRenderPass.cullResults` */
 interface CullingPass {
-  /** WebGPU's per-batch cull results (`ForwardRenderPass.cullResults`) */
   cullResults?: CullResults;
 }
 
 /**
- * The pass's cull result for `batch`, present on WebGPU once the pass has drawn the batch
- *
- * WebGPU keeps what the pass's frustum decided there: the culled draw args and the bundle
- * watermark. WebGL culls by rewriting the draw list's own args in place, so it has no result and
- * the list's args are already the culled ones.
- * @param pass - Pass to read the cull results from
- * @param batch - Batch whose cull result to find
+ * The pass's cull result for `batch`; none on WebGL, which culls the draw list's args in place, or
+ * in the shadow pass, whose results live on each light
  */
 function cullResultFor(pass: GraphRenderPass, batch: Mesh3DBatch): CullResult | undefined {
   return (pass as CullingPass).cullResults?.get(batch);
 }
 
+/**
+ * Oldest bundle watermark across the casting lights' cascades, mirroring when `ShadowRenderPassGpu`
+ * re-records them; `null` when no counted cascade has a result for `batch`
+ */
+function shadowBundleWatermark(
+  lights: readonly Light[],
+  batch: Mesh3DBatch,
+  list: DrawList,
+  includeWaiting: boolean,
+): number | null {
+  const commandListDirtyId = list.commandList.dirtyId;
+  let watermark: number | null = null;
+  for (let i = 0; i < lights.length; i++) {
+    const light = lights[i];
+    const data: ShadowDataGpu | null = light._gpuShadowData;
+    if (!data?.cullResults || !castsShadowThisFrame(light)) continue;
+    const cascadeCount = cascadeCountFor(light);
+    for (let c = 0; c < cascadeCount; c++) {
+      const result = data.cullResults.get(batch, c);
+      if (!result || (result.direct && batch.cull !== 'off')) continue;
+      if (!includeWaiting && !data.cascades?.[c]?.needsRender && updateRateFor(light.shadow.update, c) === 0) {
+        continue;
+      }
+      const recorded = result.lastCommandListDirtyId === commandListDirtyId ? result.lastBundleDirtyId : -1;
+      if (watermark === null || recorded < watermark) watermark = recorded;
+    }
+  }
+  return watermark;
+}
+
+/**
+ * Sum of `lastBundleCountsDirtyId` over every shadow light's cascades for `batch`, casting this frame
+ * or not, so hiding or showing a light leaves the sum alone
+ */
+function shadowBundleCountsDirtyId(lights: readonly Light[], batch: Mesh3DBatch): number | null {
+  if (batch.cull !== 'off') return null;
+  let sum: number | null = null;
+  for (let i = 0; i < lights.length; i++) {
+    const light = lights[i];
+    const data: ShadowDataGpu | null = light._gpuShadowData;
+    if (!data?.cullResults) continue;
+    const cascadeCount = cascadeCountFor(light);
+    for (let c = 0; c < cascadeCount; c++) {
+      const result = data.cullResults.get(batch, c);
+      if (result?.direct) sum = (sum ?? 0) + result.lastBundleCountsDirtyId;
+    }
+  }
+  return sum;
+}
+
+/**
+ * The list's members in draw order, `null` for a record no member holds (left by an edit after this
+ * frame's `DrawList.applyEdits`), so command ranges still index the result
+ */
+function meshesInDrawOrder(passData: DrawList): (Mesh3DData | null)[] {
+  const view = passData.view;
+  const byRow = new Map<number, Mesh3DData>();
+  for (let i = 0; i < view.count; i++) {
+    const mesh = view.items[view.renderableIndices[i]];
+    byRow.set(mesh._storeIndex, mesh);
+  }
+
+  const records = passData.records;
+  const drawn: (Mesh3DData | null)[] = [];
+  for (let i = 0; i < view.count; i++) drawn.push(byRow.get(records[i]) ?? null);
+
+  return drawn;
+}
+
 function captureDraws(
   passData: DrawList,
+  drawn: (Mesh3DData | null)[],
   args: Uint32Array,
   mirroredDrawCounts: Uint32Array | null,
+  gpuCull: boolean,
 ): GraphDebugDrawSnapshot[] {
   const draws: GraphDebugDrawSnapshot[] = [];
   const commands = passData.commandList.commands;
@@ -787,10 +934,9 @@ function captureDraws(
     const firstInstance = args[offset + 4];
     const nextFirstInstance = i + 1 < count ? args[(i + 1) * 5 + 4] : passData.view.count;
     const sourceCount = Math.max(0, nextFirstInstance - firstInstance);
-    const sourceMeshes: Mesh3DData[] = [];
-    for (let j = firstInstance; j < firstInstance + sourceCount && j < passData.view.count; j++) {
-      sourceMeshes.push(passData.view.items[passData.view.indices[j]]);
-    }
+    const sourceMeshes = drawn
+      .slice(firstInstance, firstInstance + sourceCount)
+      .flatMap((mesh) => (mesh ? [mesh] : []));
 
     const geometryIds = uniqueNumbers(sourceMeshes.map((mesh) => mesh.geometry.uid));
     const materialIds = uniqueNumbers(sourceMeshes.map((mesh) => mesh.material.uid));
@@ -798,8 +944,7 @@ function captureDraws(
       sourceMeshes.flatMap((mesh) => mesh.material._textures.map((texture) => textureId(texture))),
     );
     const indexCount = args[offset];
-    const gpuCull = passData._cullProducer === 'gpu';
-    const drawnInstanceCount = gpuCull ? (mirroredDrawCounts?.[i] ?? null) : args[offset + 1];
+    const drawnInstanceCount = mirroredDrawCounts ? mirroredDrawCounts[i] : gpuCull ? null : args[offset + 1];
     let drawnInstanceCountStatus: GraphDebugDrawSnapshot['drawnInstanceCountStatus'] = 'exact';
     if (gpuCull) drawnInstanceCountStatus = mirroredDrawCounts ? 'cpu-mirror' : 'gpu-readback-required';
     const topology = String(commands[i].topology);
@@ -813,6 +958,8 @@ function captureDraws(
       textureIds,
       renderGeometryId: objectUid(commands[i].geometry),
       topology,
+      batchKey: commands[i].batchKey,
+      form: commands[i].merged ? 'merged' : commands[i].batchBindGroup ? 'direct' : 'no-material',
       indexCount,
       firstIndex: args[offset + 2],
       baseVertex: args[offset + 3],
@@ -830,22 +977,22 @@ function captureDraws(
 }
 
 /**
- * Re-run the GPU culling tests (visibility lane + frustum-sphere) on the CPU to recover per-command
- * survivor counts without a GPU readback
- * @param passData - Draw list whose commands are counted
- * @param batch - Batch the draw list draws from, for its store buffer
- * @param planes - World-space frustum planes the GPU culls against, as packed plane data
+ * Counts each command's survivors as `produceCpuCompaction` in `core/gpu/cull.ts` would; a WebGPU
+ * `'off'` list needs it too, since the args the snapshot reads may hold its uncompacted counts
  */
-function mirrorGpuCullDrawCounts(passData: DrawList, batch: Mesh3DBatch, planes: Float32Array): Uint32Array {
+function mirrorCullDrawCounts(
+  passData: DrawList,
+  batch: Mesh3DBatch,
+  drawn: (Mesh3DData | null)[],
+  planes: Float32Array | null,
+): Uint32Array {
   const commandCount = passData.commandList.count;
   const counts = new Uint32Array(commandCount);
   const args = passData.drawData.drawCalls;
-  const items = passData.view.items;
-  const indices = passData.view.indices;
   const sourceInstances = passData.gpuData.instanceBuffer.data;
   const storeU32 = batch.storeBuffer.u32Data;
   const storeStride = batch.storeBuffer.stride;
-  const transformedPlanes = transformFrustumToBatch(planes, batch.storeBuffer.data);
+  const transformedPlanes = planes && transformFrustumToBatch(planes, batch.storeBuffer.data);
 
   for (let command = 0; command < commandCount; command++) {
     const start = args[command * 5 + 4];
@@ -853,10 +1000,15 @@ function mirrorGpuCullDrawCounts(passData: DrawList, batch: Mesh3DBatch, planes:
     let survivors = 0;
 
     for (let instance = start; instance < end; instance++) {
-      const storeIndex = sourceInstances[instance * 2];
+      const storeIndex = sourceInstances[instance];
       if (storeU32[storeIndex * storeStride + MESH3D_LANE_VISIBILITY] === 0) continue;
+      if (!transformedPlanes) {
+        survivors++;
+        continue;
+      }
 
-      const mesh = items[indices[instance]];
+      const mesh = drawn[instance];
+      if (!mesh) continue;
       const sphere = mesh.boundingSphere;
       const radius = sphere.radius;
       let visible = true;
@@ -890,7 +1042,7 @@ function captureMesh(
   geometries: Map<number, GraphDebugGeometrySnapshot>,
   materials: Map<number, GraphDebugMaterialSnapshot>,
   textures: Map<number, GraphDebugTextureSnapshot>,
-  captureGeometry?: GraphDebugGeometryCapture,
+  captureGeometry?: (geometry: Geometry3D) => void,
 ): void {
   if (!meshes.has(mesh.uid)) {
     meshes.set(mesh.uid, {
@@ -961,6 +1113,19 @@ function captureMeshInput(mesh: Mesh3DData, cache: MeshPassCache): GraphDebugMes
   };
 }
 
+function pushMembershipCauses(
+  causes: GraphDebugDrawRebuildCause[],
+  previous: GraphDebugBatchPassState,
+  current: GraphDebugBatchPassState,
+): void {
+  const previousIds = new Set(previous.meshIds);
+  const currentIds = new Set(current.meshIds);
+  const added = current.meshIds.filter((id) => !previousIds.has(id));
+  const removed = previous.meshIds.filter((id) => !currentIds.has(id));
+  if (added.length > 0) causes.push({ code: 'mesh-added', meshIds: added });
+  if (removed.length > 0) causes.push({ code: 'mesh-removed', meshIds: removed });
+}
+
 function compareDrawBuildState(
   previous: GraphDebugBatchPassState | undefined,
   current: GraphDebugBatchPassState,
@@ -978,7 +1143,13 @@ function compareDrawBuildState(
   }
 
   if (previous.commandListDirtyId === current.commandListDirtyId) {
-    return { status: 'reused', commandListDirtyId: current.commandListDirtyId, causes: [] };
+    if (previous.rangesDirtyId === current.rangesDirtyId) {
+      return { status: 'reused', commandListDirtyId: current.commandListDirtyId, causes: [] };
+    }
+    const causes: GraphDebugDrawRebuildCause[] = [];
+    pushMembershipCauses(causes, previous, current);
+    if (current.tailMeshIds.length > 0) causes.push({ code: 'tail', meshIds: current.tailMeshIds });
+    return { status: 'repacked', commandListDirtyId: current.commandListDirtyId, causes };
   }
 
   const causes: GraphDebugDrawRebuildCause[] = [];
@@ -986,12 +1157,7 @@ function compareDrawBuildState(
     causes.push({ code: 'batch-buffer-grew', previous: previous.bufferVersion, current: current.bufferVersion });
   }
 
-  const previousIds = new Set(previous.meshIds);
-  const currentIds = new Set(current.meshIds);
-  const added = current.meshIds.filter((id) => !previousIds.has(id));
-  const removed = previous.meshIds.filter((id) => !currentIds.has(id));
-  if (added.length > 0) causes.push({ code: 'mesh-added', meshIds: added });
-  if (removed.length > 0) causes.push({ code: 'mesh-removed', meshIds: removed });
+  pushMembershipCauses(causes, previous, current);
 
   const changedGeometry: number[] = [];
   const changedMaterial: number[] = [];
@@ -1012,20 +1178,15 @@ function compareDrawBuildState(
   if (changedTextures.length > 0) causes.push({ code: 'texture-changed', meshIds: changedTextures });
   if (changedShaders.length > 0) causes.push({ code: 'shader-changed', meshIds: changedShaders });
   if (changedPipelines.length > 0) causes.push({ code: 'pipeline-changed', meshIds: changedPipelines });
+  if (causes.length === 0 && !sameNumbers(previous.meshIds, current.meshIds)) causes.push({ code: 'order-changed' });
   if (causes.length === 0) causes.push({ code: 'unknown' });
 
   return { status: 'rebuilt', commandListDirtyId: current.commandListDirtyId, causes };
 }
 
 /**
- * Classify the pass's WebGPU bundle against the previous capture
- *
- * A rebuilt draw list counts as a recording although the bundle counter didn't move: the cull
- * result drops its bundle when the command list moves, without touching the counter. Only a
- * bundle-only change shows in the watermark.
- * @param previous - The pass's state at the previous capture, if it was captured
- * @param current - The pass's state now
- * @param drawBuild - This capture's draw-build outcome for the pass
+ * A rebuilt draw list counts as recorded though `bundleDirtyId` didn't move, since `CullResult`
+ * drops its bundle when the command list changes
  */
 function compareBundleState(
   previous: GraphDebugBatchPassState | undefined,
@@ -1049,29 +1210,41 @@ function compareBundleState(
     return { ...base, status: 'first-capture', causes: [{ code: 'first-capture' }] };
   }
 
-  const cause = drawBuild.status === 'rebuilt' ? 'draws-rebuilt' : 'bundle-only-change';
-  if (current.bundleDirtyId !== current.lastBundleDirtyId) {
+  const cause =
+    drawBuild.status === 'rebuilt' ? 'draws-rebuilt' : (previous.pendingBundleCause ?? 'bundle-only-change');
+  if (current.bundleDirtyId !== current.lastBundleDirtyId) current.pendingBundleCause = cause;
+
+  const scheduled = current.scheduledBundleDirtyId;
+  if (scheduled === null) return { ...base, status: 'reused', causes: [] };
+  if (current.bundleDirtyId !== scheduled) {
     return { ...base, status: 'invalidated', causes: [{ code: cause }] };
   }
-  if (drawBuild.status === 'rebuilt' || current.lastBundleDirtyId !== previous.lastBundleDirtyId) {
+  if (
+    drawBuild.status === 'rebuilt' ||
+    (previous.scheduledBundleDirtyId !== null && scheduled !== previous.scheduledBundleDirtyId) ||
+    current.lastBundleDirtyId! > previous.lastBundleDirtyId!
+  ) {
     return { ...base, status: 'recorded', causes: [{ code: cause }] };
+  }
+  if (
+    current.lastBundleCountsDirtyId !== null &&
+    current.lastBundleCountsDirtyId !== previous.lastBundleCountsDirtyId
+  ) {
+    return { ...base, status: 'recorded', causes: [{ code: 'counts-changed' }] };
   }
   return { ...base, status: 'reused', causes: [] };
 }
 
-function forwardConfig(pass: GraphRenderPass): { cache?: 'auto' | 'never'; sort: 'distance' | 'key' } | undefined {
-  return (pass as unknown as { _forward?: { sort: 'key' | 'distance'; cache?: 'auto' | 'never' } })._forward;
+function forwardConfig(pass: GraphRenderPass): RenderForwardDescriptor | undefined {
+  return (pass as unknown as { _forward?: RenderForwardDescriptor })._forward;
 }
 
-function passAlwaysRebuilds(pass: GraphRenderPass): boolean {
-  const forward = forwardConfig(pass);
-  if (!forward) return false;
-  return (forward.cache ?? (forward.sort === 'key' ? 'auto' : 'never')) === 'never';
-}
-
-function passUsesBundle(pass: GraphRenderPass): boolean {
-  if (pass.bit === RenderPassBit.SHADOW) return true;
-  return Boolean(forwardConfig(pass) && !passAlwaysRebuilds(pass));
+/**
+ * Whether the pass rebuilds every frame; a distance-sorted pass doesn't cache either, but replays
+ * its commands while its order holds
+ */
+function passAlwaysRebuilds(forward: RenderForwardDescriptor | undefined): boolean {
+  return forward !== undefined && forward.sort === 'key' && !cachesDrawWork(forward);
 }
 
 function textureId(texture: Texture): number {
@@ -1138,10 +1311,9 @@ export interface RenderGraphDebuggerOptions {
  * Captures a {@link GraphDebugSnapshot} of a view's last frame and explains what changed since
  * the previous capture
  *
- * It reads what the renderer already keeps and changes nothing. Call
- * {@link RenderGraphDebugger#capture} after every rendered frame if you want draw rebuilds and
- * bundle recordings explained: causes compare against the previous capture, so a skipped frame
- * folds its changes into the next one.
+ * It only reads, and changes nothing about how the view renders. Causes compare against the
+ * previous capture, so call {@link RenderGraphDebugger#capture} after every rendered frame: a
+ * skipped frame folds its changes into the next one.
  * @category extras:debug
  * @advanced
  */
@@ -1150,7 +1322,7 @@ export class RenderGraphDebugger {
   private _previous = new Map<string, GraphDebugBatchPassState>();
   private _captureId = 0;
 
-  /** @param options - Debugger options; see {@link RenderGraphDebuggerOptions} */
+  /** @param options - Options for the debugger */
   constructor(options: RenderGraphDebuggerOptions) {
     const { view } = options;
 
@@ -1158,11 +1330,10 @@ export class RenderGraphDebugger {
   }
 
   /**
-   * Capture the view's last frame as JSON-serialisable data
-   * @param captureGeometry - Called once per distinct geometry in this capture, before it is snapshotted
-   * @returns The frame snapshot, or null when the source resolves to no view with a graph
+   * Captures the view's last frame; `null` when there's no view, or it hasn't rendered yet
+   * @param captureGeometry - Called once for each distinct geometry in the capture
    */
-  public capture(captureGeometry?: GraphDebugGeometryCapture): GraphDebugSnapshot | null {
+  public capture(captureGeometry?: (geometry: Geometry3D) => void): GraphDebugSnapshot | null {
     const view = this._getView();
     if (!view?._graph) return null;
 
@@ -1171,7 +1342,7 @@ export class RenderGraphDebugger {
     return captured.snapshot;
   }
 
-  /** Forget the comparison baseline, so the next snapshot starts again at capture 1 */
+  /** Forgets the previous capture, so the next one is a first capture numbered 1 */
   public reset(): void {
     this._previous.clear();
     this._captureId = 0;

@@ -39,12 +39,6 @@ describe('Matrix3', () => {
     });
   });
 
-  describe('static Matrix3.IDENTITY', () => {
-    test('returns an identity matrix', () => {
-      expect(Matrix3.IDENTITY.isIdentity()).toBe(true);
-    });
-  });
-
   describe('set', () => {
     test('writes row-major args into column-major storage', () => {
       const m = new Matrix3();

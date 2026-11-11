@@ -7,14 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Hidden meshes must not cast shadows — through the multi-light shadow path. Two shadow-casting
- * directional lights deny the shadow pass its single-light enclosing frustum, so caster
- * visibility rides the visibility-only walk that fills the draw counts instead (the compacted
- * buffer on WebGPU, the compacting upload on WebGL). The middle cube is hidden after a full
- * first render: the reference must show the remaining cubes with BOTH their shadows, and
- * neither cube nor shadow where the hidden one stood.
- */
 export const scene: TestScene = {
   app: { backgroundColor: 0x1a1a2e },
   create: async (app) => {
@@ -48,7 +40,6 @@ export const scene: TestScene = {
       cubes.push(cube);
     }
 
-    // Two shadow casters → no single enclosing light frustum → shadow producer 'off'.
     const sun1 = new DirectionalLight({
       color: 0xfff4e0,
       intensity: 4,
@@ -71,8 +62,6 @@ export const scene: TestScene = {
     view3d.camera.position.set(0, 6, 10);
     view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-    // Full render first (all three cubes + both shadow sets recorded), then hide the middle
-    // cube — its shadows from BOTH lights must vanish with it, with no shadow-pass rebuild.
     app.render();
     cubes[1].visible = false;
   },

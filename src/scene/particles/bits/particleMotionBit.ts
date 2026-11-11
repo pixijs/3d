@@ -1,25 +1,11 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Ballistic motion with linear drag, in closed form
+ * Moves each particle from its launch point along a ballistic path, worked out on the GPU
  *
- * Where a particle is after `particleAge` seconds given its launch velocity,
- * the system's gravity and the system's drag. Velocity, gravity and drag are
- * one bit because drag couples the other two; with drag the exact position is
- *
- * ```text
- * p = p0 + v · a + g · b
- * a = (1 − e^(−kt)) / k          → t     as k → 0
- * b = (t − a) / k                → t²/2  as k → 0
- * ```
- *
- * so neither the velocity term nor the gravity term can be added on its own.
- * `k` below a small threshold takes the drag-free form directly, which is both
- * the exact limit and the way to dodge the `1/k` precision loss.
- *
- * Reads `particleAge` from {@link particleLifetimeBit}, so that bit must be
- * composed first. `aPosition` is the launch point; this bit moves `position`
- * from it.
+ * `aPosition` is the launch point and `aVel` the launch velocity, per particle. The container's
+ * `uGravity` uniform is the acceleration, and `uDrag` the linear drag per second, 0 for none.
+ * Compose it after {@link particleLifetimeBit}.
  * @category scene
  * @advanced
  */

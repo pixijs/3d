@@ -2,12 +2,8 @@ import type { Scene3DDescriptor, Scene3DNode } from '../../../Scene3DDescriptor'
 import type { GltfFormat } from '../GltfFormat';
 
 /**
- * Converts glTF nodes into descriptor nodes, decomposing matrix transforms to TRS
- *
- * A primitive with no material points at the slot after the file's own materials, where
- * `processMaterials` puts the glTF default material.
- * @param gltfRaw - Parsed glTF JSON
- * @param descriptor - Receives the nodes
+ * Gives a primitive with no material the index after the file's materials, where
+ * `processMaterials` adds the default one
  * @internal
  */
 export function processNodes(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor): void {
@@ -77,15 +73,6 @@ export function processNodes(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor)
   });
 }
 
-/**
- * Splits a column-major 4x4 matrix into translation, rotation quaternion and scale
- *
- * A mirrored matrix, one with a negative determinant, gets its flip as a negative X scale.
- * @param matrix - Column-major 4x4 matrix
- * @param position - Receives the translation
- * @param quaternion - Receives the rotation as `[x, y, z, w]`
- * @param scale - Receives the scale
- */
 function decomposeMatrix(
   matrix: Float32Array | number[],
   position: Float32Array,

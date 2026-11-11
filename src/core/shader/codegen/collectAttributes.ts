@@ -10,14 +10,7 @@ function warnAttributeConflict(name: string, newFormat: string, existingFormat: 
   );
 }
 
-/**
- * Collects deduplicated attributes from shader bits as a plain object
- *
- * Warns on format conflicts, keeps the first definition.
- * @param bits - Array of shader bits containing attribute definitions
- * @returns Attribute name → vertex format map
- * @internal
- */
+/** @internal */
 export function collectAttributes(bits: ShaderBit[]): Record<string, VertexFormat> {
   const attributes: Record<string, VertexFormat> = Object.create(null);
 

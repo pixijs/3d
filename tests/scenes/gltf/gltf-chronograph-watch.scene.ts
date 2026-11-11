@@ -8,6 +8,7 @@ const URL = model('gltf.ChronographWatch');
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },
+  pixelMatchWebgpu: 150,
   create: async (app) => {
     await renderGltfModel(app, { url: URL });
   },

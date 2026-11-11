@@ -1,35 +1,17 @@
 import type { ShaderBit } from './ShaderBit';
-import type { ShaderBitTemplate } from './ShaderBitTemplate';
+import { resolveBindGroups } from './ShaderBitTemplate';
+import type { ResolvedBindGroup, ShaderBitTemplate } from './ShaderBitTemplate';
 
-/**
- * The bit that owns each name, for the whole page
- *
- * A `ShaderDescriptor` key joins its bits' names, so two different bits with one name would get
- * each other's compiled shaders from the cache. Every bit is checked here before it joins a key.
- */
 const registry = new Map<string, ShaderBit>();
 
-/**
- * The bit's content as JSON, built once and only when two bits claim one name
- *
- * It leaves out the `_` fields this module stamps, so it reads the same whenever it is taken.
- * @param bit - The bit to snapshot
- */
+/** Leaves out the `_` fields stamped on a bit, which differ between a checked bit and its copy */
 function contentSnapshot(bit: ShaderBit): string {
-  return ((bit._contentSnapshot as string | undefined) ??= JSON.stringify(bit, (key, value) =>
-    key.startsWith('_') ? undefined : value,
-  ));
+  return (bit._contentSnapshot ??= JSON.stringify(bit, (key, value) => (key.startsWith('_') ? undefined : value)));
 }
 
 /**
- * Registers `bit` as the owner of its name, and throws if a different bit already owns it
- *
- * Two bits with the same name and the same content are the same module evaluated twice, after a
- * hot reload or with a library bundled twice. They are interchangeable, so the newer one takes the
- * name without an error, and its own later checks stay a single read.
- *
- * After a bit's first check, each check costs one property read.
- * @param bit - The bit whose name identity to verify and register
+ * Throws when a different bit owns `bit`'s name, since cache keys hold bit names; a bit with the same
+ * content is one module loaded twice, such as after a hot reload, and takes the name over
  * @internal
  */
 export function assertBitIdentity(bit: ShaderBit): void {
@@ -56,29 +38,47 @@ export function assertBitIdentity(bit: ShaderBit): void {
   );
 }
 
-/**
- * Forgets every registered name, so a test can build colliding bits without breaking later tests
- * @internal
- */
-export function resetBitRegistry(): void {
-  registry.clear();
+const ENGINE_BIND_GROUPS: readonly ResolvedBindGroup[] = [
+  { name: 'global', ubo: true },
+  { name: 'camera', ubo: false },
+  { name: 'batch', ubo: false },
+];
+
+function templateEntry(group: ResolvedBindGroup): string {
+  return group.ubo ? `\`{ name: '${group.name}', ubo: true }\`` : `\`'${group.name}'\``;
 }
 
 /**
- * Fails a compile whose template declares a `camera` bind group that no bit fills
- *
- * The camera group is bound at 1 by every draw. A template that lists `'camera'` in its
- * `bindGroups` but assembles no bit declaring that group would compile, then fail at draw
- * with a bind-group mismatch that names nothing. Catch it here, and name the flag.
- * @param bits - The final bit list the shader is compiled from.
- * @param template - The template it is compiled against.
+ * Throws, naming the fix, where a template and its bits disagree about the engine's bind groups;
+ * each case otherwise fails later with an error that names nothing
  * @internal
  */
-export function assertCameraGroupProvided(bits: readonly ShaderBit[], template: ShaderBitTemplate): void {
-  if (!template.bindGroups.includes('camera')) return;
-  for (let i = 0; i < bits.length; i++) if (bits[i].bindings?.camera) return;
-  throw new Error(
-    "The shader template declares a 'camera' bind group but no bit provides it. " +
-      'Leave `includeCamera` on (the default), or list `cameraBit` in the descriptor.',
-  );
+export function assertBindGroups(bits: readonly ShaderBit[], template: ShaderBitTemplate): void {
+  const groups = resolveBindGroups(template);
+
+  for (const engineGroup of ENGINE_BIND_GROUPS) {
+    const { name, ubo } = engineGroup;
+    const listed = groups.find((group) => group.name === name);
+    const declaredBy = bits.find((bit) => bit.bindings?.[name]);
+
+    if (declaredBy && !listed) {
+      throw new Error(
+        `The shader bit '${declaredBy.name}' declares the '${name}' bind group, but the shader template ` +
+          `doesn't list it. Add ${templateEntry(engineGroup)} to the template's \`bindGroups\`.`,
+      );
+    }
+    if (name === 'camera' && listed && !declaredBy) {
+      throw new Error(
+        "The shader template lists a 'camera' bind group but no bit declares it. " +
+          'Leave `includeCamera` on (the default), or list `cameraBit` in the descriptor.',
+      );
+    }
+    if (listed && listed.ubo !== ubo) {
+      throw new Error(
+        `The shader template lists the '${name}' bind group ${ubo ? 'without' : 'with'} \`ubo: true\`. ` +
+          `List it as ${templateEntry(engineGroup)} in \`bindGroups\`, because the engine binds '${name}' as ` +
+          `${ubo ? 'one uniform block' : 'plain uniforms'} on WebGL.`,
+      );
+    }
+  }
 }

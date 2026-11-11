@@ -1,41 +1,32 @@
 import { warn } from 'pixi.js';
 
+import type { InstanceDataLayout } from '../../batcher/instanceDataLayout';
+import { DEFAULT_OUTPUT_LOCATIONS } from '../../shader/codegen/collectFragmentOutputs';
 import { compileShader } from '../../shader/compileShader';
+import { resolveShaderBits } from '../../shader/resolveShaderBits';
 import type { ShaderBit } from '../../shader/ShaderBit';
 import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
 import type { ShaderCompilerContext, ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 import { glslAttributesPlugin } from './glslAttributesPlugin';
 import { glslBindingsPlugin } from './glslBindingsPlugin';
+import { glslFragmentOutputsPlugin } from './glslFragmentOutputsPlugin';
 import { glslGroupMapPlugin } from './glslGroupMapPlugin';
 import { glslHeadersPlugin } from './glslHeadersPlugin';
 import { glslInterStagePlugin } from './glslInterStagePlugin';
 import { glslOverridesPlugin } from './glslOverridesPlugin';
 import { glslPrecisionPlugin } from './glslPrecisionPlugin';
 import { glslStageSlotsPlugin } from './glslStageSlotsPlugin';
+import { instanceAccessPluginGl } from './instanceAccessPluginGl';
 
-/**
- * Options controlling how GLSL uniforms, locations, and overrides are emitted
- * @internal
- */
+/** @internal */
 export interface CompileGlslSourceOptions {
-  /** Groups to declare as `std140` uniform blocks; any other group's fields become plain uniforms */
-  uboGroups?: Set<string> | string[];
-
   /**
-   * Whether to declare `layout(location = n)` on attributes and inter-stage variables
-   *
-   * Every caller passes `false`. GLSL ES 3.00 only accepts locations on vertex inputs and
-   * fragment outputs, so `true` fails to compile once the shader has an inter-stage variable.
+   * `true` fails to compile once the shader has a varying: GLSL ES 3.00 takes locations only on vertex inputs and
+   * fragment outputs
    * @default true
    */
   useLocations?: boolean;
 
-  /**
-   * Override values, baked into the header as `#define KEY VALUE` by `glslOverridesPlugin`
-   *
-   * GLSL ES 3.00 has no specialization constants, so where WebGPU applies overrides when it builds
-   * the pipeline, WebGL compiles one program per set of values.
-   */
   overrides?: Record<string, number>;
 }
 
@@ -48,53 +39,45 @@ function warnMissingHeaderSlot(templateSource: string, headerSource: string, sta
   }
 }
 
-/**
- * Compiled GLSL sources plus the metadata `Shader.from()` needs to bind them
- * @internal
- */
 interface CompileGlslResult {
-  /** Compiled vertex shader source */
   vertex: string;
-  /** Compiled fragment shader source */
   fragment: string;
-  /** Resolved group struct definitions (e.g. `{ Material: { baseColor: 'vec4<f32>', ... } }`) */
   structs: Record<string, Record<string, string>>;
-  /** Maps WebGL bind group/binding indices to uniform names for `Shader.from()` */
   groupMap: Record<number, Record<number, string>>;
-}
-
-/**
- * Full input to `compileGlslSource`: the bits and template to compile plus the
- * GLSL emission options
- * @internal
- */
-interface CompileGlslOptions extends CompileGlslSourceOptions {
-  /** Shader bits to compile */
   bits: ShaderBit[];
-  /** Template defining bind groups and vertex/fragment GLSL sources */
+}
+
+interface CompileGlslOptions extends CompileGlslSourceOptions {
+  bits: ShaderBit[];
   template: ShaderBitTemplate;
-  /** Plugins that run before the defaults, such as `texturesPluginGl` */
   extraPlugins?: ShaderCompilerPlugin[];
+  instanceLayout?: InstanceDataLayout;
+  outputLocations?: readonly string[];
 }
 
 /**
- * Compiles GLSL vertex + fragment sources from bits + template using the
- * default GLSL plugins
- *
- * Compiles the vertex stage, then the fragment stage, sharing `context.data` between them, so
- * what the plugins collect once (bindings, inter-stage variables, the group map) matches in both.
- * @param options - Bits, template, and GLSL emission options
- * @returns Compiled sources plus struct/group metadata
+ * The fragment stage reuses the vertex stage's `context.data`, so both declare what the plugins collected once. The
+ * default plugins start with `instanceAccessPluginGl`, so the bit it adds reaches the rest.
  * @internal
  */
 export function compileGlslSource(options: CompileGlslOptions): CompileGlslResult {
-  const { bits, template, extraPlugins, ...glslOptions } = options;
+  const {
+    bits,
+    template,
+    extraPlugins,
+    instanceLayout,
+    outputLocations = DEFAULT_OUTPUT_LOCATIONS,
+    ...glslOptions
+  } = options;
+  const resolvedBits = resolveShaderBits(bits);
   const defaultPlugins = [
+    instanceAccessPluginGl,
     glslPrecisionPlugin,
     glslGroupMapPlugin,
     glslOverridesPlugin,
     glslBindingsPlugin,
     glslInterStagePlugin,
+    glslFragmentOutputsPlugin,
     glslAttributesPlugin,
     glslHeadersPlugin,
     glslStageSlotsPlugin,
@@ -102,24 +85,28 @@ export function compileGlslSource(options: CompileGlslOptions): CompileGlslResul
   const plugins = extraPlugins ? [...extraPlugins, ...defaultPlugins] : defaultPlugins;
 
   const vertexContext: ShaderCompilerContext = {
-    bits,
+    bits: resolvedBits,
     template,
     templateString: template.gl!.vertex,
     data: {},
     stage: 'vertex',
     glslOptions,
+    instanceLayout,
+    outputLocations,
   };
   const vertex = compileShader(vertexContext, plugins);
 
   warnMissingHeaderSlot(template.gl!.vertex, vertexContext.data.headers!.join(''), 'vertex');
 
   const fragmentContext: ShaderCompilerContext = {
-    bits,
+    bits: resolvedBits,
     template,
     templateString: template.gl!.fragment,
     data: vertexContext.data,
     stage: 'fragment',
     glslOptions,
+    instanceLayout,
+    outputLocations,
   };
   const fragment = compileShader(fragmentContext, plugins);
 
@@ -130,5 +117,6 @@ export function compileGlslSource(options: CompileGlslOptions): CompileGlslResul
     fragment,
     structs: (fragmentContext.data.structs as Record<string, Record<string, string>>) ?? {},
     groupMap: fragmentContext.data.groupMap!,
+    bits: fragmentContext.bits,
   };
 }

@@ -7,14 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Cascade-to-cascade fading. The camera is pitched steeply down so view depth
- * spreads across many screen rows rather than compressing into a few, and
- * `lambda: 0` puts the single split mid-frame. Tall thin poles throw long thin
- * shadows, the shape that shows a change in shadow-map resolution most clearly:
- * without the fade each shadow visibly breaks partway along its length, where
- * it crosses from one cascade into the next. Static scene for determinism.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x0d0f16,
@@ -23,8 +15,6 @@ export const scene: TestScene = {
     const view3d = new View3D({
       width: app.screen.width,
       height: app.screen.height,
-      // Low resolution widens the gap between the two cascades, so a regression
-      // in the fade shows up as a hard step rather than a subtle one.
       shadowQuality: 'low',
     });
     app.stage.addChild(view3d);

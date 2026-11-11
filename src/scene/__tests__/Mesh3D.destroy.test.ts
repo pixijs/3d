@@ -1,7 +1,9 @@
 import { Texture, TextureSource } from 'pixi.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { Geometry3D } from '~/geometry/Geometry3D';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
+import { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 
@@ -104,24 +106,13 @@ describe('Mesh3D destroy', () => {
     expect(materialDestroy).not.toHaveBeenCalled();
   });
 
-  it('clears the per-pass cache and nulls the destroyed flag bookkeeping', () => {
-    const geometry = new SphereGeometry();
-    const material = new Material3D({ baseColor: 0xff8844 });
+  it('never destroys the shared placeholders, whatever the flags', () => {
+    new Mesh3D().destroy({ geometry: true, material: true });
+    new Mesh3D().destroy(true);
 
-    try {
-      const mesh = new Mesh3D({ geometry, material });
-
-      mesh._passCache[1] = {} as Mesh3D['_passCache'][number];
-
-      expect(Object.keys(mesh._passCache)).toHaveLength(1);
-
-      mesh.destroy();
-
-      expect(Object.keys(mesh._passCache)).toHaveLength(0);
-      expect(mesh.destroyed).toBe(true);
-    } finally {
-      geometry.destroy(true);
-    }
+    expect(Geometry3D.EMPTY.attributes).not.toBeNull();
+    expect(BaseMaterial3D.EMPTY.destroyed).toBe(false);
+    expect(new Mesh3D().material.data, 'the next mesh still gets a live placeholder').toBeDefined();
   });
 
   it('does not double-destroy the geometry across repeated destroy calls', () => {

@@ -1,23 +1,12 @@
 import type { ShaderBit } from '../ShaderBit';
+import { mathConstantsBit } from './mathConstantsBit';
 
-/**
- * The sampling helpers that the environment prefilter and the BRDF lookup table share
- *
- * - `PI`.
- * - `radicalInverseVdC(bits)`: the base-2 Van der Corput radical inverse, the bits reversed and
- *   scaled by 2⁻³².
- * - `hammersley(i, n)`: point `i` of an `n`-point Hammersley set, `(i / n, radicalInverseVdC(i))`.
- * - `importanceSampleGGX(xi, n, roughness)`: a GGX half vector around `n` for the uniform sample
- *   `xi`, with α = roughness², built in tangent space and turned into world space. It follows Karis
- *   2013, "Real Shading in Unreal Engine 4".
- * @internal
- */
+/** @internal */
 export const iblSamplingFuncsBit: ShaderBit = {
   name: 'iblSamplingFuncs',
+  requires: [mathConstantsBit],
   gpu: {
     header: /*wgsl*/ `
-const PI: f32 = 3.14159265359;
-
 fn radicalInverseVdC(bits_in: u32) -> f32 {
   var bits = bits_in;
   bits = (bits << 16u) | (bits >> 16u);
@@ -62,8 +51,6 @@ fn importanceSampleGGX(Xi: vec2<f32>, N: vec3<f32>, roughness: f32) -> vec3<f32>
   },
   gl: {
     header: /*glsl*/ `
-const float PI = 3.14159265359;
-
 float radicalInverseVdC(uint bits) {
     bits = (bits << 16u) | (bits >> 16u);
     bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);

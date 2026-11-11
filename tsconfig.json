@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
     "target": "esnext",
+    // The DOM and WebGPU types come from `@types/web` in `types`, as the README tells TypeScript 6
+    // and 7 users to set up, so the repo compiles against the types consumers see. Adding "DOM" or
+    // "WebWorker" here clashes with it; worker scripts get their own program in tsconfig.worker.json.
     "lib": ["ESNext"],
     "moduleDetection": "force",
     "module": "preserve",

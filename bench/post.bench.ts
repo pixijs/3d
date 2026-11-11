@@ -1,11 +1,14 @@
 /**
  * `post`: what screen-space post-processing costs over a lit scene: the field at 2000 objects, and a ladder of
  * the effects the view's post chain (`view.passes`) runs over it, `none`, `bloom`, and `bloom-ao` (ambient occlusion
- * over the scene, then bloom over the occluded frame). Judged on `gpu.frame`, where every effect's passes run; the
- * scene under them is the same on every rung.
+ * over the scene, then bloom over the occluded frame). Judged on `gpu.frame`, where every effect's passes run.
  *
- * Multisampling is off unless `--msaa 4` asks for it: a post chain can run over a single-sampled copy of the frame,
- * and a `none` rung drawn multisampled straight to the canvas beside it would change two things in one step.
+ * Bloom and ambient occlusion read the scene as linear light, so the `bloom` and `bloom-ao` rungs draw it into an
+ * `rgba16float` texture and an output pass applies the tone curve after them, while `none` draws it 8-bit straight to
+ * the canvas. The float scene and the output pass are part of what those two rungs cost.
+ *
+ * Multisampling is off unless `--msaa 4` asks for it. With it on, every rung draws the scene multisampled, and the
+ * effect rungs also pay the scene colour's resolve and, on `bloom-ao`, the copy of the scene depth that SSAO samples.
  *
  * Bloom is `BloomEffect`, and occlusion is `SsaoEffect` at sixteen samples a pixel.
  *

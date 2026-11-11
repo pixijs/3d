@@ -4,19 +4,13 @@ import { PointShape } from '~/extras/particles/emitterShapes/PointShape';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { ensureQuadBuffers } from '~/scene/particles/utils/particleGeometry';
 import { View3D } from '~/scene/View3D';
 
 import { wedgeTexture } from './helpers/particleTextures';
 
-// Every container draws its corners and indices from one shared pair, grown in
-// place when a bigger container arrives. The first frames record both
-// columns' draws against the pair as it was; the pair is then grown as a
-// bigger container would grow it, reallocating both buffers with nothing about
-// the batch changing, and the capture is a frame after that. Both columns
-// must still draw: on WebGPU that is the draw cache noticing the reallocation
-// and re-recording, on WebGL the buffers growing in place under their bindings.
 export const scene: TestScene = {
   create: async (app) => {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
@@ -41,10 +35,9 @@ export const scene: TestScene = {
         texture,
         capacity,
         color,
-        seed: `shared-${capacity}`,
+        createRandom: () => seededRandom(`shared-${capacity}`),
         autoUpdate: false,
         emitRate: 0,
-        // Mask puts the columns in the opaque pass, the one that records bundles.
         alphaMode: 'mask',
         shape: new PointShape(),
         life: 100,
@@ -64,17 +57,11 @@ export const scene: TestScene = {
     column(8, -2.5, 0xffaa44);
     column(4096, 2.5, 0x66ddff);
 
-    // After the first frame has recorded the draws: past the pair's capacity,
-    // so it grows in place, with no container behind it. Nothing else changes,
-    // so the reallocation alone has to bring the recorded draws back on every
-    // frame after, the captured one included.
     let frames = 0;
 
     app.renderer.runners.postrender.add({
       postrender: () => {
-        // The View's first frame only warms up; its draws are recorded on the second.
         if (++frames !== 2) return;
-        // Relative to whatever the pair holds, so it grows in every run of the scene.
         ensureQuadBuffers(ensureQuadBuffers(1).capacity + 1);
       },
     });

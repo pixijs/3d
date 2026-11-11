@@ -11,10 +11,6 @@ import type { Sphere } from './Sphere';
  *
  * Use one to bound a mesh or a group and to run cheap overlap, culling and picking tests before
  * precise ones. {@link Container3D#getLocalBounds} measures one for a subtree.
- *
- * A new box is empty, so growing it with {@link Box#expandByPoint} gives a tight fit. Methods that
- * change the box do so in place, or write into an `out` box when you pass one and leave this box
- * as it is.
  * @example
  * ```ts
  * const squadBounds = new Box();
@@ -23,9 +19,7 @@ import type { Sphere } from './Sphere';
  *
  * const rallyPoint = squadBounds.getCenter(new Vector3());
  * ```
- * @see {@link Sphere} For the bounding-sphere counterpart
- * @see {@link Plane} For half-space intersection tests
- * @see {@link Ray} For ray-box hit tests
+ * @see {@link Ray#intersectBox} For the point where a ray hits the box
  * @category maths
  * @standard
  */
@@ -58,9 +52,8 @@ export class Box {
   /**
    * Creates a new `Box`
    *
-   * Left out, the corners start empty (`min` at `+Infinity`, `max` at `-Infinity`), so the first
-   * {@link Box#expandByPoint} gives a tight fit. Vectors passed in become the box's corners; they
-   * are not copied.
+   * Left out, the box starts empty, so the first {@link Box#expandByPoint} gives a tight fit.
+   * Vectors passed in become the box's corners; they are not copied.
    * @param min - The minimum corner of the box
    * @param max - The maximum corner of the box
    */
@@ -342,7 +335,7 @@ export class Box {
   /**
    * Returns true when `box` is fully inside this box (boundary is inclusive)
    *
-   * An empty `box` counts as inside any box.
+   * A new, empty `box` counts as inside any box.
    * @example
    * ```ts
    * const fitsOnShelf = shelfBounds.containsBox(itemBounds);
@@ -440,7 +433,7 @@ export class Box {
   }
 
   /**
-   * Returns true when `ray` enters this box; same as {@link Ray#intersectsBox}
+   * Returns true when `ray` hits this box; same as {@link Ray#intersectsBox}
    * @example
    * ```ts
    * view3d.on('pointermove', (e) => {
@@ -448,7 +441,7 @@ export class Box {
    * });
    * ```
    * @param ray - The ray to test
-   * @returns Whether the ray enters this box
+   * @returns Whether the ray hits this box
    */
   public intersectsRay(ray: Ray): boolean {
     return ray.intersectsBox(this);
@@ -457,11 +450,11 @@ export class Box {
   /**
    * Transforms this box by an affine `matrix`, then fits a new axis-aligned box around the result
    *
-   * The result is the smallest axis-aligned box around the eight transformed corners, so rotating
-   * a box grows it. An empty box stays empty.
+   * The new box holds all eight transformed corners, so rotating a box can grow it. An empty box
+   * stays empty.
    *
    * `matrix` must be affine (bottom row `[0, 0, 0, 1]`), as a {@link Container3D#worldTransform}
-   * always is. A projection matrix gives a wrong box.
+   * always is and a projection matrix isn't.
    * @example
    * ```ts
    * const worldBounds = new Box();

@@ -3,14 +3,12 @@ import type { TestScene } from '@test-utils';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
 import { puffTexture } from './helpers/particleTextures';
 
-// Both blend modes over the same mid-grey backdrop, so the difference is the
-// whole picture: 'normal' particles sit on the wall and can darken it, 'add'
-// ones only ever brighten it and pile up towards white where they overlap.
 export const scene: TestScene = {
   create: async (app) => {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
@@ -23,7 +21,7 @@ export const scene: TestScene = {
 
     const wall = new Mesh3D({
       geometry: new PlaneGeometry({ width: 14, height: 10 }),
-      material: new FlatMaterial({ baseColor: 0xd8dce4 }),
+      material: new FlatMaterial({ baseColor: 0xafb7c6 }),
     });
 
     wall.position.set(0, 0, -2);
@@ -41,7 +39,7 @@ export const scene: TestScene = {
         texture,
         blendMode,
         color,
-        seed: `blend-${blendMode}`,
+        createRandom: () => seededRandom(`blend-${blendMode}`),
         capacity: 8,
         autoUpdate: false,
         emitRate: 0,
@@ -52,7 +50,6 @@ export const scene: TestScene = {
 
       view3d.root.addChild(system);
 
-      // A tight rosette, so most pairs overlap and the accumulation shows.
       const cx = (i - 0.5) * 4.4;
 
       for (let p = 0; p < 5; p++) {

@@ -1,63 +1,98 @@
 import type { Mesh3DData } from './Mesh3DData';
 
+/** Change flag: the item's entry in the last order is stale, since it left or re-keyed */
+const REMOVED = 1;
+
+/** Change flag: the item needs a place in the next order, since it arrived or re-keyed */
+const PENDING = 2;
+
+const INSERTION_SHIFT_BUDGET = 32;
+
+const MAX_INSERTION_BACKOFF = 64;
+
 /**
- * One pass's sorted view of a batch's items
+ * One pass's sorted view of a batch's items: after a sort, `items[indices[i]]` is the i-th in draw order
  *
- * Holds indices into the shared item array with a sort key each, packed densely so add and remove
- * are O(1), remove by swapping in the last entry. After `sort()`, `items[indices[i]]` is the i-th
- * item in draw order.
+ * Both sorts start from the last order, so a frame with few changes costs close to one pass over it.
  * @internal
  */
 export class SortedMesh3DView<T extends Mesh3DData> {
-  /** The batch's item array, shared with its other views and never copied */
+  /** The batch's item array, shared with its other views, so never copied */
   public items: T[];
 
-  /** Number of items in this pass view */
   public count = 0;
 
-  /** Whether `indices` is out of date: set by `add`, `remove`, a changed key and `clear`, cleared by a sort */
+  /** Whether `indices` needs a sort */
   public dirty = true;
 
-  /** Item indices in draw order, as of the last sort */
+  /**
+   * Bumped when a sort may have changed the order; the insertion sort in `sortForced` bumps it only
+   * when an entry moved, since each bump rebuilds a distance-sorted pass's draws
+   */
+  public orderDirtyId = 0;
+
   public indices: Uint32Array;
 
-  /**
-   * Item indices in insertion order, with removals swapped out
-   *
-   * Stays current through every `add()` and `remove()`, while `indices` only changes in a sort. A
-   * walk that needs no order and runs before the pass sorts reads this array.
-   */
+  /** Item indices in add order, each removal filled by the last entry; current between sorts, unlike `indices` */
   public renderableIndices: Uint32Array;
 
-  /** Sort key of each `renderableIndices` entry; Float64 so a 53-bit key stays exact */
+  /** Float64, so a 53-bit key stays exact */
   private _sortKeys: Float64Array;
 
-  /** Scratch for sorting positions by key */
   private _localIndices: Uint32Array;
 
-  /** Each item's position in `renderableIndices` by uid, or -1 once removed */
-  private _uidToLocal: Record<number, number> = Object.create(null);
+  private readonly _uidToLocal = new Map<number, number>();
+
+  /** Entries of `indices` the last sort left in order, or -1 when there's no order to start from */
+  private _sortedCount = -1;
+
+  private _sortedKeys: Float64Array;
+
+  private _mergeIndices: Uint32Array;
+
+  private _mergeKeys: Float64Array;
+
+  private _changes = new Uint8Array(0);
+
+  private _hasChanges = false;
 
   /**
-   * @param items - The batch's item array.
-   * @param initialCapacity - Entries the arrays start with. There is one view per batch and pass,
-   *   at 20 bytes an entry, so the default is small: most views hold a few meshes, and a view that
-   *   outgrows it jumps straight to 256 entries.
+   * Uids flagged {@link PENDING} since the last sort, the first `_pendingCount` of them; counted rather
+   * than truncated, so it keeps its storage
    */
+  private readonly _pending: number[] = [];
+
+  private _pendingCount = 0;
+
+  private _orderForced = false;
+
+  private _insertionSkip = 0;
+
+  private _insertionBackoff = 0;
+
   constructor(items: T[], initialCapacity = 32) {
     this.items = items;
     this.renderableIndices = new Uint32Array(initialCapacity);
     this._sortKeys = new Float64Array(initialCapacity);
     this._localIndices = new Uint32Array(initialCapacity);
     this.indices = new Uint32Array(initialCapacity);
+    this._sortedKeys = new Float64Array(initialCapacity);
+    this._mergeIndices = new Uint32Array(initialCapacity);
+    this._mergeKeys = new Float64Array(initialCapacity);
   }
 
-  /**
-   * Add an item to this pass view
-   * @param uid - The item's UID.
-   * @param renderableIndex - Index into the shared mesh array.
-   * @param sortKey - Initial sort key.
-   */
+  /** Whether the last order came from `sortForced`, so it holds no key order to merge into or keep commands against */
+  public get orderForced(): boolean {
+    return this._orderForced;
+  }
+
+  /** The item index of a member, or -1 when the view doesn't hold it */
+  public indexOf(uid: number): number {
+    const local = this._uidToLocal.get(uid);
+
+    return local === undefined ? -1 : this.renderableIndices[local];
+  }
+
   public add(uid: number, renderableIndex: number, sortKey: number): void {
     const local = this.count++;
 
@@ -67,19 +102,18 @@ export class SortedMesh3DView<T extends Mesh3DData> {
 
     this.renderableIndices[local] = renderableIndex;
     this._sortKeys[local] = sortKey;
-    this._uidToLocal[uid] = local;
+    this._uidToLocal.set(uid, local);
     this.dirty = true;
+
+    if (this._sortedCount >= 0) this._markPending(uid, renderableIndex);
   }
 
-  /**
-   * Remove an item from this pass view in O(1) via swap-and-pop
-   * @param uid - The item's UID.
-   */
   public remove(uid: number): void {
-    const local = this._uidToLocal[uid];
+    const local = this._uidToLocal.get(uid);
 
-    if (local === undefined || local < 0) return;
+    if (local === undefined) return;
 
+    const renderableIndex = this.renderableIndices[local];
     const lastLocal = --this.count;
 
     if (local !== lastLocal) {
@@ -89,96 +123,254 @@ export class SortedMesh3DView<T extends Mesh3DData> {
 
       this.renderableIndices[local] = lastRenderableIdx;
       this._sortKeys[local] = lastKey;
-      this._uidToLocal[lastUid] = local;
+      this._uidToLocal.set(lastUid, local);
     }
 
-    this._uidToLocal[uid] = -1;
+    this._uidToLocal.delete(uid);
     this.dirty = true;
+
+    if (this._sortedCount >= 0) {
+      this._setChange(renderableIndex, REMOVED);
+      this._changes[renderableIndex] &= ~PENDING;
+    }
   }
 
-  /**
-   * Updates an item's sort key in O(1)
-   *
-   * An unchanged key leaves the view clean, since a dirty view costs a comparator sort, a JS
-   * callback run about n log n times. A material swapped for an equivalent one, with the same
-   * shader, state and texture sources, re-keys to the same value, and that is far more common than
-   * a swap that re-sorts.
-   * @param uid - The item's UID
-   * @param key - The new sort key
-   */
+  /** Updates an item's sort key, leaving the view clean when the key is unchanged, as it is after most material swaps */
   public updateKey(uid: number, key: number): void {
-    const local = this._uidToLocal[uid];
-    if (local === undefined || local < 0) return;
+    const local = this._uidToLocal.get(uid);
+    if (local === undefined) return;
     if (this._sortKeys[local] === key) return;
     this._sortKeys[local] = key;
     this.dirty = true;
+
+    if (this._sortedCount >= 0) {
+      const renderableIndex = this.renderableIndices[local];
+      this._setChange(renderableIndex, REMOVED);
+      this._markPending(uid, renderableIndex);
+    }
   }
 
-  /** Sorts by key into `indices`, if anything changed since the last sort */
+  /** Sorts by key into `indices` if anything changed, patching the last order when few items moved */
   public sort(): void {
     const count = this.count;
-    if (count === 0) return;
+    if (count === 0) {
+      this._resetOrder(0);
+      return;
+    }
     if (!this.dirty) return;
 
-    const keys = this._sortKeys;
-    const localIndices = this._localIndices;
-    const renderableIndices = this.renderableIndices;
-    const indices = this.indices;
-
-    for (let i = 0; i < count; i++) {
-      localIndices[i] = i;
+    if (this._sortedCount < 0 || this._orderForced || this._pendingCount > count >> 1 || !this._patchOrder()) {
+      this._sortFull();
     }
+    this.orderDirtyId++;
 
-    localIndices.subarray(0, count).sort((a, b) => keys[a] - keys[b]);
-
-    for (let i = 0; i < count; i++) {
-      indices[i] = renderableIndices[localIndices[i]];
-    }
-
+    this._orderForced = false;
     this.dirty = false;
   }
 
   /**
-   * Re-reads every key from its item and sorts, whether or not the view is dirty
-   *
-   * For the transparent pass, whose distance keys change every frame.
-   * @param getKey - Reads an item's key.
+   * Re-reads every key and sorts, dirty or not, trying an insertion sort of the last order first while the items are
+   * unchanged; it backs off after a failure, since a view two cameras take turns sorting fails it every time
    */
   public sortForced(getKey: (item: T) => number): void {
     const count = this.count;
-    if (count === 0) return;
+    if (count === 0) {
+      this._resetOrder(0);
+      this.orderDirtyId++;
+      return;
+    }
 
-    const items = this.items;
+    let sorted = false;
+    if (this._orderForced && this._sortedCount === count && !this._hasChanges) {
+      if (this._insertionSkip > 0) this._insertionSkip--;
+      else sorted = this._insertionSort(getKey);
+    }
+
+    if (!sorted) {
+      const items = this.items;
+      const keys = this._sortKeys;
+      const renderableIndices = this.renderableIndices;
+
+      for (let i = 0; i < count; i++) {
+        keys[i] = getKey(items[renderableIndices[i]]);
+      }
+
+      this._sortFull();
+    }
+
+    this._orderForced = true;
+    this.dirty = false;
+  }
+
+  public clear(): void {
+    this.orderDirtyId++;
+    this.count = 0;
+    this._uidToLocal.clear();
+    this.dirty = true;
+    this._resetOrder(-1);
+    this._orderForced = false;
+    this._insertionSkip = 0;
+    this._insertionBackoff = 0;
+  }
+
+  private _sortFull(): void {
+    const count = this.count;
     const keys = this._sortKeys;
-    const renderableIndices = this.renderableIndices;
     const localIndices = this._localIndices;
+    const renderableIndices = this.renderableIndices;
     const indices = this.indices;
+    const sortedKeys = this._sortedKeys;
 
     for (let i = 0; i < count; i++) {
       localIndices[i] = i;
-      keys[i] = getKey(items[renderableIndices[i]]);
     }
 
     localIndices.subarray(0, count).sort((a, b) => keys[a] - keys[b]);
 
     for (let i = 0; i < count; i++) {
-      indices[i] = renderableIndices[localIndices[i]];
+      const local = localIndices[i];
+      indices[i] = renderableIndices[local];
+      sortedKeys[i] = keys[local];
     }
+    this.orderDirtyId++;
 
-    this.dirty = false;
-  }
-
-  /** Empty the view, keeping allocated capacity */
-  public clear(): void {
-    this.count = 0;
-    this._uidToLocal = Object.create(null);
-    this.dirty = true;
+    this._resetOrder(count);
   }
 
   /**
-   * The uid of the item at a position in `renderableIndices`
-   * @param local - Position in `renderableIndices`, not in sorted order
+   * Re-sorts the last order by fresh keys with an insertion sort
+   * @returns `false` when it ran out of budget, so the caller sorts in full
    */
+  private _insertionSort(getKey: (item: T) => number): boolean {
+    const count = this.count;
+    const items = this.items;
+    const indices = this.indices;
+    const keys = this._sortedKeys;
+
+    for (let i = 0; i < count; i++) {
+      keys[i] = getKey(items[indices[i]]);
+    }
+
+    const budget = count * INSERTION_SHIFT_BUDGET;
+    let shifts = 0;
+
+    for (let i = 1; i < count; i++) {
+      const key = keys[i];
+      if (keys[i - 1] <= key) continue;
+
+      const index = indices[i];
+      let j = i - 1;
+      do {
+        keys[j + 1] = keys[j];
+        indices[j + 1] = indices[j];
+        j--;
+      } while (j >= 0 && keys[j] > key);
+      keys[j + 1] = key;
+      indices[j + 1] = index;
+
+      shifts += i - 1 - j;
+      if (shifts > budget) {
+        this._insertionBackoff = Math.min(MAX_INSERTION_BACKOFF, Math.max(1, this._insertionBackoff * 2));
+        this._insertionSkip = this._insertionBackoff;
+        return false;
+      }
+    }
+
+    this._insertionBackoff = 0;
+    if (shifts > 0) this.orderDirtyId++;
+    return true;
+  }
+
+  /**
+   * Merges the sorted pending items into the last order; equal keys keep the last order, newcomers after
+   * @returns `false` when the patched order doesn't account for every item, so the caller sorts in full
+   */
+  private _patchOrder(): boolean {
+    const count = this.count;
+    const keys = this._sortKeys;
+    const renderableIndices = this.renderableIndices;
+    if (this._changes.length < this.items.length) this._growChanges(this.items.length);
+    const changes = this._changes;
+
+    const arriving = this._localIndices;
+    let arrivingCount = 0;
+    for (let p = 0; p < this._pendingCount; p++) {
+      const local = this._uidToLocal.get(this._pending[p]);
+      if (local === undefined) continue;
+      const renderableIndex = renderableIndices[local];
+      if ((changes[renderableIndex] & PENDING) === 0) continue;
+      changes[renderableIndex] &= ~PENDING;
+      arriving[arrivingCount++] = local;
+    }
+    if (arrivingCount > 1) arriving.subarray(0, arrivingCount).sort((a, b) => keys[a] - keys[b]);
+
+    const previous = this.indices;
+    const previousKeys = this._sortedKeys;
+    const previousCount = this._sortedCount;
+    const merged = this._mergeIndices;
+    const mergedKeys = this._mergeKeys;
+    let i = 0;
+    let j = 0;
+    let o = 0;
+
+    for (;;) {
+      while (i < previousCount && (changes[previous[i]] & REMOVED) !== 0) i++;
+      if (i < previousCount && (j === arrivingCount || previousKeys[i] <= keys[arriving[j]])) {
+        merged[o] = previous[i];
+        mergedKeys[o++] = previousKeys[i++];
+      } else if (j < arrivingCount) {
+        const local = arriving[j++];
+        merged[o] = renderableIndices[local];
+        mergedKeys[o++] = keys[local];
+      } else break;
+    }
+    if (o !== count) return false;
+
+    this.indices = merged;
+    this._mergeIndices = previous;
+    this._sortedKeys = mergedKeys;
+    this._mergeKeys = previousKeys;
+    this._resetOrder(count);
+    return true;
+  }
+
+  /**
+   * Flags an item for a place in the next order, dropping the order once the pending list outgrows
+   * the view, so a view that never sorts doesn't grow it forever
+   */
+  private _markPending(uid: number, renderableIndex: number): void {
+    if (!this._setChange(renderableIndex, PENDING)) return;
+    this._pending[this._pendingCount++] = uid;
+    if (this._pendingCount > this.renderableIndices.length) this._resetOrder(-1);
+  }
+
+  /** Sets a change flag on an item index; returns whether it was newly set */
+  private _setChange(renderableIndex: number, flag: number): boolean {
+    if (renderableIndex >= this._changes.length) this._growChanges(renderableIndex + 1);
+    const changes = this._changes;
+    const flags = changes[renderableIndex];
+    if ((flags & flag) !== 0) return false;
+    changes[renderableIndex] = flags | flag;
+    this._hasChanges = true;
+    return true;
+  }
+
+  /** Grows `_changes`; a patch grows it to the item array's length first, since the merge reading past its end is slow */
+  private _growChanges(minLength: number): void {
+    const grown = new Uint8Array(Math.max(minLength, this._changes.length * 2, 256));
+    grown.set(this._changes);
+    this._changes = grown;
+  }
+
+  private _resetOrder(sortedCount: number): void {
+    if (this._hasChanges) {
+      this._changes.fill(0);
+      this._hasChanges = false;
+      this._pendingCount = 0;
+    }
+    this._sortedCount = sortedCount;
+  }
+
   private _getUidAtLocal(local: number): number {
     const renderableIdx = this.renderableIndices[local];
     return this.items[renderableIdx].uid;
@@ -192,8 +384,13 @@ export class SortedMesh3DView<T extends Mesh3DData> {
     this._sortKeys = new Float64Array(newCapacity);
     this._localIndices = new Uint32Array(newCapacity);
     this.indices = new Uint32Array(newCapacity);
+    this._sortedKeys = new Float64Array(newCapacity);
+    this._mergeIndices = new Uint32Array(newCapacity);
+    this._mergeKeys = new Float64Array(newCapacity);
 
     this.renderableIndices.set(oldRI);
     this._sortKeys.set(oldKeys);
+
+    this._resetOrder(-1);
   }
 }

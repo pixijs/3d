@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { Container3D } from '~/scene/Container3D';
 import { Skeleton } from '~/scene/Skeleton';
 
-/** One root node that is also the only joint, with an identity inverse bind */
 const oneBoneSkeleton = (): Skeleton =>
   new Skeleton({
     parent: new Int16Array([-1]),

@@ -1,19 +1,8 @@
 import type { ShaderBit } from '../../ShaderBit';
 
 /**
- * ACES filmic tone mapping, then the display encode `srgbEncodeBit` describes
- *
- * It uses Stephen Hill's fit of the ACES reference and output transforms. `inMat` takes linear
- * sRGB into the ACES AP1 primaries with the reference transform's saturation tweak folded in, each
- * channel goes through the fitted curve, and `outMat` brings the result back to linear sRGB. The
- * matrices give ACES its desaturation and contrast; Narkowicz's cheaper fit is one curve per
- * channel and leaves them out.
- *
- * The input is first scaled by 1/0.6. Narkowicz pre-exposes his fit the same way, so that an input
- * of 1 comes out near 0.8 and the image stays about as bright as with no curve; "for the original
- * ACES curve just multiply input (x) by 0.6" (Narkowicz 2016, "ACES Filmic Tone Mapping Curve").
- * Here an input of 1 comes out at 0.76, where the unscaled fit gives 0.62. The view's exposure
- * multiplies in before this bit runs.
+ * Stephen Hill's ACES fit, with the input scaled by 1/0.6 as Narkowicz pre-exposes his, so an input
+ * of 1 lands near 0.76; then the display encode, which must match `srgbEncodeBit`
  * @internal
  */
 export const acesToneMappingBit: ShaderBit = {

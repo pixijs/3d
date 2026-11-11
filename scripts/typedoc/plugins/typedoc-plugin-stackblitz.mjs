@@ -40,9 +40,12 @@ const EXT_LANG = { '.ts': 'typescript', '.js': 'javascript' };
 
 const DIRECTIVE_RE = /<p>\s*@stackblitz\(([a-zA-Z0-9_/-]+)\)[\s\S]*?<\/p>/g;
 
+/** typedoc's logger, set in `load`, so a warning here fails the build under `treatWarningsAsErrors` */
+let logger;
+
 function addExample(examples, name, files) {
   if (examples.has(name)) {
-    console.warn(`[stackblitz] Duplicate example name: "${name}"`);
+    logger.warn(`[stackblitz] Duplicate example name: "${name}"`);
   }
   examples.set(name, files);
 }
@@ -77,8 +80,8 @@ function scanExampleDir(exDir, examples) {
 
 /**
  * Adds the playground's single-file examples from the root `examples/`, named the way the
- * playground names them (`picking.example.ts` is `picking`). Its subfolders hold binary assets
- * and multi-file demos with no `index` entry, so they are skipped.
+ * playground names them (`theme-kit.example.ts` is `theme-kit`). Its subfolders, the gallery
+ * examples, the theme kit and the assets, are skipped.
  * @param dir - the root `examples/` folder
  * @param examples - the example map to add to
  */
@@ -357,12 +360,12 @@ function highlightCode(code, filename) {
     .join('\n');
 }
 
-function replaceDirectives(html, examples, dependencies) {
+function replaceDirectives(html, examples, dependencies, pageUrl) {
   return html.replace(DIRECTIVE_RE, (_match, name) => {
     const files = examples.get(name);
 
     if (!files) {
-      console.warn(`[stackblitz] Unknown example: "${name}"`);
+      logger.warn(`[stackblitz] Unknown example: "${name}" in ${pageUrl}`);
 
       return `<div class="stackblitz-embed stackblitz-error">Unknown example: <code>${name}</code></div>`;
     }
@@ -427,6 +430,8 @@ export function load(app) {
   let examples;
   let dependencies;
 
+  logger = app.logger;
+
   app.renderer.on(RendererEvent.BEGIN, () => {
     examples = scanExamples();
     dependencies = getDependencies();
@@ -438,7 +443,7 @@ export function load(app) {
     if (!page.contents) return;
     if (!page.contents.includes('@stackblitz(')) return;
 
-    page.contents = replaceDirectives(page.contents, examples, dependencies);
+    page.contents = replaceDirectives(page.contents, examples, dependencies, page.url);
   });
 
   app.renderer.on(RendererEvent.END, (event) => {

@@ -9,7 +9,7 @@ import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Pass3D } from '~/post-processing/Pass3D';
-import type { PassContext, PassStage } from '~/post-processing/Pass3D';
+import type { PassContext, SceneStage } from '~/post-processing/Pass3D';
 import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { PointLight } from '~/scene/lights/PointLight';
@@ -52,7 +52,7 @@ const GRID_COLORS = [0xff5a4d, 0xffc53d, 0x7be36a, 0x3dd6ff, 0xffffff, 0x6f7cff,
 
 /** Opaque and transparent draws from `camera`, over a depth clear, into its corner of the view */
 class InsetPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'afterTransparent';
+  public readonly stage: SceneStage = 'afterTransparent';
 
   private readonly _camera: Camera3D;
 

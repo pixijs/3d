@@ -15,25 +15,8 @@ import {
 import type { SpawnAttribute, SpawnFn, SpawnShape } from './spawnPlan';
 
 /**
- * Generates a straight-line spawn function for one override pattern
- *
- * The attribute list is the declaration and the pattern of kinds is the
- * structure, so everything the polyfill dispatches on per particle (components,
- * source, store and kind) is a literal here. Spreads and lerps are inlined, the
- * spread offsets and element indices are literals, and the stamp across the
- * quad is unrolled. Per-system values (the capacity, the frame count and the
- * packed constants) come through the context, so systems with the same
- * attributes share one function. The same idea as pixi's uniform sync
- * generators, applied to a particle's birth record.
- *
- * Every byte or short it packs inlines `unorm8` or `unorm16`, clamp included.
- * Random draws happen in exactly the order `generateSpawnPolyfill` makes them,
- * which the parity test pins byte for byte.
- * @param attributes - The attributes a spawn writes, in the order it writes them
- * @param kinds - Each attribute's override kind for this pattern, parallel to `attributes`
- * @param positionKind - The position override's kind
- * @param shape - The stride, space and frame mode the function is built for
- * @returns The compiled spawn function.
+ * Bakes in only the override pattern and what `spawnSignature` covers, and writes the same bytes
+ * in the same draw order as `generateSpawnPolyfill`, which the parity test checks
  * @internal
  */
 export function generateSpawn(
@@ -84,7 +67,7 @@ export function generateSpawn(
     );
     emit('  pos.set(origin3.x + pos.x, origin3.y + pos.y, origin3.z + pos.z);');
   } else {
-    emit('  { const q = posRaw(rng, index); pos.set(q.x + pos.x, q.y + pos.y, q.z + pos.z); }');
+    emit('  { const q = posRaw(rng, n); pos.set(q.x + pos.x, q.y + pos.y, q.z + pos.z); }');
   }
 
   if (world) emit('  dir.transformDirection(wt);');
@@ -125,8 +108,8 @@ export function generateSpawn(
       continue;
     }
 
-    const n = a.components;
-    const names = ['x', 'y', 'z', 'w'].slice(0, n);
+    const components = a.components;
+    const names = ['x', 'y', 'z', 'w'].slice(0, components);
 
     emit('  {');
     if (kind === ABSENT) {
@@ -142,11 +125,11 @@ export function generateSpawn(
     } else if (kind === PAIR) {
       emit(`    const ${names.map((c) => `${c} = lo${i}.${c} + (hi${i}.${c} - lo${i}.${c}) * rng()`).join(', ')};`);
     } else {
-      emit(`    const q = raw${i}(rng, index); const ${names.map((c) => `${c} = q.${c}`).join(', ')};`);
+      emit(`    const q = raw${i}(rng, n); const ${names.map((c) => `${c} = q.${c}`).join(', ')};`);
     }
 
     if (a.store === AS_F32) {
-      for (let c = 0; c < n; c++) emit('  ' + stamp('f32', at + c, names[c]));
+      for (let c = 0; c < components; c++) emit('  ' + stamp('f32', at + c, names[c]));
     } else if (a.store === AS_UNORM8) {
       for (const c of names) emit(`    const ${c}8 = ${c} <= 0 ? 0 : ${c} >= 1 ? 255 : (${c} * 255 + 0.5) | 0;`);
       emit('    const c = (x8 | (y8 << 8) | (z8 << 16) | (w8 << 24)) >>> 0;');
@@ -173,31 +156,17 @@ export function generateSpawn(
 }
 
 const VERTS = 4;
-/** `SPREAD.speed` in the system's spread table; the one spread no attribute owns */
+/** Must match `SPREAD.speed` in `ParticleSystem3D.ts` */
 const SPEED_OFFSET = 2;
 
-/**
- * Four stores of `value` at element `at` of each vertex, as one line
- * @param view - The vertex buffer view to write through
- * @param at - Element offset within a vertex
- * @param value - Source expression for the stored value
- * @returns The generated statements.
- */
 function stamp(view: 'f32' | 'u32', at: number, value: string): string {
   return ` ${view}[o0 + ${at}] = ${value}; ${view}[o1 + ${at}] = ${value}; ${view}[o2 + ${at}] = ${value}; ${view}[o3 + ${at}] = ${value};`;
 }
 
-/**
- * The expression for one scalar attribute's value, by its baked kind and source
- * @param i - The attribute's position in the list
- * @param kind - Its override kind for this pattern
- * @param a - The attribute itself
- * @returns The generated expression.
- */
 function scalarExpr(i: number, kind: number, a: SpawnAttribute): string {
   if (kind === CONSTANT) return `raw${i}`;
   if (kind === PAIR) return `lo${i} + (hi${i} - lo${i}) * rng()`;
-  if (kind !== ABSENT) return `raw${i}(rng, index)`;
+  if (kind !== ABSENT) return `raw${i}(rng, n)`;
   if (a.source === FROM_SPREAD) {
     return `(spreads[${a.spread}] === spreads[${a.spread + 1}] ? spreads[${a.spread}] : spreads[${a.spread}] + (spreads[${a.spread + 1}] - spreads[${a.spread}]) * rng())`;
   }

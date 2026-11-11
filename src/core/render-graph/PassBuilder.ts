@@ -1,17 +1,17 @@
 import type { Camera3D } from '../../scene/cameras/Camera3D';
 import type { RenderGraph } from './RenderGraph';
 import type { ColorHandle, DepthHandle, ResourceHandle, TransientTextureOptions } from './ResourceHandle';
+import type { SceneOutput } from './SceneOutput';
+import type { GlobalTextureBindings, TextureBinding } from './TextureBinding';
 
 /**
- * How a pass touches a resource
+ * How a pass uses a texture, as declared with a {@link PassBuilder} method
  *
- * Drives dependency inference and hazard checks.
- *
- *  - `write_attachment` — render-target colour/depth write.
- *  - `read_attachment` — render-target depth attached read-only.
- *  - `sample` — bound to a shader sampler at `slot`.
- *  - `read` — consumed by a non-sampler GPU mechanism (blit / copyToTexture).
- *  - `produce` — written via a non-attachment mechanism (blit, internal multi-target loop).
+ * - `write_attachment`: drawn into as a render target, from `writeColor` or `writeDepth`
+ * - `read_attachment`: a depth attached read-only, from `readDepthAttachment`
+ * - `sample`: bound for a shader to sample, from `sample`
+ * - `read`: read some other way, such as a copy, from `read`
+ * - `produce`: written some other way, such as a copy or compute work, from `produce`
  * @category rendering
  * @advanced
  */
@@ -23,31 +23,25 @@ export type AccessMode = 'write_attachment' | 'read_attachment' | 'sample' | 're
  * @advanced
  */
 export interface ResourceAccess {
-  /** The resource being accessed */
+  /** The texture the pass uses */
   handle: ResourceHandle;
   /** How the pass touches it */
   mode: AccessMode;
-  /** Bind-group slot; always set for `mode === 'sample'`, never for any other mode */
-  slot?: number;
+  /** Where the texture is bound; set only for `'sample'` */
+  binding?: TextureBinding;
 }
 
-/**
- * A pass and the accesses it declared during `setup()`
- *
- * Built by the graph as it walks addPass calls.
- * @internal
- */
+/** @internal */
 export interface PassRecord {
-  /** Accesses recorded during `setup()`, in declaration order */
   accesses: ResourceAccess[];
+  hasSideEffect: boolean;
 }
 
 /**
- * Recording API handed to {@link GraphRenderPass#setup}
+ * Declares what a pass reads and writes; {@link GraphRenderPass#setup} receives one
  *
- * The graph keeps one and scopes it to each pass's `setup` call, so every access lands on the pass
- * that declared it. Methods return their input handle so callers can capture it inline, as in
- * `const color = b.writeColor(b.targetColor)`.
+ * Each declaration returns its handle, so `const color = b.writeColor(b.targetColor)` captures it
+ * inline.
  * @category rendering
  * @advanced
  */
@@ -59,12 +53,10 @@ export class PassBuilder {
   constructor(private readonly _graph: RenderGraph) {}
 
   /**
-   * Colour this pass draws into
+   * The colour this pass draws into: {@link RenderGraph#sceneColor}, or for a pass whose camera has a
+   * render texture, that camera's own target
    *
-   * For a pass whose camera has a render texture, that camera's own target, which the graph copies
-   * into the texture. Otherwise the scene colour: the screen in direct mode, a pooled transient in
-   * composite mode. Passes that present the scene rather than draw it write
-   * {@link PassBuilder#defaultColor} instead.
+   * A pass that presents the finished picture writes {@link PassBuilder#defaultColor} instead.
    */
   public get targetColor(): ColorHandle {
     this._mustBeInSetup('targetColor');
@@ -77,27 +69,38 @@ export class PassBuilder {
     return this._targetDepth;
   }
 
-  /** The View's default (screen) colour attachment */
+  /** The colour of the view's own target; see {@link RenderGraph#defaultColor} */
   public get defaultColor(): ColorHandle {
     return this._graph.defaultColor;
   }
 
-  /** The View's default (screen) depth attachment */
+  /** Depth paired with {@link PassBuilder#defaultColor} */
   public get defaultDepth(): DepthHandle {
     return this._graph.defaultDepth;
   }
 
   /**
-   * Declare a render-target colour write
+   * The texture of a scene output the graph attaches, for this pass to write or read; see
+   * {@link RenderGraph#getSceneOutput}
+   * @param output - An output in the graph's `sceneOutputs`
+   * @returns The output's texture handle
+   */
+  public getSceneOutput(output: SceneOutput): ColorHandle {
+    return this._graph.getSceneOutput(output);
+  }
+
+  /**
+   * Declares that this pass draws into `handle` as a render target
    *
-   * The graph clears the texture before its first writer each frame when the graph owns it, and
-   * keeps what is there otherwise. Later writers always draw over earlier ones.
+   * The first pass each frame to write a texture the graph allocated clears it, unless that pass
+   * writes it with {@link PassBuilder#produce} instead; a texture you import with
+   * {@link RenderGraph#importColor} keeps its content. Later writers draw over earlier ones, and a pass that writes several colours
+   * attaches them in the order it declares them.
    *
-   * A pass's render target is exactly the set of attachments it declares, so to draw into this
-   * pass's target declare both `writeColor(b.targetColor)` and `writeDepth(b.targetDepth)`. A
-   * colour-only declaration resolves to a separate colour-only target. Over the screen that is a
-   * second target around the canvas rather than pixi's own, and inside a 2D filter it loses the
-   * view's place on the filter's texture.
+   * A pass's target is exactly the attachments it declares, so to draw into this pass's target,
+   * declare both `writeColor(b.targetColor)` and `writeDepth(b.targetDepth)`. Declared alone, the
+   * colour gets a target of its own: over the screen that isn't pixi's target, and inside a 2D
+   * filter it loses the view's place on the filter's texture.
    * @param handle - The colour resource this pass writes as an attachment.
    * @returns The same handle, for inline capture.
    */
@@ -108,7 +111,7 @@ export class PassBuilder {
   }
 
   /**
-   * Declare a render-target depth write — see {@link PassBuilder#writeColor}
+   * Declares that this pass draws into the depth `handle`; see {@link PassBuilder#writeColor}
    * @param handle - The depth resource this pass writes as an attachment.
    * @returns The same handle, for inline capture.
    */
@@ -119,11 +122,10 @@ export class PassBuilder {
   }
 
   /**
-   * Declare that this pass produces `handle` without writing it as an attachment
+   * Declares that this pass writes `handle` itself, with a copy, compute work or targets it binds
    *
-   * For a copy, a pass that binds its own targets in a loop (the shadow pass), or a compute
-   * dispatch. The graph orders, keeps and allocates `handle` as for
-   * {@link PassBuilder#writeColor}, but binds no target: the pass does its own GPU work.
+   * The graph counts `handle` as written, as for {@link PassBuilder#writeColor}, but binds and clears
+   * nothing for it; get the texture in `render` with {@link RenderGraph#getTexture}.
    * @param handle - The resource this pass produces.
    * @returns The same handle, for inline capture.
    */
@@ -134,7 +136,7 @@ export class PassBuilder {
   }
 
   /**
-   * Declare a read-only depth attachment — the pass depth-tests against `handle` without
+   * Declares a read-only depth attachment: the pass depth-tests against `handle` without
    * writing it
    * @param handle - The depth resource attached read-only.
    * @returns The same handle, for inline capture.
@@ -146,24 +148,42 @@ export class PassBuilder {
   }
 
   /**
-   * Declare that this pass samples `handle` through a shader binding
+   * The view's global texture bindings, to pass to {@link PassBuilder#sample}
+   * @example
+   * ```ts
+   * b.sample(opaqueDepth, b.globalTextureBindings.opaqueDepth);
+   * ```
+   */
+  public get globalTextureBindings(): GlobalTextureBindings {
+    return this._graph.globalTextureBindings;
+  }
+
+  /**
+   * Declares that this pass samples `handle` through `binding`
    *
-   * The graph puts the texture in the view's global bind group at `slot` before the pass renders.
+   * The graph puts the frame's texture in the binding before the pass renders. A texture the graph
+   * allocated that another pass attaches as a render target needs a bind group this pass owns;
+   * {@link RenderGraph#compile} throws for a global binding.
    * @param handle - The resource this pass samples.
-   * @param slot - Global-bind-group slot the texture is bound to.
+   * @param binding - Where the texture goes.
    * @returns The same handle, for inline capture.
    */
-  public sample<H extends ResourceHandle>(handle: H, slot: number): H {
+  public sample<H extends ResourceHandle>(handle: H, binding: TextureBinding): H {
     const record = this._mustBeInSetup('sample');
-    record.accesses.push({ handle, mode: 'sample', slot });
+    if (binding.styleSlot !== undefined && handle._kind === 'depth') {
+      throw new Error(
+        'PassBuilder.sample: a depth handle binds as a depth view, which has no sampler to bind beside it',
+      );
+    }
+    record.accesses.push({ handle, mode: 'sample', binding });
     return handle;
   }
 
   /**
-   * Declare a read without a shader binding
+   * Declares a read the graph doesn't bind, for a copy or a pass that builds its own bindings
    *
-   * For a copy, or a pass that builds its own `TextureView`. The pass runs after the texture's
-   * writers, as with {@link PassBuilder#sample}, but the graph binds nothing.
+   * It keeps the earlier passes that write the texture running; get the texture in `render` with
+   * {@link RenderGraph#getTexture}.
    * @param handle - The resource this pass reads.
    * @returns The same handle, for inline capture.
    */
@@ -174,8 +194,36 @@ export class PassBuilder {
   }
 
   /**
-   * Register a graph-allocated colour texture; see {@link RenderGraph#createColor}
-   * @param options - Size, resolution, format and label — see {@link TransientTextureOptions}.
+   * Keeps this pass running when no other pass reads what it writes, for work that leaves the graph,
+   * such as a readback to the CPU
+   *
+   * The graph runs a pass only when a later pass uses what it writes, or when it writes the screen,
+   * an imported texture or a camera's target. A pass that calls this in `setup` runs too, and so do
+   * the passes it reads from.
+   *
+   * It doesn't override the pass's `condition`: on a frame the condition skips this pass, any pass
+   * that only feeds it is skipped too. The scene still writes every scene output a pass requires,
+   * every frame.
+   * @example
+   * ```ts
+   * graph.addPass({
+   *   name: 'pickReadback',
+   *   bit: RenderPassBit.NONE,
+   *   setup: (b) => {
+   *     b.read(objectIds);
+   *     b.sideEffect();
+   *   },
+   *   render: (session) => readPixelUnderPointer(graph.getTexture(objectIds, session)),
+   * });
+   * ```
+   */
+  public sideEffect(): void {
+    this._mustBeInSetup('sideEffect').hasSideEffect = true;
+  }
+
+  /**
+   * Creates a colour texture the graph allocates; see {@link RenderGraph#createColor}
+   * @param options - Size, resolution, format and label; see {@link TransientTextureOptions}.
    * @returns The handle for the new transient colour resource.
    */
   public createColor(options: TransientTextureOptions = {}): ColorHandle {
@@ -184,8 +232,8 @@ export class PassBuilder {
   }
 
   /**
-   * Register a graph-allocated depth texture — see {@link PassBuilder#createColor}
-   * @param options - Size, resolution, format and label — see {@link TransientTextureOptions}.
+   * Creates a depth texture the graph allocates; see {@link RenderGraph#createColor}
+   * @param options - Size, resolution, format and label; see {@link TransientTextureOptions}.
    * @returns The handle for the new transient depth resource.
    */
   public createDepth(options: TransientTextureOptions = {}): DepthHandle {
@@ -193,16 +241,7 @@ export class PassBuilder {
     return this._graph.createDepth(options);
   }
 
-  /**
-   * Starts collecting declared accesses into `record` until `_endPass`; `RenderGraph.addPass`
-   * calls the pair around each `setup`
-   *
-   * Seeds {@link PassBuilder#targetColor} / {@link PassBuilder#targetDepth} from `camera`:
-   * that camera's own target, or the scene pair when it has no render texture.
-   * @param record - The pass whose `setup()` is about to run
-   * @param camera - The pass's camera, or `null` to draw the view.
-   * @internal
-   */
+  /** @internal */
   public _beginPass(record: PassRecord, camera?: Camera3D | null): void {
     this._current = record;
     if (camera?.renderTexture) {
@@ -220,12 +259,6 @@ export class PassBuilder {
     this._current = null;
   }
 
-  /**
-   * The record `setup()` is currently filling
-   * @param label - Which builder member was called, for the error.
-   * @returns The current pass's record.
-   * @throws When no pass's `setup()` is running.
-   */
   private _mustBeInSetup(label: string): PassRecord {
     if (!this._current) {
       throw new Error(`PassBuilder.${label}: called outside a pass.setup()`);

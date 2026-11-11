@@ -9,14 +9,15 @@ import type { Scene3DDescriptor, Scene3DEntry } from './Scene3DDescriptor';
 /**
  * The geometries, materials, textures and animations loaded from a glTF or GLB file
  *
- * A source is a template. Spawn scene-graph instances from it with `new Model3D(source)` and add
- * those to a view; the source itself never goes into a `View3D`. Every model spawned from one
- * source shares its geometries, materials and textures, so a change to a source material shows on
- * all of them.
+ * A source is a template: add `new Model3D(source)` to a view, never the source itself. Every model
+ * spawned from one source shares its geometries, materials and textures, so a change to a source
+ * material shows on every model that draws it. {@link Model3D#materials} gives one model materials
+ * of its own.
  *
- * Resources come two ways: by their index in the file (`textures`, `materials`, `geometries`),
- * which lists all of them, and by the name the file gave them (`texture`, `material`, `geometry`),
- * which lists only the named ones.
+ * The plural lists (`textures`, `materials`, `geometries`) hold everything, by index in the file.
+ * The singular records (`texture`, `material`, `geometry`) hold only what the file named.
+ *
+ * {@link loadGltf} lists the texture formats a file can use and the imports they need.
  * @example
  * ```ts
  * import { Assets } from 'pixi.js';
@@ -33,7 +34,6 @@ import type { Scene3DDescriptor, Scene3DEntry } from './Scene3DDescriptor';
  * // Repaints both robots
  * source.material['Helmet'].baseColor = 0xff0000;
  * ```
- * @see {@link Model3D} For the live scene-graph instance type
  * @category assets
  * @standard
  */
@@ -41,7 +41,9 @@ export class Scene3DSource {
   /**
    * Every texture, by its index in the file
    *
-   * Textures in the file that use the same image share one `Texture`, so an entry can repeat.
+   * Textures in the file that use the same image share one `Texture` and its style, so an entry can
+   * repeat. The file's samplers set the style, and glTF's defaults (repeat wrapping, linear
+   * filtering, mipmaps) fill whatever a sampler leaves out.
    * @example
    * ```ts
    * for (const texture of source.textures) texture.source.style.maxAnisotropy = 8;
@@ -53,7 +55,8 @@ export class Scene3DSource {
    * Every material, by its index in the file
    *
    * Unlit materials load as {@link FlatMaterial}, the rest as {@link Material3D}. When a mesh
-   * primitive names no material, the glTF default material is added after the file's own.
+   * primitive names no material, the glTF default material, a white `Material3D` with `metallic` and
+   * `roughness` at 1, is added after the file's own.
    * @example
    * ```ts
    * const pbrMaterials = source.materials.filter((material) => material instanceof Material3D);
@@ -128,23 +131,16 @@ export class Scene3DSource {
    */
   public destroyed = false;
 
-  /**
-   * Hierarchy descriptor the {@link Model3D} constructor builds its scene graph from
-   * @internal
-   */
+  /** @internal */
   public readonly _descriptor: Scene3DDescriptor;
 
   /**
-   * URLs of the images the loader cached for this source; the parser's `unload` unloads them
+   * Cache keys of the file's images, which the loader's `unload` releases
    * @internal
    */
   public readonly _imageUrls: string[] = [];
 
-  /**
-   * Loaders construct the source and then fill its resource lists; load files with `Assets.load`
-   * instead of calling this
-   * @param descriptor - The parsed hierarchy descriptor
-   */
+  /** @internal */
   constructor(descriptor: Scene3DDescriptor) {
     this._descriptor = descriptor;
 
@@ -158,18 +154,12 @@ export class Scene3DSource {
   }
 
   /**
-   * Frees everything this source owns and releases its references to them
-   *
-   * Destroys every geometry (with its GPU buffers), every material, and every texture with its
-   * `TextureSource`, except the shared defaults (`Texture.WHITE`, `Texture.EMPTY` and the flat
-   * normal map) that every material falls back to. Animations are plain keyframe data, so they're
-   * simply released. A second call does nothing.
+   * Destroys every geometry, material and texture the source holds; a second call does nothing
    *
    * Every {@link Model3D} spawned from this source draws these resources, so destroy or stop
-   * rendering those models first. For a source that came from `Assets.load`, call
-   * `Assets.unload(url)` instead: it destroys the source and also unloads every image the file
-   * referenced from the loader's cache, as pixi's spritesheets do with their image, even when
-   * another loaded asset still uses one.
+   * rendering those models first. For a source from `Assets.load`, call `Assets.unload(url)`
+   * instead. It destroys the source and also unloads every image the file referenced from the
+   * loader's cache, even when another loaded asset still uses one.
    * @example
    * ```ts
    * const source = await Assets.load<Scene3DSource>('robot.glb');

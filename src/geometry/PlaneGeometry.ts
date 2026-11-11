@@ -34,7 +34,7 @@ export interface PlaneGeometryOptions extends Geometry3DOptions {
    */
   height: number;
   /**
-   * Subdivision count along the width (X axis); the plane is split into this many quads horizontally
+   * Subdivision count along the width (X axis)
    *
    * Floored, and clamped to a minimum of 1.
    * @default 1
@@ -45,7 +45,7 @@ export interface PlaneGeometryOptions extends Geometry3DOptions {
    */
   widthSegments: number;
   /**
-   * Subdivision count along the height (Y axis); the plane is split into this many quads vertically
+   * Subdivision count along the height (Y axis)
    *
    * Floored, and clamped to a minimum of 1.
    * @default 1
@@ -56,11 +56,9 @@ export interface PlaneGeometryOptions extends Geometry3DOptions {
    */
   heightSegments: number;
   /**
-   * Put `v = 0` on the top edge instead of the bottom, which is how images are laid out
+   * Put `v = 0` on the top edge instead of the bottom, so an image texture shows the right way up
    *
-   * Images store their rows top-down while the default UVs run upward, so an image texture on a
-   * default plane renders upside down. Set this when the plane shows a picture rather than a tiling
-   * or procedural material. Only the UVs change; positions, normals and winding stay the same.
+   * Set it when the plane shows a picture, which otherwise renders upside down. Only the UVs change.
    * @default false
    * @example
    * ```ts
@@ -71,13 +69,12 @@ export interface PlaneGeometryOptions extends Geometry3DOptions {
 }
 
 /**
- * A flat, single-sided plane geometry built on a regular grid of vertices
+ * A flat plane geometry in the XY plane, centered on the origin and facing +Z
  *
- * The plane lies in the XY plane, centered on the origin, with a uniform `+Z` normal on every vertex.
- * UV (0, 0) sits at the bottom-left corner `(-w/2, -h/2, 0)` and UV (1, 1) at the top-right `(+w/2, +h/2, 0)`;
- * pass `flipV` to put `v = 0` on the top edge instead, which is what an image texture expects.
- * Subdivide via `widthSegments` and `heightSegments` for vertex shaders that displace the surface (terrain,
- * water, cloth) where the extra vertex density matters.
+ * Seen from behind it's culled, unless the material is `doubleSided`. UV (0, 0) sits at the
+ * bottom-left corner and (1, 1) at the top-right; set `flipV` for an image texture. Subdivide it
+ * with `widthSegments` and `heightSegments` when a vertex shader displaces the surface, as for
+ * terrain, water or cloth.
  * @example
  * ```ts
  * const plane = new PlaneGeometry({
@@ -87,15 +84,13 @@ export interface PlaneGeometryOptions extends Geometry3DOptions {
  *   heightSegments: 32,
  * });
  * ```
- * @see {@link PlaneGeometry.spriteQuad} For the shared image-oriented 1×1 quad
- * @see {@link Geometry3D} For the base geometry class
- * @see {@link Geometry3DOptions} For inherited geometry options
+ * @see {@link PlaneGeometry.spriteQuad} For a shared 1×1 quad set up for images
  * @category geometry
  * @standard
  */
 export class PlaneGeometry extends Geometry3D {
   /**
-   * Default options for {@link PlaneGeometry}
+   * Defaults for every new `PlaneGeometry`
    * @example
    * ```ts
    * PlaneGeometry.defaultOptions.flipV = true;
@@ -110,25 +105,21 @@ export class PlaneGeometry extends Geometry3D {
     flipV: false,
   };
 
-  /** Backing store for {@link PlaneGeometry.spriteQuad}, built on first read so importing the module builds nothing */
+  /** Built on first read, so importing the module builds nothing */
   private static _spriteQuad: PlaneGeometry | null = null;
 
   /**
-   * The shared 1×1 quad every {@link Sprite3D} draws: `new PlaneGeometry({ flipV: true })`, built
-   * on first read and reused everywhere
+   * The shared 1×1 quad every {@link Sprite3D} draws, built as `new PlaneGeometry({ flipV: true })`
    *
-   * Draws batch by pipeline and geometry, so sprites with the same billboard mode batch into
-   * instanced draws even when their textures and tints differ. Give it to {@link BatchedMesh3D}
-   * slots too when you draw billboards without a scene node per sprite.
-   *
-   * Its `destroy` does nothing, as with pixi's `Texture.WHITE`, so no `destroy` call can pull the
-   * quad out from under every other sprite.
+   * Give it to {@link BatchedMesh3D} slots with a `billboardMode` to draw billboards without a scene
+   * node per sprite. Its `destroy` does nothing, as with pixi's `Texture.WHITE`, so no `destroy`
+   * call can pull it out from under the sprites.
    * @example
    * ```ts
    * const sprites = new BatchedMesh3D({ size: 10_000, parent: view.root });
    * sprites.setGeometryAt(0, PlaneGeometry.spriteQuad);
+   * sprites.items[0].billboardMode = 'spherical';
    * ```
-   * @see {@link Sprite3D} For the managed node that draws this quad.
    */
   public static get spriteQuad(): PlaneGeometry {
     return (PlaneGeometry._spriteQuad ??= (() => {

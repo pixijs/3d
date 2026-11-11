@@ -14,7 +14,6 @@ import { traceGpu } from './gpu-inspector';
 
 const CUBE_COLORS = [0xff5566, 0x66ccff, 0x88ffcc, 0xffc857, 0xa8c8ff, 0xff88cc];
 
-/** A small opaque (no transmission, no shadow) cube in its own View3D inset. */
 function addCubeView(parent: Container, cx: number, cy: number, size: number, color: number): void {
   const view3d = new View3D({ width: size, height: size, anchor: 0.5 });
   view3d.position.set(cx, cy);
@@ -40,14 +39,6 @@ function addCubeView(parent: Container, cx: number, cy: number, size: number, co
   view3d.root.addChild(cube);
 }
 
-/**
- * Build "3D, 2D, 3D, 2D, …" across the stage (View3D insets with a 2D rect
- * between each pair, over a 2D grid backdrop), render a steady-state WebGPU
- * frame, and return how many `beginRenderPass` calls it took.
- *
- * Two warm-up frames come first: the first frames build pipelines and record bundles, which
- * begin passes of their own.
- */
 async function countRenderPassBegins(cubeCount: number): Promise<number> {
   const app = new Application();
   await app.init({ width: 480, height: 180, preference: 'webgpu', autoStart: false, backgroundColor: 0x10202a });
@@ -56,7 +47,6 @@ async function countRenderPassBegins(cubeCount: number): Promise<number> {
   const w = app.screen.width;
   const h = app.screen.height;
 
-  /** A 2D grid drawn before any 3D, in a colour-only pass */
   const backdrop = new Graphics();
   for (let gx = 0; gx <= w; gx += 24) backdrop.moveTo(gx, 0).lineTo(gx, h);
   for (let gy = 0; gy <= h; gy += 24) backdrop.moveTo(0, gy).lineTo(w, gy);

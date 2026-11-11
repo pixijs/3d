@@ -1,36 +1,72 @@
-import { BindGroup, Geometry, Texture } from 'pixi.js';
+import { Geometry } from 'pixi.js';
 import type { Buffer, Shader, State, TextureSource, Topology } from 'pixi.js';
 
+import type { BaseMaterial3D } from '../../materials/BaseMaterial3D';
 import { Buffer3D } from '../buffers/Buffer3D';
 import type { IndirectDrawData } from '../buffers/IndirectDrawData';
 import type { CameraData } from '../CameraData';
-import { MAX_BATCH_TEXTURES } from './batchConstants';
+import { SHARED_DEFAULT_TEXTURES } from '../textures/DefaultTextures';
+import { DrawCommand } from './DrawCommand';
+import { DrawCommandCapture } from './DrawCommandCapture';
+import type { CapturedResource } from './DrawCommandCapture';
 
-/**
- * The state one draw binds before it runs, everything except the numeric args
- * @internal
- */
-export class DrawCommand {
-  /** Geometry bound for the draw */
-  public geometry: Geometry = null!;
-  /** Compiled shader program for the draw */
-  public shader: Shader = null!;
-  /** Global bind group, assigned to `shader.groups[0]` at replay */
-  public globalBindGroup: BindGroup = null!;
-  /** Optional batch-texture bind group, assigned to `shader.groups[2]` at replay (group 1 is the camera's) */
-  public batchBindGroup: BindGroup | undefined = undefined;
-  /** Render state: blending, depth and culling */
-  public state: State = null!;
-  /** Primitive topology */
-  public topology: Topology = null!;
+interface CaptureTicked {
+  _captureTick?: number;
+}
+
+interface CaptureStamped {
+  _capturedResourceId?: number;
+  _capturedStyleId?: number;
 }
 
 /**
- * WebGPU encoder subset: an indirect draw sourcing its counts from a `GPUBuffer`
- * @internal
+ * Bumped when a captured texture source or its style changes; material bind groups don't watch their
+ * sources, so they refresh when it moves (`refreshMaterialBindings`)
  */
+let textureDirtyId = 0;
+
+/** Stamps a texture source with its own and its style's `_resourceId`; true when an earlier stamp differs */
+function recordTextureIds(source: TextureSource & CaptureStamped): boolean {
+  const id = source._resourceId;
+  const styleId = source.style ? source.style._resourceId : -1;
+  const moved =
+    source._capturedResourceId !== undefined &&
+    (source._capturedResourceId !== id || source._capturedStyleId !== styleId);
+  source._capturedResourceId = id;
+  source._capturedStyleId = styleId;
+  return moved;
+}
+
+interface DrawOptions {
+  geometry: Geometry;
+  shader: Shader;
+  state: State;
+  topology: Topology;
+  size: number;
+  instanceCount: number;
+  start: number;
+  baseVertex: number;
+  firstInstance: number;
+}
+
+interface DrawEncoder {
+  draw(options: DrawOptions): void;
+}
+
+/** Refilled per draw so a replay allocates nothing, and emptied after so it pins no resource */
+const _drawOptions: DrawOptions = {
+  geometry: null!,
+  shader: null!,
+  state: null!,
+  topology: 'triangle-list',
+  size: 0,
+  instanceCount: 0,
+  start: 0,
+  baseVertex: 0,
+  firstInstance: 0,
+};
+
 interface DrawIndirectEncoder {
-  /** Record one indirect draw reading its numeric args from `indirectBuffer` at `indirectOffset` */
   drawIndirect(options: {
     geometry: Geometry;
     shader: Shader;
@@ -41,158 +77,78 @@ interface DrawIndirectEncoder {
   }): void;
 }
 
-/**
- * Resolves a pixi `Buffer` to its `GPUBuffer`, as pixi's `GpuBufferSystem` does
- * @internal
- */
 interface DrawCallsResolver {
-  /**
-   * Resolve a pixi `Buffer` to its backing `GPUBuffer`
-   * @param {Buffer} buffer - The pixi buffer to resolve.
-   * @returns The backing GPU buffer.
-   */
   getGPUBuffer(buffer: Buffer): GPUBuffer;
 }
 
-/**
- * A resource a build bakes without ever re-fetching: a geometry buffer or a batch texture source
- * @internal
- */
-type CapturedResource = Buffer | TextureSource;
-
-/**
- * The lifecycle event every capturable resource emits
- *
- * `Buffer` and `TextureSource` both emit it, but their full event maps make `on` and `off`
- * uncallable on the union in TypeScript. `change` fires once for every way a resource's GPU copy can
- * be replaced: `unload()`, which also emits `unload`, pixi's GC collecting it, a buffer growing, a
- * texture resizing, and `destroy()`. It is the one event a capture has to watch.
- */
 interface CaptureLifecycleEvents {
-  on(event: 'change', fn: (resource: CapturedResource) => void): unknown;
-  off(event: 'change', fn: (resource: CapturedResource) => void): unknown;
+  on(event: 'change' | 'styleChange', fn: (resource: CapturedResource) => void): unknown;
+  off(event: 'change' | 'styleChange', fn: (resource: CapturedResource) => void): unknown;
 }
 
-/**
- * One captured resource's bookkeeping, kept for as long as a build bakes the resource
- * @internal
- */
-class Capture {
-  /** The build generation that last recorded the resource; `endBuild` sweeps older stamps */
-  public generation = 0;
-  /**
-   * Geometries whose recorded commands bake the resource (their GPU layouts must drop when it
-   * dies), or `null` for a texture source (bind groups re-key themselves; only the rebuild matters)
-   */
-  public readonly geometries: Geometry[] | null;
-
-  constructor(
-    public readonly resource: CapturedResource,
-    generation: number,
-    geometry: Geometry | null,
-  ) {
-    this.generation = generation;
-    this.geometries = geometry ? [geometry] : null;
-  }
-}
+let lastCaptureTick = 0;
 
 /**
- * An ordered list of draw commands
+ * An ordered list of draw commands that every frustum drawing it replays against its own numeric args
  *
- * Each command carries the geometry, shader, bind groups, state and topology of one draw. The
- * numeric args (index counts, offsets, instance counts) come separately, from the `DrawArgs`
- * or `IndirectDrawData` the caller hands to the draw. One list can drive several sets of args: every
- * frustum that draws it replays the same commands against its own `CullResult`'s counts. So the list
- * owns no args buffer.
- *
- * ### Captures
- *
- * A build's commands, and on WebGPU the bundles that replay them, hold GPU resources they never
- * fetch again: the geometries' buffers and the batch texture sources. The list tracks those
- * captures for as long as a build holds them, and keeps each one honest two ways:
- *
- * - A `change` listener marks the build stale when the resource's GPU copy goes, whether a user
- *   called `texture.source.unload()`, a buffer grew in place, or pixi's GC collected a resource
- *   nothing drew for a while. It drops the recorded GPU layout of the geometries that used a lost
- *   buffer, since a WebGL VAO holds the dead handle, and reports through `onCaptureLost`, so the
- *   next frame rebuilds instead of replaying dead handles.
- * - `touch` stamps every capture as used on frames that replay a recorded bundle. Pixi stamps what
- *   it binds, and an immediate-mode draw binds everything every frame, but a bundle replay binds
- *   nothing. Without the stamp, pixi's GC would see a resource drawn every frame as idle.
- *
- * Captures carry a build generation. `clear` starts a new one and `endBuild` sweeps the captures
- * the build didn't record again, so a pass that rebuilds every frame from the same resources adds
- * no listeners and allocates nothing. `releaseCaptures` drops them all for a build that isn't
- * coming back. Engine-owned {@link Buffer3D}s, such as the stores and the geometry atlas, are
- * exempt from the GC and never captured.
+ * It listens to every buffer and texture source its build or a tail command bakes, and reports one
+ * whose GPU copy goes, or whose style changes, through `onCaptureLost`.
  * @internal
  */
 export class DrawCommandList {
-  /** Pooled command instances; the first `count` entries are valid */
+  /** Pooled commands; the first `count` are in use */
   public commands: DrawCommand[] = [];
-  /** Number of valid entries in `commands` */
   public count = 0;
 
-  /**
-   * Bumped by `clear`, so once at the start of every rebuild
-   *
-   * A `CullResult` caches its copy of the draw args and its render bundle against it, and re-syncs
-   * when it moves, with no signal from the pass. It counts rebuilds only: WebGL rewrites the draw
-   * args' instance counts in place between rebuilds without moving it.
-   */
+  /** Commands the last build recorded; those from here to `count` are tail commands, which no bundle holds */
+  public bodyCount = 0;
+
+  /** Bumped once per rebuild, by `clear`; a draw list's edits leave it alone (`DrawList.rangesDirtyId`) */
   public dirtyId = 0;
 
-  /**
-   * Called when a captured resource's GPU copy is lost while this build holds it
-   *
-   * The owning `DrawList` sets it to bump its dirty counters, so the next frame rebuilds.
-   */
   public onCaptureLost?: () => void;
 
-  /** The captured resources, each with the generation that last recorded it */
-  private readonly _captures = new Map<CapturedResource, Capture>();
+  private readonly _captures = new Map<CapturedResource, DrawCommandCapture>();
 
-  /** The current build generation; `clear` advances it */
-  private _generation = 0;
+  private _destroyed = false;
 
-  /** Texture bind groups owned by this list, pooled by flush order and reused across builds */
-  private readonly _bindGroups: BindGroup[] = [];
-  private _bindGroupCount = 0;
+  /** This build's tick, unique across lists, since geometries and materials keep the last tick that captured them */
+  public captureTick: number = ++lastCaptureTick;
 
   /**
-   * Drops the recorded GPU layout of the geometries that used a lost buffer, then reports the loss
-   *
-   * It calls the base `Geometry.unload`, which drops only the layout. A `Geometry3D`'s own `unload`
-   * would also vacate its atlas range and unload every buffer it owns.
-   * @param resource - The captured resource whose GPU copy went
+   * Drops the GPU layouts that bake a lost buffer through the base `Geometry.unload`, since
+   * `Geometry3D.unload` would also vacate the atlas range; for a texture source it bumps `textureDirtyId`
    */
   private readonly _onCaptureResourceLost = (resource: CapturedResource): void => {
     const geometries = this._captures.get(resource)?.geometries;
     if (geometries) {
       for (const geometry of geometries) Geometry.prototype.unload.call(geometry);
+    } else {
+      recordTextureIds(resource as TextureSource);
+      textureDirtyId++;
     }
     this.onCaptureLost?.();
   };
 
   /**
-   * Append and return the next command slot, reusing a pooled instance when one exists
-   * @returns The command to fill in.
+   * Hands out the pooled command at `count`, so a builder may lower `count` to drop the commands after it
+   * @returns The command to fill in
    */
   public next(): DrawCommand {
     const i = this.count;
     const cmd = (this.commands[i] ??= new DrawCommand());
+    cmd.dead = false;
+    cmd.leftOut = false;
     this.count = i + 1;
     return cmd;
   }
 
-  /**
-   * Captures each of `geometry`'s buffers for the current build
-   *
-   * The batcher calls it for every command it emits. A geometry already captured this build isn't
-   * recorded twice.
-   * @param geometry - The geometry the emitted command draws
-   */
+  /** Captures each of `geometry`'s buffers for the current build */
   public captureGeometry(geometry: Geometry): void {
+    const ticked = geometry as Geometry & CaptureTicked;
+    if (ticked._captureTick === this.captureTick) return;
+    ticked._captureTick = this.captureTick;
+
     const buffers = geometry.buffers;
     for (let i = 0; i < buffers.length; i++) {
       this._capture(buffers[i], geometry);
@@ -200,136 +156,219 @@ export class DrawCommandList {
   }
 
   /**
-   * Hands out the next pooled texture bind group with `sources[0..slotCount)` in the batch slots
-   * and the remaining slots padded empty, capturing each source for the build
-   *
-   * Groups are pooled by flush order. Pixi's `BindGroupSystem` already shares one native bind group
-   * between groups that resolve to the same resource key, so identical sets cost nothing extra.
-   * @param sources - Texture sources for the batch, in slot order
-   * @param slotCount - How many leading entries of `sources` fill batch slots
+   * Captures a material's texture sources for the current build and refreshes its bind groups; skips the
+   * shared default textures, which are never destroyed or collected
    */
-  public nextBatchBindGroup(sources: TextureSource[], slotCount: number): BindGroup {
-    const bg = (this._bindGroups[this._bindGroupCount++] ??= new BindGroup());
-    for (let s = 0; s < slotCount; s++) {
-      bg.setResource(sources[s], s);
-      this._capture(sources[s], null);
+  public captureMaterialTextures(material: BaseMaterial3D): void {
+    if (material._captureTick === this.captureTick) return;
+    material._captureTick = this.captureTick;
+
+    const textures = material._textures;
+    for (let t = 0; t < textures.length; t++) {
+      if (!SHARED_DEFAULT_TEXTURES.has(textures[t])) this._capture(textures[t].source, null);
     }
-    const empty = Texture.EMPTY.source;
-    for (let s = slotCount; s < MAX_BATCH_TEXTURES; s++) bg.setResource(empty, s);
-    return bg;
+
+    this.refreshMaterialBindings(material);
   }
 
-  private _capture(resource: CapturedResource, geometry: Geometry | null): void {
-    if (resource instanceof Buffer3D) return;
+  /**
+   * Captures a tail command's buffers and textures while it has members, counting the command as an
+   * owner even of resources the build or another tail command holds
+   */
+  public captureTail(command: DrawCommand, geometry: Geometry, material: BaseMaterial3D | null): void {
+    const held = command.captures;
 
-    const generation = this._generation;
+    const buffers = geometry.buffers;
+    for (let i = 0; i < buffers.length; i++) {
+      const capture = this._capture(buffers[i], geometry, true);
+      if (capture) held.push(capture);
+    }
+    if (!material) return;
+
+    const textures = material._textures;
+    for (let t = 0; t < textures.length; t++) {
+      if (SHARED_DEFAULT_TEXTURES.has(textures[t])) continue;
+      const capture = this._capture(textures[t].source, null, true);
+      if (capture) held.push(capture);
+    }
+
+    this.refreshMaterialBindings(material);
+  }
+
+  /**
+   * Gives back a tail command's captures once its last member leaves; a buffer capture that stays
+   * forgets the command's geometry unless something else still draws it
+   */
+  public releaseTail(command: DrawCommand): void {
+    const held = command.captures;
+    const geometry = command.geometry;
+    let tailDraws = false;
+    for (let i = this.bodyCount; i < this.count && !tailDraws; i++) {
+      const other = this.commands[i];
+      tailDraws = other !== command && other.geometry === geometry && other.captures.length > 0;
+    }
+    const drawn = tailDraws || (geometry as Geometry & CaptureTicked)._captureTick === this.captureTick;
+
+    for (let i = 0; i < held.length; i++) {
+      const capture = held[i];
+      if (--capture.tailOwners > 0 || capture.generation === this.captureTick) {
+        if (!drawn && capture.geometries) {
+          const at = capture.geometries.indexOf(geometry);
+          if (at >= 0) capture.geometries.splice(at, 1);
+        }
+        continue;
+      }
+      this._unwatch(capture);
+      this._captures.delete(capture.resource);
+    }
+    held.length = 0;
+  }
+
+  /** Refreshes a material's bind groups if a texture changed since their last refresh */
+  public refreshMaterialBindings(material: BaseMaterial3D): void {
+    if (material._lastTextureDirtyId === textureDirtyId) return;
+    material._lastTextureDirtyId = textureDirtyId;
+    material._refreshTextureBindings();
+  }
+
+  /**
+   * Captures a resource for the current build, or for a tail command, watching it if nothing did
+   * @returns The capture, or `undefined` for an engine-owned `Buffer3D`, which pixi's GC never frees
+   */
+  private _capture(
+    resource: CapturedResource,
+    geometry: Geometry | null,
+    tail = false,
+  ): DrawCommandCapture | undefined {
+    if (resource instanceof Buffer3D) return undefined;
+
+    const generation = tail ? -1 : this.captureTick;
     let capture = this._captures.get(resource);
     if (capture === undefined) {
-      capture = new Capture(resource, generation, geometry);
+      capture = new DrawCommandCapture(resource, generation, geometry);
       this._captures.set(resource, capture);
       (resource as unknown as CaptureLifecycleEvents).on('change', this._onCaptureResourceLost);
-      return;
+      if (geometry === null) this._watchTexture(resource as TextureSource);
+    } else {
+      if (!tail && capture.generation !== generation) {
+        capture.generation = generation;
+        if (capture.geometries) capture.geometries.length = 0;
+      }
+      if (geometry && capture.geometries && !capture.geometries.includes(geometry)) capture.geometries.push(geometry);
     }
+    if (tail) capture.tailOwners++;
 
-    if (capture.generation !== generation) {
-      capture.generation = generation;
-      if (capture.geometries) capture.geometries.length = 0;
-    }
-    if (geometry && capture.geometries && !capture.geometries.includes(geometry)) capture.geometries.push(geometry);
+    return capture;
   }
 
-  /** Stops listening to every captured resource and forgets them */
+  /**
+   * Watches `styleChange` as well as `change`, since a WebGPU bundle replays the sampler it recorded, and
+   * bumps `textureDirtyId` if the source changed while no list watched it
+   */
+  private _watchTexture(source: TextureSource): void {
+    (source as unknown as CaptureLifecycleEvents).on('styleChange', this._onCaptureResourceLost);
+    if (recordTextureIds(source)) textureDirtyId++;
+  }
+
+  private _unwatch(capture: DrawCommandCapture): void {
+    const events = capture.resource as unknown as CaptureLifecycleEvents;
+    events.off('change', this._onCaptureResourceLost);
+    if (capture.geometries === null) events.off('styleChange', this._onCaptureResourceLost);
+  }
+
   private _dropCaptures(): void {
-    for (const resource of this._captures.keys()) {
-      (resource as unknown as CaptureLifecycleEvents).off('change', this._onCaptureResourceLost);
-    }
+    for (const capture of this._captures.values()) this._unwatch(capture);
     this._captures.clear();
   }
 
-  /**
-   * Points every slot of the pooled groups from `from` onwards at the empty texture, so a group the
-   * current build left unused retains none of the previous build's sources
-   * @param from - Index of the first pooled group to clear
-   */
-  private _emptyBindGroups(from: number): void {
-    const empty = Texture.EMPTY.source;
-    for (let i = from; i < this._bindGroups.length; i++) {
-      const bg = this._bindGroups[i];
-      for (let s = 0; s < MAX_BATCH_TEXTURES; s++) bg.setResource(empty, s);
-    }
-  }
-
-  /**
-   * Reset the list for a rebuild, bumping `dirtyId`
-   *
-   * The previous build's captures stay until `endBuild` decides which of them the rebuild recorded
-   * again.
-   */
+  /** Resets the list for a rebuild; the old captures stay until `endBuild` sweeps those not recorded again */
   public clear(): void {
-    this._generation++;
-    this._bindGroupCount = 0;
+    for (let i = this.bodyCount; i < this.count; i++) {
+      const held = this.commands[i].captures;
+      for (let c = 0; c < held.length; c++) held[c].tailOwners = 0;
+      held.length = 0;
+    }
+    this.captureTick = ++lastCaptureTick;
     this.count = 0;
+    this.bodyCount = 0;
     this.dirtyId++;
   }
 
-  /**
-   * Finish a rebuild: sweep the captures this build did not record again and empty the pooled bind
-   * groups it left unused
-   */
+  /** Finishes a rebuild: sweeps the captures it didn't record again, and makes every command the body's */
   public endBuild(): void {
-    const generation = this._generation;
+    this.bodyCount = this.count;
+    const generation = this.captureTick;
     for (const capture of this._captures.values()) {
       if (capture.generation === generation) continue;
-      (capture.resource as unknown as CaptureLifecycleEvents).off('change', this._onCaptureResourceLost);
+      this._unwatch(capture);
       this._captures.delete(capture.resource);
     }
-    this._emptyBindGroups(this._bindGroupCount);
   }
 
   /**
-   * Stamps every captured resource as used at `now`, pixi's `gc.now`
-   *
-   * Call it on every frame that replays a recorded bundle. Pixi's own bind calls stamp an
-   * immediate-mode draw's resources.
-   * @param now - The frame's GC clock.
+   * Stamps every captured resource as used; call it on frames that replay a bundle, since a replay binds
+   * nothing for pixi's GC to see
    */
   public touch(now: number): void {
     for (const resource of this._captures.keys()) resource._gcLastUsed = now;
   }
 
-  /**
-   * Drops the recorded commands and every capture, and empties every pooled bind group
-   *
-   * For a build that isn't coming back: an unload, or the last renderable leaving the pass. `clear`
-   * alone keeps the captures for the rebuild that follows it.
-   */
+  /** Drops the commands and every capture, for a build that isn't coming back; `clear` keeps the captures */
   public releaseCaptures(): void {
     this.clear();
     this._dropCaptures();
-    this._emptyBindGroups(0);
   }
 
   /**
-   * Records one `drawIndirect` per command, reading its args from `data`'s GPU buffer (WebGPU)
+   * Draws each command from the CPU-side counts in `data`, skipping a size of 0, which pixi takes as the whole buffer
    *
-   * Each command's geometry, shader and state come from this list, and only the numeric args from
-   * `data`, so every cull result replays the same commands against its own counts. Command `i`'s
-   * args start at byte `i * 20`, five `u32`s.
-   * @param encoder - Encoder the indirect draws are recorded into.
-   * @param resolver - Resolves the draw-calls buffer to its `GPUBuffer`.
-   * @param data - Numeric draw args for this replay.
-   * @param camera - The camera these commands draw from; its group is bound at 1.
+   * A bundle that records these draws bakes the counts, so it re-records on `CullResult.countsDirtyId`.
    */
+  public replayDirect(encoder: DrawEncoder, data: IndirectDrawData, camera: CameraData): void {
+    const args = data.drawCalls;
+    const { bindGroup } = camera;
+    const options = _drawOptions;
+    for (let i = 0; i < this.count; i++) {
+      const o = i * 5;
+      const instanceCount = args[o + 1];
+      if (instanceCount === 0 || args[o] === 0) continue;
+      const cmd = this.commands[i];
+      cmd.shader.groups[0] = cmd.globalBindGroup;
+      cmd.shader.groups[1] = bindGroup;
+      if (cmd.batchBindGroup) cmd.shader.groups[2] = cmd.batchBindGroup;
+      options.geometry = cmd.geometry;
+      options.shader = cmd.shader;
+      options.state = cmd.state;
+      options.topology = cmd.topology;
+      options.size = args[o];
+      options.instanceCount = instanceCount;
+      options.start = args[o + 2];
+      options.baseVertex = args[o + 3];
+      options.firstInstance = args[o + 4];
+      encoder.draw(options);
+    }
+    options.geometry = null!;
+    options.shader = null!;
+    options.state = null!;
+  }
+
+  /** Records one `drawIndirect` per live command (WebGPU), reading command `i`'s five `u32` args at byte `i * 20` */
   public replay(
     encoder: DrawIndirectEncoder,
     resolver: DrawCallsResolver,
     data: IndirectDrawData,
     camera: CameraData,
+    from = 0,
+    to = this.count,
   ): void {
     const indirectBuffer = resolver.getGPUBuffer(data.drawCallsBuffer);
     const { bindGroup } = camera;
-    for (let i = 0; i < this.count; i++) {
+    for (let i = from; i < to; i++) {
       const cmd = this.commands[i];
+      if (cmd.dead) {
+        cmd.leftOut = true;
+        continue;
+      }
       cmd.shader.groups[0] = cmd.globalBindGroup;
       cmd.shader.groups[1] = bindGroup;
       if (cmd.batchBindGroup) cmd.shader.groups[2] = cmd.batchBindGroup;
@@ -344,18 +383,14 @@ export class DrawCommandList {
     }
   }
 
-  /**
-   * Drops the recorded commands, releases every capture, and destroys the pooled texture bind groups
-   *
-   * The numeric args aren't this list's to free.
-   */
+  /** Drops the recorded commands and releases every capture; the numeric args aren't this list's to free */
   public destroy(): void {
+    if (this._destroyed) return;
+    this._destroyed = true;
+
     this._dropCaptures();
-    for (let i = 0; i < this._bindGroups.length; i++) this._bindGroups[i].destroy();
-    this._bindGroups.length = 0;
-    this._bindGroupCount = 0;
     this.onCaptureLost = undefined;
     this.count = 0;
-    this.commands.length = 0;
+    (this.commands as DrawCommand[] | null) = null;
   }
 }

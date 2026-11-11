@@ -10,17 +10,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Exercises the alpha-blend + skybox combo. `view3d.background` and the PBR
-// transparent shader both bind `session.globalBindGroup`, but their group-0
-// layouts differ (skybox: 14 entries; PBR transparent: 16 entries). Locks down
-// the pixi-side bind-group cache-keying fix that was needed to render this.
-//
-// We deliberately do NOT set `view3d.environment`. The bug is purely a
-// bind-group cache mismatch — IBL plays no role in triggering it. Skipping
-// IBL avoids the platform-dependent precision drift from
-// `generateIblSpecialCubemap` (6 faces × N mips × 1024 importance-sampled
-// reads) which made an earlier version of this scene unstable on CI's
-// Linux/Mesa stack vs local macOS/Metal.
 const FACE_COLORS = ['#ff7777', '#77ff77', '#9bb4d8', '#5c5040', '#77dada', '#da77da'] as const;
 
 function colorCanvas(color: string): HTMLCanvasElement {

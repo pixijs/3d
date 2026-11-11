@@ -1,41 +1,61 @@
 import { definedProps, UniformGroup } from 'pixi.js';
 
 import type { RenderGraph } from '../../../core/render-graph/RenderGraph';
+import type { SceneOutput } from '../../../core/render-graph/SceneOutput';
 import { FullscreenPass } from '../../../post-processing/effects/FullscreenPass';
 import { PostEffect } from '../../../post-processing/effects/PostEffect';
 import type { EffectFragment, EffectIO, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
+import { normalOutput } from '../../scene-outputs/normalOutput';
 
-/**
- * First pass: raw ambient occlusion from the scene depth
- *
- * Rebuilds the view-space position and a face normal from depth. Of the four neighbour taps it
- * takes each tangent from the side whose depth is nearer the centre's, so the normal holds at a
- * depth edge. Samples lie on a golden-angle spiral (2.3999632 radians apart) over a hemisphere
- * around the normal, and interleaved gradient noise rotates the spiral per pixel, so the blur
- * pass has high-frequency noise to dissolve rather than fixed banding.
- *
- * An occluder counts in full when its depth is close to the shaded point's and fades out by
- * `maxDistance`. That cutoff is separate from `radius`, so a wide radius gives smooth occlusion
- * without halos from distant occluders around silhouettes.
- *
- * Reads `uParams` = (radius, bias, intensity, power) and `uRange` = (maxDistance, samples, unused,
- * unused).
- */
-const COMPUTE_FRAGMENT: EffectFragment = {
+/** Taps at least one depth texel out, so none lands on the centre's texel when the occlusion buffer is finer */
+const DEPTH_NORMAL = {
   gpu: /* wgsl */ `
-fn effect(uv: vec2<f32>) -> vec4<f32> {
-  let d = sampleDepth(uv);
-  if (d >= 1.0) { return vec4<f32>(1.0, 1.0, 1.0, 1.0); }
-
-  let P = viewPos(uv);
-  let t = texel();
-  let pl = viewPos(uv - vec2<f32>(t.x, 0.0));
-  let pr = viewPos(uv + vec2<f32>(t.x, 0.0));
-  let pd = viewPos(uv - vec2<f32>(0.0, t.y));
-  let pu = viewPos(uv + vec2<f32>(0.0, t.y));
+  let dt = max(t, depthTexel());
+  let pl = viewPos(uv - vec2<f32>(dt.x, 0.0));
+  let pr = viewPos(uv + vec2<f32>(dt.x, 0.0));
+  let pd = viewPos(uv - vec2<f32>(0.0, dt.y));
+  let pu = viewPos(uv + vec2<f32>(0.0, dt.y));
   let ddx = select(pr - P, P - pl, abs(pl.z - P.z) < abs(pr.z - P.z));
   let ddy = select(pu - P, P - pd, abs(pd.z - P.z) < abs(pu.z - P.z));
-  var N = normalize(cross(ddx, ddy));
+  var N = normalize(cross(ddx, ddy));`,
+  gl: /* glsl */ `
+  vec2 dt = max(t, depthTexel());
+  vec3 pl = viewPos(uv - vec2(dt.x, 0.0));
+  vec3 pr = viewPos(uv + vec2(dt.x, 0.0));
+  vec3 pd = viewPos(uv - vec2(0.0, dt.y));
+  vec3 pu = viewPos(uv + vec2(0.0, dt.y));
+  vec3 ddx = abs(pl.z - P.z) < abs(pr.z - P.z) ? (P - pl) : (pr - P);
+  vec3 ddy = abs(pd.z - P.z) < abs(pu.z - P.z) ? (P - pd) : (pu - P);
+  vec3 N = normalize(cross(ddx, ddy));`,
+};
+
+const SCENE_NORMAL = {
+  gpu: /* wgsl */ `
+  var N = normalize(sampleColor(uv).xyz * 2.0 - 1.0);`,
+  gl: /* glsl */ `
+  vec3 N = normalize(sampleColor(uv).xyz * 2.0 - 1.0);`,
+};
+
+/**
+ * Writes occlusion to red and log view depth to green + blue / 255, the sum {@link blurFragment} decodes
+ * @param normal - Code that declares `N`, the view-space normal at `P`; it can read `t`, the texel size.
+ */
+function computeFragment(normal: { gpu: string; gl: string }): EffectFragment {
+  return {
+    gpu: /* wgsl */ `
+fn packDepth(ao: f32, z: f32) -> vec4<f32> {
+  let v = clamp(log(z / fxh.uFxClip.x) / log(fxh.uFxClip.y / fxh.uFxClip.x), 0.0, 1.0) * 255.0;
+  return vec4<f32>(ao, floor(v) / 255.0, fract(v), 1.0);
+}
+fn effect(uv: vec2<f32>) -> vec4<f32> {
+  let d = sampleDepth(uv);
+  if (d >= 1.0) { return vec4<f32>(1.0, 1.0, 0.0, 1.0); }
+
+  let P = viewPos(uv);
+  let fade = select(1.0, 1.0 - smoothstep(fx.uRange.z, fx.uRange.w, -P.z), fx.uRange.w > 0.0);
+  if (fade <= 0.0) { return packDepth(1.0, -P.z); }
+  let t = texel();
+${normal.gpu}
   if (dot(N, -P) < 0.0) { N = -N; }
 
   let fc = uv / t;
@@ -68,25 +88,24 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
   }
   occ = occ / fx.uRange.y;
 
-  let ao = clamp(1.0 - occ * fx.uParams.z, 0.0, 1.0);
-  let v = pow(ao, fx.uParams.w);
-  return vec4<f32>(v, v, v, 1.0);
+  let ao = clamp(1.0 - occ * fx.uParams.z * fade, 0.0, 1.0);
+  return packDepth(pow(ao, fx.uParams.w), -P.z);
 }
 `,
-  gl: /* glsl */ `
+    gl: /* glsl */ `
+vec4 packDepth(float ao, float z) {
+  float v = clamp(log(z / uFxClip.x) / log(uFxClip.y / uFxClip.x), 0.0, 1.0) * 255.0;
+  return vec4(ao, floor(v) / 255.0, fract(v), 1.0);
+}
 vec4 effect(vec2 uv) {
   float d = sampleDepth(uv);
-  if (d >= 1.0) { return vec4(1.0); }
+  if (d >= 1.0) { return vec4(1.0, 1.0, 0.0, 1.0); }
 
   vec3 P = viewPos(uv);
+  float fade = uRange.w > 0.0 ? 1.0 - smoothstep(uRange.z, uRange.w, -P.z) : 1.0;
+  if (fade <= 0.0) { return packDepth(1.0, -P.z); }
   vec2 t = texel();
-  vec3 pl = viewPos(uv - vec2(t.x, 0.0));
-  vec3 pr = viewPos(uv + vec2(t.x, 0.0));
-  vec3 pd = viewPos(uv - vec2(0.0, t.y));
-  vec3 pu = viewPos(uv + vec2(0.0, t.y));
-  vec3 ddx = abs(pl.z - P.z) < abs(pr.z - P.z) ? (P - pl) : (pr - P);
-  vec3 ddy = abs(pd.z - P.z) < abs(pu.z - P.z) ? (P - pd) : (pu - P);
-  vec3 N = normalize(cross(ddx, ddy));
+${normal.gl}
   if (dot(N, -P) < 0.0) { N = -N; }
 
   vec2 fc = uv / t;
@@ -117,64 +136,77 @@ vec4 effect(vec2 uv) {
   }
   occ /= uRange.y;
 
-  float ao = clamp(1.0 - occ * uParams.z, 0.0, 1.0);
-  float v = pow(ao, uParams.w);
-  return vec4(v, v, v, 1.0);
+  float ao = clamp(1.0 - occ * uParams.z * fade, 0.0, 1.0);
+  return packDepth(pow(ao, uParams.w), -P.z);
 }
 `,
-};
+  };
+}
 
-/**
- * Second pass: a 5×5 box blur over the raw occlusion, which dissolves the per-pixel noise
- *
- * Reads `uBlur` = (step in texels, unused, unused, unused).
- */
-const BLUR_FRAGMENT: EffectFragment = {
-  gpu: /* wgsl */ `
+const DEPTH_NORMAL_FRAGMENT = computeFragment(DEPTH_NORMAL);
+
+const SCENE_NORMAL_FRAGMENT = computeFragment(SCENE_NORMAL);
+
+/** Passes green and blue through, so the second blur can still decode the depth {@link computeFragment} packs */
+function blurFragment(axis: 'x' | 'y'): EffectFragment {
+  const dir = axis === 'x' ? '1.0, 0.0' : '0.0, 1.0';
+
+  return {
+    gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
-  var sum = 0.0;
-  for (var j = -2; j <= 2; j = j + 1) {
-    for (var i = -2; i <= 2; i = i + 1) {
-      let o = vec2<f32>(f32(i), f32(j)) * texel() * fx.uBlur.x;
-      sum += sampleColor(uv + o).r;
-    }
+  let c = sampleColor(uv);
+  let zc = c.g + c.b / 255.0;
+  let sharpness = 10.0 * log(fxh.uFxClip.y / fxh.uFxClip.x);
+  let stride = vec2<f32>(${dir}) * texel() * fx.uBlur.x;
+  var sum = c.r;
+  var weight = 1.0;
+  for (var i = -2; i <= 2; i = i + 1) {
+    if (i == 0) { continue; }
+    let s = sampleColor(uv + stride * f32(i));
+    let w = max(1.0 - abs(s.g + s.b / 255.0 - zc) * sharpness, 0.0);
+    sum += s.r * w;
+    weight += w;
   }
-  let ao = sum / 25.0;
-  return vec4<f32>(ao, ao, ao, 1.0);
+  return vec4<f32>(sum / weight, c.g, c.b, 1.0);
 }
 `,
-  gl: /* glsl */ `
+    gl: /* glsl */ `
 vec4 effect(vec2 uv) {
-  float sum = 0.0;
-  for (int j = -2; j <= 2; j++) {
-    for (int i = -2; i <= 2; i++) {
-      vec2 o = vec2(float(i), float(j)) * texel() * uBlur.x;
-      sum += sampleColor(uv + o).r;
-    }
+  vec4 c = sampleColor(uv);
+  float zc = c.g + c.b / 255.0;
+  float sharpness = 10.0 * log(uFxClip.y / uFxClip.x);
+  vec2 stride = vec2(${dir}) * texel() * uBlur.x;
+  float sum = c.r;
+  float weight = 1.0;
+  for (int i = -2; i <= 2; i++) {
+    if (i == 0) { continue; }
+    vec4 s = sampleColor(uv + stride * float(i));
+    float w = max(1.0 - abs(s.g + s.b / 255.0 - zc) * sharpness, 0.0);
+    sum += s.r * w;
+    weight += w;
   }
-  float ao = sum / 25.0;
-  return vec4(ao, ao, ao, 1.0);
+  return vec4(sum / weight, c.g, c.b, 1.0);
 }
 `,
-};
+  };
+}
 
-/**
- * Last pass: multiplies the blurred occlusion onto the chain image
- *
- * Only RGB is multiplied, so occlusion darkens light but not coverage, and the edges of a view
- * composited over 2D content keep their alpha.
- */
+const BLUR_X_FRAGMENT = blurFragment('x');
+
+const BLUR_Y_FRAGMENT = blurFragment('y');
+
+/** Darkens RGB only and keeps the chain image's alpha, so a view composited over 2D keeps its edges */
 const MERGE_FRAGMENT: EffectFragment = {
   gpu: /* wgsl */ `
 fn effect(uv: vec2<f32>) -> vec4<f32> {
   let base = sampleColor(uv);
-  return vec4<f32>(base.rgb * sampleColor2(uv).rgb, base.a);
+  return vec4<f32>(base.rgb * sampleColor2(uv).r, base.a);
 }
 `,
   gl: /* glsl */ `
 vec4 effect(vec2 uv) {
   vec4 base = sampleColor(uv);
-  return vec4(base.rgb * sampleColor2(uv).rgb, base.a);
+  return vec4(base.rgb * sampleColor2(uv).r, base.a);
 }
 `,
 };
@@ -202,9 +234,8 @@ export interface SsaoEffectOptions extends PostEffectOptions {
   /**
    * Depth gap in world units at which an occluder stops counting
    *
-   * An occluder's contribution fades from full at no gap to nothing at this one, which stops dark
-   * halos where a near object overlaps a distant one. Set apart from `radius` so a wide radius
-   * doesn't widen the halos too.
+   * An occluder counts less the further it is in depth from the shaded point, which keeps a near
+   * object from casting a dark halo on what's far behind it. Lower it if halos show.
    * @default radius * 0.65
    * @example
    * ```ts
@@ -251,6 +282,18 @@ export interface SsaoEffectOptions extends PostEffectOptions {
    */
   samples?: number;
   /**
+   * Depths in front of the camera, `[start, end]` in world units, across which the occlusion fades out
+   *
+   * Past `end` the effect skips its samples, which saves their cost and removes the speckle and
+   * dark bands it gives distant surfaces. `null` keeps occlusion at every depth.
+   * @default null
+   * @example
+   * ```ts
+   * new SsaoEffect({ fadeDistance: [40, 80] });
+   * ```
+   */
+  fadeDistance?: [number, number] | null;
+  /**
    * Spacing between blur taps, in texels of the occlusion buffer
    * @default 1.5
    * @example
@@ -260,10 +303,10 @@ export interface SsaoEffectOptions extends PostEffectOptions {
    */
   blurStep?: number;
   /**
-   * Texels per logical pixel for the occlusion buffers, as `resolution` means on a pixi filter
+   * Texels per logical pixel for the occlusion, like a pixi filter's `resolution`
    *
-   * `'inherit'` matches the view. On a high-DPI screen `1` is the usual choice: one texel per
-   * logical pixel, a quarter of the work at a device pixel ratio of 2. Fixed at construction.
+   * `'inherit'` matches the scene, at {@link View3D#resolution}. On a high-DPI screen `1` is the
+   * usual choice: a quarter of the work at a device pixel ratio of 2. Fixed at construction.
    * @default 'inherit'
    * @example
    * ```ts
@@ -271,14 +314,28 @@ export interface SsaoEffectOptions extends PostEffectOptions {
    * ```
    */
   resolution?: number | 'inherit';
+  /**
+   * Whether the effect makes the view write {@link normalOutput}, so it reads each surface's own
+   * normal instead of rebuilding a flat one from depth
+   *
+   * The scene's normal is smooth across curves and carries normal-map detail, but it costs every
+   * opaque and glass pixel one more 4-byte write, which on a phone can cost more than it saves, and
+   * on WebGL it turns the view's MSAA off; see {@link normalOutput}. When another pass already makes
+   * the view write the normals, the effect reads them whatever this says. Fixed at construction.
+   * @default false
+   * @example
+   * ```ts
+   * new SsaoEffect({ sceneNormals: true });
+   * ```
+   */
+  sceneNormals?: boolean;
 }
 
 /**
  * Screen-space ambient occlusion: darkens creases, corners and contact points
  *
- * Three passes: occlusion from the scene depth, a blur, and a multiply onto the frame. The first
- * two draw at `resolution`. Every property is a plain uniform write, so it can change every frame;
- * `resolution` is fixed at construction.
+ * Costs four fullscreen passes, three of them at `resolution`. Every property can change every
+ * frame; the `resolution` and `sceneNormals` options are fixed at construction.
  * @example
  * ```ts
  * view.passes = [new SsaoEffect({ radius: 0.35, resolution: 1 })];
@@ -288,10 +345,9 @@ export interface SsaoEffectOptions extends PostEffectOptions {
  */
 export class SsaoEffect extends PostEffect {
   /**
-   * Default {@link SsaoEffectOptions} merged under every constructor call
+   * Defaults for every new `SsaoEffect`; an option passed as `undefined` keeps its default
    *
-   * `new SsaoEffect(opts)` resolves as `{ ...SsaoEffect.defaultOptions, ...opts }`. Mutate to change defaults
-   * process-wide. `maxDistance` has no entry: when neither side sets it, it follows the resolved `radius`.
+   * `maxDistance` has no entry, so unless set it starts at 0.65 × the resolved `radius`.
    * @example
    * ```ts
    * SsaoEffect.defaultOptions.resolution = 1;
@@ -304,8 +360,14 @@ export class SsaoEffect extends PostEffect {
     power: 1.5,
     samples: 16,
     blurStep: 1.5,
+    fadeDistance: null,
     resolution: 'inherit',
+    sceneNormals: false,
   };
+
+  /** `[normalOutput]` when `sceneNormals` is set, otherwise `undefined` */
+  // oxlint-disable-next-line pixi3d/require-standard-example -- set from `sceneNormals`; the view reads it, users don't
+  public override readonly requiredOutputs?: readonly SceneOutput[];
 
   private readonly _computeUniforms = new UniformGroup({
     uParams: { value: new Float32Array(4), type: 'vec4<f32>' },
@@ -319,13 +381,26 @@ export class SsaoEffect extends PostEffect {
   private readonly _resolution: number | 'inherit';
 
   constructor(options: SsaoEffectOptions = {}) {
-    const { radius, maxDistance, intensity, bias, power, samples, blurStep, resolution, ...rest } = {
+    const {
+      radius,
+      maxDistance,
+      intensity,
+      bias,
+      power,
+      samples,
+      blurStep,
+      fadeDistance,
+      resolution,
+      sceneNormals,
+      ...rest
+    } = {
       ...SsaoEffect.defaultOptions,
       ...definedProps(options),
     };
 
     super(rest);
     this._resolution = resolution!;
+    this.requiredOutputs = sceneNormals ? [normalOutput] : undefined;
 
     this.radius = radius!;
     this.maxDistance = maxDistance ?? radius! * 0.65;
@@ -334,10 +409,11 @@ export class SsaoEffect extends PostEffect {
     this.power = power!;
     this.samples = samples!;
     this.blurStep = blurStep!;
+    this.fadeDistance = fadeDistance!;
   }
 
   /**
-   * Add the occlusion, blur and merge passes for this slot in the chain
+   * Adds the occlusion, blur and merge passes for this slot in the chain
    * @param graph - Render graph being built.
    * @param io - Input/output handles for this slot in the chain.
    * @example
@@ -348,15 +424,31 @@ export class SsaoEffect extends PostEffect {
    * @advanced
    */
   public override build(graph: RenderGraph, io: EffectIO): void {
+    const sceneNormals = graph.hasSceneOutput(normalOutput);
     const ao = graph.createColor({ resolution: this._resolution, format: 'rgba8unorm', label: 'ssaoAO' });
     graph.addPass(
       new FullscreenPass({
         renderer: io.renderer,
         label: 'ssao:compute',
-        fragment: COMPUTE_FRAGMENT,
+        fragment: sceneNormals ? SCENE_NORMAL_FRAGMENT : DEPTH_NORMAL_FRAGMENT,
         uniforms: this._computeUniforms,
-        reads: { depth: graph.sceneDepth },
+        reads: {
+          depth: graph.sceneDepth,
+          color: sceneNormals ? graph.getSceneOutput(normalOutput) : undefined,
+        },
         writes: ao,
+      }),
+    );
+
+    const across = graph.createColor({ resolution: this._resolution, format: 'rgba8unorm', label: 'ssaoBlurX' });
+    graph.addPass(
+      new FullscreenPass({
+        renderer: io.renderer,
+        label: 'ssao:blurX',
+        fragment: BLUR_X_FRAGMENT,
+        uniforms: this._blurUniforms,
+        reads: { color: ao },
+        writes: across,
       }),
     );
 
@@ -364,10 +456,10 @@ export class SsaoEffect extends PostEffect {
     graph.addPass(
       new FullscreenPass({
         renderer: io.renderer,
-        label: 'ssao:blur',
-        fragment: BLUR_FRAGMENT,
+        label: 'ssao:blurY',
+        fragment: BLUR_Y_FRAGMENT,
         uniforms: this._blurUniforms,
-        reads: { color: ao },
+        reads: { color: across },
         writes: blurred,
       }),
     );
@@ -413,7 +505,7 @@ export class SsaoEffect extends PostEffect {
   }
   /**
    * Sets the self-occlusion bias
-   * @param value - Depth offset in world units that stops a surface occluding itself.
+   * @param value - Depth offset in world units.
    */
   public set bias(value: number) {
     this.writeLane(this._computeUniforms, 'uParams', 1, value);
@@ -458,7 +550,7 @@ export class SsaoEffect extends PostEffect {
   }
 
   /**
-   * Depth gap in world units at which an occluder stops counting; {@link SsaoEffectOptions#maxDistance} has the details
+   * Depth gap in world units at which an occluder stops counting; see {@link SsaoEffectOptions#maxDistance}
    * @example
    * ```ts
    * ssao.maxDistance = ssao.radius * 0.5;
@@ -469,7 +561,7 @@ export class SsaoEffect extends PostEffect {
   }
   /**
    * Sets the depth gap at which an occluder stops counting
-   * @param value - Depth gap in world units at which an occluder's contribution fades to zero.
+   * @param value - Depth gap in world units.
    */
   public set maxDistance(value: number) {
     this.writeLane(this._computeUniforms, 'uRange', 0, value);
@@ -504,10 +596,32 @@ export class SsaoEffect extends PostEffect {
     return (this._blurUniforms.uniforms.uBlur as Float32Array)[0];
   }
   /**
-   * Sets the blur kernel step
-   * @param value - Spacing between blur taps, in texels.
+   * Sets the spacing between blur taps
+   * @param value - Spacing in texels.
    */
   public set blurStep(value: number) {
     this.writeLane(this._blurUniforms, 'uBlur', 0, value);
+  }
+
+  /**
+   * Depths `[start, end]` across which the occlusion fades out, or `null` for none; see
+   * {@link SsaoEffectOptions#fadeDistance}
+   * @example
+   * ```ts
+   * ssao.fadeDistance = [40, 80];
+   * ```
+   */
+  public get fadeDistance(): [number, number] | null {
+    const range = this._computeUniforms.uniforms.uRange as Float32Array;
+
+    return range[3] > 0 ? [range[2], range[3]] : null;
+  }
+  /**
+   * Sets the depths across which the occlusion fades out
+   * @param value - `[start, end]` in world units, `end` above `start`, or `null` for no fade.
+   */
+  public set fadeDistance(value: [number, number] | null) {
+    this.writeLane(this._computeUniforms, 'uRange', 2, value?.[0] ?? 0);
+    this.writeLane(this._computeUniforms, 'uRange', 3, value?.[1] ?? 0);
   }
 }

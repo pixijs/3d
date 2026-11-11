@@ -1,6 +1,6 @@
 import type { TestScene } from '@test-utils';
 import { Container, Graphics, Text } from 'pixi.js';
-import type { Renderer, Texture } from 'pixi.js';
+import type { Texture } from 'pixi.js';
 
 import { ContainerTexture } from '~/core/textures/ContainerTexture';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
@@ -11,18 +11,14 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Regression for "the box is black after layer nine": mirrors the infinite-cubes recycling (RT reuse via
-// setContainer + fresh View3D per layer), now with a TRUE CUBE captured into a fixed square texture. Pushes
-// 11 layers and must render the nested cubes, not black.
-const T = 1024; // fixed square capture size, independent of the screen
+const T = 1024;
 const LIVE = 6;
 const REST = 5;
 
 export const scene: TestScene = {
-  // Deliberately non-square (16:9) to exercise the square-texture-on-a-wide-window cover/crop math.
   app: { backgroundColor: 0x05060c, width: 768, height: 432 },
   create: async (app) => {
-    const renderer = app.renderer as unknown as Renderer;
+    const renderer = app.renderer;
 
     interface Layer {
       container: Container;
@@ -41,7 +37,7 @@ export const scene: TestScene = {
         view.root.addChild(key);
       }
       const cube = new Mesh3D({
-        geometry: new CubeGeometry({ width: 2, height: 2, depth: 2 }), // a true cube
+        geometry: new CubeGeometry({ width: 2, height: 2, depth: 2 }),
         material,
         castShadow: false,
         receiveShadow: false,
@@ -61,7 +57,6 @@ export const scene: TestScene = {
       return { container, view, cube, capture: null };
     };
 
-    // COVER-fit the square to the larger screen dimension: fills the wide window, overscans (crops) the rest.
     const display = (layer: Layer): void => {
       const fit = Math.max(app.screen.width, app.screen.height) / T;
       layer.container.scale.set(fit);
@@ -79,7 +74,7 @@ export const scene: TestScene = {
 
     const push = (): void => {
       const inner = chain[chain.length - 1];
-      inner.container.scale.set(1); // reset to identity so the square captures 1:1
+      inner.container.scale.set(1);
       inner.container.position.set(0, 0);
 
       let tex = texturePool.pop();

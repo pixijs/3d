@@ -10,15 +10,6 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * `[tint, ssao]` — a two-effect chain: tint writes an intermediate transient,
- * SSAO's merge samples it (chain input) × its blurred AO and presents.
- *
- * Same AO corner as effect-ssao.scene.ts, warm-tinted; the AO must darken the
- * *tinted* image identically to how it darkens the untinted one — a chain
- * mis-order shows as AO missing or double-applied.
- */
-
 const SIZE = 200;
 
 export const scene: TestScene = {

@@ -6,15 +6,12 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Static snapshot of the morph-target example's "wave": several instances of
- * one `AnimatedMorphCube` source frozen at different points in the clip. Each
- * instance shares the geometry (one delta upload) but holds its own weights, so
- * a single frame shows three distinct morph states side by side — the
- * deterministic regression counterpart to the interactive example.
- */
+import { model } from '../../examples/assets/manifest';
+
+const MORPH_CUBE = model('gltf.AnimatedMorphCube');
+
 export const scene: TestScene = {
-  assets: ['AnimatedMorphCube.glb'],
+  assets: [MORPH_CUBE],
   app: {
     backgroundColor: 0x1e2024,
   },
@@ -22,7 +19,7 @@ export const scene: TestScene = {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
     app.stage.addChild(view3d);
 
-    const source = Assets.get<Scene3DSource>('AnimatedMorphCube.glb');
+    const source = Assets.get<Scene3DSource>(MORPH_CUBE);
     const phases = [0.0, 0.35, 0.7];
     const spacing = 2.6;
 

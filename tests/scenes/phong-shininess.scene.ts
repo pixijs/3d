@@ -7,9 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Three spheres, same base + specular, ascending shininess — the highlight
-// should tighten (and, being energy-normalized, brighten at its peak) left to
-// right.
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x14141a,

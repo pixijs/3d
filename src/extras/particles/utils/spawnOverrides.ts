@@ -6,11 +6,11 @@ import type { PointData4D } from '../../../math/vector/PointData4D';
 import type { ParticleDeclaredValues } from '../../../scene/particles/utils/particleValues';
 
 /**
- * A value handed to `spawn()` for a whole batch
+ * A `spawn()` override: one value for the whole batch, a pair each particle draws between, or a
+ * function called per particle
  *
- * One value every particle gets, a pair each particle draws between, or a
- * function called per particle with the system's random source and the slot
- * index. Pairs of points draw per component, so two corners make a box.
+ * The function gets the system's random source and the particle's place in the batch, 0 to
+ * `count - 1`. A pair of points draws each component on its own, so two corners make a box.
  * @example
  * ```ts
  * sparks.spawn(10, {
@@ -18,6 +18,7 @@ import type { ParticleDeclaredValues } from '../../../scene/particles/utils/part
  *   size: [0.1, 0.4],
  *   startRotation: (rng: () => number) => rng() * Math.PI * 2,
  * });
+ * sparks.spawn(8, { position: (_rng: () => number, i: number) => ringPoints[i] });
  * ```
  * @category extras:particles
  * @standard
@@ -25,7 +26,9 @@ import type { ParticleDeclaredValues } from '../../../scene/particles/utils/part
 export type ParticleSpawnValue<V> = V | readonly [V, V] | ((rng: () => number, index: number) => V);
 
 /**
- * The overrides every system accepts, whatever bits it composes
+ * The overrides `spawn()` takes for the system's own behaviour
+ *
+ * `spawn()` throws on an override the system wasn't built to take.
  * @example
  * ```ts
  * const impact: ParticleSpawnBuiltInOverrides = { position: hit.point, life: [0.2, 0.5], color: 'white' };
@@ -37,11 +40,10 @@ export type ParticleSpawnValue<V> = V | readonly [V, V] | ((rng: () => number, i
  */
 export interface ParticleSpawnBuiltInOverrides {
   /**
-   * Where to put this spawn
+   * Where this batch spawns, in place of the emitter's position
    *
-   * The point stands in for the emitter's transform: the shape adds its own
-   * offset around it, unrotated and unscaled. The direction still follows the
-   * emitter's rotation.
+   * In a world-space system, the shape's offsets are added unrotated and unscaled, while directions
+   * still follow the emitter's rotation.
    * @example
    * ```ts
    * dust.spawn(3, { position: { x: wheel.x, y: 0, z: wheel.z } });
@@ -73,7 +75,7 @@ export interface ParticleSpawnBuiltInOverrides {
    */
   size?: ParticleSpawnValue<number>;
   /**
-   * Starting spin angle about the view axis, in radians
+   * Starting spin angle in radians, turning the quad in its own plane
    * @example
    * ```ts
    * leaves.spawn(6, { startRotation: (rng: () => number) => rng() * Math.PI });
@@ -81,7 +83,7 @@ export interface ParticleSpawnBuiltInOverrides {
    */
   startRotation?: ParticleSpawnValue<number>;
   /**
-   * Starting tint. One per batch: a `ColorSource` can itself be an array, so a pair would be ambiguous
+   * Starting tint, one for the whole batch: it takes no pair or function
    * @example
    * ```ts
    * sparks.spawn(8, { color: 'red' });
@@ -96,16 +98,47 @@ export interface ParticleSpawnBuiltInOverrides {
    * ```
    */
   alpha?: ParticleSpawnValue<number>;
+  /**
+   * End-of-life size; only on a system built with `sizeEnd`
+   * @example
+   * ```ts
+   * puffs.spawn(4, { sizeEnd: [2, 3] });
+   * ```
+   */
+  sizeEnd?: ParticleSpawnValue<number>;
+  /**
+   * End-of-life opacity; only on a system built with `alphaEnd`
+   * @example
+   * ```ts
+   * smoke.spawn(4, { alphaEnd: 0.2 });
+   * ```
+   */
+  alphaEnd?: ParticleSpawnValue<number>;
+  /**
+   * Rotation rate in radians per second; only on a system built with `spin`
+   * @example
+   * ```ts
+   * debris.spawn(6, { spin: [-6, 6] });
+   * ```
+   */
+  spin?: ParticleSpawnValue<number>;
+  /**
+   * End-of-life tint, one for the whole batch; only on a system built with `colorEnd`
+   * @example
+   * ```ts
+   * embers.spawn(8, { colorEnd: 0x330000 });
+   * ```
+   */
+  colorEnd?: ColorSource;
 }
 
 /**
  * Per-spawn overrides for {@link ParticleSystem3D.spawn}
  *
- * Anything omitted comes from the system's options as usual. `position` and
- * `velocity` are in the system's own space: world-space unless the system was
- * built with `space: 'local'`. Any attribute the system's
- * `extraBits` declare is accepted under its own name, shaped by its format, and
- * typed exactly when the bit was declared with `satisfies ShaderBit`.
+ * Anything omitted comes from the system's options, or is zero for an attribute from `extraBits`.
+ * `position` and `velocity` are in world space unless the system was built with `space: 'local'`.
+ * An attribute the system's `extraBits` declare is accepted under its own name, shaped by its
+ * format, and type-checked when the bit was declared with `satisfies ShaderBit`.
  * @example
  * ```ts
  * const windBit = { name: 'wind', attributes: { aWind: 'float32x3' } } satisfies ShaderBit;
@@ -122,17 +155,17 @@ export type ParticleSpawnOverrides<B extends readonly ShaderBit[] = readonly Sha
   };
 
 /**
- * The attributes the system's own behaviour bits declare, on top of the
- * container's built-ins
+ * The system's own attributes, which {@link ParticleSystem3D.setParticle | setParticle} takes on top
+ * of the container's
  *
- * `aVel`, `aBirth` and `aLife` are always there. The rest exist only when the
- * option that composes their bit was given, so writing one the system did not
- * compose throws at runtime.
+ * `aVel`, `aBirth` and `aLife` are always there. The rest exist only on a system built with their
+ * option; on any other, `setParticle` throws on them. {@link ParticleSystem3D.spawn | spawn} takes
+ * most of them under their option names instead, such as `sizeEnd` for `aSizeEnd`.
  * @category extras:particles
  * @advanced
  */
 export interface ParticleSystemValues {
-  /** Launch velocity */
+  /** Launch velocity, in units per second */
   aVel?: PointData3D;
   /** Birth time on the system clock */
   aBirth?: number;
@@ -142,7 +175,7 @@ export interface ParticleSystemValues {
   aSizeEnd?: number;
   /** End-of-life opacity, with `alphaEnd` */
   aAlphaEnd?: number;
-  /** End-of-life tint as linear `{ x, y, z, w }`, with `colorEnd` */
+  /** End-of-life tint in display (sRGB) space, each component 0 to 1, with `colorEnd` */
   aColorEnd?: PointData4D;
   /** Rotation rate in radians per second, with `spin` */
   aSpin?: number;

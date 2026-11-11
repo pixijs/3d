@@ -2,17 +2,8 @@ import { BoneMatrixStruct } from '../../shader/bits/shaderStructs';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * Skeletal animation for WebGPU: blends up to four bone matrices per vertex from the view's bone
- * pit, `uBonePitStorage`, starting at the mesh's `renderable.bonePitIndex`
- *
- * A bone matrix is affine, so its fourth row is always `(0, 0, 0, 1)` and the pit stores only the
- * other three (`BoneMatrixStruct`): twelve floats instead of sixteen, and a quarter less work to
- * blend. A point then transforms with three dot products and keeps its `w` of 1. A normal or
- * tangent uses the rows' `xyz`, so the translation drops out. Normals take the rows as they are,
- * not their inverse transpose, so they skew under a bone with non-uniform scale.
- *
- * Runs in `vertexInput` after the position bit and the morph bit, so it skins the decoded,
- * morphed position. `skinningBitGl` is the WebGL twin.
+ * WebGPU twin of `skinningBitGl`; normals take the bone rows, not their inverse transpose, so they
+ * skew under a bone with non-uniform scale
  * @internal
  */
 export const skinningBitGpu: ShaderBit = {

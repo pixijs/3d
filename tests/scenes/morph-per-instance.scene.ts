@@ -7,12 +7,6 @@ import { View3D } from '~/scene/View3D';
 
 import { createMorphGrid } from './helpers/morphGrid';
 
-/**
- * Two meshes sharing one morphed geometry at different weights — the left mesh
- * shows only the peak target, the right only the ramp. Locks per-instance
- * weight correctness: distinct weights must not alias through the shared
- * geometry/delta buffer.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0xf4f1ea,

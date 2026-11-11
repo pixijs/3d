@@ -1,3 +1,4 @@
+import { RendererType } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import type { DataStoreBuffer } from '~/core/buffers/DataStoreBuffer';
@@ -6,47 +7,58 @@ import { MaterialDataStoreBuffer } from '~/core/buffers/MaterialDataStoreBuffer'
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
 
-/** Rows the store has handed out and not taken back */
-const liveRows = (store: DataStoreBuffer): number => {
+const liveRows = <T extends object>(store: DataStoreBuffer<T>): number => {
   const probe = store as unknown as { _count: number; _freeCount: number };
 
   return probe._count - probe._freeCount;
 };
 
+const ALIGNMENT = 256;
+
+const liveUnits = (store: MaterialDataStoreBuffer): number => {
+  const probe = store as unknown as { _end: number; _freePlaces: Map<number, number[]> };
+  let freed = 0;
+  for (const [length, places] of probe._freePlaces) freed += length * places.length;
+
+  return probe._end - freed;
+};
+
+const units = (material: Material3D): number => Math.ceil(material.data._f32.byteLength / ALIGNMENT);
+
 describe('store re-mint hands the old row back', () => {
-  it('a material registered by a second store frees its row on the first', () => {
-    const storeA = new MaterialDataStoreBuffer();
-    const storeB = new MaterialDataStoreBuffer();
+  it('a material registered by a second store frees its place on the first', () => {
+    const storeA = new MaterialDataStoreBuffer({ alignment: ALIGNMENT, rendererType: RendererType.WEBGPU });
+    const storeB = new MaterialDataStoreBuffer({ alignment: ALIGNMENT, rendererType: RendererType.WEBGPU });
     const material = new Material3D({ baseColor: 0x8899aa });
 
     storeA.register(material);
     storeA.update();
     expect(material._uploadQueue).toBe(storeA);
-    expect(liveRows(storeA)).toBe(1);
+    expect(liveUnits(storeA)).toBe(units(material));
 
     storeB.register(material);
     expect(material._uploadQueue).toBe(storeB);
-    expect(liveRows(storeA)).toBe(0);
-    expect(liveRows(storeB)).toBe(1);
+    expect(liveUnits(storeA)).toBe(0);
+    expect(liveUnits(storeB)).toBe(units(material));
     expect(material._materialIndex).toBeGreaterThanOrEqual(0);
 
     storeA.destroy();
     storeB.destroy();
   });
 
-  it('a store draining a material re-minted elsewhere mints it no row', () => {
-    const storeA = new MaterialDataStoreBuffer();
-    const storeB = new MaterialDataStoreBuffer();
+  it('a store draining a material re-minted elsewhere mints it no place', () => {
+    const storeA = new MaterialDataStoreBuffer({ alignment: ALIGNMENT, rendererType: RendererType.WEBGPU });
+    const storeB = new MaterialDataStoreBuffer({ alignment: ALIGNMENT, rendererType: RendererType.WEBGPU });
     const material = new Material3D({ baseColor: 0x8899aa });
 
     storeA.register(material);
     storeB.register(material);
-    expect(liveRows(storeA), "registered on B before A's drain").toBe(0);
+    expect(liveUnits(storeA), "registered on B before A's drain").toBe(0);
 
     storeA.update();
-    expect(liveRows(storeA)).toBe(0);
+    expect(liveUnits(storeA)).toBe(0);
     expect(material._uploadQueue).toBe(storeB);
-    expect(liveRows(storeB)).toBe(1);
+    expect(liveUnits(storeB)).toBe(units(material));
 
     expect(material._storeQueued, "A's drain leaves the entry for B to drain").toBe(true);
     storeB.update();

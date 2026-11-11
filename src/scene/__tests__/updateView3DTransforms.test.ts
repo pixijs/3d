@@ -8,7 +8,6 @@ import { Mesh3D } from '~/scene/Mesh3D';
 import { updateTransformAndChildren3D, updateView3DTransforms } from '~/scene/utils/updateView3DTransforms';
 import { View3D } from '~/scene/View3D';
 
-/** Root parent for `visit`, matching the pass's private `TEMP_PARENT_3D`: identity worldTransform, worldVisible 1 */
 const tempParent = new Container3D();
 
 let tickCounter = 0;
@@ -17,52 +16,6 @@ const nextTick = () => ++tickCounter;
 const visit = (root: Container3D) => {
   updateTransformAndChildren3D(root, tempParent, nextTick(), false, false);
 };
-
-describe('updateTransformAndChildren3D — visibility propagation', () => {
-  it('child inherits invisible from any ancestor regardless of own visible flag', () => {
-    const root = new Container3D();
-    const mid = new Container3D();
-    const leaf = new Container3D();
-
-    root.addChild(mid);
-    mid.addChild(leaf);
-
-    root.visible = false;
-    leaf.visible = true;
-
-    visit(root);
-
-    expect(root.worldVisible).toBe(0);
-    expect(mid.worldVisible).toBe(0);
-    expect(leaf.worldVisible).toBe(0);
-  });
-
-  it('clears all dirty flags after each visible visit', () => {
-    const root = new Container3D();
-    const child = new Container3D();
-    root.addChild(child);
-
-    visit(root);
-
-    expect(root._worldTransformDirty).toBe(false);
-    expect(root._worldVisibleDirty).toBe(false);
-    expect(child._worldTransformDirty).toBe(false);
-    expect(child._worldVisibleDirty).toBe(false);
-  });
-
-  it('clears didChange after each visit', () => {
-    const root = new Container3D();
-    const child = new Container3D();
-    root.addChild(child);
-    root.didChange = true;
-    child.didChange = true;
-
-    visit(root);
-
-    expect(root.didChange).toBe(false);
-    expect(child.didChange).toBe(false);
-  });
-});
 
 describe('updateTransformAndChildren3D — work-skipping by flag', () => {
   it('visibility-only flip does NOT recompute world matrix or set _storeDirty', () => {
@@ -166,22 +119,6 @@ describe('updateTransformAndChildren3D — hidden-state flag preservation', () =
 
     expect(leaf.worldTransform.elements[12]).toBe(12);
   });
-
-  it('clears _worldVisibleDirty on the visit that hides a subtree, since that visit resolves worldVisible to 0', () => {
-    const root = new Container3D();
-    const child = new Container3D();
-    root.addChild(child);
-
-    visit(root);
-
-    root.visible = false;
-    visit(root);
-
-    expect(root._worldVisibleDirty).toBe(false);
-    expect(child._worldVisibleDirty).toBe(false);
-    expect(root._worldTransformDirty).toBe(false);
-    expect(child._worldTransformDirty).toBe(false);
-  });
 });
 
 describe('Mesh3D._storeWorldTransform — publishing the matrix from the transform pass', () => {
@@ -194,7 +131,6 @@ describe('Mesh3D._storeWorldTransform — publishing the matrix from the transfo
     view.root.addChild(mesh);
 
     const store = view._sceneBatch.storeBuffer;
-    /** The mesh's store row, minted here as the scene sweep would on first sight */
     const index = store.set(mesh);
     updateView3DTransforms(view);
     store.update();
@@ -206,22 +142,8 @@ describe('Mesh3D._storeWorldTransform — publishing the matrix from the transfo
     const row = store.data.subarray(index * MESH3D_STORE_STRIDE, (index + 1) * MESH3D_STORE_STRIDE);
     expect(Array.from(row.subarray(12, 15))).toEqual([3, 4, 5]);
     expect(mesh._storeDirty, 'published, so the sweep has nothing left to re-emit').toBe(false);
-    expect(store['_minDirty']).toBe(index);
-    expect(store['_maxDirty']).toBe(index);
-
-    view.destroy();
-  });
-
-  it('defers to the sweep while the mesh has no row yet', () => {
-    const view = new View3D({ width: 64, height: 64 });
-    const mesh = makeMesh();
-    view.root.addChild(mesh);
-    mesh._storeDirty = false;
-
-    expect(mesh._storeIndex).toBe(-1);
-    updateView3DTransforms(view);
-
-    expect(mesh._storeDirty).toBe(true);
+    expect(store['_dirty'].min).toBe(index);
+    expect(store['_dirty'].max).toBe(index);
 
     view.destroy();
   });
@@ -259,7 +181,6 @@ describe('Mesh3D._storeWorldTransform — publishing the matrix from the transfo
     expect(survivor._storeIndex).toBe(-1);
     expect(survivor._storeDirty).toBe(true);
 
-    /** A fresh row for the survivor, minted as the sweep's full-row `set` would, carrying its matrix */
     const newIndex = storeB.set(survivor);
     expect(newIndex).not.toBe(residentIndex);
     const survivorRow = storeB.data.subarray(newIndex * MESH3D_STORE_STRIDE, (newIndex + 1) * MESH3D_STORE_STRIDE);

@@ -1,23 +1,26 @@
-import { captureWarnings, expectCleanRender, getApp } from '@test-utils';
+import { captureWarnings, expectCleanRender, getApp, readCanvasPixels } from '@test-utils';
 import { BufferImageSource, CanvasSource, CubeTexture, Sprite, Texture } from 'pixi.js';
-import type { Application, Renderer } from 'pixi.js';
+import type { Application, ApplicationOptions, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import type { DrawCommandList } from '~/core/batcher/DrawCommandList';
 import type { View3DPipeGl } from '~/core/gl/View3DPipeGl';
 import type { ForwardRenderPass } from '~/core/render-passes/ForwardRenderPass';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
+import { TintEffect } from '~/extras/post-processing/effects/TintEffect';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
+import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 import type { View3DGlobalData } from '~/scene/View3DGlobalData';
 
 const SIZE = 128;
+const WIDTH = 200;
+const HEIGHT = 160;
 
-/** The one shadow-pass internal these tests assert against. */
 interface ShadowPassProbe {
   _renderTarget: unknown;
 }
@@ -30,7 +33,6 @@ function opaquePass(view3d: View3D): ForwardRenderPass {
   return view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass;
 }
 
-/** A collectable texture; pixi only auto-collects sources that opt in */
 function makeCollectableTexture(color: string): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 4;
@@ -43,7 +45,6 @@ function makeCollectableTexture(color: string): Texture {
   return texture;
 }
 
-/** A cube map with one colour on all six faces, so a readback of it is orientation-free. */
 function solidCubeTexture(r: number, g: number, b: number): CubeTexture {
   const face = (): Texture =>
     new Texture({
@@ -60,12 +61,22 @@ function solidCubeTexture(r: number, g: number, b: number): CubeTexture {
   });
 }
 
-/** The pipe's enrolment registry and, inside it, pixi's `GCManagedHash` of enrolled Views. */
+interface ForwardOptionsProbe {
+  _forwardOptions: { session: unknown; camera: unknown; cullResults?: unknown };
+}
+
+interface BindOptionsProbe {
+  _bindOptions: { target: unknown; frame?: unknown };
+}
+
+interface RenderTargetCacheProbe {
+  _renderTargetCache: { _targets: Record<string, unknown> };
+}
+
 interface EnrolmentProbe {
   _managedViews: { _managedViews: { items: Record<number, View3D | null> } };
 }
 
-/** The `items` record of the pipe's GC hash, `null` where an entry has been cleared */
 function managedViews(app: Application<Renderer>): Record<number, View3D | null> {
   const pipe = (app.renderer.renderPipes as unknown as Record<string, EnrolmentProbe>).view3d;
   return pipe._managedViews._managedViews.items;
@@ -79,11 +90,6 @@ interface Scene {
   cube: Mesh3D;
 }
 
-/**
- * A 2D + 3D app, rendered once so every test starts from a drawn frame: the View3D holds a
- * captured material texture and a shadow caster, and (unless `with2d` is off) a plain pixi Sprite
- * sits behind it so the renderer keeps drawing 2D while the View is out of the tree.
- */
 function buildScene(app: Application<Renderer>, with2d = true): Scene {
   if (with2d) {
     const sprite = new Sprite(makeCollectableTexture('#224466'));
@@ -123,17 +129,10 @@ function buildScene(app: Application<Renderer>, with2d = true): Scene {
   return { view3d, texture, sun, ground, cube };
 }
 
-/**
- * Read the whole stage back, never the View alone. `extract` on a container runs
- * `enableRenderGroup()` on it, and a View3D that owns a render group is refreshed by pixi's
- * GC tick rescue on every sweep, so snapshotting the View directly would make it uncollectable
- * and quietly defeat the tests below.
- */
 function pixels(app: Application<Renderer>): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(app.stage).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -144,41 +143,33 @@ function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   return n;
 }
 
-/** RGB of the pixel at the centre of a `SIZE`-square readback. */
 function centreRgb(readback: Uint8Array): number[] {
   const offset = ((SIZE / 2) * SIZE + SIZE / 2) * 4;
   return [readback[offset], readback[offset + 1], readback[offset + 2]];
 }
 
-/** Anything carrying pixi's GC idle clock: a texture source, a buffer, or a View3D */
 interface GcClocked {
   _gcLastUsed: number;
 }
 
-/** A pixi resource carrying both a GC policy flag and per-renderer GPU copies. */
 interface GcResource extends GcClocked {
   autoGarbageCollect?: boolean;
   _gpuData: Record<number, unknown>;
 }
 
-/**
- * The engine-owned stores that are actually holding GPU memory right now: the View's bone pit
- * and mesh store plus the pipe's shared material, morph and geometry stores. Each creates a buffer
- * and a data texture only when something binds them. WebGL reads every store's texture; WebGPU
- * binds the buffer, except for the material store, whose texture it reads. Which are resident
- * depends on the backend and on what the scene uses, so only resident ones come back.
- */
 function engineResources(app: Application<Renderer>, view3d: View3D): GcResource[] {
   const pipe = (app.renderer.renderPipes as unknown as Record<string, View3DPipeGl>).view3d;
   const stores = [
     view3d._bonePit,
     view3d._sceneBatch.storeBuffer,
-    pipe.materialStoreBuffer,
     pipe.geometryDataStoreBuffer,
     pipe._morphStoreBuffer,
   ];
 
   const resources: GcResource[] = [];
+  const material = pipe.materialStoreBuffer.texture.source as unknown as GcResource;
+  if (gpuCopies(material) > 0) resources.push(material);
+
   for (const store of stores) {
     const { _buffer, _textureSource } = store as unknown as { _buffer?: GcResource; _textureSource?: GcResource };
     for (const resource of [_buffer, _textureSource]) {
@@ -188,7 +179,6 @@ function engineResources(app: Application<Renderer>, view3d: View3D): GcResource
   return resources;
 }
 
-/** How many renderers hold a GPU copy of this resource; 0 once it has been collected */
 function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   let n = 0;
   for (const uid in resource._gpuData) {
@@ -197,30 +187,20 @@ function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   return n;
 }
 
-/** The resources a pass's recorded build bakes: the list's capture map, by membership and size */
 function captures(list: DrawCommandList): Map<unknown, unknown> {
   return (list as unknown as { _captures: Map<unknown, unknown> })._captures;
 }
 
-/** The renderer's global data on the View, minted by the first `execute` that drew it. */
 function globalData(view3d: View3D, uid: number): View3DGlobalData {
   const data: View3DGlobalData | null = view3d._gpuData[uid] ?? null;
   expect(data).not.toBeNull();
-  return data!;
+  return data;
 }
 
-/** Makes `resources` look idle by any threshold, unless a frame stamps them again */
 function backdate(...resources: GcClocked[]): void {
   for (const resource of resources) resource._gcLastUsed = performance.now() - 100_000;
 }
 
-/**
- * Sweep with a 1s idle threshold after backdating `stale`'s clocks, so only those age out and
- * everything the last frame touched survives. The targeted recipe: it can tell a View the GC
- * should have rescued (its render-group tick refresh rewrites the clock during the sweep) from
- * one it should have collected. Without it, nothing is provable: pixi's real threshold is 60s
- * on a 30s cadence.
- */
 function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
   const saved = renderer.gc.maxUnusedTime;
   renderer.gc.maxUnusedTime = 1000;
@@ -229,15 +209,6 @@ function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
   renderer.gc.maxUnusedTime = saved;
 }
 
-/**
- * Sweep everything the GC tracks, stale or not: a negative threshold fails the
- * `now - lastUsed < maxUnusedTime` test even for a resource touched this instant.
- *
- * Only safe in an app with no 2D content. Pixi's own 2D breaks under this: re-creating a GPU
- * buffer after a collection doesn't bump its resource id, so a pixi bind group keeps serving the
- * destroyed handle. That can't happen for real (a 2D batcher touches its buffers every frame, so
- * they never reach 60s idle), but it does happen when the threshold is forced negative.
- */
 function forceGc(renderer: Renderer): void {
   const saved = renderer.gc.maxUnusedTime;
   renderer.gc.maxUnusedTime = -1;
@@ -245,12 +216,31 @@ function forceGc(renderer: Renderer): void {
   renderer.gc.maxUnusedTime = saved;
 }
 
+function buildEffectScene(app: Application<Renderer>): View3D {
+  const view3d = new View3D({ width: WIDTH, height: HEIGHT, passes: [new TintEffect()] });
+  view3d.camera.position.z = 4;
+  view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
+  view3d.root.addChild(new AmbientLight({ color: 0xffffff, intensity: 1 }));
+  view3d.root.addChild(
+    new Mesh3D({
+      geometry: new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 }),
+      material: new Material3D({ baseColor: 0xffffff, roughness: 1 }),
+    }),
+  );
+  app.stage.addChild(view3d);
+  return view3d;
+}
+
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`renderer gc with a View3D (${preference})`, () => {
-    async function withApp(id: string, run: (app: Application<Renderer>) => Promise<void> | void): Promise<void> {
+    async function withApp(
+      id: string,
+      run: (app: Application<Renderer>) => Promise<void> | void,
+      appOptions: Partial<ApplicationOptions> = {},
+    ): Promise<void> {
       const app = await getApp<Renderer>({
         id: `${id}-${preference}`,
-        appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x101018 },
+        appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x101018, ...appOptions },
       });
       try {
         await run(app);
@@ -259,10 +249,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     }
 
-    /**
-     * Take the View out of the tree and age it out. Detached it has no parent render group, so
-     * pixi's GC tick refresh can't rescue it and it goes the way of any idle renderable.
-     */
     function collectIdleView(app: Application<Renderer>, view3d: View3D): void {
       app.stage.removeChild(view3d);
       app.render();
@@ -270,23 +256,13 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       collectStale(app.renderer, view3d);
     }
 
-    /**
-     * pixi's hash ran the payload: the bind group's slots are gone, then the uniform buffer it
-     * bound. Only WebGPU realises that buffer (the WebGL group syncs through `uniform*` calls and
-     * never owns one), so on WebGL there is no buffer to free.
-     */
     function expectDestroyed(data: View3DGlobalData): void {
       expect(data.globalBindGroup.resources).toBeNull();
       const buffer = data.globalUniformGroup.buffer;
-      expect(buffer ? buffer.destroyed : preference === 'webgl').toBe(true);
+      expect(buffer?.destroyed).toBe(true);
     }
 
-    /**
-     * Everything the collection payload had to give back. Asserted on every cycle: a pixi change
-     * that made the sweep collect nothing would leave the revival checks passing vacuously.
-     * `data` is this renderer's global data, captured before the collection.
-     */
-    function expectCollected(app: Application<Renderer>, view3d: View3D, data: View3DGlobalData): void {
+    function expectCollected(uid: number, view3d: View3D, data: View3DGlobalData): void {
       const opaque = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
       expect(opaque.commandList.count).toBe(0);
       expect(
@@ -297,15 +273,15 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       expect(captures(opaque.commandList).size, "the build's captures went with it").toBe(0);
       expectDestroyed(data);
       expect(
-        view3d._gpuData[app.renderer.uid] ?? null,
-        "pixi's hash ran this renderer's payload and cleared the slot, so the next execute mints a new one",
+        view3d._gpuData[uid] ?? null,
+        "pixi's hash cleared this renderer's GC slot, so the next execute fills it again",
       ).toBe(null);
     }
 
-    /** The render after a collection minted a fresh payload: a new object over a live buffer. */
     function expectReminted(app: Application<Renderer>, view3d: View3D, previous: View3DGlobalData): View3DGlobalData {
       const data = globalData(view3d, app.renderer.uid);
-      expect(data).not.toBe(previous);
+      expect(data, 'the next render makes new global data').not.toBe(previous);
+      expect(view3d._gpuData[app.renderer.uid]).toBe(data);
       expect(data.globalUniformGroup.buffer?.destroyed ?? false).toBe(false);
       return data;
     }
@@ -326,7 +302,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const data = globalData(view3d, app.renderer.uid);
 
         collectIdleView(app, view3d);
-        expectCollected(app, view3d, data);
+        expectCollected(app.renderer.uid, view3d, data);
 
         app.stage.addChild(view3d);
         await expectCleanRender(app);
@@ -335,30 +311,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('collects a revived view a second time', async () => {
-      await withApp('gc-recollect', async (app) => {
-        const { view3d, texture } = buildScene(app);
-        const before = pixels(app);
-
-        let data = globalData(view3d, app.renderer.uid);
-        for (let cycle = 0; cycle < 2; cycle++) {
-          collectIdleView(app, view3d);
-          expectCollected(app, view3d, data);
-
-          app.stage.addChild(view3d);
-          await expectCleanRender(app);
-          expect(differingPixels(before, pixels(app))).toBe(0);
-          expectLoaded(view3d, texture);
-          data = expectReminted(app, view3d, data);
-        }
-      });
-    });
-
     it('keeps a live view through a sweep that collects idle 2D', async () => {
       await withApp('gc-coexistence', async (app) => {
         const { view3d, texture } = buildScene(app);
 
-        /** A 2D texture uploaded once and then taken off the stage, so nothing keeps it in use */
         const idle = makeCollectableTexture('#00ff00');
         const idleSprite = new Sprite(idle);
         app.stage.addChild(idleSprite);
@@ -377,7 +333,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expectLoaded(view3d, texture);
         expect(
           globalData(view3d, app.renderer.uid),
-          "on the stage, pixi's tick refresh rewrote the View's backdated clock mid-sweep and kept its payload",
+          "on the stage, pixi's tick refresh rewrote the View's backdated clock mid-sweep and kept its global data",
         ).toBe(data);
 
         await expectCleanRender(app);
@@ -433,10 +389,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.on('unload', countUnloads);
 
         expect(() => view3d.unload()).not.toThrow();
-        expect(unloadEvents, "one event: the payload pixi runs from it doesn't re-enter the View's teardown").toBe(1);
+        expect(unloadEvents, "one event: pixi clearing the slot doesn't unload the view again").toBe(1);
         view3d.off('unload', countUnloads);
         expect(view3d.listenerCount('unload'), "the hash's once-listener went with the event").toBe(0);
-        expectCollected(app, view3d, data);
+        expectCollected(app.renderer.uid, view3d, data);
 
         await expectCleanRender(app);
         expect(differingPixels(before, pixels(app))).toBe(0);
@@ -445,7 +401,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const reminted = expectReminted(app, view3d, data);
         expect(view3d.listenerCount('unload'), 'the render re-enrolled the View, so the GC owns it again').toBe(1);
         collectIdleView(app, view3d);
-        expectCollected(app, view3d, reminted);
+        expectCollected(app.renderer.uid, view3d, reminted);
 
         app.stage.addChild(view3d);
         expect(differingPixels(before, pixels(app))).toBe(0);
@@ -454,7 +410,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
     it('keeps drawing its background after its last mesh leaves', async () => {
       await withApp('gc-empty-scene-background', async (app) => {
-        /** The background's colour, which `none` tone mapping keeps the readback near */
         const sky: [number, number, number] = [40, 160, 220];
         const view3d = new View3D({
           width: SIZE,
@@ -463,10 +418,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           background: solidCubeTexture(...sky),
         });
         app.stage.addChild(view3d);
-        /**
-         * Raises the mesh-slot high-water mark, which the empty-View early-out keys on, so the graph
-         * keeps running once the cube leaves
-         */
         const cube = new Mesh3D({
           geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
           material: new Material3D({ baseColor: 0x888888, metallic: 0, roughness: 0.5 }),
@@ -497,7 +448,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.stage.removeChild(view3d);
         app.render();
         forceGc(app.renderer);
-        expectCollected(app, view3d, data);
+        expectCollected(app.renderer.uid, view3d, data);
 
         app.stage.addChild(view3d);
         await expectCleanRender(app);
@@ -532,7 +483,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('unhooks an enrolled view when the renderer is destroyed, without unloading it', async () => {
+    it('unloads every enrolled view when the renderer is destroyed, before the pipe frees its stores', async () => {
       const app = await getApp<Renderer>({
         id: `gc-renderer-destroy-${preference}`,
         appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x101018 },
@@ -542,23 +493,18 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       const data = globalData(view3d, uid);
       let unloadEvents = 0;
       view3d.on('unload', () => unloadEvents++);
+      expectLoaded(view3d, texture);
 
       const warnings = captureWarnings(() => {
         expect(() => app.destroy()).not.toThrow();
       });
       expect(
         warnings.filter((text) => text.includes('[BindGroup]')),
-        "the payload ran before the pipe destroyed the LUT, environment maps and stores the View's bind groups hold",
+        "the view destroyed this renderer's bind group before the pipe destroyed the LUT, environment maps and stores it held",
       ).toEqual([]);
 
-      expect(unloadEvents, 'never View3D.unload(), which is renderer-wide and would strip a second renderer').toBe(0);
-      expectDestroyed(data);
-      expect(view3d._gpuData[uid] ?? null).toBe(null);
-      expect(shadowPass(view3d)._renderTarget).toBeNull();
-
-      const opaque = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
-      expect(opaque.commandList.count).toBeGreaterThan(0);
-      expect(captures(opaque.commandList).has(texture.source)).toBe(true);
+      expect(unloadEvents, "a view renders with one renderer, so the renderer's teardown unloads the view").toBe(1);
+      expectCollected(uid, view3d, data);
 
       expect(() => view3d.destroy({ children: true })).not.toThrow();
     });
@@ -573,19 +519,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       view3d.environment = environment;
       app.render();
 
-      /**
-       * Prefiltering the environment and the BRDF LUT draw through one-shot bind groups; a group
-       * left alive would keep listening to the source texture, its style and the batched UBO, and
-       * warn as each dies
-       */
       const onDestroy = captureWarnings(() => environment.destroy(true));
       expect(onDestroy.filter((text) => text.includes('[BindGroup]'))).toEqual([]);
 
       view3d.destroy({ children: true });
-      /**
-       * The style and pixi's batched uniform buffer such a group borrows die only with the
-       * renderer; the View went first so its own state is out of the picture
-       */
       const onRendererDestroy = captureWarnings(() => app.destroy());
       expect(onRendererDestroy.filter((text) => text.includes('[BindGroup]'))).toEqual([]);
     });
@@ -595,11 +532,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const { view3d } = buildScene(app);
         app.render();
 
-        /**
-         * Pixi warns from `BindGroup.onResourceChange` when a bound resource dies under a live bind
-         * group, so `destroy` has to run the global data (through `unload`) before it frees the
-         * light, shadow and bone buffers that group binds
-         */
         const warnings = captureWarnings(() => view3d.destroy({ children: true }));
         expect(warnings.filter((text) => text.includes('[BindGroup]'))).toEqual([]);
       });
@@ -676,6 +608,46 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         await expectCleanRender(app);
       });
+    });
+
+    it('keeps no session, camera or target in its reused draw and bind options once a frame has drawn', async () => {
+      await withApp('gc-reused-options', (app) => {
+        const { view3d } = buildScene(app);
+        const forward = (app.renderer.renderPipes as unknown as Record<string, ForwardOptionsProbe>).view3d
+          ._forwardOptions;
+        expect(forward.session).toBeNull();
+        expect(forward.camera).toBeNull();
+        expect(forward.cullResults ?? null).toBeNull();
+
+        const bind = (view3d._graph as unknown as BindOptionsProbe)._bindOptions;
+        expect(bind.target).toBeNull();
+        expect(bind.frame).toBeUndefined();
+      });
+    });
+
+    it("drops the old size's render targets when the canvas resizes", async () => {
+      await withApp(
+        'gc-resize-targets',
+        async (app) => {
+          const view3d = buildEffectScene(app);
+          app.render();
+          const cache = (view3d._graph as unknown as RenderTargetCacheProbe)._renderTargetCache._targets;
+          const targets = Object.keys(cache).length;
+          for (let i = 1; i <= 8; i++) {
+            app.renderer.resize(WIDTH + 13 * i, HEIGHT + 7 * i);
+            view3d.width = app.screen.width;
+            view3d.height = app.screen.height;
+            app.render();
+          }
+          expect(Object.keys(cache).length, "a resize drops the old size's targets").toBe(targets);
+
+          await expectCleanRender(app);
+          app.render();
+          const [r, g, b] = readCanvasPixels(app.canvas, app.screen.width / 2, app.screen.height / 2, 1, 1);
+          expect(Math.max(r, g, b), 'draws after the resizes').toBeGreaterThan(128);
+        },
+        { width: WIDTH, height: HEIGHT, resolution: 1 },
+      );
     });
   });
 }

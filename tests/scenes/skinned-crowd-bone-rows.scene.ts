@@ -15,12 +15,6 @@ const COLUMNS = 8;
 const ROWS = 6;
 const SPACING = 1.4;
 
-/**
- * 48 skinned foxes (24 joints each, 1,152 bones) in one View3D: more than one 4,096-texel row of
- * the WebGL bone data texture. The bone pit starts under a row and doubles as the foxes are
- * added, so this exercises the growth path that has to keep the array covering whole rows. When
- * it doesn't, every bone upload fails and the foxes collapse to nothing.
- */
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },

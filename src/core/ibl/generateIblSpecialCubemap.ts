@@ -2,87 +2,53 @@ import { BindGroup, CubeTexture, RenderTarget, State, TextureSource, UniformGrou
 import type { CubeTextureSource, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
 import { fullscreenTriangleGeometry } from '../fullscreenTriangleGeometry';
+import { decodeToLinearBit, isLinearFormat } from '../shader/bits/decodeToLinearBit';
 import { iblSamplingFuncsBit } from '../shader/bits/iblSamplingFuncsBit';
 import type { ShaderBit } from '../shader/ShaderBit';
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
+import { assertFloatRenderable, floatRgbFormat } from '../textures/floatRenderTargets';
 
-/**
- * Storage format for the prefiltered cube
- *
- * With an environment set, every lit fragment samples the cube, so its bytes per texel set the IBL
- * bandwidth.
- * - `rgb10a2unorm`, 4 bytes: 10-bit linear, which keeps dark gradients free of the banding 8 bits
- *   would show. WebGPU and WebGL 2 both render to it and filter it with no extension. The
- *   default, since the prefilter of an 8-bit source stays within [0, 1].
- * - `rg11b10ufloat`, 4 bytes: compact linear HDR with no alpha. WebGPU needs the
- *   `rg11b10ufloat-renderable` feature and WebGL 2 needs `EXT_color_buffer_float`.
- * - `rgba16float`, 8 bytes: HDR that WebGPU renders to with no feature; WebGL 2 needs
- *   `EXT_color_buffer_float`.
- * @internal
- */
-type IblCubemapFormat = 'rgb10a2unorm' | 'rg11b10ufloat' | 'rgba16float';
-
-/**
- * Options for `generateIblSpecialCubemap`
- * @internal
- */
 interface GenerateIblSpecialCubemapOptions {
-  /** The renderer to generate with */
   renderer: WebGPURenderer | WebGLRenderer;
-  /** The environment cubemap to prefilter */
   sourceTexture: CubeTexture;
-  /** Output cubemap size (width/height per face). Default: 256 */
   size?: number;
-  /** Number of Monte Carlo samples per pixel (higher = less noise, slower). Default: 1024 */
   sampleCount?: number;
-  /**
-   * Mip levels, one per roughness step
-   *
-   * Default `floor(log2(size)) - 3`, at least 1, which ends the chain at 16 × 16: five mips for
-   * a 256 cube.
-   */
   mipLevelCount?: number;
-  /**
-   * Cube storage format, `'rgb10a2unorm'` by default
-   *
-   * The caller checks that the device can render to a float format before passing one;
-   * `IblCubemapFormat` lists what each needs.
-   */
-  format?: IblCubemapFormat;
-  /** Texture label for debugging. Default: "ibl-specular" */
   label?: string;
 }
 
 /**
- * Prefilters an environment cubemap into the roughness-mipped specular cube IBL samples from
+ * Largest value every `rg11b10ufloat` channel holds; this prefilter and `equirectToCube.ts` cap radiance at it,
+ * so no texel becomes infinity
+ * @internal
+ */
+export const RG11B10_MAX = 64512;
+
+/** The source's mip count once uploaded, since pixi raises it for `autoGenerateMipmaps` only at upload */
+function sourceMipLevelCount(source: CubeTextureSource): number {
+  return source.autoGenerateMipmaps
+    ? Math.floor(Math.log2(Math.max(source.pixelWidth, source.pixelHeight))) + 1
+    : source.mipLevelCount;
+}
+
+/**
+ * Prefilters an environment cube into the specular cube IBL reads, restoring the bind as `generateBrdfLut` does
  *
- * Each mip holds one roughness step, from a mirror at mip 0 to fully rough at the last mip,
- * stored as linear radiance. Following Karis's split-sum prefilter, the shader takes the normal,
- * view and reflection directions to be the same, importance-samples GGX around that direction,
- * and weights each sample by `NdotL`. Mip 0 copies the source without filtering. Source texels
- * are decoded with a 2.2 gamma, so the average runs in linear light. Each sample reads source
- * mip `roughness * 4`, which only blurs further when the source has mips. The sum is divided
- * by at least 1e-4, because a NaN from 0 / 0 would stay in the mip for the texture's lifetime.
- *
- * The vertex stage turns the face index, in cube layer order +X, -X, +Y, -Y, +Z, -Z, and the clip
- * position into a direction. It stays unnormalised so it interpolates exactly, and the fragment
- * stage normalises it. Texture row 0 sits at clip y = +1 on WebGPU and at y = -1 on WebGL, so
- * the WGSL face mapping negates y and the GLSL one doesn't.
- *
- * Runs synchronously, restoring the caller's binding the way `generateBrdfLut` does.
- * @param options - Renderer and source cube plus size/samples/mips/format/label overrides.
- * @returns The prefiltered specular cubemap.
+ * Writes `floatRgbFormat`, since every lit fragment samples the cube and 4 bytes a texel halve `rgba16float`'s
+ * bandwidth. Floors the weight sum at 1e-4, as a 0 / 0 NaN would stay in the mip. Only the WGSL face mapping
+ * negates y, as WebGPU puts texture row 0 at clip y = +1.
+ * @throws On WebGL 2 without `EXT_color_buffer_float`.
  * @internal
  */
 export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOptions): CubeTexture {
   const { renderer, sourceTexture } = options;
 
-  const size = options.size ?? 256;
+  const size = options.size ?? Math.min(256, Math.max(128, sourceTexture.source.pixelWidth));
   const sampleCount = options.sampleCount ?? 1024;
   const label = options.label ?? 'ibl-specular';
-  const format = options.format ?? 'rgb10a2unorm';
-
-  const mipLevelCount = options.mipLevelCount ?? Math.max(1, Math.floor(Math.log2(size)) - 3);
+  assertFloatRenderable(renderer, 'View3D environment, for the cube a cubemap environment is prefiltered into');
+  const format = floatRgbFormat(renderer);
+  const mipLevelCount = options.mipLevelCount ?? 5;
 
   const gpuTemplate = /* wgsl */ `
      {{header}}
@@ -105,6 +71,14 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
         return dir;
      }
 
+     fn sourceLod(NdotH: f32, roughness: f32, solidAnglePerTexel: f32) -> f32 {
+        let a2 = roughness * roughness * roughness * roughness;
+        let d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+        let pdf = a2 / (PI * d * d) * 0.25;
+        let solidAnglePerSample = 1.0 / (local.sampleCount * pdf + 1e-4);
+        return clamp(0.5 * log2(solidAnglePerSample / solidAnglePerTexel) + 1.0, 0.0, local.sourceMaxMip);
+     }
+
      @vertex
      fn mainVertex(input: VertexInput) -> VertexOutput {
        var output: VertexOutput;
@@ -124,13 +98,14 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
         
         if roughness < 0.01 {
             let s = textureSampleLevel(uSourceTexture, uSampler, N, 0.0).rgb;
-            return vec4<f32>(pow(s, vec3<f32>(2.2)), 1.0);
+            return vec4<f32>(min(decodeToLinear(s), vec3<f32>(${RG11B10_MAX}.0)), 1.0);
         }
         
         var prefilteredColor = vec3<f32>(0.0);
         var totalWeight = 0.0;
         
         let sampleCount = u32(local.sampleCount);
+        let solidAnglePerTexel = 4.0 * PI / (6.0 * local.sourceSize * local.sourceSize);
         
         for (var i = 0u; i < sampleCount; i++) {
             let Xi = hammersley(i, sampleCount);
@@ -138,10 +113,8 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
             let L = normalize(2.0 * dot(V, H) * H - V);
             
             let NdotL = max(dot(N, L), 0.0);
-            
-            let mipBias = roughness * 4.0;
-            let encoded = textureSampleLevel(uSourceTexture, uSampler, L, mipBias).rgb;
-            let sampleColor = pow(encoded, vec3<f32>(2.2));
+            let lod = sourceLod(dot(N, H), roughness, solidAnglePerTexel);
+            let sampleColor = decodeToLinear(textureSampleLevel(uSourceTexture, uSampler, L, lod).rgb);
             
             let weight = NdotL * step(0.0001, NdotL);
             prefilteredColor += sampleColor * weight;
@@ -150,7 +123,7 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
         
         prefilteredColor = prefilteredColor / max(totalWeight, 1e-4);
         
-        return vec4<f32>(prefilteredColor, 1.0);
+        return vec4<f32>(min(prefilteredColor, vec3<f32>(${RG11B10_MAX}.0)), 1.0);
      }
   `;
 
@@ -186,6 +159,14 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
 
         out vec4 fragColor;
 
+        float sourceLod(float NdotH, float roughness, float solidAnglePerTexel) {
+            float a2 = roughness * roughness * roughness * roughness;
+            float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+            float pdf = a2 / (PI * d * d) * 0.25;
+            float solidAnglePerSample = 1.0 / (sampleCount * pdf + 1e-4);
+            return clamp(0.5 * log2(solidAnglePerSample / solidAnglePerTexel) + 1.0, 0.0, sourceMaxMip);
+        }
+
         void main() {
             vec3 N = normalize(vDir);
             vec3 R = N;
@@ -196,7 +177,7 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
             
             if (roughness < 0.01) {
                 vec3 s = textureLod(uSourceTexture, N, 0.0).rgb;
-                fragColor = vec4(pow(s, vec3(2.2)), 1.0);
+                fragColor = vec4(min(decodeToLinear(s), vec3(${RG11B10_MAX}.0)), 1.0);
                 return;
             }
             
@@ -204,6 +185,7 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
             float totalWeight = 0.0;
             
             uint sampleCountUint = uint(sampleCount);
+            float solidAnglePerTexel = 4.0 * PI / (6.0 * sourceSize * sourceSize);
             
             for (uint i = 0u; i < sampleCountUint; i++) {
                 vec2 Xi = hammersley(i, sampleCountUint);
@@ -211,10 +193,8 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
                 vec3 L = normalize(2.0 * dot(V, H) * H - V);
                 
                 float NdotL = max(dot(N, L), 0.0);
-                float mipBias = roughness * 4.0;
-
-                vec3 encoded = textureLod(uSourceTexture, L, mipBias).rgb;
-                vec3 sampleColor = pow(encoded, vec3(2.2));
+                float lod = sourceLod(dot(N, H), roughness, solidAnglePerTexel);
+                vec3 sampleColor = decodeToLinear(textureLod(uSourceTexture, L, lod).rgb);
                 
                 float weight = NdotL * step(0.0001, NdotL);
                 prefilteredColor += sampleColor * weight;
@@ -222,7 +202,7 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
             }
             
             prefilteredColor = prefilteredColor / max(totalWeight, 1e-4);
-            fragColor = vec4(prefilteredColor, 1.0);
+            fragColor = vec4(min(prefilteredColor, vec3(${RG11B10_MAX}.0)), 1.0);
         }
       `,
   };
@@ -235,6 +215,7 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
 
   const localBit: ShaderBit = {
     name: 'iblPrefilter',
+    requires: [iblSamplingFuncsBit, decodeToLinearBit(!isLinearFormat(sourceTexture.source.format))],
     attributes: {
       aPosition: 'float32x2',
     },
@@ -249,6 +230,8 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
         mipLevel: 'f32',
         mipLevelCount: 'f32',
         sampleCount: 'f32',
+        sourceSize: 'f32',
+        sourceMaxMip: 'f32',
       },
     },
   };
@@ -257,7 +240,6 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
     label,
     width: size,
     height: size,
-    dimensions: '2d',
     viewDimension: 'cube',
     arrayLayerCount: 6,
     mipLevelCount,
@@ -269,15 +251,17 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
     mipLevel: { value: 0, type: 'f32' },
     mipLevelCount: { value: mipLevelCount, type: 'f32' },
     sampleCount: { value: sampleCount, type: 'f32' },
+    sourceSize: { value: sourceTexture.source.pixelWidth, type: 'f32' },
+    sourceMaxMip: { value: sourceMipLevelCount(sourceTexture.source) - 1, type: 'f32' },
   });
 
   const localBindGroup = new BindGroup({
-    0: localUniforms,
-    1: sourceTexture.source,
-    2: sourceTexture.source.style,
+    local: localUniforms,
+    uSourceTexture: sourceTexture.source,
+    uSampler: sourceTexture.source.style,
   });
 
-  const shader = renderer.material3d.compileIsolatedShader([iblSamplingFuncsBit, localBit], template, {
+  const shader = renderer.material3d.compileIsolatedShader([localBit], template, {
     0: localBindGroup,
   });
 
@@ -299,7 +283,7 @@ export function generateIblSpecialCubemap(options: GenerateIblSpecialCubemapOpti
       const batchedUbo =
         'uniformBatch' in renderer.renderPipes ? renderer.renderPipes.uniformBatch.getUboResource(localUbo) : localUbo;
 
-      localBindGroup.setResource(batchedUbo, 0);
+      localBindGroup.setResource(batchedUbo, 'local');
 
       renderer.renderTarget.bind({ target: renderTarget, clear: true, mipLevel: j, layer: i });
 

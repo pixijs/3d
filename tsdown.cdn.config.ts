@@ -11,10 +11,9 @@ import { inlineWorker } from './scripts/build/inline-worker.mts';
 // mirror. `pixi.js` stays a bare import for the page's import map; everything else is
 // bundled.
 //
-// The entry is `src/index.bundle.ts`, not `src/index.ts`: a bundle exports its whole
-// surface, so the root barrel's `core/gl/**` and `core/gpu/**` exports would pull both
-// backends into the entry chunk. The bundle entry leaves them out, which keeps each
-// backend in the lazy chunk its renderer loader imports.
+// The entry is `src/index.ts`, the same as the npm build. A bundle exports its whole
+// surface, which is why no barrel exports `core/gl/**` or `core/gpu/**`: each backend
+// stays in the lazy chunk its renderer loader imports.
 //
 // `extras` is a second file, `pixi-3d-extras.mjs`, that a page imports next to the main
 // one. It holds only `src/extras/**` and takes the engine as named imports from
@@ -226,7 +225,7 @@ function cdn(minify: boolean): UserConfig[] {
   return [
     {
       ...base,
-      entry: { 'pixi-3d': './src/index.bundle.ts' },
+      entry: { 'pixi-3d': './src/index.ts' },
       deps: { alwaysBundle: [/^meshoptimizer(\/|$)/], onlyBundle: ['meshoptimizer'], onlyImport: ['pixi.js'] },
       plugins: [inlineWorker(), checkLayout()],
     },

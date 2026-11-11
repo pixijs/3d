@@ -1,46 +1,8 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Reads a PBR material's surface and declares the values the PBR bits after it share
- *
- * Reads `normal` and the `material` row from the template. Provides `albedo`, `alpha`, `metallic`,
- * `roughness`, `occlusion`, `fresnelF0` and `viewDir`, plus these, which later bits may change:
- *
- * - `f90`: 1 unless `specularBit` lowers it.
- * - `emissive`: zero until `emissiveBit` or `transmissionBit` writes it, so a material without
- *   those features samples no emissive texture and adds nothing.
- * - `specularNormal`: the normal the environment's specular reflection uses; `normal` unless the
- *   anisotropy bit bends it.
- * - `directLight` and `ambient`: zero, for the lighting bits to add to.
- * - `geometricRoughness`: see below; `clearcoatBit` reuses it.
- *
- * Both backends declare the same set; keep them in step.
- *
- * The base colour texture is sRGB-decoded as `phongMaterialBit` describes. Roughness comes from the
- * green channel of the metallic-roughness map and metalness from the blue, as in glTF, and
- * occlusion from the red channel of its map. Every texture is sampled unconditionally: an unset slot
- * holds `Texture.WHITE`, so the multiply changes nothing.
- *
- * ## F0 from IOR (KHR_materials_ior)
- *
- * The dielectric `fresnelF0` is `((ior - 1) / (ior + 1))²`, with `ior` from `pbrParams.w`, which
- * gives exactly 0.04 at the default 1.5. Metals then replace it with `albedo` through
- * `mix(F0, albedo, metallic)`.
- *
- * ## Geometric specular antialiasing
- *
- * Kaplanyan & Hofmann 2016, "Stable Geometric Specular Antialiasing", in its simplified
- * screen-derivative form: `geometricRoughness` is how fast the normal swings across a pixel, and it
- * is added to roughness. That widens the highlight on the silhouettes of curved meshes and on small
- * distant detail, which would otherwise sparkle. The normal it reads is the one the bits before it
- * left: the renderer adds normal mapping, flat shading and the double-sided flip ahead of the
- * material's own bits, so normal-map detail raises roughness too.
- *
- * Roughness is floored at 0.045 before that. The floor keeps the GGX denominator in
- * `pbrLightingBit` above zero, which is why that bit divides without a guard.
- *
- * The `normal` slot, `normalScale` and `alphaCutoff` are declared for the reasons
- * `phongMaterialBit` gives.
+ * Floors roughness at 0.045 for `pbrLightingBit`'s unguarded GGX divide. Declares the `normal` slot,
+ * `normalScale` and `alphaCutoff` for normal mapping and `alphaMaskBit`, which join after the layout is fixed
  * @internal
  */
 export const pbrMaterialBit: ShaderBit = {

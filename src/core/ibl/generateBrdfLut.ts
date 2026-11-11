@@ -8,43 +8,21 @@ import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
 import { brdfLutGlslTemplate } from './brdfLutGlslTemplate';
 import { brdfLutWgslTemplate } from './brdfLutWgslTemplate';
 
-/** Both backends' LUT sources in one template; the material system compiles only its own */
 const brdfLutTemplate: ShaderBitTemplate = {
   bindGroups: ['local'],
   gpu: brdfLutWgslTemplate.gpu,
   gl: brdfLutGlslTemplate.gl,
 };
 
-/**
- * Options for `generateBrdfLut`
- * @internal
- */
 interface GenerateBrdfLutOptions {
-  /** The renderer to generate with */
   renderer: WebGPURenderer | WebGLRenderer;
-  /** Output texture size (width and height). Default: 256 */
   size?: number;
-  /** Number of Monte Carlo samples per pixel. Default: 1024 */
   sampleCount?: number;
 }
 
 /**
- * Renders the BRDF lookup table that IBL specular lighting reads, following Karis's split sum
- *
- * UV x is `NdotV` and UV y is roughness. Each texel Monte Carlo integrates GGX for that pair into
- * the scale (red) and bias (green) the lighting shader applies to F0 before multiplying by the
- * prefiltered environment cube. The geometry term is Smith with Schlick-GGX at
- * `k = roughness² / 2`, the paper's choice for image-based lighting. `NdotV` is clamped to 0.001,
- * since the visibility term divides by it.
- *
- * The table is `rgba16float`: 8-bit storage bands visibly once tone mapping stretches a smooth
- * gradient, such as the shading across a sphere of one colour.
- *
- * Runs synchronously, and can run mid-frame on first use. It restores the caller's binding with
- * `getBindState` rather than `push` and `pop`: a 2D filter binds its input with `bind`, so `pop`
- * would land back on the screen and the caller's next draws would go there.
- * @param options - Renderer plus size/sample-count overrides.
- * @returns The generated rgba16float LUT texture.
+ * Renders the split-sum BRDF table IBL reads, in `rg16float` since 8 bits band visibly once tone-mapped; it restores
+ * the caller's bind with `getBindState`, not `pop`, which inside a 2D filter would land on the screen
  * @internal
  */
 export function generateBrdfLut(options: GenerateBrdfLutOptions): Texture {
@@ -55,6 +33,7 @@ export function generateBrdfLut(options: GenerateBrdfLutOptions): Texture {
 
   const localBit: ShaderBit = {
     name: 'brdfLut',
+    requires: [iblSamplingFuncsBit],
     attributes: {
       aPosition: 'float32x2',
     },
@@ -69,18 +48,18 @@ export function generateBrdfLut(options: GenerateBrdfLutOptions): Texture {
   };
 
   const local = new BindGroup({
-    0: new UniformGroup({
+    local: new UniformGroup({
       sampleCount: { value: sampleCount, type: 'f32' },
     }),
   });
-  const shader = renderer.material3d.compileIsolatedShader([iblSamplingFuncsBit, localBit], brdfLutTemplate, {
+  const shader = renderer.material3d.compileIsolatedShader([localBit], brdfLutTemplate, {
     0: local,
   });
 
   const textureSource = RenderTexture.create({
     width: size,
     height: size,
-    format: 'rgba16float',
+    format: 'rg16float',
   }).source;
 
   const texture = new Texture({

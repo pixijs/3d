@@ -14,17 +14,8 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** Instance count comfortably over the shadow pass's auto-measure cap (256). */
 const OVER_CAP = 300;
 
-/**
- * Ground + auto-fit sun (`castShadow: true`, no shadow options). `instanceCount > 0` adds a
- * BatchedMesh3D cluster of shadow-casting cubes spanning roughly ±5 around the origin —
- * each instance counts toward the auto-measure cap individually.
- *
- * The `castShadow: false` ground is attached first and is 400 units wide, so a gather that
- * wrongly includes it grows the box to the ground's bounding sphere and trips the large-box warn.
- */
 function buildScene(
   app: Application<Renderer>,
   instanceCount: number,
@@ -54,7 +45,7 @@ function buildScene(
       batched.setGeometryAt(i, geometry);
       batched.setMaterialAt(i, material);
       batched.setMatrixAt(i, local.makeTranslation(x * 0.5, 0, z * 0.5));
-      batched.setItemActive(i, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+      batched.setPassesAt(i, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
     }
     view3d.root.addChild(batched);
   }
@@ -70,10 +61,8 @@ function buildScene(
   return { view3d, sun, batched };
 }
 
-/** Half the diagonal of a unit cube: how far its bounding sphere reaches from its centre */
 const CASTER_RADIUS = Math.sqrt(3) / 2;
 
-/** A unit-cube shadow caster at `x` on the ground line */
 function addCaster(view3d: View3D, x: number): Mesh3D {
   const caster = new Mesh3D({
     geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }),
@@ -83,6 +72,16 @@ function addCaster(view3d: View3D, x: number): Mesh3D {
   caster.position.set(x, 0, 0);
   view3d.root.addChild(caster);
   return caster;
+}
+
+function addBatchedCaster(view3d: View3D, x: number): BatchedMesh3D {
+  const batched = new BatchedMesh3D({ size: 1 });
+  batched.setGeometryAt(0, new CubeGeometry({ width: 1, height: 1, depth: 1 }));
+  batched.setMaterialAt(0, new Material3D({ baseColor: 0xc06c4a, metallic: 0, roughness: 0.5 }));
+  batched.setMatrixAt(0, new Matrix4().makeTranslation(x, 0, 0));
+  batched.setPassesAt(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+  view3d.root.addChild(batched);
+  return batched;
 }
 
 for (const preference of ['webgpu', 'webgl'] as const) {
@@ -145,6 +144,50 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
+    it('a slot hidden with setVisibleAt leaves the box on the next frame, and comes back when shown', async () => {
+      const app = await getApp<Renderer>({
+        id: `shadow-autofit-hidden-slot-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE },
+      });
+      try {
+        const { view3d, sun } = buildScene(app, 0);
+        addCaster(view3d, -3);
+        const batched = addBatchedCaster(view3d, 30);
+        app.render();
+        expect(sun._autoShadowBounds!.max.x).toBeCloseTo(30 + CASTER_RADIUS, 1);
+
+        batched.setVisibleAt(0, false);
+        app.render();
+        expect(sun._autoShadowBounds!.max.x, 'only the caster at x = -3 is left').toBeLessThan(0);
+
+        batched.setVisibleAt(0, true);
+        app.render();
+        expect(sun._autoShadowBounds!.max.x).toBeCloseTo(30 + CASTER_RADIUS, 1);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('a hidden mesh leaves the box on the next frame', async () => {
+      const app = await getApp<Renderer>({
+        id: `shadow-autofit-hidden-mesh-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE },
+      });
+      try {
+        const { view3d, sun } = buildScene(app, 0);
+        addCaster(view3d, -3);
+        const far = addCaster(view3d, 30);
+        app.render();
+
+        far.visible = false;
+        app.render();
+
+        expect(sun._autoShadowBounds!.max.x).toBeLessThan(0);
+      } finally {
+        app.destroy();
+      }
+    });
+
     it('under the cap, the box follows a moved caster with no app call', async () => {
       const app = await getApp<Renderer>({
         id: `shadow-autofit-live-${preference}`,
@@ -182,7 +225,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           sun._autoShadowBounds!.max.x,
           "the grid's last column sits at x = 4, so the box spans the whole batch, not one slot",
         ).toBeGreaterThan(4);
-        /** The notice is a page-global `warnOnce`: the first backend in this file logs it, the second finds it spent */
         const expectLogged = preference === 'webgpu';
         expect(warnSpy.mock.calls.some((c) => c.join(' ').includes('auto-measure cap'))).toBe(expectLogged);
         const frozenMaxX = sun._autoShadowBounds!.max.x;
@@ -213,7 +255,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.render();
         expect(sun._autoShadowBoundsFrozen).toBe(true);
 
-        for (let i = 100; i < OVER_CAP; i++) batched!.setItemActive(i, 0);
+        for (let i = 100; i < OVER_CAP; i++) batched!.setPassesAt(i, 0);
         app.render();
         expect(sun._autoShadowBoundsFrozen).toBe(false);
         expect(

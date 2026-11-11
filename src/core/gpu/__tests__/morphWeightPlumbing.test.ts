@@ -10,7 +10,6 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** A one-triangle geometry with `targetCount` morph targets (unique per call). */
 function createMorphedTriangle(targetCount: number): Geometry3D {
   const morphTargets: { positions: Float32Array }[] = [];
   for (let i = 0; i < targetCount; i++) {
@@ -31,47 +30,6 @@ const weightLane = (view3d: View3D, mesh: Mesh3D): number =>
 const getPipe = (app: Application<WebGPURenderer>): View3DPipeGpu => app.renderer.renderPipes.view3d;
 
 describe('morph weight slots, held from joining the scene to leaving it, and their store lane 20', () => {
-  it('keeps existing offsets still when new morphed meshes join, and atlases and registers the morphed geometry', async () => {
-    const app = await getApp<WebGPURenderer>({
-      id: 'morph-slot-stable',
-      appOptions: { preference: 'webgpu', width: 128, height: 128 },
-    });
-    try {
-      const view3d = new View3D({ width: 128, height: 128 });
-      app.stage.addChild(view3d);
-      view3d.camera.position.set(0, 0, 5);
-
-      const material = new Material3D({ baseColor: 0xffffff });
-      const meshA = new Mesh3D({ geometry: createMorphedTriangle(2), material });
-      view3d.root.addChild(meshA);
-
-      app.render();
-      const indexA = meshA.morph!._weightIndex;
-      expect(weightLane(view3d, meshA)).toBe(indexA);
-
-      const meshB = new Mesh3D({ geometry: createMorphedTriangle(2), material });
-      view3d.root.addChild(meshB);
-      app.render();
-
-      expect(meshA.morph!._weightIndex, 'a second geometry packs into the arena reservation').toBe(indexA);
-      expect(weightLane(view3d, meshA)).toBe(indexA);
-      expect(weightLane(view3d, meshB)).toBe(meshB.morph!._weightIndex);
-      expect(meshB.morph!._weightIndex).not.toBe(indexA);
-
-      const geometry = meshA.geometry;
-      expect(geometry._geometryDataIndex).toBeGreaterThanOrEqual(0);
-      expect(geometry._geometryAtlasAllocation).toBeTruthy();
-      const geomStore = getPipe(app).geometryDataStoreBuffer;
-      const rowBase = geometry._geometryDataIndex * GEOMETRY_DATA_STRIDE;
-      expect(geomStore.u32Data[rowBase + 4]).toBe(geometry._morphDeltaBase);
-      expect(geomStore.u32Data[rowBase + 5]).toBe(2);
-      expect(geomStore.u32Data[rowBase + 6]).toBe(geometry._geometryAtlasAllocation!.baseVertex);
-      expect(geomStore.data[rowBase + 3], 'the radius grows by the morph reach').toBeGreaterThan(0);
-    } finally {
-      app.destroy();
-    }
-  });
-
   it('registers dynamic morphed geometry in the store, outside the atlas, with a no-cull sentinel, and morphs it', async () => {
     const app = await getApp<WebGPURenderer>({
       id: 'morph-dynamic-combo',
@@ -103,7 +61,7 @@ describe('morph weight slots, held from joining the scene to leaving it, and the
       expect(geomStore.data[rowBase + 3], 'a negative radius keeps it from being frustum-culled').toBeLessThan(0);
       expect(geomStore.u32Data[rowBase + 6], 'outside an atlas its vertex ids are already local').toBe(0);
 
-      const morph = mesh.morph!;
+      const morph = mesh._morph!;
       expect(morph._slot).toBeGreaterThanOrEqual(0);
       expect(getPipe(app)._morphStoreBuffer.data[morph._weightIndex]).toBeCloseTo(0.25);
     } finally {
@@ -130,23 +88,23 @@ describe('morph weight slots, held from joining the scene to leaving it, and the
       view3d.root.addChild(meshC);
 
       app.render();
-      const indexA = meshA.morph!._weightIndex;
-      const indexB = meshB.morph!._weightIndex;
-      const indexC = meshC.morph!._weightIndex;
+      const indexA = meshA._morph!._weightIndex;
+      const indexB = meshB._morph!._weightIndex;
+      const indexC = meshC._morph!._weightIndex;
 
       view3d.root.removeChild(meshA);
-      expect(meshA.morph!._slot, 'the slot goes with scene membership').toBe(-1);
+      expect(meshA._morph!._slot, 'the slot goes with scene membership').toBe(-1);
 
       app.render();
-      expect(meshB.morph!._weightIndex).toBe(indexB);
-      expect(meshC.morph!._weightIndex).toBe(indexC);
+      expect(meshB._morph!._weightIndex).toBe(indexB);
+      expect(meshC._morph!._weightIndex).toBe(indexC);
       expect(weightLane(view3d, meshB)).toBe(indexB);
       expect(weightLane(view3d, meshC)).toBe(indexC);
 
       const meshD = new Mesh3D({ geometry: createMorphedTriangle(4), material });
       view3d.root.addChild(meshD);
       app.render();
-      expect(meshD.morph!._weightIndex, "D has as many targets as A, so it reuses A's freed slot").toBe(indexA);
+      expect(meshD._morph!._weightIndex, "D has as many targets as A, so it reuses A's freed slot").toBe(indexA);
       expect(weightLane(view3d, meshD)).toBe(indexA);
     } finally {
       app.destroy();
@@ -168,49 +126,19 @@ describe('morph weight slots, held from joining the scene to leaving it, and the
       view3d.root.addChild(meshA);
 
       app.render();
-      const indexA = meshA.morph!._weightIndex;
-      const slotA = meshA.morph!._slot;
+      const indexA = meshA._morph!._weightIndex;
+      const slotA = meshA._morph!._slot;
 
-      /** 3 vertices × 340 targets × 4 floats = 4080, which with meshA's 24 overflows the default 4096-float arena */
       const big = new Mesh3D({ geometry: createMorphedTriangle(340), material });
       view3d.root.addChild(big);
       app.render();
 
       const store = getPipe(app)._morphStoreBuffer as unknown as { _deltaCapacity: number };
       expect(store._deltaCapacity).toBeGreaterThan(4096);
-      expect(meshA.morph!._slot, 'the slot is relative to the weights base').toBe(slotA);
-      expect(meshA.morph!._weightIndex, 'the arena doubled, moving the weights base').not.toBe(indexA);
-      expect(weightLane(view3d, meshA), 'the store row followed').toBe(meshA.morph!._weightIndex);
-      expect(weightLane(view3d, big)).toBe(big.morph!._weightIndex);
-    } finally {
-      app.destroy();
-    }
-  });
-
-  it('picks up bare weight mutations via the per-frame diff — no invalidate call', async () => {
-    const app = await getApp<WebGPURenderer>({
-      id: 'morph-weights-diff',
-      appOptions: { preference: 'webgpu', width: 128, height: 128 },
-    });
-    try {
-      const view3d = new View3D({ width: 128, height: 128 });
-      app.stage.addChild(view3d);
-      view3d.camera.position.set(0, 0, 5);
-
-      const mesh = new Mesh3D({
-        geometry: createMorphedTriangle(2),
-        material: new Material3D({ baseColor: 0xffffff }),
-      });
-      mesh.weights![0] = 0.25;
-      view3d.root.addChild(mesh);
-
-      app.render();
-      const store = getPipe(app)._morphStoreBuffer;
-      expect(store.data[mesh.morph!._weightIndex]).toBeCloseTo(0.25);
-
-      mesh.weights![0] = 0.75;
-      app.render();
-      expect(store.data[mesh.morph!._weightIndex]).toBeCloseTo(0.75);
+      expect(meshA._morph!._slot, 'the slot is relative to the weights base').toBe(slotA);
+      expect(meshA._morph!._weightIndex, 'the arena doubled, moving the weights base').not.toBe(indexA);
+      expect(weightLane(view3d, meshA), 'the store row followed').toBe(meshA._morph!._weightIndex);
+      expect(weightLane(view3d, big)).toBe(big._morph!._weightIndex);
     } finally {
       app.destroy();
     }

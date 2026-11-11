@@ -5,14 +5,11 @@ import { Mesh3D } from '../scene/Mesh3D';
 import type { Skeleton } from '../scene/Skeleton';
 import type { Animation } from './Animation';
 import { AnimationState } from './AnimationState';
-import type { Binding } from './bindings/Binding';
 import { createBinding } from './bindings/createBinding';
+import { PropertyAccumulator } from './PropertyAccumulator';
 import type { Track } from './tracks/Track';
 
-/**
- * Resolved animation target used by loader-created node maps
- * @internal
- */
+/** @internal */
 export type AnimationTarget = Container3D | { skeleton: Skeleton; boneIndex: number };
 
 /**
@@ -46,14 +43,12 @@ export interface AnimationPlayerOptions {
    */
   animations?: Record<string, Animation> | Animation[];
   /**
-   * Direct glTF node-index lookup used to avoid walking the scene graph
+   * Targets by glTF node index, the node part of a loaded track's label
    * @internal
    */
   nodeMap?: Record<number, AnimationTarget>;
   /**
-   * Whether to use {@link Ticker.shared} to advance playing animations
-   *
-   * Set to `false` when manually calling {@link AnimationPlayer#update}.
+   * Whether playback advances on {@link Ticker.shared}; see {@link AnimationPlayer#autoUpdate}
    * @example
    * ```ts
    * const player = new AnimationPlayer({ target: robot, animations: [walk], autoUpdate: false });
@@ -78,30 +73,15 @@ export interface AnimationPlayerOptions {
 }
 
 /**
- * Accumulates blended values for a single animated property before applying them to the bound target
- * @internal
- */
-export class PropertyAccumulator {
-  public binding: Binding;
-  public values: Float32Array;
-  public weight: number = 0;
-  public dirty: boolean = false;
-
-  constructor(binding: Binding, valueSize: number) {
-    this.binding = binding;
-    this.values = new Float32Array(valueSize);
-  }
-}
-
-/**
  * Plays animations on a {@link Container3D} and its children
  *
  * A {@link Model3D} loaded with animations already has one as {@link Model3D#player | player}.
  * Build your own to play animations authored in code.
  *
  * Each animation gets one {@link AnimationState} per player, holding its time, speed and weight.
- * Any number can play at once. Where two playing states drive the same property, the player
- * blends their values by {@link AnimationState#weight}, which is how crossfades work. Playback
+ * Any number can play at once. Where two playing states drive the same property through tracks
+ * with the same label, the player blends their values by {@link AnimationState#weight}, which is
+ * how crossfades work. Playback
  * advances on {@link Ticker.shared} unless {@link AnimationPlayer#autoUpdate} is off.
  * @example
  * ```ts
@@ -115,11 +95,10 @@ export class PropertyAccumulator {
  */
 export class AnimationPlayer {
   /**
-   * Default {@link AnimationPlayerOptions} merged under every constructor call
+   * Defaults for every new `AnimationPlayer`; an option passed as `undefined` keeps its default
    *
-   * `new AnimationPlayer(opts)` resolves as `{ ...AnimationPlayer.defaultOptions, ...opts }`.
-   * Mutate to change defaults process-wide. A {@link Model3D} passes its own `autoUpdate` and
-   * `autoPlay`, so its player follows {@link Model3D.defaultOptions} instead.
+   * A {@link Model3D} passes its own `autoUpdate` and `autoPlay`, so its player follows
+   * {@link Model3D.defaultOptions} instead.
    * @example
    * ```ts
    * AnimationPlayer.defaultOptions.autoUpdate = false;
@@ -143,7 +122,7 @@ export class AnimationPlayer {
 
   private _autoUpdate: boolean;
   private _isConnectedToTicker: boolean = false;
-  /** Set while `update` or `stop` loops over `_states`; {@link AnimationPlayer#_deactivate} says why */
+  /** Set while `update` or `stop` walks `_states`; a state that stops then stays listed until the walk ends */
   private _updating: boolean = false;
   private _destroyed: boolean = false;
 
@@ -318,10 +297,10 @@ export class AnimationPlayer {
   }
 
   /**
-   * Whether this player advances active states with {@link Ticker.shared}
+   * Whether playback advances on {@link Ticker.shared}
    *
-   * Disable this when driving animation from a custom ticker or fixed-step loop
-   * with {@link AnimationPlayer#update}.
+   * Turn it off to drive playback from your own ticker or fixed-step loop with
+   * {@link AnimationPlayer#update}.
    * @example
    * ```ts
    * player.autoUpdate = false;
@@ -333,8 +312,8 @@ export class AnimationPlayer {
   }
 
   /**
-   * Connects or disconnects the shared ticker to match the new value
-   * @param value - Whether to advance active states from `Ticker.shared`
+   * Sets whether playback advances on `Ticker.shared`
+   * @param value - `false` to call `update` yourself
    */
   public set autoUpdate(value: boolean) {
     if (value === this._autoUpdate) return;
@@ -348,13 +327,7 @@ export class AnimationPlayer {
     }
   }
 
-  /**
-   * Registers an animation state for frame updates
-   *
-   * Called by {@link AnimationState#play}.
-   * @param state - State to activate
-   * @internal
-   */
+  /** @internal */
   public _activate(state: AnimationState): void {
     if (this._destroyed) return;
 
@@ -369,11 +342,7 @@ export class AnimationPlayer {
     }
   }
 
-  /**
-   * Resolves a state's tracks to their target properties, once per state
-   * @param state - State whose accumulators to fill
-   * @internal
-   */
+  /** @internal */
   public _bind(state: AnimationState): void {
     if (state._accumulators.length > 0) return;
 
@@ -384,14 +353,7 @@ export class AnimationPlayer {
     }
   }
 
-  /**
-   * Removes an animation state from frame updates
-   *
-   * Called by {@link AnimationState#stop}. A state that stops while {@link AnimationPlayer#update}
-   * or {@link AnimationPlayer#stop} walks the list stays in it until the walk finishes, so the
-   * loop never sees the list shift.
-   * @internal
-   */
+  /** @internal */
   public _deactivate(): void {
     if (!this._updating) this._removeStopped();
   }
@@ -459,13 +421,10 @@ export class AnimationPlayer {
   }
 
   /**
-   * Removes this player from automatic updates and releases cached playback state
+   * Stops every animation and takes the player off the ticker for good
    *
-   * After calling `destroy`, the player should not be reused. Calling `destroy`
-   * again is a no-op, and playback calls on an {@link AnimationState} kept from before it
-   * are ignored, so a destroyed player never returns to the ticker.
-   *
-   * A {@link Model3D} destroys its own player; call this for one you built yourself.
+   * Calling it again does nothing, and `play` and `gotoAndStop` on an {@link AnimationState} kept
+   * from before are ignored. A {@link Model3D} destroys its own player; call this for one you built.
    * @example
    * ```ts
    * player.destroy();
@@ -485,15 +444,16 @@ export class AnimationPlayer {
       state.onLoop = null;
     });
 
+    /* oxlint-disable pixi3d/destroy-release -- kept states, playing, stop and update still read these after destroy */
     this._states.length = 0;
     this._stateCache.clear();
     this._animations.clear();
     this._animationLabels = null;
     this._accumulators = {};
     this._accumulatorList.length = 0;
+    /* oxlint-enable pixi3d/destroy-release */
   }
 
-  /** Drops stopped states from the update list, and the ticker once nothing is playing */
   private _removeStopped(): void {
     const states = this._states;
     let kept = 0;
@@ -521,14 +481,7 @@ export class AnimationPlayer {
     this._isConnectedToTicker = false;
   }
 
-  /**
-   * Returns the accumulator for a track's property, binding it on first use
-   *
-   * Tracks with the same label share an accumulator, which is how states driving the same
-   * property blend. The node part of the label is looked up in the glTF node map when it is a
-   * number the map holds, and otherwise by searching the subtree for a node label or bone name.
-   * @param track - Track whose label names the property
-   */
+  /** Tracks with the same label share one accumulator, which is how states driving one property blend */
   private _getAccumulator(track: Track): PropertyAccumulator {
     const trackLabel = track.label;
 
@@ -580,14 +533,7 @@ export class AnimationPlayer {
   }
 }
 
-/**
- * Depth-first search for a node with the given label, or a bone of that name on a skinned mesh
- *
- * `Skeleton.indexOf` throws for a name that isn't a bone, so the search catches that and moves on.
- * @param target - Subtree root to search, itself included
- * @param label - Node label or bone name to find
- * @internal
- */
+/** The empty `catch` is for `Skeleton.indexOf`, which throws for a name that isn't a bone */
 function findTarget(
   target: Container3D,
   label: string,

@@ -10,13 +10,11 @@ import type { View3DOptions } from '~/scene/View3D';
 
 const SIZE = 64;
 
-/** Brightness, 0 to 255, of the canvas pixel at the centre of a View placed at x = `left` */
 function brightnessAt(canvas: HTMLCanvasElement, left: number): number {
   const [r, g, b] = readCanvasPixels(canvas, left + SIZE / 2, SIZE / 2, 1, 1);
   return Math.max(r, g, b);
 }
 
-/** A SIZE × SIZE View3D with a white unlit sphere filling its centre */
 function sphereView(options: View3DOptions = {}): View3D {
   const view = new View3D({ width: SIZE, height: SIZE, ...options });
   view.root.addChild(

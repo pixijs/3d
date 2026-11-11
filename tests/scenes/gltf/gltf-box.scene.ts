@@ -5,11 +5,6 @@ import { renderGltfModel } from './frameModel';
 
 const URL = model('gltf.Box');
 
-/**
- * Basic glTF model regression — Box.
- *
- * Loaded remotely from KhronosGroup/glTF-Sample-Models. Exercises an untextured multi-primitive box rendered with the default PBR metallic-roughness material.
- */
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },

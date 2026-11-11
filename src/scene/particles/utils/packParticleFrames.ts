@@ -4,22 +4,13 @@ import type { Texture } from 'pixi.js';
 const NO_PACKED_FRAMES = new Uint16Array(0);
 
 /**
- * Quantizes each frame's sampling region into the vertex layout's `unorm16x4`
- * encoding
+ * Packs each flipbook frame's window on its sheet, `(u0, v0, uScale, vScale)`, as the four
+ * `unorm16` values a particle's `aParticleUVFrame` holds
  *
- * `(u0, v0, uScale, vScale)` per frame in whole-source space, ready for
- * {@link ParticleContainer3D.writePacked | writePacked} to copy without
- * conversion. The sibling of {@link packParticleColor}: pixi objects in, GPU
- * bytes out, computed once.
- *
- * Returns an empty array for a single frame, whose vertices carry no frame
- * attribute at all, saving eight bytes on every vertex; its framing comes from
- * the material's `uvTransform` instead. Multiple frames must share
- * one `TextureSource` (a sprite sheet), because a particle system is a single
- * draw call binding a single texture.
- * @param textures - The flipbook frames, in frame-index order
- * @returns Four `unorm16` values per frame, or an empty array for a single frame
- * @throws If the frames don't all share a source.
+ * A single frame needs no window and gets an empty array. Rotated frames aren't supported.
+ * @param textures - The flipbook frames, in frame order
+ * @returns Four values per frame, or an empty array for a single frame
+ * @throws If the frames don't all share one `TextureSource`.
  * @category scene
  * @advanced
  */

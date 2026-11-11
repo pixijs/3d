@@ -6,14 +6,6 @@ import type { Hemisphere } from '~/scene/lights/environment/Hemisphere';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Exercises the Background pass drawing a {@link Hemisphere} gradient instead of a cubemap.
- *
- * One hemisphere is both the environment and the background, so the sphere's sky-lit top and
- * ground-lit bottom should match the sky above and the ground below it. The wide field of view
- * takes in most of the gradient, so the screenshot checks its orientation and blend on WebGL and
- * WebGPU.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x000000,

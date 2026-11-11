@@ -11,6 +11,7 @@ export * from './bindings/SkeletonPositionBinding';
 export * from './bindings/SkeletonRotationBinding';
 export * from './bindings/SkeletonScaleBinding';
 export * from './bindings/Vector3Binding';
+export * from './PropertyAccumulator';
 export * from './tracks/NumberTrack';
 export * from './tracks/QuaternionTrack';
 export * from './tracks/Track';

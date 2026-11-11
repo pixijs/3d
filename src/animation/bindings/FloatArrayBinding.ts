@@ -1,9 +1,6 @@
 import { Binding } from './Binding';
 
-/**
- * Copies sampled values into an array-like numeric buffer
- * @internal
- */
+/** @internal */
 export class FloatArrayBinding extends Binding {
   constructor(private readonly _target: Float32Array | Float64Array | number[]) {
     super();

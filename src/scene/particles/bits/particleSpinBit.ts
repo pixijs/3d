@@ -1,10 +1,9 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Spins a particle about the view axis at `aSpin` radians per second
+ * Spins a particle in its quad's plane at `aSpin` radians per second, from its spawn rotation
  *
- * Reads `particleAge` from {@link particleLifetimeBit} and adds to the
- * `particleRotation` local the particle bit seeds from the spawn rotation.
+ * Compose it after {@link particleLifetimeBit}.
  * @category scene
  * @advanced
  */

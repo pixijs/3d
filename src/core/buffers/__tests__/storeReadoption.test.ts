@@ -12,7 +12,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** The renderers that carry a `view3d` pipe (and so the three renderer-scoped stores) */
 type Gpu3DRenderer = WebGLRenderer | WebGPURenderer;
 
 function makeTexture(color: string): Texture {
@@ -25,7 +24,6 @@ function makeTexture(color: string): Texture {
   return new Texture({ source: new CanvasSource({ resource: canvas }) });
 }
 
-/** A camera-facing quad with one morph target that widens it; weight 0 draws the base pose. */
 function morphedQuad(): Geometry3D {
   return new Geometry3D({
     positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]),
@@ -35,7 +33,6 @@ function morphedQuad(): Geometry3D {
   });
 }
 
-/** The user-owned objects that survive a renderer: one material, one geometry, one morphed mesh, shared by meshes */
 interface Survivors {
   material: Material3D;
   texture: Texture;
@@ -65,7 +62,6 @@ function buildSurvivors(): Survivors {
   return { material, texture, geometry, morphed, morphedMesh, nodes: [left, right, morphedMesh, sun] };
 }
 
-/** Shows the survivors in a fresh View on `app` (reparenting them out of any previous View) and renders once. */
 function show(app: Application<Gpu3DRenderer>, survivors: Survivors): View3D {
   const view3d = new View3D({ width: SIZE, height: SIZE });
   app.stage.addChild(view3d);
@@ -81,7 +77,6 @@ function pixels(app: Application<Gpu3DRenderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -108,7 +103,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       expect(material._uploadQueue).toBe(pipeA.materialStoreBuffer);
       expect(geometry._geometryDataStore).toBe(pipeA.geometryDataStoreBuffer);
       expect(morphed._morphStore).toBe(pipeA._morphStoreBuffer);
-      expect(morphedMesh.morph!._store).toBe(pipeA._morphStoreBuffer);
+      expect(morphedMesh._morph!._store).toBe(pipeA._morphStoreBuffer);
 
       appA.destroy();
 
@@ -136,8 +131,8 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           'its raw targets went at the first pack, so it draws its base pose, as weight 0 did',
         ).toBe(-1);
         expect(morphed._morphStore).toBeNull();
-        expect(morphedMesh.morph!._store).toBe(pipeB._morphStoreBuffer);
-        expect(morphedMesh.morph!._slot).toBeGreaterThanOrEqual(0);
+        expect(morphedMesh._morph!._store).toBe(pipeB._morphStoreBuffer);
+        expect(morphedMesh._morph!._slot).toBeGreaterThanOrEqual(0);
 
         expect(differingPixels(before, pixels(appB, viewB))).toBe(0);
       } finally {

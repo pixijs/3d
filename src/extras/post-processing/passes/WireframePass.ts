@@ -1,16 +1,12 @@
 import type { ColorSource } from 'pixi.js';
 import { definedProps, State } from 'pixi.js';
 
-import type { PassStage } from '../../../post-processing/Pass3D';
 import { MeshPass } from '../../../post-processing/passes/MeshPass';
 import type { MeshPassOptions } from '../../../post-processing/passes/MeshPass';
 import { solidMeshDescriptor } from './solidMeshShader';
 
 /**
  * Constructor options for {@link WireframePass}
- *
- * Every {@link MeshPassOptions} field except the ones the wireframe fixes: its `name` (materials opt in as
- * `wireframe`), its shader `descriptor`, and `textures`.
  * @example
  * ```ts
  * new WireframePass({ color: 0x00ff66, enabled: false });
@@ -18,7 +14,7 @@ import { solidMeshDescriptor } from './solidMeshShader';
  * @category extras:post-processing
  * @standard
  */
-export interface WireframePassOptions extends Omit<MeshPassOptions, 'name' | 'descriptor' | 'textures'> {
+export interface WireframePassOptions extends Omit<MeshPassOptions, 'name' | 'descriptor'> {
   /**
    * Line colour
    * @default 0x00ff00
@@ -28,28 +24,17 @@ export interface WireframePassOptions extends Omit<MeshPassOptions, 'name' | 'de
    * ```
    */
   color?: ColorSource;
-  /**
-   * Where in the default graph the lines draw; {@link PassStage} lists the stages
-   * @default 'afterTransparent'
-   * @example
-   * ```ts
-   * new WireframePass({ stage: 'afterOpaque' });
-   * ```
-   */
-  stage?: Exclude<PassStage, 'post'>;
 }
 
 /**
- * Wireframe debug pass: redraws opted-in meshes as lines over their shaded result
+ * Debug pass that redraws opted-in meshes as lines over their shaded result
  *
- * Add it to `View3D.passes`; meshes join by opting into the `wireframe` pass on their
- * material. Depth testing is off, so the lines never z-fight the surface they trace, and the
- * edges on the far side of a mesh show through too.
+ * Add it to `View3D.passes`, and opt a mesh in with `passes: { wireframe: true }` on its material.
+ * Depth testing is off, so edges on the far side of a mesh show through. By default it draws after
+ * every scene draw, so the lines show over everything.
  *
- * The pass draws each mesh's triangle indices as a line list, which pairs them two at a time and
- * so doesn't line up with the triangles: some edges are drawn, others are missed, and some lines
- * join one triangle's last corner to the next one's first. That is enough to inspect a mesh, not
- * an exact wireframe.
+ * The lines aren't an exact wireframe: the pass draws a mesh's triangle indices in pairs, so some
+ * edges are missed and some lines join one triangle to the next. That's enough to inspect a mesh.
  * @example
  * ```ts
  * new View3D({ passes: [new WireframePass({ color: 0x00ff66 })] });
@@ -60,10 +45,7 @@ export interface WireframePassOptions extends Omit<MeshPassOptions, 'name' | 'de
  */
 export class WireframePass extends MeshPass {
   /**
-   * Default {@link WireframePassOptions} merged under every constructor call
-   *
-   * `new WireframePass(opts)` resolves as `{ ...WireframePass.defaultOptions, ...opts }`. Mutate to change defaults
-   * process-wide.
+   * Defaults for every new `WireframePass`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * WireframePass.defaultOptions.color = 0xff00ff;
@@ -86,7 +68,6 @@ export class WireframePass extends MeshPass {
     super({
       ...rest,
       name: 'wireframe',
-      textures: false,
       descriptor: {
         shaderDescriptor: solidMeshDescriptor({ color }),
         state,

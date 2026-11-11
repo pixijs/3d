@@ -22,6 +22,7 @@
     "types": ["vite/client"],
     "paths": {
       "@pixi/3d": ["../src/index.ts"],
+      "@pixi/3d/extras": ["../src/extras/index.ts"],
       "@pixi/3d/webgl": ["../src/core/gl/init.ts"],
       "@pixi/3d/webgpu": ["../src/core/gpu/init.ts"]
     }

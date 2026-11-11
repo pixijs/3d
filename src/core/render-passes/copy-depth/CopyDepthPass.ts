@@ -14,37 +14,27 @@ import type { RenderSession } from '../RenderSession';
 export interface CopyDepthPassOptions {
   /** Renderer the pass copies with: the {@link PassContext#renderer} a {@link Pass3D#build} call receives */
   renderer: WebGLRenderer | WebGPURenderer;
-  /**
-   * Camera whose depth is copied
-   *
-   * Omitted, the pass copies the view's own depth: the scene depth. Given one, it copies that
-   * camera's depth target, the one its passes draw into. See {@link RenderPassOptions#camera}.
-   */
+  /** Camera whose depth is copied, or the view's own when omitted; see {@link RenderPassOptions#camera} */
   camera?: Camera3D;
   /**
-   * Depth texture the copy lands in
+   * Depth texture the copy lands in; hand the same handle to the passes that sample it
    *
-   * Required. Hand the same handle to the passes that sample the copy, such as
-   * {@link BlendedRefractionPass}. The view camera's copy is {@link PassContext#opaqueDepth}; a
-   * pass copying another camera allocates its own with {@link RenderGraph#createDepth}.
+   * For another camera, create it with {@link RenderGraph#createDepth}.
    */
   opaqueDepthHandle: DepthHandle;
 }
 
 /**
- * Copies a camera's opaque depth into a texture that refractive materials sample
+ * Copies a camera's opaque depth into a texture for refractive materials to sample
  *
- * Effects that read the depth of what lies beneath them, such as a water shoreline or refraction
- * that fades with depth, draw over the opaque scene and so sample a copy of its depth. The pass
- * reads its camera's depth target, or the scene depth when it has no camera, and writes
- * {@link CopyDepthPass#opaqueDepthHandle}. It declares no attachments, so the graph binds no
- * target for it, and it copies its camera's target whatever is bound.
+ * Effects that read the depth beneath them, such as a water shoreline or refraction that fades with
+ * depth, draw over the opaque scene and so sample a copy of its depth. {@link createDefaultGraph3D}
+ * copies the view's camera into {@link PassContext#opaqueDepth}. For another camera, add one after
+ * the draws it copies and before the passes that sample it; passes on other targets can run in
+ * between.
  *
- * Add it after the draws it copies and before the passes that sample the copy; passes on other
- * targets can run in between. The default graph runs one for the view's camera after the opaque
- * draw and the `'afterOpaque'` passes, just before {@link CopyOpaquePass}. The graph drops it on
- * frames where no running pass samples the copy. {@link BlendedRefractionPass} samples it;
- * {@link TransmissionRenderPass} doesn't, so a scene with only glass skips it.
+ * The graph skips the copy on frames where nothing samples it. {@link BlendedRefractionPass} does,
+ * but {@link TransmissionRenderPass} doesn't, so glass alone costs no depth copy.
  * @category rendering
  * @advanced
  */
@@ -64,10 +54,7 @@ export class CopyDepthPass extends RenderPass {
   }
 
   /**
-   * Declares a read of its camera's depth target and the copy it produces
-   *
-   * The read orders the copy after whatever drew the target, and keeps a pooled target alive
-   * until the copy has run.
+   * Reads its camera's depth target and produces {@link CopyDepthPass#opaqueDepthHandle}
    * @param b - The builder recording this pass's resource accesses
    */
   public override setup(b: PassBuilder): void {
@@ -83,7 +70,7 @@ export class CopyDepthPass extends RenderPass {
     const graph = session.view3d._graph;
     this.pipe.copyDepth(
       graph._drawTarget(this.camera, session),
-      graph._texture(this.opaqueDepthHandle, session),
+      graph.getTexture(this.opaqueDepthHandle, session),
       session,
     );
   }

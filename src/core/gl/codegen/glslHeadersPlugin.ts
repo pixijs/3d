@@ -1,10 +1,6 @@
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
-/**
- * GLSL compiler plugin that collects each bit's `gl.header` source and injects
- * the concatenation into the `{{header}}` slot of both stages
- * @internal
- */
+/** @internal */
 export const glslHeadersPlugin: ShaderCompilerPlugin = {
   collectData(context) {
     if (!context.data.headers) {

@@ -1,64 +1,42 @@
 import { extractStructAndGroups, generateGpuLayoutGroups, ShaderStage } from 'pixi.js';
 
-import { bindingVisibility } from '../../shader/codegen/parseBindingType';
+import type { InstanceDataLayout } from '../../batcher/instanceDataLayout';
+import { DEFAULT_OUTPUT_LOCATIONS } from '../../shader/codegen/collectFragmentOutputs';
+import { bindingFields, bindingVisibility } from '../../shader/codegen/parseBindingType';
 import { compileShader } from '../../shader/compileShader';
+import { resolveShaderBits } from '../../shader/resolveShaderBits';
 import type { ShaderBit, StructDefinition } from '../../shader/ShaderBit';
 import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
 import type { ShaderCompilerContext, ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
+import { instanceAccessPlugin } from './instanceAccessPlugin';
 import { wgslAttributesPlugin } from './wgslAttributesPlugin';
 import { wgslBindingsPlugin } from './wgslBindingsPlugin';
+import { wgslFragmentOutputsPlugin } from './wgslFragmentOutputsPlugin';
 import { wgslHeadersPlugin } from './wgslHeadersPlugin';
 import { wgslInterStagePlugin } from './wgslInterStagePlugin';
 import { wgslOverridesPlugin } from './wgslOverridesPlugin';
 import { wgslStageSlotsPlugin } from './wgslStageSlotsPlugin';
 
-/**
- * Input to `compileWgslSource`: the bits and template to compile
- * @internal
- */
 interface CompileWgslSourceOptions {
-  /** Shader bits to compile */
   bits: ShaderBit[];
-  /** Template defining bind groups and WGSL source */
   template: ShaderBitTemplate;
-  /** Optional plugins prepended before the defaults (e.g. batch texture plugin) */
   extraPlugins?: ShaderCompilerPlugin[];
+  instanceLayout?: InstanceDataLayout;
+  outputLocations?: readonly string[];
 }
 
-/**
- * Compiled WGSL stages plus the metadata `Shader.from()` and `GpuProgram` need
- * @internal
- */
 interface CompileWgslResult {
-  /** Vertex stage: the shared WGSL source and its entry point */
   vertex: { source: string; entryPoint: string };
-  /** Fragment stage: the shared WGSL source and its entry point */
   fragment: { source: string; entryPoint: string };
-  /** Resolved group struct definitions (e.g. `{ Material: { baseColor: 'vec4<f32>', ... } }`) */
   structs: Record<string, StructDefinition>;
-  /**
-   * Bind-group layout with per-stage `visibility` narrowed from the bits'
-   * `{ type, visibility }` binding tags. Passed to `GpuProgram` so a storage
-   * buffer read in only one stage spends a slot in only that stage's budget
-   * (WebGPU's default `maxStorageBuffersPerShaderStage` is 8). Untagged bindings
-   * keep `VERTEX | FRAGMENT`, as pixi would generate them.
-   */
   gpuLayout: ReturnType<typeof generateGpuLayoutGroups>;
+  /** The bits compiled: the listed ones, the ones they require, and any a plugin added */
+  bits: ShaderBit[];
 }
 
 /**
- * Builds the WebGPU bind-group layout for `source` and narrows each entry whose
- * binding a bit tagged with a single stage
- *
- * The base layout is pixi's own default, derived from the WGSL: every binding
- * `VERTEX | FRAGMENT`, and each texture's sample type from its texel type. Only the
- * `visibility` of bindings tagged `'vertex'` or `'fragment'` changes, matched by the
- * binding number parsed from the source.
- *
- * A binding's tag comes from the first bit that declares it, the rule `collectBindings` follows
- * for its type. Tags are keyed by binding name, which WGSL keeps unique across the module.
- * @param source - The compiled WGSL source whose bindings the layout describes
- * @param bits - The bits whose per-binding stage tags narrow the layout
+ * Narrows each binding a bit tags `'vertex'` or `'fragment'` to that stage, so it counts against only that
+ * stage's limits; the first bit to declare a binding sets its tag, as it sets its type in `collectBindings`
  */
 function narrowGpuLayout(source: string, bits: ShaderBit[]): ReturnType<typeof generateGpuLayoutGroups> {
   const parsed = extractStructAndGroups(source);
@@ -67,9 +45,9 @@ function narrowGpuLayout(source: string, bits: ShaderBit[]): ReturnType<typeof g
   const tags: Record<string, ReturnType<typeof bindingVisibility>> = Object.create(null);
   for (const bit of bits) {
     if (!bit.bindings) continue;
-    for (const group of Object.values(bit.bindings)) {
+    for (const [groupName, group] of Object.entries(bit.bindings)) {
       if (!group) continue;
-      for (const [name, spec] of Object.entries(group)) {
+      for (const { name, spec } of bindingFields(group, groupName)) {
         if (!(name in tags)) tags[name] = bindingVisibility(spec);
       }
     }
@@ -86,43 +64,39 @@ function narrowGpuLayout(source: string, bits: ShaderBit[]): ReturnType<typeof g
 }
 
 /**
- * The directive every module starts with
- *
- * `textureSample` takes its level of detail from derivatives. WGSL reports the
- * `derivative_uniformity` diagnostic as an error by default when a derivative sits in control flow
- * the compiler cannot prove uniform. The batch samplers branch on a flat varying, uniform across
- * every quad but not provably so, and this directive turns that diagnostic off. It is off for the
- * whole module, so no bit compiled here gets that check. A bit's own `textureSample`, `dpdx`,
- * `dpdy` and the other derivative builtins must stay in uniform control flow. `textureSampleLevel`
- * and `textureSampleGrad` take no derivative, so they may sit in any branch.
+ * Turns off `derivative_uniformity`, since the merged form's `material` is uniform but not provably so;
+ * bits must keep `textureSample`, `dpdx` and `dpdy` in uniform control flow themselves
  */
 const WGSL_DIRECTIVE = 'diagnostic(off, derivative_uniformity);\n';
 
 /**
- * Compiles a WGSL shader source from bits + template using the default WGSL
- * plugins
- * @param options - Bits and template to compile
- * @returns The `gpu` object expected by `Shader.from()`, plus struct and
- * bind-group-layout metadata
+ * Runs `instanceAccessPlugin` after any `extraPlugins` but before the default plugins, so the defaults
+ * collect the bit it adds
  * @internal
  */
 export function compileWgslSource(options: CompileWgslSourceOptions): CompileWgslResult {
-  const { bits, template, extraPlugins } = options;
+  const { bits, template, extraPlugins, instanceLayout, outputLocations = DEFAULT_OUTPUT_LOCATIONS } = options;
   const defaultPlugins = [
+    instanceAccessPlugin,
     wgslOverridesPlugin,
     wgslBindingsPlugin,
     wgslAttributesPlugin,
     wgslInterStagePlugin,
+    wgslFragmentOutputsPlugin,
     wgslHeadersPlugin,
     wgslStageSlotsPlugin,
   ];
   const plugins = extraPlugins ? [...extraPlugins, ...defaultPlugins] : defaultPlugins;
 
+  const resolvedBits = resolveShaderBits(bits);
+
   const context: ShaderCompilerContext = {
-    bits,
+    bits: resolvedBits,
     template,
     templateString: template.gpu!,
     data: {},
+    instanceLayout,
+    outputLocations,
   };
   const source = `${WGSL_DIRECTIVE}${compileShader(context, plugins)}`;
 
@@ -130,6 +104,7 @@ export function compileWgslSource(options: CompileWgslSourceOptions): CompileWgs
     vertex: { source, entryPoint: 'mainVertex' },
     fragment: { source, entryPoint: 'mainFragment' },
     structs: context.data.structs || {},
-    gpuLayout: narrowGpuLayout(source, bits),
+    gpuLayout: narrowGpuLayout(source, context.bits),
+    bits: context.bits,
   };
 }

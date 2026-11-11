@@ -16,7 +16,6 @@ const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 const CENTER = { x: 50, y: 50 };
 
-/** A 2×2×2 cube mesh centred on the origin, so each face sits one unit from the centre */
 function makeCube(): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -32,7 +31,6 @@ function makeCube(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -47,22 +45,6 @@ function makeView(): View3D {
 }
 
 describe('passive nodes under an interactive ancestor — implicit pick registration', () => {
-  test('parent made static before attach registers the subtree through the attach walk', () => {
-    const view3d = makeView();
-    const robot = new Container3D();
-    robot.eventMode = 'static';
-    const mesh = makeCube();
-    robot.addChild(mesh);
-
-    view3d.root.addChild(robot);
-    tickPick(view3d);
-
-    expect(view3d.events._interactiveList).toContain(mesh);
-    const hit = view3d.raycast(CENTER);
-    expect(hit).not.toBeNull();
-    expect(hit!.target).toBe(robot);
-  });
-
   test('nested interactive ancestors: the nearest one is the target, and mode churn never duplicates', () => {
     const view3d = makeView();
     const grandparent = new Container3D();

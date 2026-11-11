@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 
 import { DepthMapViewer } from '../DepthMapViewer';
 
-/** A four-layer depth array texture, the shape a cascaded shadow map has */
 function depthArrayTexture(): Texture {
   return new Texture({
     source: new TextureSource({
@@ -20,12 +19,10 @@ function depthArrayTexture(): Texture {
   });
 }
 
-/** How many renderers hold a GPU copy of this buffer or geometry */
 function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   return Object.values(resource._gpuData).filter(Boolean).length;
 }
 
-/** Largest x of the viewer's quad */
 function quadWidth(viewer: DepthMapViewer): number {
   return Math.max(...viewer.geometry.getAttribute('aPosition').buffer.data);
 }

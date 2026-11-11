@@ -1,9 +1,6 @@
 import { Binding } from './Binding';
 
-/**
- * Applies scalar samples to a numeric property on an object target
- * @internal
- */
+/** @internal */
 export class NumberBinding<TTarget extends object = object> extends Binding {
   constructor(
     private readonly _target: TTarget,

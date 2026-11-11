@@ -8,7 +8,7 @@ import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Pass3D } from '~/post-processing/Pass3D';
-import type { PassContext, PassStage } from '~/post-processing/Pass3D';
+import type { PassContext, SceneStage } from '~/post-processing/Pass3D';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Container3D } from '~/scene/Container3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
@@ -26,7 +26,8 @@ import { View3D } from '~/scene/View3D';
  * What the picture proves:
  * - the inset lands inside `mapCamera.viewport` and nothing spills outside it (the executor
  *   narrows the GPU viewport to the camera's frame);
- * - the marker cone sits at the eye, so the main camera near-clips it while the map shows it;
+ * - the marker cone sits at the eye, so the main camera, inside it, sees only its back faces, which
+ *   don't draw, while the map shows it;
  * - the two translucent blocks are sorted per camera — the lower one is nearer to the eye, the
  *   higher one is nearer to the map, so their overlap band blends in opposite orders.
  *
@@ -54,7 +55,7 @@ const YAW = 0.18;
  * which passes an inset wants is the demo's call.
  */
 class MinimapPass extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'afterTransparent';
+  public readonly stage: SceneStage = 'afterTransparent';
 
   private readonly _camera: Camera3D;
 
@@ -88,9 +89,12 @@ function translucent(color: number): Material3D {
  * @param options.composite - Routes the scene through an offscreen transient, and sits the view
  *   off the screen origin — which is what makes the executor's transient shift observable (a
  *   transient holds the view's content at its own origin, the screen does not).
+ * @param options.edit - Runs after one rendered frame, to change the arena both cameras draw.
  * @returns The scene, ready for `defineSceneTests`.
  */
-export function cameraInsetScene(options: { composite?: boolean } = {}): TestScene {
+export function cameraInsetScene(
+  options: { composite?: boolean; edit?: (view3d: View3D, wall: Mesh3D) => void } = {},
+): TestScene {
   const composite = options.composite ?? false;
 
   return {
@@ -164,7 +168,7 @@ export function cameraInsetScene(options: { composite?: boolean } = {}): TestSce
       view3d.camera.rotation.set(0, YAW, 0);
       view3d.camera.rotationDirty = true;
 
-      // The marker sits at the eye, so the main camera near-clips it and only the map sees it. The
+      // The marker sits at the eye, so the main camera, inside it, sees none of it and only the map does. The
       // pivot carries the yaw; the cone's own -90° tilt lays its apex along the pivot's forward.
       const marker = new Container3D();
       marker.position.set(EYE.x, EYE.y, EYE.z);
@@ -193,6 +197,11 @@ export function cameraInsetScene(options: { composite?: boolean } = {}): TestSce
       view3d.root.addChild(mapCamera);
 
       view3d.passes = [new MinimapPass(mapCamera)];
+
+      if (options.edit) {
+        app.render();
+        options.edit(view3d, wall);
+      }
     },
   };
 }

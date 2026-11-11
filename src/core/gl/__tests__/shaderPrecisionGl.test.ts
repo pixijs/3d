@@ -3,6 +3,7 @@ import type { WebGLRenderer } from 'pixi.js';
 import { BufferImageSource, CubeTexture, Texture } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { MERGE_THRESHOLD } from '~/core/batcher/batchConstants';
 import { SsaoEffect } from '~/extras/post-processing/effects/SsaoEffect';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
@@ -28,12 +29,6 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 }
 
-/**
- * Returns what `source` uses at a precision below highp, or an empty list
- *
- * Desktop and Apple GPUs run everything at highp, so no visual scene can catch a missing
- * declaration; `GLSL_PRECISION_PRELUDE` in `glslPrecisionPlugin` says what Mali does instead.
- */
 function lowPrecisionUses({ source, fragment }: CompiledShader): string[] {
   const code = stripComments(source);
   const problems: string[] = [];
@@ -61,7 +56,7 @@ function colourFace(r: number, g: number, b: number): Texture {
 }
 
 describe('WebGL shader precision', () => {
-  it('declares highp for every sampler type and for fragment int maths in the material, IBL, skybox, shadow, effect and output shaders', async () => {
+  it('declares highp for every sampler type and for fragment int maths in the direct and merged material, IBL, skybox, shadow, effect and output shaders', async () => {
     const compiled: CompiledShader[] = [];
     const proto = WebGL2RenderingContext.prototype;
     const descriptor = Object.getOwnPropertyDescriptor(proto, 'shaderSource') as PropertyDescriptor;
@@ -105,6 +100,12 @@ describe('WebGL shader precision', () => {
       view3d.root.addChild(
         new Mesh3D({ geometry: new SphereGeometry(), material: new Material3D({ baseColor: 0xff8844 }) }),
       );
+      const shared = new SphereGeometry({ radius: 0.3 });
+      for (let i = 0; i <= MERGE_THRESHOLD; i++) {
+        const mesh = new Mesh3D({ geometry: shared, material: new Material3D({ baseColor: 0x3366ff + i * 0x001800 }) });
+        mesh.position.set((i - MERGE_THRESHOLD / 2) * 0.7, -1.5, 0);
+        view3d.root.addChild(mesh);
+      }
       view3d.camera.position.set(0, 0, 4);
 
       app.render();
@@ -116,9 +117,12 @@ describe('WebGL shader precision', () => {
     }
 
     const sources = compiled.map((shader) => shader.source).join('\n');
-    expect(sources, 'the material shader compiled').toContain('vTextureSlots');
+    expect(sources, 'the material shader compiled').toContain('vMaterialIndex');
+    expect(sources, 'the merged material shader compiled, reading its row from the store texture').toContain(
+      'texelFetch(uMaterialStorage',
+    );
     expect(sources, 'the PBR lighting compiled').toContain('geometrySchlickGGX');
-    expect(sources, 'a depth-reading effect compiled').toContain('uOpaqueDepthTexture');
+    expect(sources, 'a depth-reading effect compiled').toContain('uFxDepthTexture');
     expect(
       compiled.some((shader) => /samplerCube/.test(stripComments(shader.source))),
       'a cube-map shader compiled',

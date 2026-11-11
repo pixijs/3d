@@ -2,10 +2,7 @@ import { collectOverrideDefs, emitOverridesGlsl } from '../../shader/collectOver
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
 /**
- * GLSL compiler plugin that bakes the bits' overrides into the header as `#define KEY VALUE` lines
- *
- * Values come from `glslOptions.overrides`, falling back to each override's default; a required
- * override with no value throws. The WGSL twin is `wgslOverridesPlugin`.
+ * The GLSL twin of `wgslOverridesPlugin`; GLSL ES 3.00 has no override constants, so values bake in as `#define`s
  * @internal
  */
 export const glslOverridesPlugin: ShaderCompilerPlugin = {

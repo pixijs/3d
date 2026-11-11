@@ -8,7 +8,6 @@ import { Geometry3D } from '~/geometry/Geometry3D';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { View3D } from '~/scene/View3D';
 
-/** A source with one unit triangle, for framing checks */
 function createTriangleSource(): Scene3DSource {
   const source = new Scene3DSource({
     scenes: [{ children: [0] }],

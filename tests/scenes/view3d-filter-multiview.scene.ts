@@ -9,17 +9,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Two filtered View3D cards side by side — a BlurFilter on the left, a
- * black-and-white ColorMatrixFilter on the right. Both hold high-poly geometry
- * (torus knot / torus) large enough to grow the shared geometry atlas when the
- * second view's mesh is added.
- *
- * Guards that the first-rendered (left) view still renders after that growth
- * reallocates the atlas buffers its draw state was cached against. Correct
- * render: a blurred knot on the left, a greyscale torus on the right.
- */
-
 const CARD = 220;
 
 function buildCard(geometry: Geometry3D, color: number, metallic: number, cx: number, filter: unknown): Container {

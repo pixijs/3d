@@ -44,10 +44,9 @@ export type ParticleSpace = 'world' | 'local';
 /**
  * Constructor options for {@link ParticleContainer3D}
  *
- * Every field is optional. The container builds its own geometry and material, so it takes the
- * {@link Container3DOptions} rather than the mesh ones, except `width`, `height` and `depth`: the
- * quads take shape in the shader, so the node has no local bounds to size against. Shadows are
- * always off.
+ * The container builds its own geometry and material, so it takes the {@link Container3DOptions}
+ * rather than the mesh ones, less `width`, `height` and `depth`, since particles have no bounds to
+ * measure. Particles never cast or receive shadows.
  * @example
  * ```ts
  * const sparks = new ParticleContainer3D({
@@ -69,7 +68,7 @@ export interface ParticleContainer3DOptions<B extends readonly ShaderBit[] = rea
    * The sprite drawn for every particle
    *
    * Pass an array of frames for a flipbook. The frames must share one `TextureSource`, such as a
-   * sprite sheet, because the whole system is one draw call that binds one texture.
+   * sprite sheet.
    * @default Texture.WHITE
    * @example
    * ```ts
@@ -113,10 +112,9 @@ export interface ParticleContainer3DOptions<B extends readonly ShaderBit[] = rea
    * (`'local'`)
    *
    * World-space particles are left behind as the emitter moves, which suits smoke and dust.
-   * Local-space particles move with the node, so a system on a moving object travels with it,
-   * at no extra cost.
-   *
-   * Particle size is a world-space diameter either way; the node's scale doesn't change it.
+   * Local-space particles move with the node, so a system on a moving object travels with it, at
+   * no extra cost. Particle size is a world-space diameter either way; the node's scale doesn't
+   * change it.
    * @default 'world'
    * @example
    * ```ts
@@ -128,11 +126,11 @@ export interface ParticleContainer3DOptions<B extends readonly ShaderBit[] = rea
   /**
    * How particle transparency works
    *
-   * `'blend'` blends particles over the scene. `'mask'` makes hard-edged cutouts that write
-   * depth, so they need no sorting and overlap correctly between systems; the pick for leaves,
-   * debris and stylised effects. `'opaque'` draws whole quads solid, which is the cheapest and
-   * only right for textures with no transparent texels. {@link ParticleContainer3DOptions.blendMode}
-   * only applies under `'blend'`.
+   * - `'blend'`: blends over the scene with {@link ParticleContainer3DOptions.blendMode | blendMode}.
+   *   Particles draw in slot order, not sorted by depth, which shows under `'normal'` blending.
+   * - `'mask'`: hard-edged cutouts that write depth, so they overlap correctly in any order; suits
+   *   leaves and debris.
+   * - `'opaque'`: solid quads, the cheapest; only for textures with no transparent texels.
    * @default 'blend'
    * @example
    * ```ts
@@ -154,9 +152,9 @@ export interface ParticleContainer3DOptions<B extends readonly ShaderBit[] = rea
    *
    * Each bit's `attributes` get space in every particle, writable with
    * {@link ParticleContainer3D.setParticle}, and its `material` bindings become fields on the
-   * container's {@link ParticleContainer3D.uniforms | uniforms}. Declaring what a bit needs is
-   * all it takes. The bits run after the base colour is sampled, so they see and can change
-   * `albedo` and `alpha`.
+   * container's {@link ParticleContainer3D.uniforms | uniforms}. The bits run after the base colour
+   * is sampled, so they see and can change `albedo` and `alpha`; {@link getParticleBit} lists the
+   * vertex-stage locals they can change.
    * @example
    * ```ts
    * const particles = new ParticleContainer3D({ extraBits: [particleLifetimeBit, particleAlphaOverLifeBit] });
@@ -169,10 +167,10 @@ export interface ParticleContainer3DOptions<B extends readonly ShaderBit[] = rea
  * Typed-array views over the particle vertex buffer, for code that writes particles itself
  * instead of through {@link ParticleContainer3D.setParticleAt | setParticleAt}
  *
- * All three views share one `ArrayBuffer`, and every vertex holds every attribute in turn.
- * Vertex `v`'s position starts at `f32[v * floatStride]`, and any other attribute sits
- * `offsets[name] / 4` elements after that. Each particle is 4 consecutive vertices holding the
- * same data. Call {@link ParticleContainer3D.markDirty | markDirty} for what you write.
+ * All three views share one `ArrayBuffer`. Each particle is 4 consecutive vertices holding the
+ * same data. Vertex `v`'s position starts at `f32[v * floatStride]`, and any other attribute sits
+ * `offsets[name] / 4` elements after that. Call {@link ParticleContainer3D.markDirty | markDirty}
+ * for what you write.
  * @category scene
  * @advanced
  */
@@ -196,22 +194,15 @@ export interface ParticleContainerViews {
 }
 
 /**
- * The drawing half of a particle system: a fixed pool of camera-facing quads drawn in one call,
- * which you move yourself
+ * A fixed pool of camera-facing quads drawn in one call, which you move yourself
  *
- * Build on this when you already have a simulation, such as a physics solver, a replayed
- * recording or a GPU readback, and want it on screen cheaply. To make smoke without writing a
- * simulation, use `ParticleSystem3D` from `@pixi/3d/extras`, which extends this class.
+ * Use it to draw a simulation you already have, such as a physics solver or a replayed recording.
+ * For particles that move on their own, use `ParticleSystem3D` from `@pixi/3d/extras`, which
+ * extends this class.
  *
- * Every particle is four vertices in one buffer, so the whole pool is one draw call and one
- * upload. Write a particle with {@link ParticleContainer3D.setParticleAt | setParticleAt}:
- * nothing allocates, and there are no per-particle objects. An empty slot is one with
- * `size = 0`; its quad collapses to a point and draws nothing.
- *
- * `setParticleAt` packs the colour on every call. When a tint is fixed, or
- * changes more slowly than once per particle per frame, pack it yourself with
- * `packParticleColor` and write through
- * {@link ParticleContainer3D.writePacked | writePacked} instead.
+ * Write particles with {@link ParticleContainer3D.setParticleAt | setParticleAt}, which allocates
+ * nothing, then call {@link ParticleContainer3D.upload | upload}. A slot with a size of 0 draws
+ * nothing.
  * @example
  * ```ts
  * const particles = new ParticleContainer3D({ texture: smoke, capacity: 500, blendMode: 'add' });
@@ -227,12 +218,10 @@ export interface ParticleContainerViews {
  * for (let i = 0; i < count; i++) particles.writePacked(i, x[i], y[i], z[i], 0.5, 0, tint);
  * particles.upload();
  * ```
- * @see `ParticleSystem3D` from `@pixi/3d/extras` for the standard simulation built on top of this.
  * @see {@link ParticleContainer3DOptions} for the constructor options.
- * @typeParam B - The extra bits, which decide what {@link ParticleContainer3D.setParticle} accepts.
- * Inferred from `extraBits`. With none given it defaults to any bits, so a variable typed as the
- * bare `ParticleContainer3D` holds every container; `setParticle` then types only the built-in
- * attributes and leaves other names to the runtime check.
+ * @typeParam B - The extra bits, inferred from `extraBits`; they decide what
+ * {@link ParticleContainer3D.setParticle} accepts. On the bare `ParticleContainer3D` type,
+ * `setParticle` type-checks only the built-in attributes.
  * @category scene
  * @advanced
  */
@@ -247,49 +236,30 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   public readonly data: ParticleContainerViews;
 
   /**
-   * The textures particles sample, one per flipbook frame
+   * The flipbook frames, in frame order; one entry for a single sprite
    *
-   * A particle's `frame` index picks `textures[frame]`. A plain sprite has one entry. Every
-   * entry shares one `TextureSource`.
+   * A `ParticleSystem3D` with `frameMode` `'animate'` or `'overLife'` holds one texture over the
+   * whole sheet here instead.
    */
   public readonly textures: readonly Texture[];
 
-  /**
-   * Each frame's sampling window `(u0, v0, uScale, vScale)` in the vertex buffer's `unorm16x4`
-   * encoding, so `writePacked` copies it without conversion; empty for a single sprite
-   */
+  /** Each frame's window in the vertex buffer's `unorm16x4` encoding; empty for a single sprite */
   protected readonly _packedFrames: Uint16Array;
-  /**
-   * The whole-sheet texture a flipbook binds, owned here; `null` for a single sprite
-   *
-   * A texture's frame doesn't crop on the GPU: binding any frame binds the whole source, and the
-   * material derives a UV transform from the frame. A flipbook binds this wrapper over the whole
-   * sheet, so that transform is identity and the per-particle frame windows do all the UV
-   * mapping. A single sprite binds its own texture, whose frame is its framing.
-   */
+  /** A flipbook's whole sheet, so the material's UV transform is identity, as `ParticleMaterial` requires */
   private readonly _sheet: Texture | null;
 
   private readonly _vertexBuffer: Buffer;
   /**
-   * The corner and index buffers shared with every other container, released in `destroy`
-   *
-   * The geometry lists the corner attribute after this container's own attributes, because a
-   * geometry reads its vertex count off its first attribute, and the shared corner buffer can be
-   * bigger than this container.
+   * Shared with other containers until `destroy`; `aUV` goes last, since the vertex count comes from
+   * the first attribute and the shared corner buffer can be bigger
    */
   private readonly _quads: SharedQuadBuffers;
   private readonly _floatStride: number = 0;
   private readonly _sizeRotIndex: number = 0;
   private readonly _colorIndex: number = 0;
-  /** Float index of the frame window within a vertex, or `-1` when the system has one frame */
+  /** `-1` when the system has one frame */
   private readonly _uvFrameIndex: number = 0;
-  /**
-   * Every attribute the container's bits declare, by name, resolved to its place in a vertex
-   *
-   * Built from the particle bit and the extra bits, the same ones `ParticleMaterial` composes,
-   * so the buffer holds exactly the attributes the shader reads. The material's other bits
-   * declare none; one that did would need adding to the layout here.
-   */
+  /** Built from the bits of `ParticleMaterial._bits` that declare attributes: the particle bit and the extra bits */
   private readonly _attributes: Record<string, ParticleAttribute>;
   private readonly _bytesPerParticle: number = 0;
   private readonly _particleMaterial: ParticleMaterial;
@@ -301,11 +271,7 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   /** Highest slot written since the last `clear`; every slot past it is still zero */
   private _written = -1;
 
-  /**
-   * Default {@link ParticleContainer3DOptions} merged under every constructor call
-   *
-   * Mutate to change the defaults process-wide.
-   */
+  /** Defaults for every new `ParticleContainer3D`; an option passed as `undefined` keeps its default */
   public static override defaultOptions: ParticleContainer3DOptions = {
     capacity: 1000,
     billboard: 'spherical',
@@ -317,8 +283,6 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
 
   /**
    * Creates a particle container; add it under a {@link View3D}'s root to draw it
-   *
-   * A `parent` option is applied last, once the container is fully built.
    * @param options - Construction options; see {@link ParticleContainer3DOptions}.
    */
   constructor(options: ParticleContainer3DOptions<B> = {}) {
@@ -418,36 +382,25 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   }
 
   /**
-   * The container's uniforms, by the names the bits read them under
+   * The uniforms the composed bits declare in their `material` bindings, by name
    *
-   * Only the names the composed bits declare in their `material` bindings exist here. Assigning
-   * one queues it for upload, so `particles.uniforms.uParticleTime = t` is the whole of a
-   * per-frame update.
-   *
-   * Scalars take a number. Vectors take an array, `uGravity = [0, -9.8, 0]`, and read back as a
-   * `Float32Array` view. A point-shaped object isn't an array and is silently ignored, so
-   * `{ x, y, z }` leaves the uniform as it was. Writing one element of that view doesn't queue
-   * an upload; call `particles.material.update()` after.
+   * Assigning one uploads it, so `particles.uniforms.uParticleTime = t` is a whole per-frame update.
+   * A vector takes an array, such as `uGravity = [0, -9.8, 0]`; a `{ x, y, z }` object is silently
+   * ignored. A vector reads back as a `Float32Array`, and writing one of its elements isn't
+   * uploaded until you call `particles.material.update()`.
    */
   get uniforms(): Record<string, unknown> {
-    return this._particleMaterial.data as unknown as Record<string, unknown>;
+    return this._particleMaterial.data;
   }
 
-  /**
-   * Always `'none'`: a particle container turns each quad to the camera itself, so it refuses
-   * the mesh-wide billboard rather than stacking the two
-   *
-   * The mesh billboard would turn the whole system about the node's origin, which moves every
-   * particle of a `space: 'local'` system. Use the `billboard` option instead; see
-   * {@link ParticleBillboardMode}.
-   */
+  /** Always `'none'`; particles face the camera through the `billboard` option instead */
   override get billboardMode(): BillboardMode {
     return 'none';
   }
 
   /**
-   * Refuses the assignment and warns; see the getter
-   * @param value - Ignored; anything but `'none'` warns.
+   * Ignored; a value other than `'none'` warns
+   * @param value - Ignored
    */
   override set billboardMode(value: BillboardMode) {
     if (value === 'none') return;
@@ -461,18 +414,16 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   /**
    * How particles blend over the scene; see {@link ParticleBlendMode}
    *
-   * Switching rebuilds the draw state, so prefer setting it once at construction. Applies under
-   * `alphaMode: 'blend'` only.
+   * Ignored unless `alphaMode` is `'blend'`. A change rebuilds the draw state, so prefer setting it
+   * once at construction. Fog reaches the particles only if the blend mode was `'normal'` at
+   * construction; a later change doesn't turn it on or off.
    */
   get blendMode(): ParticleBlendMode {
     return this._particleMaterial.state.blendMode as ParticleBlendMode;
   }
 
   /**
-   * Switches the blend, rebuilding the draw state on the next frame
-   *
-   * Ignored under `'mask'` and `'opaque'`, which don't blend. Whether fog reaches the particles
-   * stays as the blend mode at construction decided; see `ParticleMaterialOptions.fog`.
+   * Sets the blend mode
    * @param value - How particles blend over the scene.
    */
   set blendMode(value: ParticleBlendMode) {
@@ -484,23 +435,20 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   }
 
   /**
-   * Writes one particle into all four of its vertices and adds it to the pending upload
+   * Writes one particle, to go out with the next {@link upload}
    *
-   * Positions are in world space unless the container was built with `space: 'local'`. `size`
-   * is a world-space diameter, so a particle shrinks with distance like everything else. Size 0
-   * empties the slot: the quad collapses and costs no fill rate.
-   *
-   * The colour is packed on every call. When a tint doesn't vary per particle, pack it once with
-   * `packParticleColor` and write through {@link writePacked}.
-   * @param index - Slot to write, in `[0, capacity)`.
+   * Positions are in world space unless the container was built with `space: 'local'`. A `size`
+   * of 0 empties the slot. To write many particles with one tint, {@link writePacked} skips
+   * packing the colour on every call.
+   * @param index - Slot to write, 0 to `capacity - 1`.
    * @param x - Particle centre x.
    * @param y - Particle centre y.
    * @param z - Particle centre z.
    * @param size - World-space diameter.
-   * @param rotation - Spin about the view axis, in radians.
-   * @param color - Display-space `0xRRGGBB` tint, sRGB-decoded like every other colour in the engine.
-   * @param alpha - Opacity in `[0, 1]`.
-   * @param frame - Flipbook frame index; ignored by single-sprite systems.
+   * @param rotation - Spin in the quad's plane, in radians.
+   * @param color - `0xRRGGBB` tint, in display (sRGB) space.
+   * @param alpha - Opacity, 0 to 1.
+   * @param frame - Flipbook frame index, wrapping past the last frame; ignored with one frame.
    */
   public setParticleAt(
     index: number,
@@ -517,19 +465,18 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   }
 
   /**
-   * Writes one particle with its colour already packed by `packParticleColor`
+   * {@link setParticleAt} with a colour already packed by {@link packParticleColor}
    *
-   * The same write as {@link setParticleAt}, minus the colour packing. Use it whenever a tint is
-   * fixed, or changes more slowly than once per particle per frame. Its body is kept small
-   * enough for V8 to inline into your per-particle loop.
-   * @param index - Slot to write, in `[0, capacity)`.
+   * Use it when a tint is fixed, or changes less often than you write particles: pack it once,
+   * then write many.
+   * @param index - Slot to write, 0 to `capacity - 1`.
    * @param x - Particle centre x.
    * @param y - Particle centre y.
    * @param z - Particle centre z.
    * @param size - World-space diameter.
-   * @param rotation - Spin about the view axis, in radians.
+   * @param rotation - Spin in the quad's plane, in radians.
    * @param packedColor - Tint and opacity as `packParticleColor` returns them.
-   * @param frame - Flipbook frame index; ignored by single-sprite systems.
+   * @param frame - Flipbook frame index, wrapping past the last frame; ignored with one frame.
    */
   public writePacked(
     index: number,
@@ -566,14 +513,7 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
     if (index > this._written) this._written = index;
   }
 
-  /**
-   * Writes a particle's flipbook frame window into all four of its vertices
-   *
-   * Split out of `writePacked` so that stays small enough for V8 to inline into a caller's
-   * per-particle loop. Past V8's inlining limit, every float argument is boxed on each call.
-   * @param index - Slot to write, in `[0, capacity)`.
-   * @param frame - Flipbook frame index, wrapped into `[0, textures.length)`.
-   */
+  /** Kept out of `writePacked`, so that stays small enough for V8 to inline into a caller's loop */
   private _writeFrame(index: number, frame: number): void {
     const stride = this._floatStride;
     const uvFrame = this._uvFrameIndex;
@@ -600,19 +540,18 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   }
 
   /**
-   * Writes any of a particle's attributes by name into all four of its vertices, and adds it to
-   * the pending upload
+   * Writes any of a particle's attributes by name, to go out with the next {@link upload}
    *
-   * Every attribute the composed bits declare can be written, built-ins included, so a bit that
-   * declares `aVel` makes `{ aVel: { x, y, z } }` valid here with no other wiring. Attributes not
-   * named keep their values. Each value takes the shape its format implies (see
-   * {@link ParticleAttributeValue}); the built-in tint takes any `ColorSource`, decoded like
-   * {@link setParticleAt}'s `color`.
+   * Every `float32` to `float32x4`, `unorm8x4` and `unorm16x4` attribute the composed bits declare
+   * can be written, built-ins included, so a bit that declares `aVel` makes `{ aVel: { x, y, z } }`
+   * valid here; other formats throw, so write them through {@link data}. Attributes not named keep
+   * their values. Each value takes the shape of its format; see {@link ParticleValues}. Declare your
+   * bits with `satisfies ShaderBit`, not `: ShaderBit`, or their names and shapes aren't
+   * type-checked.
    *
-   * Looking keys up by name costs several times what the positional `setParticleAt` does, so
-   * this suits spawning, where a slot is written once, rather than rewriting every particle
-   * every frame.
-   * @param index - Slot to write, in `[0, capacity)`.
+   * It looks each name up, so it's slower than {@link setParticleAt}: use it to spawn a particle,
+   * not to rewrite every particle every frame.
+   * @param index - Slot to write, 0 to `capacity - 1`.
    * @param values - Attribute name to value. An undeclared name throws.
    */
   public setParticle(index: number, values: ParticleValues<B>): void {
@@ -698,11 +637,12 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   }
 
   /**
-   * Adds particles `lo` to `hi`, inclusive, to the pending upload
+   * Marks particles `lo` to `hi`, inclusive, for the next {@link upload}
    *
-   * Only needed after writing through {@link data} directly; the setters do it for you. The
-   * upload is one contiguous range covering everything marked. A range given the wrong way
-   * round marks the whole pool, and one past either end is clamped to it.
+   * Only needed after writing through {@link data} directly; the setters mark what they write.
+   * The upload is one range spanning everything marked, so two far-apart particles send all the
+   * slots between them. A range given the wrong way round marks the whole pool, and one past either
+   * end is clamped to it.
    * @param lo - First particle in the range.
    * @param hi - Last particle in the range, inclusive.
    */
@@ -721,15 +661,7 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
     if (hi > this._written) this._written = hi;
   }
 
-  /**
-   * Uploads the pending range and clears it
-   *
-   * One range covers every attribute, because they share one buffer. Free when nothing is
-   * pending.
-   *
-   * Call it once per frame, after every write. On WebGL, pixi uploads only the last range it was
-   * handed before a draw, so a second call in the same frame would drop the first range.
-   */
+  /** Sends the particles written since the last upload to the GPU; call it after each frame's writes */
   public upload(): void {
     const lo = this._dirtyLo;
     const hi = this._dirtyHi;
@@ -743,10 +675,9 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   }
 
   /**
-   * Empties every slot, so the whole pool stops drawing
+   * Empties every slot, from the next {@link upload} on
    *
-   * Adds the emptied range to the next {@link upload}. Slots never written are still zero, so
-   * the cost follows the slots used, not the capacity.
+   * It costs up to the highest slot written since the last clear, not the whole capacity.
    */
   public clear(): void {
     if (this._written < 0) return;
@@ -756,11 +687,7 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
     this._written = -1;
   }
 
-  /**
-   * Throws for a slot outside the pool, where a write would land nowhere and the upload would ask
-   * for bytes past the buffer
-   * @param index - Slot to check.
-   */
+  /** Throws, since a write past the pool lands nowhere but its upload range runs past the buffer */
   private _checkIndex(index: number): void {
     if (!(index >= 0 && index < this.capacity)) {
       throw new Error(`[ParticleContainer3D] particle ${index} is outside the pool of ${this.capacity}`);
@@ -768,12 +695,10 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   }
 
   /**
-   * Destroys the container and everything it built
+   * Destroys the container and the geometry and material it built
    *
-   * Its geometry, material and vertex buffer, and a flipbook's whole-sheet texture, always go.
-   * `options` reaches any children unchanged, and decides whether the textures you passed in go
-   * too. The corner and index buffers it shares with other containers stay until the last
-   * container using them is destroyed.
+   * `children` works as for any node. `texture` frees a single sprite's texture but leaves a
+   * flipbook's frames; add `textureSource` to free the sheet behind them.
    * @param options - Teardown flags; see {@link Destroy3DOptions}.
    */
   public override destroy(options?: Destroy3DOptions): void {
@@ -790,12 +715,6 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
     this._sheet?.destroy(false);
   }
 
-  /**
-   * Does nothing, so the base `destroy` leaves the geometry alone and `destroy` frees it itself
-   *
-   * The geometry draws from the corner and index buffers every container shares, and the base
-   * cascade would destroy them with it under `geometry: true`. `destroy` calls
-   * `geometry.destroy(false)` instead, which keeps them.
-   */
+  /** Empty: under `geometry: true` the base would destroy the shared quad buffers; `destroy` keeps them */
   protected override _destroyGeometry(): void {}
 }

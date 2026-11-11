@@ -1,39 +1,15 @@
+import { mathConstantsBit } from '../../../core/shader/bits/mathConstantsBit';
 import { createLightingBit } from '../../../core/shader/createLightingBit';
 
 /**
- * Blinn-Phong lighting, normalized to read at the same brightness as `pbrLightingBit`
- *
- * Built with {@link createLightingBit}, which owns the light loop, attenuation and shadows; this bit
- * supplies only the shading.
- *
- * - Diffuse is Lambert, `albedo / PI`.
- * - Specular is `pow(N·H, shininess)` around the half vector, scaled by `(shininess / 2 + 1) / PI`
- *   to keep the highlight's energy roughly steady as shininess changes, by 0.25 for the implicit
- *   geometry term, and by `specularStrength`. Those three fold into `specScale` once per fragment.
- *   Fresnel-Schlick tints it from `specularColor`, in the spherical-Gaussian form `pbrLightingBit`
- *   documents.
- * - Both lobes take `light.color * N·L * attenuation * shadow`.
- * - Ambient is the ambient lights' sum times `albedo / PI`, plus the view environment's
- *   `sampleEnvironment(normal, 1.0) * albedo`, the form `iblBit` uses for diffuse, so Phong and PBR
- *   match under one environment. There is no environment specular.
- *
- * Reads the surface `normal`, `sampleEnvironment` from the view's environment bit (which the
- * descriptor must include; with no environment it returns zero), and `viewDir`, `albedo`,
- * `specularColor`, `shininess`, `specularStrength` and `emissive` from `phongMaterialBit`. Writes
- * `finalColor` as ambient plus direct light plus emissive.
+ * Normalized to read as bright as `pbrLightingBit`, and takes the environment's diffuse as `iblBit`
+ * does, with no `1 / PI`, so Phong and PBR meshes match under the same lights
  * @internal
  */
 export const phongLightingBit = createLightingBit({
   name: 'phongLighting',
 
-  header: {
-    gpu: /*wgsl*/ `
-const INV_PI: f32 = 0.31830988618;
-`,
-    gl: /*glsl*/ `
-const float INV_PI = 0.31830988618;
-`,
-  },
+  requires: [mathConstantsBit],
 
   preLighting: {
     gpu: /*wgsl*/ `

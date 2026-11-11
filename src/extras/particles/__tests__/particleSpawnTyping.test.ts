@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
+import { seededRandom } from '~/math/utils/seededRandom';
 
-/** Declared with `satisfies`, so `spawn()` knows these names and their shapes */
 const windBit = {
   name: 'spawn-typing-wind',
   attributes: { aWind: 'float32x3', aSeed: 'float32' },
@@ -11,7 +11,7 @@ const windBit = {
 
 function makeSystem(): ParticleSystem3D<readonly [typeof windBit]> {
   return new ParticleSystem3D({
-    seed: 'test',
+    createRandom: () => seededRandom('test'),
     autoUpdate: false,
     capacity: 8,
     emitRate: 0,
@@ -20,21 +20,10 @@ function makeSystem(): ParticleSystem3D<readonly [typeof windBit]> {
   });
 }
 
-/** Float `component` of an attribute on a slot's first vertex */
 function laneAt(system: ParticleSystem3D<never>, index: number, name: string, component = 0): number {
   return system.data.f32[index * 4 * system.data.floatStride + system.data.offsets[name] / 4 + component];
 }
 
-/**
- * Typing cases tsc checks and nothing calls: a `@ts-expect-error` line still
- * executes if reached, and these would throw at runtime
- *
- * Custom and built-in overrides each take one value for the batch, a pair per
- * particle or a function per particle. `setParticle` takes the container's
- * built-ins, the system's own attributes and the custom ones. The bit list also
- * types `onUpdate`'s system, inferred from a plain array literal with no
- * `as const`.
- */
 function tscOnlyChecks(): void {
   const system = makeSystem();
 
@@ -123,7 +112,7 @@ describe('ParticleSystem3D spawn overrides', () => {
     system.destroy();
   });
 
-  it('calls a function per particle with the seeded rng and the slot index', () => {
+  it('calls a function per particle with the seeded rng and its place in the burst', () => {
     const system = makeSystem();
 
     system.spawn(3, { aSeed: (_rng, index) => index * 10 });

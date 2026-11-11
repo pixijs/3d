@@ -7,10 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * 1×1 RGBA face. Six distinct colours make the skybox directional, so the
- * screenshot verifies cubemap orientation + sampling — not just "a colour".
- */
 function colorFace(r: number, g: number, b: number): Texture {
   return new Texture({
     source: new BufferImageSource({
@@ -23,15 +19,6 @@ function colorFace(r: number, g: number, b: number): Texture {
   });
 }
 
-/**
- * Exercises the Background pass with a cubemap skybox.
- *
- * A per-face-coloured cubemap behind a small opaque cube: the skybox fills the
- * frame (Background draws at the far plane, depth-write off) and the cube
- * occludes the centre (Opaque depth-writes over it). So this checks both the
- * skybox render itself and that opaque geometry correctly composites in front
- * of it, on WebGL and WebGPU.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x000000,
@@ -43,12 +30,12 @@ export const scene: TestScene = {
 
     view3d.background = CubeTexture.from({
       faces: {
-        right: colorFace(220, 60, 60), // +X red
-        left: colorFace(60, 200, 200), // -X cyan
-        top: colorFace(70, 200, 90), // +Y green
-        bottom: colorFace(200, 70, 200), // -Y magenta
-        front: colorFace(70, 110, 220), // +Z blue
-        back: colorFace(220, 200, 70), // -Z yellow
+        right: colorFace(220, 60, 60),
+        left: colorFace(60, 200, 200),
+        top: colorFace(70, 200, 90),
+        bottom: colorFace(200, 70, 200),
+        front: colorFace(70, 110, 220),
+        back: colorFace(220, 200, 70),
       },
     });
 

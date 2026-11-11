@@ -47,7 +47,13 @@ function fillImage(image: PNG, red: number, green: number, blue: number, alpha: 
   }
 }
 
-function resizeImage(image: PNG, width: number, height: number): PNG {
+/**
+ * `image` on a black canvas `width` x `height`, so two shots of different sizes can still be compared
+ * @param image - The image to place in the top-left corner.
+ * @param width - The canvas's width, at least the image's.
+ * @param height - The canvas's height, at least the image's.
+ */
+export function resizeImage(image: PNG, width: number, height: number): PNG {
   if (image.width === width && image.height === height) {
     return image;
   }
@@ -92,7 +98,15 @@ function drawLabel(image: PNG, label: string, x: number, y: number) {
   }
 }
 
-function saveFailureArtifact(name: string, expected: PNG, actual: PNG, diff: PNG) {
+/**
+ * Writes the expected, actual and diff images side by side to `.pr_uploads/<folder>/<name>`
+ * @param name - The file's name.
+ * @param expected - The reference image.
+ * @param actual - The image taken.
+ * @param diff - pixelmatch's diff of the two.
+ * @param folder - The folder under `.pr_uploads/`.
+ */
+export function saveFailureArtifact(name: string, expected: PNG, actual: PNG, diff: PNG, folder = 'visual') {
   const gap = 4;
   const titleHeight = 20;
   const output = new PNG({
@@ -110,7 +124,7 @@ function saveFailureArtifact(name: string, expected: PNG, actual: PNG, diff: PNG
   copyImage(actual, output, expected.width + gap, titleHeight);
   copyImage(diff, output, expected.width * 2 + gap * 2, titleHeight);
 
-  const artifactsPath = path.resolve(process.cwd(), '.pr_uploads/visual');
+  const artifactsPath = path.resolve(process.cwd(), '.pr_uploads', folder);
 
   fs.mkdirSync(artifactsPath, { recursive: true });
   fs.writeFileSync(path.resolve(artifactsPath, name), PNG.sync.write(output));

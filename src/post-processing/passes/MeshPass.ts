@@ -3,7 +3,7 @@ import { ForwardRenderPass } from '../../core/render-passes/ForwardRenderPass';
 import type { PassDescriptorOptions } from '../../materials/PassDescriptor';
 import type { Camera3D } from '../../scene/cameras/Camera3D';
 import { Pass3D } from '../Pass3D';
-import type { Pass3DOptions, PassContext, PassStage } from '../Pass3D';
+import type { Pass3DOptions, PassContext, SceneStage } from '../Pass3D';
 
 /**
  * Constructor options for {@link MeshPass}
@@ -12,19 +12,17 @@ import type { Pass3DOptions, PassContext, PassStage } from '../Pass3D';
  */
 export interface MeshPassOptions extends Pass3DOptions {
   /**
-   * Pass name — the key a material opts in with via its `passes` option
-   *
-   * Unique per view per camera: naming an existing pass draws that same membership again, and
-   * a second pass on one name must carry a {@link MeshPassOptions#camera}.
+   * The name materials opt in with, through their `passes` option; {@link RenderPassOptions#name}
+   * says when two passes can share one
    */
   name: string;
   /**
    * Where in the default graph the pass draws
    *
-   * Left out, a camera with a render texture draws at `'beforeOpaque'`, so its texture is
-   * complete before any material samples it; anything else draws at `'afterOpaque'`.
+   * Left out, a pass whose camera has a render texture draws at `'beforeOpaque'`, so the texture
+   * is complete before any material samples it; any other pass draws at `'afterOpaque'`.
    */
-  stage?: Exclude<PassStage, 'post'>;
+  stage?: SceneStage;
   /** Human-readable explanation shown by graph tooling */
   description?: string;
   /**
@@ -35,30 +33,19 @@ export interface MeshPassOptions extends Pass3DOptions {
    */
   descriptor?: PassDescriptorOptions;
   /**
-   * Draw ordering — stable batch-key order (cacheable) or back-to-front by distance
+   * Draw order; {@link ForwardRenderPassOptions#sort} has the choices
    * @default 'key'
    */
   sort?: 'key' | 'distance';
   /**
-   * Whether the draw packs a texture atlas for the shader to sample
-   *
-   * Set `false` for solid-colour or depth-only shaders.
-   * @default true
-   */
-  textures?: boolean;
-  /**
    * Camera to draw from, instead of the view's own
    *
-   * The camera must live in the view's scene graph (`view.root.addChild(camera)`) — that is
-   * what keeps its world transform current. Its `viewport` decides where its image lands: a
-   * corner of the view for a minimap, half of it for split-screen. Give the camera a
-   * `renderTexture` and the image lands in that texture instead, ready for a material to show —
-   * a security feed, a mirror. A mesh that samples that texture while this camera draws it
-   * reads last frame's picture. This pass only redraws the named membership: glass seen from this
-   * camera needs its own {@link CopyOpaquePass} and {@link TransmissionRenderPass} (plus a
-   * {@link CopyDepthPass} and {@link BlendedRefractionPass} for blended refraction) pointed at it,
-   * added from the `build` of a {@link Pass3D} listed after this one at the same stage. See
-   * {@link RenderPassOptions#camera}.
+   * Add it to the view's scene (`view.root.addChild(camera)`) so its transform stays current. Its
+   * `viewport` places the image. Give it a `renderTexture` to draw into that texture instead, for a
+   * material to show; a mesh that samples the texture while this camera draws it sees last frame's
+   * picture. The pass draws only the meshes opted in by name, so glass seen from this camera needs
+   * passes of its own, added from the `build` of a {@link Pass3D} listed after this one at the same
+   * stage; {@link RenderPassOptions#camera} lists them.
    */
   camera?: Camera3D;
 }
@@ -66,11 +53,10 @@ export interface MeshPassOptions extends Pass3DOptions {
 /**
  * Redraws every mesh that opts in by name, with an override shader and state
  *
- * The generic second pass of a multi-pass material: a material declares `passes: { outline:
- * true }` and this pass draws it again — extruded hulls, wireframes, selection masks, decals.
- * The shader comes from the material's per-pass entry or from {@link MeshPassOptions#descriptor};
- * the draw itself is the engine's forward path, so batching, skinning and morph targets come
- * for free on both backends.
+ * A material joins by naming the pass in its `passes` option, as in `passes: { outline: true }`,
+ * and a single mesh with {@link Mesh3D#enablePass}. This pass draws them again: for outlines,
+ * wireframes, selection masks or decals. Batching, skinning and morph targets work as in the main
+ * draw.
  * @example
  * ```ts
  * new View3D({ passes: [new MeshPass({ name: 'wireframe', descriptor: wireframeDescriptor })] });
@@ -91,19 +77,13 @@ export class MeshPass extends Pass3D {
     this._options = options;
   }
 
-  /**
-   * Stage of the default graph the pass draws at
-   *
-   * The one given, or derived from the camera: a camera with a render texture draws before the
-   * scene, so its texture is complete before any material samples it; anything else draws after
-   * the opaque pass. Read at graph build, so it follows the camera's texture.
-   */
-  public get stage(): Exclude<PassStage, 'post'> {
+  /** The stage the pass draws at; {@link MeshPassOptions#stage} says how it's picked when left out */
+  public get stage(): SceneStage {
     return this._options.stage ?? (this._options.camera?.renderTexture ? 'beforeOpaque' : 'afterOpaque');
   }
 
   /**
-   * Add the forward draw for this pass's meshes
+   * Adds the draw of this pass's meshes
    * @param graph - Render graph being built.
    * @param ctx - Renderer and shared handles for this build.
    */
@@ -116,7 +96,6 @@ export class MeshPass extends Pass3D {
         description: options.description,
         descriptor: options.descriptor,
         sort: options.sort ?? 'key',
-        textures: options.textures,
         camera: options.camera,
       }),
     );

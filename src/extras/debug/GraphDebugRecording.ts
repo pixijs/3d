@@ -17,10 +17,8 @@ export const GRAPH_DEBUG_RECORDING_VERSION = 2;
 export type GraphDebugRecordingStopReason = 'frame-limit' | 'manual';
 
 /**
- * One recorded frame: a complete {@link GraphDebugSnapshot} plus pre-aggregated batch-pass counts
- *
- * The counts summarise the draw-build and bundle statuses inside the snapshot so a recording
- * timeline can be scanned without walking every batch pass of every frame.
+ * One recorded frame: its {@link GraphDebugSnapshot} and counts of its batch passes by status, for
+ * scanning a timeline without walking every snapshot
  * @category extras:debug
  * @advanced
  */
@@ -29,15 +27,15 @@ export interface GraphDebugRecordedFrame {
   index: number;
   /** Time since recording started, in milliseconds */
   elapsedMs: number;
-  /** Batch passes whose retained draw commands were rebuilt this frame */
+  /** Count of batch passes that rebuilt their draw commands this frame */
   drawRebuiltBatchPassCount: number;
-  /** Batch passes that rebuild their draw commands every frame by design */
+  /** Count of batch passes that rebuild their draw commands every frame */
   dynamicDrawBatchPassCount: number;
-  /** Batch passes that recorded a new WebGPU bundle this frame */
+  /** Count of batch passes that recorded a new WebGPU bundle this frame */
   bundleRecordedBatchPassCount: number;
-  /** Batch passes whose WebGPU bundle was invalidated this frame */
+  /** Count of batch passes still waiting to record their WebGPU bundle when this frame was captured */
   bundleInvalidatedBatchPassCount: number;
-  /** Batch passes captured for the first time this frame */
+  /** Count of batch passes captured for the first time this frame */
   firstCaptureBatchPassCount: number;
   /** The complete render snapshot captured for this frame */
   snapshot: GraphDebugSnapshot;
@@ -80,29 +78,26 @@ export type GraphDebugRecordResult = 'frame-limit' | 'inactive' | 'recorded';
  */
 export interface GraphDebugRecordingOptions {
   /**
-   * Frame cap for one recording, so a forgotten recording can't grow forever
+   * Frame cap for one recording, so a forgotten recording can't grow forever; the default is a
+   * minute at 60 fps
    *
-   * Clamped to at least one frame; a non-finite value falls back to the default.
+   * Clamped to at least one frame; a non-finite value, `Infinity` included, falls back to the default.
    * @default 3600
    */
   maxFrames?: number;
 }
 
 /**
- * Debug-only, bounded collection of complete per-frame render snapshots
+ * Stores one {@link GraphDebugSnapshot} per rendered frame, up to a frame cap
  *
- * Recording is passive: feed {@link GraphDebugRecording#record} one snapshot per rendered frame
- * and it stores the frame with pre-aggregated batch-pass counts until
- * {@link GraphDebugRecording#stop} is called or the frame cap is reached.
+ * It captures nothing itself: pass each frame's snapshot to {@link GraphDebugRecording#record}
+ * between {@link GraphDebugRecording#start} and {@link GraphDebugRecording#stop}.
  * @category extras:debug
  * @advanced
  */
 export class GraphDebugRecording {
   /**
-   * Default {@link GraphDebugRecordingOptions} merged under every constructor call
-   *
-   * `new GraphDebugRecording(opts)` resolves as `{ ...GraphDebugRecording.defaultOptions, ...opts }`. The
-   * 3,600-frame cap is one minute at 60fps.
+   * Defaults for every new `GraphDebugRecording`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * GraphDebugRecording.defaultOptions.maxFrames = 600;
@@ -119,7 +114,7 @@ export class GraphDebugRecording {
   private _stoppedAt = 0;
   private _stopReason: GraphDebugRecordingStopReason | null = null;
 
-  /** @param options - Recording options; see {@link GraphDebugRecordingOptions} */
+  /** @param options - Options for the recording */
   constructor(options: GraphDebugRecordingOptions = {}) {
     const fallback = GraphDebugRecording.defaultOptions.maxFrames!;
     const { maxFrames } = { ...GraphDebugRecording.defaultOptions, ...definedProps(options) };
@@ -155,12 +150,9 @@ export class GraphDebugRecording {
   }
 
   /**
-   * Store one frame, deriving its batch-pass counts from the snapshot
-   *
-   * Recording stops automatically once the frame cap is reached.
-   * @param snapshot - The frame's complete render snapshot
+   * Stores a frame while recording; the frame that reaches the cap stops the recording
+   * @param snapshot - The frame's snapshot
    * @param timestamp - Capture time in milliseconds
-   * @returns Whether the frame was recorded, ignored, or recorded as the final frame at the cap
    */
   public record(snapshot: GraphDebugSnapshot, timestamp = performance.now()): GraphDebugRecordResult {
     if (!this._active) return 'inactive';
@@ -196,10 +188,7 @@ export class GraphDebugRecording {
     this._stopReason = reason;
   }
 
-  /**
-   * Snapshot the recording as plain JSON-serialisable data
-   * @returns The versioned recording snapshot, with a copy of the frame list
-   */
+  /** Returns the recording as JSON-serialisable data */
   public toJSON(): GraphDebugRecordingSnapshot {
     return {
       version: GRAPH_DEBUG_RECORDING_VERSION,
@@ -211,10 +200,6 @@ export class GraphDebugRecording {
   }
 }
 
-/**
- * Tally draw-build and bundle statuses across every batch pass in the snapshot
- * @param snapshot - Snapshot to tally
- */
 function countWorkStatuses(snapshot: GraphDebugSnapshot): {
   bundleInvalidated: number;
   bundleRecorded: number;

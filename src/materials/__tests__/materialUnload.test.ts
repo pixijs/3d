@@ -14,7 +14,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-/** pixi keeps one GPU copy per renderer of a buffer or texture source, keyed by renderer uid. */
 interface GpuResident {
   _gpuData: Record<string, unknown>;
 }
@@ -49,7 +48,6 @@ interface Scene {
   right: Mesh3D;
 }
 
-/** Two meshes sharing one textured material — the case that makes unload's reach visible. */
 function buildScene(app: Application<Renderer>): Scene {
   const view3d = new View3D({ width: SIZE, height: SIZE });
   app.stage.addChild(view3d);
@@ -88,7 +86,6 @@ function pixels(app: Application<Renderer>, view3d: View3D): Uint8Array {
   return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
 }
 
-/** Count pixels whose colour differs by more than `tol` on any channel. */
 function differingPixels(a: Uint8Array, b: Uint8Array, tol = 8): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {

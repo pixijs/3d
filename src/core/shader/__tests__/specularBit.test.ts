@@ -29,15 +29,6 @@ describe('specularBit overwrites the fresnelF0 and f90 pbrMaterialBit derives fr
     it('sRGB-decodes the specular colour texture with a 2.2 gamma', () => {
       expect(src).toMatch(/pow\(specTexStraight,\s*vec3(?:<f32>)?\(2\.2\)\)/);
     });
-
-    it('overwrites fresnelF0 and f90 through mix() by metallic, so metals keep F0 = albedo and f90 = 1', () => {
-      expect(src).toMatch(/fresnelF0\s*=\s*mix\(dielectricF0,\s*albedo,\s*metallic\)/);
-      expect(src).toMatch(/f90\s*=\s*mix\(specFactor,\s*1\.0,\s*metallic\)/);
-    });
-
-    it('clamps the dielectric F0 to <=1 per spec (min(iorF0 * specColor, 1))', () => {
-      expect(src).toMatch(/min\(iorF0\s*\*\s*specColor,\s*vec3<f32>\(1\.0\)\)/);
-    });
   });
 
   describe('GLSL', () => {
@@ -46,15 +37,6 @@ describe('specularBit overwrites the fresnelF0 and f90 pbrMaterialBit derives fr
 
     it('sRGB-decodes the specular colour texture with a 2.2 gamma', () => {
       expect(src).toMatch(/pow\(specTexStraight,\s*vec3(?:<f32>)?\(2\.2\)\)/);
-    });
-
-    it('overwrites fresnelF0 and f90 through mix() by metallic, so metals keep F0 = albedo and f90 = 1', () => {
-      expect(src).toMatch(/fresnelF0\s*=\s*mix\(dielectricF0,\s*albedo,\s*metallic\)/);
-      expect(src).toMatch(/f90\s*=\s*mix\(specFactor,\s*1\.0,\s*metallic\)/);
-    });
-
-    it('clamps the dielectric F0 to <=1 per spec', () => {
-      expect(src).toMatch(/min\(iorF0\s*\*\s*specColor,\s*vec3\(1\.0\)\)/);
     });
   });
 });

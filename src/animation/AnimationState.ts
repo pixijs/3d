@@ -1,14 +1,14 @@
 import type { Animation } from './Animation';
-import type { AnimationPlayer, PropertyAccumulator } from './AnimationPlayer';
+import type { AnimationPlayer } from './AnimationPlayer';
+import type { PropertyAccumulator } from './PropertyAccumulator';
 
 /**
  * Playback state for a single {@link Animation} on an {@link AnimationPlayer}
  *
- * Animation states are returned by {@link AnimationPlayer#play} and
- * {@link AnimationPlayer#getState}. Use them to control playback,
- * looping, speed, and blend weight. The playback methods follow pixi's
- * `AnimatedSprite`: {@link AnimationState#stop | stop()} freezes in place and
- * {@link AnimationState#play | play()} resumes from there.
+ * {@link AnimationPlayer#play} and {@link AnimationPlayer#getState} return one. Use it to control
+ * playback, looping, speed and blend weight. The playback methods follow pixi's `AnimatedSprite`:
+ * {@link AnimationState#stop | stop()} freezes in place and {@link AnimationState#play | play()}
+ * resumes from there.
  * @example
  * ```ts
  * const walk = model.player.play('walk');
@@ -72,7 +72,8 @@ export class AnimationState {
    */
   public loop: boolean = true;
   /**
-   * Share of the blend when several playing states drive the same property
+   * Share of the blend when several playing states drive the same property through tracks with the
+   * same label
    *
    * Weights are relative: at 1 and 3, the property ends up a quarter one state and three quarters
    * the other. They don't fade a state against the rest pose; a state that is the only one driving
@@ -122,20 +123,10 @@ export class AnimationState {
   /** @internal */
   public _accumulators: PropertyAccumulator[] = [];
 
-  /**
-   * Scratch for the blend in `_update`, shared by every state and sized to the widest track
-   *
-   * Morph weight tracks carry one component per target, which can exceed any built-in value type.
-   * A scratch too short reads back `undefined` past its end and poisons the blend with NaN.
-   */
+  /** Grown by the constructor to the widest track, since a morph weights track can exceed 4 components */
   private static _scratchBuffer = new Float32Array(4);
 
-  /**
-   * States come from {@link AnimationPlayer#getState}, which keeps one per animation
-   * @param player - Player that owns this state
-   * @param animation - Animation this state plays
-   * @internal
-   */
+  /** @internal */
   constructor(player: AnimationPlayer, animation: Animation) {
     this.player = player;
     this.animation = animation;
@@ -164,10 +155,9 @@ export class AnimationState {
    * Starts or resumes playback from the current {@link AnimationState#time | time}
    *
    * A one-shot animation that already finished completes again on the next update; use
-   * {@link AnimationState#gotoAndPlay | gotoAndPlay(0)} to restart it.
-   *
-   * Does nothing once the owning player is destroyed, so a state kept from before
-   * cannot put the dead player back on the ticker.
+   * {@link AnimationState#gotoAndPlay | gotoAndPlay(0)} to restart it, or
+   * `gotoAndPlay(animation.duration)` for one a negative `animationSpeed` plays backwards. Does
+   * nothing once the owning player is destroyed.
    * @example
    * ```ts
    * pauseButton.on('pointertap', () => (walk.playing ? walk.stop() : walk.play()));
@@ -186,7 +176,6 @@ export class AnimationState {
   /**
    * Stops playback, holding the current time and pose
    *
-   * The state stops blending, and the player releases its ticker once nothing is playing.
    * To rewind, call {@link AnimationState#gotoAndStop | gotoAndStop(0)}.
    * @example
    * ```ts
@@ -222,8 +211,7 @@ export class AnimationState {
    * Stops playback at a time and applies that pose to the target right away
    *
    * The pose is this state's alone, not blended with others; a state still playing overwrites
-   * the properties it drives on the next update. Does nothing once the owning player is
-   * destroyed, whose target nodes are gone.
+   * the properties it drives on the next update. Does nothing once the owning player is destroyed.
    * @example
    * ```ts
    * slider.on('change', (value: number) => walk.gotoAndStop(value * walk.animation.duration));
@@ -242,18 +230,7 @@ export class AnimationState {
   }
 
   /**
-   * Advances this state and adds its sampled track values to the player's accumulators
-   *
-   * The first state to write a property this frame samples straight into the accumulator. Each
-   * later one samples into the shared scratch and lerps in by its share of the weight so far,
-   * which leaves the accumulator holding the weighted average of every sample, whatever order the
-   * states ran in.
-   *
-   * A one-shot state that runs past either end clamps to it and stops, but still samples this
-   * frame, so its end pose is applied and holds.
-   *
-   * Only {@link AnimationPlayer#update} drives this; it applies the accumulated values afterwards.
-   * @param seconds - Time to advance before applying {@link AnimationState#animationSpeed}
+   * A one-shot state that runs past an end stops but still samples this frame, so its end pose holds
    * @internal
    */
   public _update(seconds: number): void {
@@ -312,10 +289,7 @@ export class AnimationState {
     }
   }
 
-  /**
-   * Calls the callbacks `_update` flagged, once the player has applied every pose
-   * @internal
-   */
+  /** @internal */
   public _emitCallbacks(): void {
     if (this._looped) {
       this._looped = false;
@@ -328,7 +302,6 @@ export class AnimationState {
     }
   }
 
-  /** Samples every track at the current time and writes the result straight to the targets */
   private _applyPose(): void {
     this.player._bind(this);
 

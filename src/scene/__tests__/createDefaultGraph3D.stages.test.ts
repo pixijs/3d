@@ -1,20 +1,23 @@
-import { getApp } from '@test-utils';
+import { getApp, stubGlobalTextureBindings } from '@test-utils';
 import type { WebGLRenderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import type { PassBuilder } from '~/core/render-graph/PassBuilder';
 import type { RenderGraph } from '~/core/render-graph/RenderGraph';
+import { BloomEffect } from '~/extras/post-processing/effects/BloomEffect';
+import { FxaaEffect } from '~/extras/post-processing/effects/FxaaEffect';
+import { TintEffect } from '~/extras/post-processing/effects/TintEffect';
 import { PostEffect } from '~/post-processing/effects/PostEffect';
 import type { EffectIO } from '~/post-processing/effects/PostEffect';
 import { Pass3D } from '~/post-processing/Pass3D';
-import type { PassStage } from '~/post-processing/Pass3D';
+import type { EffectStage, SceneStage } from '~/post-processing/Pass3D';
+import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { createDefaultGraph3D } from '~/scene/utils/createDefaultGraph3D';
 import type { DefaultGraph3DOptions } from '~/scene/utils/createDefaultGraph3D';
 
-/** A scene-stage pass that adds one stub graph pass drawing into the scene colour */
 class StubScenePass extends Pass3D {
   constructor(
-    public readonly stage: Exclude<PassStage, 'post'>,
+    public readonly stage: SceneStage,
     private readonly _name: string,
   ) {
     super();
@@ -31,10 +34,12 @@ class StubScenePass extends Pass3D {
   }
 }
 
-/** A post effect whose single pass reads its chain input and writes its slot's output */
 class StubEffect extends PostEffect {
-  constructor(private readonly _name: string) {
-    super();
+  constructor(
+    private readonly _name: string,
+    stage: EffectStage = 'beforeToneMapping',
+  ) {
+    super({ stage });
   }
 
   public override build(graph: RenderGraph, io: EffectIO): void {
@@ -49,15 +54,15 @@ class StubEffect extends PostEffect {
   }
 }
 
-/** Claims the post stage without being a post effect */
 class RoguePost extends Pass3D {
-  public readonly stage = 'post';
+  public readonly stage = 'beforeToneMapping';
 
   public build(): void {}
 }
 
 async function withGraph<T>(
-  options: DefaultGraph3DOptions,
+  options: Omit<DefaultGraph3DOptions, 'globalTextureBindings' | 'toneMapping'> &
+    Partial<Pick<DefaultGraph3DOptions, 'toneMapping'>>,
   run: (names: string[], graph: RenderGraph) => T,
 ): Promise<T> {
   const app = await getApp<WebGLRenderer>({
@@ -65,7 +70,11 @@ async function withGraph<T>(
     appOptions: { preference: 'webgl', width: 64, height: 64, autoStart: false },
   });
   try {
-    const { graph } = createDefaultGraph3D(app.renderer, options);
+    const { graph } = createDefaultGraph3D(app.renderer, {
+      toneMapping: 'aces',
+      ...options,
+      globalTextureBindings: stubGlobalTextureBindings(),
+    });
     try {
       return run(
         graph.passes.map((p) => p.name),
@@ -84,6 +93,7 @@ describe('createDefaultGraph3D stages, the contract every pass author writes aga
     await withGraph(
       {
         passes: [
+          new StubEffect('aa', 'afterToneMapping'),
           new StubEffect('fxA'),
           new StubScenePass('afterTransparent', 'late'),
           new StubScenePass('afterOpaque', 'early'),
@@ -104,8 +114,8 @@ describe('createDefaultGraph3D stages, the contract every pass author writes aga
         expect(at('late')).toBeGreaterThan(at('transparent'));
         expect(at('late')).toBeLessThan(at('fxA'));
         expect(at('fxA')).toBeLessThan(at('fxB'));
-        expect(names[names.length - 1]).toBe('fxB');
-        expect(names, 'the last effect presents, so no output blit runs').not.toContain('output');
+        expect(at('fxB'), 'the tone curve runs after the last linear effect').toBeLessThan(at('output'));
+        expect(names[names.length - 1], 'an afterToneMapping effect runs after the curve').toBe('aa');
       },
     );
   });
@@ -119,10 +129,22 @@ describe('createDefaultGraph3D stages, the contract every pass author writes aga
       expect(graph.sceneColor).not.toBe(graph.defaultColor);
       expect(names[names.length - 1]).toBe('output');
     });
-    await withGraph({ passes: [new StubEffect('fx')] }, (names, graph) => {
+    await withGraph({ passes: [new StubEffect('fx', 'afterToneMapping')] }, (names, graph) => {
       expect(graph.sceneColor).not.toBe(graph.defaultColor);
-      expect(names).not.toContain('output');
+      expect(names, 'the curve stays in the materials, and the effect presents').not.toContain('output');
     });
+    await withGraph({ passes: [new StubEffect('fx')], toneMapping: 'custom' }, (names) => {
+      expect(names[names.length - 1], "'custom' leaves the curve to the effects").toBe('fx');
+    });
+  });
+
+  it('puts each effect at the stage its class picks, which one instance can move', () => {
+    expect(new BloomEffect().stage).toBe('beforeToneMapping');
+    expect(new FxaaEffect().stage, 'antialiasing judges the picture').toBe('afterToneMapping');
+    expect(new TintEffect().stage).toBe('afterToneMapping');
+    expect(new TintEffect({ stage: 'beforeToneMapping' }).stage, 'tinting the light instead').toBe('beforeToneMapping');
+    // @ts-expect-error a MeshPass draws meshes, so it takes a scene stage only
+    expect(new MeshPass({ name: 'misplaced', stage: 'afterToneMapping' })).toBeDefined();
   });
 
   it('skips disabled passes', async () => {

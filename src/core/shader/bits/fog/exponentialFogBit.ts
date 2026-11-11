@@ -1,15 +1,6 @@
 import type { ShaderBit } from '../../ShaderBit';
 
-/**
- * Exponential distance fog, `factor = 1 - exp(-density * depth)`
- *
- * `depth` is the fragment's view-space depth and `density` is `uFogParams.z`. The fog nears its
- * colour without reaching it, and starts thickening right at the camera, sooner than
- * `exp2FogBit`'s.
- *
- * It runs after exposure and before tone mapping, as `linearFogBit` describes.
- * @internal
- */
+/** @internal */
 export const exponentialFogBit: ShaderBit = {
   name: 'exponentialFog',
 

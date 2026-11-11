@@ -8,5 +8,5 @@
     "types": ["node", "@webgpu/types", "vite/client"]
   },
   "include": ["../../src"],
-  "exclude": ["../../src/**/__tests__", "../../src/**/*.test.ts", "../../src/**/*.worker.ts"]
+  "exclude": ["../../src/**/__tests__", "../../src/**/__docs__", "../../src/**/*.test.ts", "../../src/**/*.worker.ts"]
 }

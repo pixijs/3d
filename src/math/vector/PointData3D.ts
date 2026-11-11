@@ -3,17 +3,13 @@ import type { PointData } from 'pixi.js';
 /**
  * Minimal `{ x, y, z }` shape that 3D math methods accept
  *
- * Extends pixi.js `PointData` (`x`, `y`) with a `z` component, so any plain object with these three
- * numbers can be passed in place of a full {@link Vector3} or {@link ObservableVector3}.
+ * Any plain object with these three numbers can be passed in place of a {@link Vector3}.
  * @example
  * ```ts
  * const spawnPoint: PointData3D = { x: 0, y: 1, z: -5 };
  *
  * enemy.position.copyFrom(spawnPoint);
  * ```
- * @see {@link Vector3} For standard 3D vector implementation
- * @see {@link ObservableVector3} For observable 3D vector implementation
- * @see {@link PointLike3D} For the manipulation interface
  * @category maths
  * @standard
  */

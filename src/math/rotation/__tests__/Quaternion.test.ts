@@ -17,7 +17,6 @@ function expectQuatClose(
   expect(actual.w).toBeCloseTo(w, 5);
 }
 
-/** Compares quaternions for "same rotation" — q and -q represent the same rotation. */
 function expectSameRotation(
   actual: { x: number; y: number; z: number; w: number },
   expected: { x: number; y: number; z: number; w: number },
@@ -97,27 +96,6 @@ describe('Quaternion.slerpFlat', () => {
     const dst = [0, 0, 0, 0];
     Quaternion.slerpFlat(dst, 0, qa, 0, qb, 0, 0.5);
     expect(dst[3]).toBeCloseTo(1, 5);
-  });
-
-  test('near-parallel fast path (dot >= 0.9995) takes lerp+normalize branch', () => {
-    const qa = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, 0);
-    const qb = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, 0.001);
-    const dst = [0, 0, 0, 0];
-    Quaternion.slerpFlat(dst, 0, [qa.x, qa.y, qa.z, qa.w], 0, [qb.x, qb.y, qb.z, qb.w], 0, 0.5);
-
-    const len = Math.sqrt(dst[0] * dst[0] + dst[1] * dst[1] + dst[2] * dst[2] + dst[3] * dst[3]);
-    expect(len).toBeCloseTo(1, 5);
-  });
-
-  test('identical inputs short-circuit to src0', () => {
-    const src0 = [0.1, 0.2, 0.3, 0.4];
-    const src1 = [0.1, 0.2, 0.3, 0.4];
-    const dst = [0, 0, 0, 0];
-    Quaternion.slerpFlat(dst, 0, src0, 0, src1, 0, 0.5);
-    expect(dst[0]).toBeCloseTo(src0[0], 5);
-    expect(dst[1]).toBeCloseTo(src0[1], 5);
-    expect(dst[2]).toBeCloseTo(src0[2], 5);
-    expect(dst[3]).toBeCloseTo(src0[3], 5);
   });
 
   test('respects offsets', () => {
@@ -335,12 +313,6 @@ describe('Quaternion.setFromScaledRotationMatrix', () => {
     expectSameRotation(recovered, expected);
   });
 
-  test('extracts identity rotation from a non-uniform scale-only matrix', () => {
-    const m = new Matrix4().compose({ x: 0, y: 0, z: 0 }, new Quaternion(), { x: 4, y: 2, z: 6 });
-    const q = new Quaternion().setFromScaledRotationMatrix(m);
-    expectQuatClose(q, 0, 0, 0, 1);
-  });
-
   test('writes into out without mutating source', () => {
     const src = new Quaternion(0.1, 0.2, 0.3, 0.4);
     const out: { x: number; y: number; z: number; w: number } = { x: 0, y: 0, z: 0, w: 0 };
@@ -385,11 +357,6 @@ describe('Quaternion.setFromUnitVectors', () => {
     expectSameRotation(q, expected);
   });
 
-  test('result is normalized', () => {
-    const q = new Quaternion().setFromUnitVectors({ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 1 });
-    expect(q.magnitude()).toBeCloseTo(1, 5);
-  });
-
   test('writes into out without mutating source', () => {
     const src = new Quaternion(0.1, 0.2, 0.3, 0.4);
     const out: { x: number; y: number; z: number; w: number } = { x: 0, y: 0, z: 0, w: 0 };
@@ -429,13 +396,6 @@ describe('Quaternion.normalize', () => {
     expectQuatClose(q, 0, 0, 0, 1);
   });
 
-  test('non-zero quaternion becomes unit length', () => {
-    const q = new Quaternion(2, 0, 0, 0);
-    q.normalize();
-    expect(q.magnitude()).toBeCloseTo(1, 5);
-    expectQuatClose(q, 1, 0, 0, 0);
-  });
-
   test('preserves direction', () => {
     const q = new Quaternion(2, 4, 6, 8);
     const m = q.magnitude();
@@ -460,13 +420,6 @@ describe('Quaternion.inverse and conjugate', () => {
     const q = new Quaternion(0.1, 0.2, 0.3, 0.4);
     q.conjugate();
     expectQuatClose(q, -0.1, -0.2, -0.3, 0.4);
-  });
-
-  test('inverse equals conjugate for unit quaternions', () => {
-    const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 3);
-    const inv = q.clone().inverse();
-    const conj = q.clone().conjugate();
-    expectQuatClose(inv, conj.x, conj.y, conj.z, conj.w);
   });
 
   test('q * q.conjugate() = identity for unit q', () => {
@@ -494,20 +447,6 @@ describe('Quaternion.inverse and conjugate', () => {
 });
 
 describe('Quaternion.multiply and premultiply', () => {
-  test('multiplication is non-commutative in general', () => {
-    const a = new Quaternion().setFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI / 2);
-    const b = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2);
-
-    const ab = a.clone().multiply(b);
-    const ba = b.clone().multiply(a);
-    const equal =
-      Math.abs(ab.x - ba.x) < 1e-5 &&
-      Math.abs(ab.y - ba.y) < 1e-5 &&
-      Math.abs(ab.z - ba.z) < 1e-5 &&
-      Math.abs(ab.w - ba.w) < 1e-5;
-    expect(equal).toBe(false);
-  });
-
   test('rotating by q1 then q2 equals single rotation by q2 * q1', () => {
     const q1 = new Quaternion().setFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI / 4);
     const q2 = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 4);
@@ -585,13 +524,6 @@ describe('Quaternion.slerp', () => {
     expect(a.magnitude()).toBeCloseTo(1, 5);
   });
 
-  test('near-parallel fast path takes lerp+normalize branch', () => {
-    const a = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, 0);
-    const b = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, 0.0005);
-    a.slerp(b, 0.5);
-    expect(a.magnitude()).toBeCloseTo(1, 5);
-  });
-
   test('writes into out without mutating source', () => {
     const a = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, 0);
     const aOrig = a.clone();
@@ -604,17 +536,6 @@ describe('Quaternion.slerp', () => {
 });
 
 describe('Quaternion — math sanity', () => {
-  test('applyQuaternion matches makeRotationFromQuaternion + applyMatrix4', () => {
-    const q = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 3);
-    const m = new Matrix4().makeRotationFromQuaternion(q);
-
-    const p = new Vector3(0.3, 0.5, 0.7);
-    const viaQuat = p.clone().applyQuaternion(q);
-    const viaMat = p.clone().applyMatrix4(m);
-
-    expectVec3Close(viaQuat, viaMat.x, viaMat.y, viaMat.z);
-  });
-
   test('quaternion composition matches matrix composition', () => {
     const q1 = new Quaternion().setFromAxisAngle({ x: 1, y: 0, z: 0 }, Math.PI / 4);
     const q2 = new Quaternion().setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 4);

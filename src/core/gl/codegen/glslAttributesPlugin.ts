@@ -4,7 +4,6 @@ import type { VertexFormat } from 'pixi.js';
 import type { ShaderBit } from '../../shader/ShaderBit';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
-/** The GLSL type an attribute of each vertex format reads as: normalized and half-float formats as float vectors */
 const FORMAT_TO_GLSL: Record<VertexFormat, string> = {
   float32: 'float',
   float32x2: 'vec2',
@@ -65,30 +64,10 @@ function warnAttributeConflict(name: string, newFormat: string, existingFormat: 
   );
 }
 
-/**
- * Options for `compileAttributesGlsl`
- * @internal
- */
 interface CompileAttributesGlslOptions {
-  /**
-   * Whether to declare `layout(location = n)` on each attribute
-   * @default true
-   */
   useLocations?: boolean;
 }
 
-/**
- * Compiles shader attributes from bits into GLSL vertex input declarations
- *
- * Declares each attribute once, as `in vec3 aPosition;`, in the order the bits first name them. A
- * later bit naming it with another format warns and keeps the first. With `useLocations`, the
- * attributes take locations 0, 1, 2 and so on in that order; without, pixi reads the locations the
- * linker picked.
- * @param bits - Array of shader bits containing attribute definitions
- * @param options - Optional settings
- * @returns GLSL source string with attribute declarations
- * @internal
- */
 function compileAttributesGlsl(bits: ShaderBit[], options: CompileAttributesGlslOptions = {}): string {
   const { useLocations = true } = options;
 
@@ -122,22 +101,19 @@ function compileAttributesGlsl(bits: ShaderBit[], options: CompileAttributesGlsl
   return out.join('\n');
 }
 
-/**
- * GLSL compiler plugin that collects attribute declarations once (on the vertex
- * pass) and injects them into the vertex `{{header}}` slot
- * @internal
- */
+/** @internal */
 export const glslAttributesPlugin: ShaderCompilerPlugin = {
   collectData(context) {
-    if (context.stage === 'vertex' && !context.data.attributes) {
-      context.data.attributes = compileAttributesGlsl(context.bits, {
+    if (context.stage === 'vertex') {
+      const glsl = (context.data.glsl ??= {});
+      glsl.attributes ??= compileAttributesGlsl(context.bits, {
         useLocations: context.glslOptions?.useLocations,
-      }) as any;
+      });
     }
   },
   injectCode(context): Record<string, string> {
     if (context.stage === 'vertex') {
-      return { header: context.data.attributes as any };
+      return { header: context.data.glsl!.attributes! };
     }
     return {};
   },

@@ -3,6 +3,7 @@ import type { WebGLRenderer, WebGPURenderer } from 'pixi.js';
 import type { Camera3D } from '../../../scene/cameras/Camera3D';
 import type { PassBuilder } from '../../render-graph/PassBuilder';
 import type { ColorHandle } from '../../render-graph/ResourceHandle';
+import type { SceneOutput } from '../../render-graph/SceneOutput';
 import { ForwardRenderPass } from '../ForwardRenderPass';
 import { RenderPassBit } from '../RenderPass';
 
@@ -14,36 +15,28 @@ import { RenderPassBit } from '../RenderPass';
 export interface TransmissionRenderPassOptions {
   /** Renderer the pass draws with: the {@link PassContext#renderer} a {@link Pass3D#build} call receives */
   renderer: WebGLRenderer | WebGPURenderer;
-  /**
-   * Camera to draw from
-   *
-   * Omitted, the pass draws from the view's own camera into the view. Given one, it culls and
-   * draws from that camera into that camera's target, and the copy it samples has to come from a
-   * {@link CopyOpaquePass} on the same camera. See {@link RenderPassOptions#camera}.
-   */
+  /** Camera to draw from, or the view's own when omitted; see {@link RenderPassOptions#camera} */
   camera?: Camera3D;
   /**
-   * Opaque colour copy the glass refracts
-   *
-   * Required. The handle a {@link CopyOpaquePass} earlier in the graph writes:
-   * {@link PassContext#opaqueColor} for the view's own camera.
+   * Opaque colour copy the glass refracts, from a {@link CopyOpaquePass}: {@link PassContext#opaqueColor}
+   * for the view's own camera
    */
   opaqueColorHandle: ColorHandle;
+  /** The scene outputs attached after the target colour; see {@link RenderPassOptions#attachedOutputs} */
+  attachedOutputs?: readonly SceneOutput[];
 }
 
 /**
  * Draws transmissive (glass) materials over a copy of the opaque picture behind them
  *
- * Takes the meshes whose material has {@link Material3DOptions#transmission} set and draws them
- * from its camera. Each fragment refracts the opaque colour copy, reading blurred mip levels for
- * rough glass, so a {@link CopyOpaquePass} on the same camera has to run earlier in the graph.
- * The copy is taken before any glass draws, so glass seen through glass doesn't show.
+ * Draws the meshes whose material sets {@link Material3DOptions#transmission}. Each fragment
+ * refracts the opaque colour copy, rough glass through the copy's blurred mip levels, so a
+ * {@link CopyOpaquePass} on the same camera must run earlier in the graph.
+ * {@link createDefaultGraph3D} adds this pass and its copy for the view's camera.
  *
- * Transmission happens in the shader, not through blending, so the pass draws in stable material
- * order, caches its draw work, and writes depth: overlapping glass occludes correctly. The default
- * graph runs one for the view's camera after {@link CopyOpaquePass}, before
- * {@link BlendedRefractionPass} and the transparent draw. The graph skips it on frames with no
- * glass in the view's scene, and then drops the copy too unless something else samples it.
+ * The copy is taken before any glass draws, so glass behind glass doesn't show through it. Glass
+ * writes depth by default, so it hides particles and anything else drawn behind it later. A frame
+ * with no glass in the scene skips the copy, unless something else samples it.
  * @category rendering
  * @advanced
  */
@@ -59,18 +52,17 @@ export class TransmissionRenderPass extends ForwardRenderPass {
       bit: RenderPassBit.TRANSMISSION,
       sort: 'key',
       camera: options.camera,
+      attachedOutputs: options.attachedOutputs,
     });
     this.opaqueColorHandle = options.opaqueColorHandle;
   }
 
   /**
-   * Declares colour and depth writes on its camera's target, and a sample of the opaque colour copy
-   *
-   * The sample binds the copy for the glass shaders and keeps its {@link CopyOpaquePass} in the frame.
+   * Writes its camera's colour and depth, and samples the opaque colour copy
    * @param b - The builder recording this pass's resource accesses
    */
   public override setup(b: PassBuilder): void {
     super.setup(b);
-    b.sample(this.opaqueColorHandle, this.pipe.globalSlots.opaqueColor);
+    b.sample(this.opaqueColorHandle, b.globalTextureBindings.opaqueColor);
   }
 }

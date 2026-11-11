@@ -9,10 +9,10 @@ import type { QuaternionData } from './Quaternion';
 /**
  * A {@link Quaternion} that tells an observer when it changes
  *
- * It is the type of a node's {@link Container3D#quaternion | quaternion}: a change is how the node
- * learns to rebuild its transform. It has the same methods as {@link Quaternion}. Each in-place method
- * notifies the observer at most once, and not at all when no component changed. Given an `out`
- * target, a method writes there and leaves this quaternion and its observer alone.
+ * A node's {@link Container3D#quaternion | quaternion} is one, so changing it turns the node. It has
+ * the same methods as {@link Quaternion}. Each in-place method notifies the observer at most once,
+ * and not at all when no component changed. Given an `out` target, a method writes there and leaves
+ * this quaternion and its observer alone.
  * @example
  * ```ts
  * const up = { x: 0, y: 1, z: 0 };
@@ -21,8 +21,6 @@ import type { QuaternionData } from './Quaternion';
  *   coin.quaternion.setFromAxisAngle(up, (ticker.lastTime / 1000) * spinSpeed);
  * });
  * ```
- * @see {@link Quaternion} For the non-observable counterpart
- * @see {@link Observer} For the observer interface
  * @category maths
  * @standard
  */
@@ -36,7 +34,6 @@ export class ObservableQuaternion implements QuaternionData {
   /** @ignore */
   public _w = 0;
 
-  /** Object whose `_onUpdate` callback is invoked when this quaternion changes */
   private readonly _observer: Observer<ObservableQuaternion>;
 
   /**
@@ -207,16 +204,16 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Creates a copy of this quaternion that notifies `observer`, or this quaternion's own observer when
+   * Creates a copy of this quaternion that notifies `observer`, or this quaternion's observer when
    * left out
    *
-   * A clone of a node's `quaternion` that keeps the node as its observer marks the node for a transform
-   * update on every change without turning it. For a plain copy, use
+   * A copy of a node's `quaternion` that keeps the node as its observer makes the node recompute its
+   * transform on every change, though the node doesn't turn. For a plain copy, use
    * `new Quaternion().copyFrom(node.quaternion)`.
-   * @param observer - Observer for the clone; defaults to this instance's observer
+   * @param observer - Observer for the copy
    * @returns The new quaternion
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- observer-linked copy; plain copies use Quaternion#copyFrom
+  // oxlint-disable-next-line pixi3d/require-standard-example -- a copy that keeps the observer is rarely wanted
   public clone(observer?: Observer<ObservableQuaternion>): ObservableQuaternion {
     return new ObservableQuaternion(observer ?? this._observer, this._x, this._y, this._z, this._w);
   }
@@ -234,7 +231,7 @@ export class ObservableQuaternion implements QuaternionData {
   }
 
   /**
-   * Returns true when `x`, `y`, `z` and `w` match `q` exactly (no epsilon tolerance)
+   * Returns true when `x`, `y`, `z` and `w` match `q` exactly, with no tolerance
    * @example
    * ```ts
    * const closed = door.quaternion.equals(closedRotation);
@@ -316,6 +313,8 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Sets this quaternion to the rotation in `m`, a transform that may also scale each axis
+   *
+   * {@link Quaternion#setFromScaledRotationMatrix} says what a zero or mirrored scale gives.
    * @example
    * ```ts
    * debris.quaternion.setFromScaledRotationMatrix(wreck.worldTransform);
@@ -338,7 +337,7 @@ export class ObservableQuaternion implements QuaternionData {
   /**
    * Sets this quaternion to the shortest turn that takes unit-length `vFrom` to unit-length `vTo`
    *
-   * {@link Quaternion#setFromUnitVectors} covers opposite vectors.
+   * {@link Quaternion#setFromUnitVectors} says what happens when they point opposite ways.
    * @example
    * ```ts
    * tree.quaternion.setFromUnitVectors({ x: 0, y: 1, z: 0 }, groundNormal);
@@ -470,8 +469,6 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Negates `x`, `y` and `z`, leaving `w`, which reverses a unit quaternion's turn
-   *
-   * The same as {@link ObservableQuaternion#inverse} for a unit quaternion.
    * @example
    * ```ts
    * const reverseTurn = door.quaternion.conjugate(new Quaternion());
@@ -574,8 +571,6 @@ export class ObservableQuaternion implements QuaternionData {
 
   /**
    * Writes this quaternion's values into `array` starting at `offset`
-   *
-   * Allocates a new array when one is not supplied.
    * @example
    * ```ts
    * crates.forEach((crate: Container3D, i: number) => crate.quaternion.toArray(savedRotations, i * 4));

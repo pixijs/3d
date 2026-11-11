@@ -7,13 +7,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Zero-config directional shadow: `castShadow: true` with no `shadow` options.
- * The pass auto-fits a fixed box to the scene's casters (re-measured live under the
- * caster cap), so a simple scene gets a stable, well-sized shadow with no manual
- * tuning. Exercises the auto-fit caster-bounds gather + fixed-box projection.
- * Static scene for determinism.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,

@@ -8,12 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Fixed-box directional shadow: `shadow.bounds` gives the light a fixed
- * world-space shadow volume (a static box) that the pass renders as a
- * single cascade-slot-0 map. Verifies the fixed-volume directional path that
- * bypasses camera-frustum fitting. Static scene for determinism.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,

@@ -10,6 +10,7 @@ function createMockContext(bits: ShaderBit[]): ShaderCompilerContext {
     template: { bindGroups: [] },
     templateString: '',
     data: {},
+    outputLocations: ['color'],
   };
 }
 

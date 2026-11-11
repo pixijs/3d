@@ -64,7 +64,7 @@ export class SphereShape implements EmitterShape {
   public shell: boolean;
 
   /**
-   * Default {@link SphereShapeOptions} merged under every constructor call; mutate to change them process-wide
+   * Defaults for every new `SphereShape`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * SphereShape.defaultOptions.radius = 0.5;
@@ -80,10 +80,7 @@ export class SphereShape implements EmitterShape {
   }
 
   /**
-   * Draws a point in (or on) the sphere, heading radially outward
-   *
-   * Through the volume, the radius takes the cube root of its draw, which spreads points evenly
-   * rather than piling them up near the centre.
+   * Draws a point spread evenly in or on the sphere, heading radially outward
    * @example
    * ```ts
    * class MyDomeShape implements EmitterShape {
@@ -110,11 +107,6 @@ export class SphereShape implements EmitterShape {
   }
 }
 
-/**
- * Writes a uniformly distributed point on the unit sphere into `out`
- * @param rng - The system's random source
- * @param out - Receives the unit vector
- */
 function sampleUnitVector(rng: () => number, out: Vector3): void {
   const y = rng() * 2 - 1;
   const ring = Math.sqrt(Math.max(0, 1 - y * y));

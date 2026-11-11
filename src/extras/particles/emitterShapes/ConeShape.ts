@@ -63,7 +63,7 @@ export class ConeShape implements EmitterShape {
   public radius = 0;
 
   /**
-   * Default {@link ConeShapeOptions} merged under every constructor call; mutate to change them process-wide
+   * Defaults for every new `ConeShape`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * ConeShape.defaultOptions.angle = 15;
@@ -79,11 +79,7 @@ export class ConeShape implements EmitterShape {
   }
 
   /**
-   * Draws a point on the spawn disc, heading up within the cone
-   *
-   * Both draws are even: positions cover the disc and directions cover the cone's cap without
-   * bunching at the centre or the axis. The disc radius takes the square root of its draw, and
-   * `cos θ` is drawn evenly between 1 and `cos(angle)`.
+   * Draws a point on the spawn disc, heading up within the cone; both spread evenly
    * @example
    * ```ts
    * class MyTwinJetShape implements EmitterShape {

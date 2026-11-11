@@ -16,7 +16,7 @@ import type { Track } from './tracks/Track';
  */
 export interface AnimationOptions {
   /**
-   * Label {@link AnimationPlayer#addAnimations} registers this animation under when given an array
+   * Sets {@link Animation#label}
    * @example
    * ```ts
    * player.addAnimations([new Animation({ label: 'wave', tracks })]);
@@ -102,7 +102,7 @@ export class Animation {
   public duration = 0;
 
   /**
-   * @param options - Label, tracks, and optional explicit duration for the animation
+   * @param options - Label, tracks and duration
    */
   constructor(options: AnimationOptions) {
     this.label = options.label;

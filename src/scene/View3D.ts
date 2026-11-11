@@ -9,7 +9,7 @@ import type {
   WebGLRenderer,
   WebGPURenderer,
 } from 'pixi.js';
-import { CubeTexture, definedProps, Matrix, ObservablePoint, Point, ViewContainer } from 'pixi.js';
+import { Color, CubeTexture, definedProps, Matrix, ObservablePoint, Point, ViewContainer } from 'pixi.js';
 
 import type { Scene3DSource } from '../assets/Scene3DSource';
 import { Mesh3DBatch } from '../core/batcher/Mesh3DBatch';
@@ -26,10 +26,7 @@ import { envSourceHemisphereBit } from '../core/shader/bits/envSourceHemisphereB
 import { exp2FogBit } from '../core/shader/bits/fog/exp2FogBit';
 import { exponentialFogBit } from '../core/shader/bits/fog/exponentialFogBit';
 import { linearFogBit } from '../core/shader/bits/fog/linearFogBit';
-import { acesToneMappingBit } from '../core/shader/bits/tonemapping/acesToneMappingBit';
-import { reinhardToneMappingBit } from '../core/shader/bits/tonemapping/reinhardToneMappingBit';
-import { srgbEncodeBit } from '../core/shader/bits/tonemapping/srgbEncodeBit';
-import { uncharted2ToneMappingBit } from '../core/shader/bits/tonemapping/uncharted2ToneMappingBit';
+import { TONE_MAPPING_BITS } from '../core/shader/bits/tonemapping/toneMappingBits';
 import type { ShaderBit } from '../core/shader/ShaderBit';
 import { ShadowDataList } from '../core/ShadowDataList';
 import { EventBoundary3D } from '../events/EventBoundary3D';
@@ -66,11 +63,8 @@ declare global {
      * Augmentation hook for members mixed into {@link View3D}
      *
      * Declare added members here and merge their implementation onto the class with pixi.js's
-     * `extensions.mixin(View3D, myMixin)`, the pattern pixi's 2D `Container` uses. The interaction
-     * members `containsPoint`, `cursor`, `hitArea` and `raycast` arrive this way.
-     *
-     * They reach the class through the `View3D` interface declared beside it, which repeats the
-     * class's type parameters because TypeScript only merges declarations whose parameters match.
+     * `extensions.mixin(View3D, myMixin)`, as pixi's 2D `Container` does. The interaction members
+     * `containsPoint`, `cursor`, `hitArea` and `raycast` arrive this way.
      */
     interface View3D {}
     /** Augmentation hook for constructor options mixed into {@link View3DOptions} */
@@ -81,76 +75,63 @@ declare global {
 /**
  * Most lights a view draws at once
  *
- * Ambient lights don't count. Past the limit, visible lights are skipped in the order of
- * {@link View3D#lights}, so the lights added last are the ones left out. It can't exceed 32:
- * `binLightTiles` in `LightTiles.ts` makes light `i` bit `i` of a 32-bit mask.
+ * Ambient lights don't count. Past the limit, the visible lights last in {@link View3D#lights}
+ * are left out. It can't exceed 32, the bits of the light mask in `LightTiles.ts`.
  * @category scene
  * @advanced
  */
 export const MAX_LIGHTS = 32;
 
 /**
- * Floats per light slot in `LightDataList`: four `vec4`s
+ * Floats per light slot in `LightDataList`: four `vec4`s, as the `MAX_LIGHTS * 4` size of `uLightData` assumes
  * @internal
  */
 export const FLOATS_PER_LIGHT = 16;
 
 /**
- * Tone mapping that materials apply as the last step of their shader; see {@link View3D#toneMapping}
+ * The tone curve and display encode a view applies to what it draws; see {@link View3D#toneMapping}
  *
- * The curve and the sRGB encode for the screen are separate steps:
+ * - `'none'` (default): the sRGB encode alone. The scene shows as lit, and anything brighter than 1
+ *   clips.
  * - `'aces'`, `'reinhard'` and `'uncharted2'`: a filmic curve that rolls off bright light, then the
- *   sRGB encode.
- * - `'none'`: the sRGB encode alone. The scene shows as lit, and anything brighter than 1 clips.
- *   This is what most people mean by "no tone mapping".
- * - `'custom'`: neither. Materials output raw linear light, for a post effect that does its own
- *   tone mapping and encoding.
+ *   sRGB encode. Use one, usually `'aces'`, when strong lights or a bright environment push lit
+ *   colour past 1.
+ * - `'custom'`: neither. The view outputs raw linear light, for a post effect that does its own
+ *   tone mapping and encoding. Leave that effect at the default `'beforeToneMapping'` stage, so it
+ *   reads the scene in float with brightness above 1 intact.
  *
- * Materials with `toneMapped` off skip it.
+ * It applies to every material, lit or unlit, so unlit art such as sprites, particles and flat
+ * materials matches pixi 2D under `'none'` at exposure 1, and a filmic curve shifts it too.
  * @example
  * ```ts
  * const view = new View3D({ width, height, toneMapping: 'reinhard' });
  *
  * view.toneMapping = 'aces';
  * ```
- * @see {@link View3D#exposure} For the brightness multiplier applied before the curve.
  * @category environment
  * @standard
  */
 export type ToneMapping = 'aces' | 'reinhard' | 'uncharted2' | 'none' | 'custom';
 
 /**
- * How a view or a {@link BatchedMesh3D} skips what's outside the camera's view, decided for each
- * batch every frame
+ * How a view or a {@link BatchedMesh3D} skips what's outside the camera's view
  *
- * A view's mode ({@link View3DOptions.cull}) covers its meshes. A `BatchedMesh3D` has its own,
- * {@link BatchedMesh3D.cull}, for its instances.
+ * - `'gpu'`: culls on the GPU, off the main thread. WebGL, and Safari or any iOS browser for all
+ *   but very large batches, cull on the CPU instead. So do blended meshes, which draw sorted back
+ *   to front.
+ * - `'cpu'`: culls on the CPU every frame. Can suit a frame that waits on the GPU.
+ * - `'off'`: draws everything. Suits a scene that always fits in view.
  *
- * - `'off'`: no culling; every instance draws.
- * - `'cpu'`: cull on the CPU, then draw what's left.
- * - `'gpu'`: cull in a compute shader, which suits large instanced batches. WebGL has no compute
- *   shaders, so it culls on the CPU there.
- * - `'auto'`: the default. Small batches skip culling, since drawing everything costs less than
- *   testing it. Larger ones cull on the GPU under WebGPU and on the CPU under WebGL.
- *
- * Culling only changes what gets drawn, never what you see. Shadow maps are culled too.
+ * A skinned mesh is tested at its bind pose, so an animation that carries it far from that pose
+ * can make it vanish near the edge of the screen. Use `'off'` for a view that shows one.
  * @example
  * ```ts
- * const view = new View3D({ cull: 'gpu' });
+ * const view = new View3D({ cull: 'cpu' });
  * ```
- * @see {@link View3D#cull} For the mode a view was built with.
  * @category scene
  * @standard
  */
-export type CullMode = 'off' | 'auto' | 'cpu' | 'gpu';
-
-const TONE_MAPPING_BITS: Record<ToneMapping, ShaderBit | null> = {
-  aces: acesToneMappingBit,
-  reinhard: reinhardToneMappingBit,
-  uncharted2: uncharted2ToneMappingBit,
-  none: srgbEncodeBit,
-  custom: null,
-};
+export type CullMode = 'off' | 'cpu' | 'gpu';
 
 /**
  * How distance fog thickens with depth, the distance in front of the camera
@@ -162,7 +143,6 @@ const TONE_MAPPING_BITS: Record<ToneMapping, ShaderBit | null> = {
  * ```ts
  * new View3D({ width, height, fog: { type: 'exponential', color: 0xadb2ba, density: 0.18 } });
  * ```
- * @see {@link Fog} For the full fog configuration object.
  * @category environment
  * @standard
  */
@@ -187,13 +167,6 @@ const _screenRay = new Ray();
 /**
  * Distance fog settings for {@link View3D#fog}
  *
- * Every field is optional. A missing `far` is so far away that linear fog never shows, and a
- * missing `density` is 0, which means no exponential fog.
- *
- * The view keeps the object you assign, so changing its `color`, `near`, `far` or `density` later
- * is free and shows on the next frame. `type` is read-only because a new curve needs new shaders:
- * assign a new object to switch curves.
- *
  * Materials with `fog` turned off, such as a skybox or water that fades itself, ignore it.
  * @example
  * ```ts
@@ -205,7 +178,6 @@ const _screenRay = new Ray();
  * view.fog = { type: 'exp2', color: 0xadb2ba, density: 0.05 };
  * view.fog = null;
  * ```
- * @see {@link FogType} For the curves.
  * @category environment
  * @standard
  */
@@ -222,10 +194,11 @@ export interface Fog {
    */
   readonly type?: FogType;
   /**
-   * Fog colour, authored in sRGB like every other colour
+   * Fog colour, in display (sRGB) space like every other colour
    *
-   * Exposure and the tone curve apply to the fog as they do to the scene, so distant surfaces end
-   * up near this colour on screen rather than exactly on it.
+   * Exposure and the tone curve apply to it as they do to the scene, so give
+   * {@link View3D#background} the same colour and fully fogged surfaces meet it with no seam,
+   * whatever the tone mapping and exposure.
    * @default 0xcccccc
    * @example
    * ```ts
@@ -265,13 +238,8 @@ export interface Fog {
 /**
  * Constructor options for {@link View3D}
  *
- * Every field is optional and has a default documented on its member. Pass `width` and
- * `height` to match the drawing surface, like a pixi.js `TilingSprite`.
- *
- * pixi's own container options (`label`, `position`, `alpha`, `parent`, `eventMode`, `cursor`,
- * `hitArea`, the `on*` handlers and the rest) work too. They're applied last, so
- * `eventMode: 'none'` or `'passive'` turns off the view's pointer events, as setting it later
- * would.
+ * pixi's own container options, such as `label`, `position`, `eventMode` and the `on*` handlers,
+ * work too.
  * @example
  * ```ts
  * const view = new View3D({
@@ -285,9 +253,7 @@ export interface Fog {
  *   environment: { skyColor: 0x88ccff, groundColor: 0x553311 },
  * });
  * ```
- * @see {@link View3D} For changing the settings after construction.
- * @typeParam TRoot - Type of the {@link View3DOptions#root | root} container, carried through to
- * {@link View3D#root}. Inferred from the `root` you pass.
+ * @typeParam TRoot - Type of {@link View3DOptions#root | root}, inferred from the `root` you pass.
  * @category scene
  * @standard
  */
@@ -305,7 +271,8 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
    */
   root?: TRoot;
   /**
-   * Camera to draw from, added to {@link View3DOptions#root | root} when it isn't in the scene yet
+   * Camera to draw from, added to {@link View3DOptions#root | root} when it has no parent; see
+   * {@link View3D#camera}
    * @default new Camera3D()
    * @example
    * ```ts
@@ -315,9 +282,6 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
   camera?: Camera3D;
   /**
    * Width of the 3D viewport in pixels
-   *
-   * With {@link View3DOptions#autoResize | autoResize} on, this is only the size reported
-   * before the first render.
    * @default 256
    * @example
    * ```ts
@@ -382,21 +346,24 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
    */
   environment?: CubeTexture | Hemisphere | null;
   /**
-   * Drawn behind the scene: a cube map, a {@link Hemisphere} gradient, or `null` for none; see
-   * {@link View3D#background}
+   * Drawn behind the scene: a cube map, a {@link Hemisphere} gradient, a plain colour, or `null`
+   * for none; see {@link View3D#background}
    * @default null
    * @example
    * ```ts
    * const view = new View3D({ environment: sky, background: sky });
+   *
+   * // Pass the fog the same colour and distant geometry melts into the background
+   * const misty = new View3D({ background: 0x968c34, fog: { color: 0x968c34, near: 20, far: 60 } });
    * ```
    */
-  background?: CubeTexture | Hemisphere | null;
+  background?: CubeTexture | Hemisphere | ColorSource | null;
   /**
    * Tone mapping curve; see {@link View3D#toneMapping}
-   * @default 'aces'
+   * @default 'none'
    * @example
    * ```ts
-   * const view = new View3D({ toneMapping: 'none' });
+   * const view = new View3D({ toneMapping: 'aces' });
    * ```
    */
   toneMapping?: ToneMapping;
@@ -419,10 +386,7 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
   fog?: Fog;
   /**
    * How the view culls its meshes outside the camera's view; see {@link CullMode}
-   *
-   * A {@link BatchedMesh3D} has its own, {@link BatchedMesh3D.cull}. Fixed once the view exists,
-   * so pick it here.
-   * @default 'auto'
+   * @default 'gpu'
    * @example
    * ```ts
    * const view = new View3D({ cull: 'off' });
@@ -432,16 +396,28 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
   /**
    * Draw the scene into its own texture, then onto the screen, instead of straight to the screen
    *
-   * Any enabled post effect in {@link View3DOptions#passes | passes} turns it on. Set it yourself
-   * to alpha-composite an inset over 2D content without an effect. A custom
-   * {@link View3DOptions#graph | graph} builder receives it in its options.
+   * The view does this anyway while it has an enabled post effect, an enabled pass that
+   * {@link Pass3D#requiredOutputs | requires} a scene output, or a {@link View3D#resolution} other
+   * than its target's; {@link View3D#resolution} says when to set it yourself. On a canvas with
+   * `antialias` the texture is multisampled too, unless a scene output's format rules that out; see
+   * {@link SceneOutput}.
    * @default false
    * @example
    * ```ts
-   * const inset = new View3D({ width: 320, height: 240, composite: true });
+   * const view = new View3D({ width: 320, height: 240, composite: true });
    * ```
    */
   composite?: boolean;
+  /**
+   * Texels per logical pixel the scene is drawn at, or `'inherit'` for the target's; see
+   * {@link View3D#resolution}
+   * @default 'inherit'
+   * @example
+   * ```ts
+   * const view = new View3D({ resolution: 1 });
+   * ```
+   */
+  resolution?: number | 'inherit';
   /**
    * Passes and post effects for this view, the same as assigning {@link View3D#passes} later
    * @example
@@ -453,14 +429,16 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
   /**
    * Builds the render graph for this view
    *
-   * Runs on the first render, and again whenever the graph is rebuilt: after
-   * {@link View3D#passes} is assigned, or after a pass's `enabled` flag flips. The graph it
-   * returns draws every frame until then.
+   * Runs on the first render and again each time the view rebuilds its graph, such as after
+   * {@link View3D#passes} is assigned, a pass's `enabled` flips, or {@link View3D#unload}. A rebuild
+   * destroys the old graph and its passes, so make the passes inside the callback.
    *
-   * Leave it out to use {@link createDefaultGraph3D}. Adding passes to the standard pipeline
-   * needs no builder; see {@link View3DOptions#passes}. This callback is for a different
-   * pipeline: start from `createDefaultGraph3D` and append, or build a bare {@link RenderGraph}.
-   * Forward `options` so `passes` and `composite` keep working.
+   * Leave it out to use {@link createDefaultGraph3D}; to add passes to that pipeline, use
+   * {@link View3DOptions#passes} instead. For a different pipeline, start from
+   * `createDefaultGraph3D` and append, or build a bare {@link RenderGraph}. Forward `options`
+   * either way: it carries what every graph needs, and keeps `passes`, `composite` and
+   * `toneMapping` working. A pass that uses a scene output the graph doesn't attach throws when the
+   * view builds it.
    * @example Modify the default graph
    * ```ts
    * new View3D({
@@ -478,9 +456,8 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
 }
 
 /**
- * Options for {@link View3D.from}: every {@link View3DOptions} field except `root` (the model
- * built from the source is the root), the per-instance {@link Model3DOptions} fields, and the
- * default-light switch
+ * Options for {@link View3D.from}: every {@link View3DOptions} field but `root`, the
+ * {@link Model3DOptions} a model takes per instance, and `light`
  * @example
  * ```ts
  * const view = View3D.from(source, {
@@ -498,11 +475,12 @@ export interface View3DOptions<TRoot extends Container3D = Container3D>
 export interface View3DFromOptions
   extends
     Omit<View3DOptions, 'root'>,
-    Pick<Model3DOptions, 'scene' | 'castShadow' | 'receiveShadow' | 'autoUpdate' | 'autoPlay'> {
+    Pick<Model3DOptions, 'scene' | 'castShadow' | 'receiveShadow' | 'autoUpdate' | 'autoPlay' | 'materials'> {
   /**
-   * Add a white {@link DirectionalLight} under the camera when the file brings no lights of its own
+   * Add a {@link DirectionalLight} under the camera when the file brings no lights of its own
    *
-   * Set to `false` to light the scene yourself.
+   * The light follows the camera, so it lights whatever the camera faces. Set to `false` to light
+   * the scene yourself.
    * @default true
    * @example
    * ```ts
@@ -519,21 +497,17 @@ export interface View3D<TRoot extends Container3D = Container3D> extends PixiMix
  * A 3D scene drawn inside pixi's 2D display list
  *
  * A `View3D` is a pixi display object: add it to the stage, then move, mask or filter it like a
- * sprite. Everything 3D goes under its {@link View3D#root | root}. Add meshes, lights and cameras
- * there, at any depth, and the view finds them.
+ * sprite. Everything 3D goes under its {@link View3D#root | root}.
  *
  * The view holds the {@link View3D#camera | camera} and the settings for the whole scene: tone
- * mapping, exposure, fog, environment light, background and shadows. Some settings are built
- * into material shaders, so changing them recompiles the materials on the next frame:
- * {@link View3D#toneMapping | toneMapping}, {@link View3D#shadowFilter | shadowFilter}, the fog
- * `type`, and the kind of {@link View3D#environment | environment}. Others, such as
- * {@link View3D#exposure | exposure} and the fog distances, are free to change every frame.
+ * mapping, exposure, fog, environment light, background and shadows. A change to some of them
+ * recompiles the materials, so don't change those every frame; each one's doc says which.
  *
  * The view also sends pointer events into the scene. Set {@link Container3D#eventMode | eventMode}
- * on a node and it gets pixi's pointer events (`pointerdown`, `click`, `pointerenter`, the
- * capture phase, the `on*` handlers), hit-tested against its
+ * on a node and it gets pixi's pointer events, hit-tested against its
  * {@link Container3D#hitVolume | hitVolume}. {@link View3D#raycast | raycast} picks without
- * sending an event.
+ * sending an event. The view itself starts with `eventMode` `'static'`, so it catches the pointer
+ * anywhere in its rectangle.
  * @example
  * ```ts
  * import { Application } from 'pixi.js';
@@ -555,27 +529,16 @@ export interface View3D<TRoot extends Container3D = Container3D> extends PixiMix
  * // A fixed-size inset.
  * const inset = new View3D({ width: 320, height: 240 });
  * ```
- * @see {@link Container3D} For the scene-graph node type used by `root`.
- * @see {@link Camera3D} For the scene camera.
- * @see {@link Hemisphere} For a cheap gradient environment or background.
- * @see {@link Fog} For distance-fog configuration.
  * @see {@link View3DOptions} For all constructor options.
- * @see {@link View3D#events} For how pointer events reach the scene.
- * @typeParam TRoot - Type of {@link View3D#root}, inferred from the `root` passed to the
- * constructor: `new View3D({ root: model })` is a `View3D<Model3D>`, so `view.root` keeps the
- * model's own API. Defaults to {@link Container3D}.
+ * @typeParam TRoot - Type of {@link View3D#root}, inferred from the `root` you pass.
  * @category scene
  * @standard
  */
 export class View3D<TRoot extends Container3D = Container3D> extends ViewContainer<View3DGlobalData> {
   /**
-   * Default {@link View3DOptions} merged under every constructor call
+   * Defaults for every new `View3D`; an option passed as `undefined` keeps its default
    *
-   * `new View3D(opts)` resolves as `{ ...View3D.defaultOptions, ...opts }`, ignoring options set
-   * to `undefined`. Mutate to change the defaults process-wide.
-   *
-   * It has no `root` or `camera`: each view makes its own, and one set here would be shared by
-   * every view.
+   * Don't set `root` or `camera` here: every view would share the one object.
    * @example
    * ```ts
    * View3D.defaultOptions.shadowQuality = 'high';
@@ -590,34 +553,27 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     anchor: 0,
     shadowQuality: 'medium',
     shadowFilter: 'pcf',
-    toneMapping: 'aces',
+    toneMapping: 'none',
     exposure: 1.0,
     autoResize: false,
   };
 
-  /**
-   * Always `false`: a view takes no pixi children, and 3D content goes under {@link View3D#root | root}
-   * @internal
-   */
+  /** @internal */
   public override allowChildren = false;
 
   /**
-   * Name of the render pipe that draws this view: `View3DPipeGpu` or `View3DPipeGl`
+   * The `name` that `View3DPipeGpu` and `View3DPipeGl` register under
    * @internal
    */
   public override readonly renderPipeId: string = 'view3d';
-  /**
-   * Always `false`: the view's own pipe draws it, never pixi's 2D batcher
-   * @internal
-   */
+  /** @internal */
   public override batched = false;
 
   /**
    * Root of the 3D scene
    *
-   * Add meshes, lights and cameras under it, at any depth, and the view finds them. The view
-   * makes an empty one when you don't pass a `root`. Pass it in the options rather than
-   * assigning it later: the view only tracks the root it was built with.
+   * Add meshes and lights under it, at any depth, and the view finds them. Pass it in the options
+   * rather than assigning it later: the view only tracks the root it was built with.
    *
    * Typed as whatever you passed as `root`, so a view built around a {@link Model3D} keeps the
    * model's API here.
@@ -633,17 +589,17 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   public root: TRoot;
 
   /**
-   * Sends the pointer events pixi delivers to the view on to the 3D nodes under the pointer
+   * Sends the pointer events pixi delivers to the view on to the 3D nodes under the pointer; the
+   * 3D counterpart of pixi's `EventBoundary`
    *
-   * The 3D counterpart of pixi's `EventBoundary`. The view's `containsPoint`, `cursor`,
-   * `hitArea` and `raycast` work through it.
+   * It listens on the view itself, so `view.removeAllListeners()`, or `view.off(type)` without a
+   * handler, stops 3D events for good; pass your handler to `off`.
    * @example
    * ```ts
    * const view = new View3D({ width: 800, height: 600 });
    *
    * view.events.enableGlobalMoveEvents = false;
    * ```
-   * @see {@link EventBoundary3D} For the pick and dispatch implementation.
    * @see {@link View3D#raycast} For a one-off ray cast that dispatches nothing.
    */
   public readonly events: EventBoundary3D;
@@ -656,9 +612,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * Whether the view matches the renderer's screen size on every render
    *
    * Setting {@link View3D#width | width}, {@link View3D#height | height} or
-   * {@link View3D#setSize | setSize} turns it off: a size you set is yours to keep. The view
-   * reads the screen size at the start of each render, so until its first render it reports the
-   * `width` and `height` it was built with.
+   * {@link View3D#setSize | setSize} turns it off. The view reads the screen size at the start of
+   * each render, so until its first render it reports the `width` and `height` it was built with.
    * @example
    * ```ts
    * const view = new View3D({ autoResize: true });
@@ -669,16 +624,11 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * @default false
    */
   public autoResize: boolean;
-  /** Set by {@link View3D.from} on an auto-sized view: frame the model once the real aspect is known */
   private _frameOnResize = false;
   private _userOnRender: ((renderer: Renderer) => void) | null = null;
 
   /**
-   * The per-frame hook pixi runs before it updates a frame's transforms, bounds and instructions
-   *
-   * The screen size is adopted here so 2D consumers of the view's rect (filters, culling,
-   * hit-testing) see the new size in the same frame.
-   * @param renderer - Renderer drawing this frame.
+   * Takes the screen size before pixi updates bounds, so filters, culling and hit tests see it the same frame
    * @internal
    */
   public override readonly _onRender = (renderer: Renderer): void => {
@@ -721,10 +671,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    */
   public lights: Light[] = [];
   /**
-   * Size of each shadow map, per side: `'low'` 512, `'medium'` 1024, `'high'` 2048 or `'ultra'`
-   * 4096 pixels
-   *
-   * Each step up takes four times the memory. A change takes effect on the next frame.
+   * Size of each shadow map; see {@link ShadowQuality}
    * @default 'medium'
    * @example
    * ```ts
@@ -737,102 +684,53 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * Brightness multiplier for the whole scene, background and fog included, applied before tone
    * mapping
    *
-   * Free to change every frame.
+   * It scales unlit materials too, in linear light, so at 2 an unlit colour draws about 1.37 times
+   * as bright on screen. Free to change every frame.
    * @example
    * ```ts
    * view.exposure = 1.5;
    * ```
-   * @see {@link View3D#toneMapping} For the curve applied after exposure.
    * @default 1.0
    */
   public exposure = 1.0;
-  /**
-   * Drawn behind the scene: a cube map, a {@link Hemisphere} gradient, or `null` for none
-   *
-   * It isn't a mesh, so it costs no scene or culling work. Exposure and tone mapping apply to it.
-   * Set it to the same object as the {@link View3D#environment | environment} and the sky you see
-   * matches the light and reflections the scene receives.
-   *
-   * A hemisphere is drawn as its gradient for each view direction (see {@link Hemisphere}). It
-   * needs no textures, and the view reads its fields every frame, so a change shows on the next
-   * render. Switching between a cube map and a hemisphere recompiles the background shader;
-   * swapping two cube maps, or changing a hemisphere's fields, doesn't.
-   * @example
-   * ```ts
-   * const env = await Assets.load<CubeTexture>('env.cubemap');
-   * view.environment = env;
-   * view.background = env; // show the same cube map behind the scene
-   *
-   * // One hemisphere lights the scene and draws the sky behind it
-   * const sky: Hemisphere = { skyColor: 0x88ccff, groundColor: 0x553311 };
-   * view.environment = sky;
-   * view.background = sky;
-   * sky.skyColor = 0xff8800; // sunset, on the next frame
-   * ```
-   */
-  public background: CubeTexture | Hemisphere | null = null;
+  private _background: CubeTexture | Hemisphere | number | null = null;
 
-  private _toneMapping: ToneMapping = 'aces';
+  private _toneMapping: ToneMapping = 'none';
   /**
-   * Shader bit for the current tone mapping, looked up when `toneMapping` is set
+   * `null` while the scene draws as linear light: under `'custom'`, or while a graph pass applies the curve
    * @internal
    */
-  public _toneMappingBit: ShaderBit | null = TONE_MAPPING_BITS.aces;
+  public _toneMappingBit: ShaderBit | null = TONE_MAPPING_BITS.none;
 
   private _fog: Fog | null = null;
-  /**
-   * Shader bit for the current fog curve, or `null` without fog; read by `MaterialSystemGpu` and
-   * `MaterialSystemGl`
-   * @internal
-   */
+  /** @internal */
   public _fogBit: ShaderBit | null = null;
 
   private _environment: CubeTexture | Hemisphere | null = null;
   /**
-   * Shader bit for the current kind of environment, read by `getPrimaryDescriptor` in
-   * `Material3D` and `PhongMaterial`
-   *
-   * Never `null`: a no-environment bit covers that case, so lit shaders can always call
-   * `sampleEnvironment`.
+   * Never `null`: with no environment, a default bit still gives lit shaders `sampleEnvironment`
    * @internal
    */
   public _envBit: ShaderBit = envSourceDefaultBit;
 
   /**
-   * Slot allocator for the scene's meshes, whose indices survive removals
-   *
-   * Freed slots are reused, so pass views, ID buffers and the store buffer can refer to a mesh by
-   * its slot index.
+   * Indices never move, since ID buffers and store rows refer to a mesh by its slot; `meshes` is the dense list
    * @internal
    */
   public readonly _meshSlots = new StableList<Mesh3D>();
 
-  /**
-   * Every {@link Mesh3D} in the scene, sprites and particle containers included, as a list with no
-   * holes for the scene sweep in `updateView3DScene` to walk
-   *
-   * The order isn't stable: removing a mesh moves the last one into its place.
-   * @internal
-   */
+  /** @internal */
   public meshes = new UnstableList<Mesh3D>('_allMeshIndex');
-  /**
-   * Every skinned mesh in the scene, whose bones `updateView3DScene` packs into `_bonePit` each
-   * frame
-   * @internal
-   */
+  /** @internal */
   public _skinnedMeshes = new UnstableList<Mesh3D>('_skinnedMeshIndex');
 
-  /**
-   * Every mesh in the scene with a `morph`, which `updateView3DScene` syncs into the shared morph
-   * store each frame
-   * @internal
-   */
+  /** @internal */
   public _morphedMeshes = new UnstableList<Mesh3D>('_morphedMeshIndex');
 
   /**
-   * Batch for the scene's meshes, over the `_meshSlots` array
+   * Destroyed after the scene detaches through it, and after `unload` frees the bind groups over its buffers
    *
-   * Owns their store buffer, ID buffers and per-pass draw lists. Always `_meshBatches[0]`.
+   * Holds `_meshSlots.items` itself, which `StableList` never replaces.
    * @internal
    */
   public readonly _sceneBatch: Mesh3DBatch = new Mesh3DBatch({
@@ -840,138 +738,94 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   });
 
   /**
-   * All batches: `[0]` is always the scene batch, and user batches follow
+   * `[0]` is always the scene batch, and user batches follow
    * @internal
    */
   public readonly _meshBatches: Mesh3DBatch[] = [this._sceneBatch];
 
   /**
-   * Bumped whenever `_meshBatches` gains or loses a batch
-   *
-   * Holders of per-batch state, such as `CullResults.removeDetached`, check the live list only when
-   * this moves, instead of scanning it every frame.
+   * Bumped whenever `_meshBatches` gains or loses a batch, so holders of per-batch state rescan only then
    * @internal
    */
   public _meshBatchesDirtyId = 0;
 
   /**
-   * How this view culls its meshes outside the camera's view; see {@link CullMode}
-   *
-   * A {@link BatchedMesh3D} has its own, {@link BatchedMesh3D.cull}. Fixed once the view exists: set
-   * it with the `cull` option.
-   * @default 'auto'
-   */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
-  public readonly cull: CullMode;
-
-  /**
-   * The pass that owns each draw-list bit, rebuilt by `_ensureInitialized`
+   * The pass that owns each draw-list bit
    * @internal
    */
   public readonly passByBit: Record<number, RenderPass> = Object.create(null);
 
   /**
-   * Every bit in `passByBit` ORed together; `updateView3DScene` calls `onRenderableDirty` on
-   * these passes only
+   * Every bit in `passByBit` ORed together
    * @internal
    */
   public _dirtyHookBits = 0;
 
   /**
-   * The render graph that draws this view
-   *
-   * `_ensureInitialized` builds it from the `graph` option or {@link createDefaultGraph3D}, and
-   * builds it again after `passes` changes.
+   * Valid only while `_passesInitialized`; a teardown leaves the destroyed graph here
    * @internal
    */
   public _graph!: RenderGraph;
 
   private _passesInitialized = false;
 
-  /** Graph builder from {@link View3DOptions#graph}, or `undefined` for {@link createDefaultGraph3D} */
+  private _graphGlobalData: View3DGlobalData | null = null;
+
   private readonly _buildGraph?: (
     renderer: WebGLRenderer | WebGPURenderer,
     options: DefaultGraph3DOptions,
   ) => RenderGraph;
 
-  /** The `composite` option, passed on to the graph builder; see {@link View3DOptions#composite} */
   private readonly _composite: boolean;
 
-  /** Copy of the array last assigned to {@link View3D#passes} */
+  /**
+   * The `composite` asked of the graph builder, not whether the graph composites; comparing the
+   * request keeps a view with a post effect from rebuilding every frame
+   */
+  private _compositeRequested = false;
+
   private _passes: readonly Pass3D[] = [];
 
-  /** `_computePassesKey` when the graph was built; a different key on a later frame rebuilds it */
   private _passesEnabledKey = 0;
 
-  /**
-   * Per-frame packed light list; its array is the value of the `uLightData` uniform
-   * @internal
-   */
+  /** @internal */
   public readonly _lightDataList = new LightDataList();
-  /**
-   * Per-frame packed shadow slots; its array is the value of the `uShadowData` uniform
-   * @internal
-   */
+  /** @internal */
   public readonly _shadowDataList = new ShadowDataList();
   /**
-   * Whether this view has packed a light casting shadows, so its lit shaders compile the shadow
-   * sampler
-   *
-   * Off until a packed light first casts, so a view that never has shadows never carries the
-   * sampling code. It never turns back off: a light that toggles its shadow would otherwise
-   * recompile every lit shader on each toggle. Set by `_syncShadowSampling`.
+   * Whether lit shaders compile shadow sampling; never turns back off, so toggling a shadow recompiles nothing
    * @internal
    */
   public _hasShadows = false;
-  /**
-   * Scene-wide bone-matrix arena for skinned meshes
-   * @internal
-   */
+  /** @internal */
   public _bonePit = new BonePit();
 
-  /**
-   * The `_bonePit` `bufferVersion` that `invalidateGrownStores` in `updateView3DScene` last saw
-   *
-   * The bone buffer is shared by every batch, so when it grows, every batch's draw caches go.
-   * @internal
-   */
+  /** @internal */
   public _lastBonePitBufferVersion = 0;
 
   /**
-   * The atlas `bufferVersion` that `restampMorphedGeometry` in `updateView3DScene` last saw
-   *
-   * A watermark of its own, not the one on the renderer's `View3DGlobalData`:
-   * `detectSharedCacheInvalidation` updates that one as it reads it, so whichever check ran first
-   * would hide the change from the other.
+   * A watermark of its own, apart from `View3DGlobalData.lastAtlasBufferVersion`: with one shared
+   * watermark, whichever check read it first would hide the change from the other
    * @internal
    */
   public _lastAtlasBufferVersion = 0;
 
   /**
-   * Transform-pass work queue, bucketed by `_relativeSceneDepth` so ancestors are processed
-   * before descendants
-   *
-   * Filled by `View3D._onChildUpdate`.
+   * Transform update queue, bucketed by `_relativeSceneDepth` so parents update before children
    * @internal
    */
   public readonly _childrenToUpdate: Record<number, { list: Container3D[]; index: number }> = Object.create(null);
-  /**
-   * Monotonic tick used to dedupe transform updates within a frame
-   * @internal
-   */
-  public _updateTick = 0;
 
   /**
-   * Creates a new `View3D`
-   *
-   * Add the returned instance to a pixi.js container (typically `app.stage`) to render it.
-   * @example
-   * ```ts
-   * const view = new View3D({ width: 800, height: 600 });
-   * app.stage.addChild(view);
-   * ```
-   * @param options - Construction options; see {@link View3DOptions}
+   * Meshes queued for the next scene update; only the first `index` entries are live, and the
+   * drain skips one that has left the view
+   * @internal
    */
+  public readonly _renderablesToUpdate: { list: Mesh3D[]; index: number } = { list: [], index: 0 };
+  /** @internal */
+  public _updateTick = 0;
+
+  /** @param options - See {@link View3DOptions}. */
   constructor(options: View3DOptions<TRoot> = {}) {
     super({});
 
@@ -990,6 +844,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
       fog,
       cull,
       composite,
+      resolution,
       graph,
       passes,
       parent,
@@ -1004,9 +859,9 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     this.environment = environment ?? null;
     this.background = background ?? null;
     this._toneMapping = toneMapping!;
-    this._toneMappingBit = TONE_MAPPING_BITS[toneMapping!];
     this.exposure = exposure!;
     this._composite = composite ?? false;
+    this.resolution = resolution ?? 'inherit';
     this._buildGraph = graph;
     if (passes) this._passes = passes.slice();
 
@@ -1020,8 +875,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     this.root = (root ?? new Container3D()) as TRoot;
     this._attach(this.root);
 
-    this.cull = cull ?? 'auto';
-    this._sceneBatch.cull = this.cull;
+    this._sceneBatch.cull = cull ?? 'gpu';
     this.camera = camera ?? new Camera3D();
 
     Object.assign(this, rest);
@@ -1032,13 +886,11 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * Builds a view whose root is a {@link Model3D} of `source`, with a camera and light ready to
    * render it
    *
-   * The camera is, in order: `options.camera` as given; the file's first camera node
-   * ({@link Model3D#cameras}); or a default {@link Camera3D} placed on the +Z side of the
-   * model, facing it, at the closest distance where the sphere around the model's bounds fits
-   * the view. An auto-sized view ({@link View3DOptions#autoResize | autoResize}) places that
-   * camera on its first render, once the real aspect is known. A file with no lights of its own
-   * gets a {@link DirectionalLight} parented under the camera, so it lights whatever the camera
-   * looks at; pass `light: false` to skip it.
+   * The camera is `options.camera`, else the file's first camera, else a new {@link Camera3D} on
+   * the model's +Z side, facing it, just far enough back that the sphere around the model's bounds
+   * fits the view. An auto-sized view places that camera on its first render, once it knows its
+   * aspect. That camera's near and far planes sit at a hundredth and a hundred times its distance
+   * from the model. A file with no lights gets one; see {@link View3DFromOptions#light}.
    * @example
    * ```ts
    * const view = View3D.from(await Assets.load('robot.glb'), { autoResize: true, environment });
@@ -1047,11 +899,10 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * ```
    * @param source - The loaded glTF or GLB to build the scene from.
    * @param options - View options plus the per-instance model options; see {@link View3DFromOptions}.
-   * @returns The view, with `root` typed as the model it holds
    */
   public static from(source: Scene3DSource, options: View3DFromOptions = {}): View3D<Model3D> {
-    const { scene, castShadow, receiveShadow, autoUpdate, autoPlay, light, ...viewOptions } = options;
-    const root = new Model3D({ source, scene, castShadow, receiveShadow, autoUpdate, autoPlay });
+    const { scene, castShadow, receiveShadow, autoUpdate, autoPlay, materials, light, ...viewOptions } = options;
+    const root = new Model3D({ source, scene, castShadow, receiveShadow, autoUpdate, autoPlay, materials });
     const camera = viewOptions.camera ?? root.cameras[0];
     const view = new View3D({ ...viewOptions, root, camera });
 
@@ -1067,9 +918,10 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   /**
    * The camera this view draws from
    *
-   * A view makes a {@link Camera3D} when you don't pass one. Assigning a camera with no parent adds
-   * it to {@link View3D#root | root}. Assigning one that has a parent outside this view's scene
-   * throws: add it, or its ancestor, under `view.root` first.
+   * Assigning a camera with no parent adds it to {@link View3D#root | root}. Assigning one that has
+   * a parent outside this view's scene throws: add it, or its ancestor, under `view.root` first.
+   * A render with meshes to draw throws while the camera or any of its parents is hidden, or once
+   * it leaves the scene without a new camera assigned.
    * @example
    * ```ts
    * view.camera.fov = 45;
@@ -1084,8 +936,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Sets the camera, adding it to {@link View3D#root | root} when it has no parent
-   * @param value - Camera to draw from; throws if it has a parent outside this view's scene.
+   * Sets the camera
+   * @param value - Camera to draw from.
    */
   set camera(value: Camera3D) {
     if (this._camera === value) return;
@@ -1119,8 +971,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Sets the anchor from a number for both axes, or a point
-   * @param value - Origin as a fraction of the view's size: `0` top-left, `1` bottom-right.
+   * Sets the anchor
+   * @param value - A number for both axes, or a point.
    */
   set anchor(value: PointData | number) {
     if (typeof value === 'number') {
@@ -1146,7 +998,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Resizes the viewport's width and turns {@link View3D#autoResize | autoResize} off
+   * Sets the width
    * @param value - Width in pixels.
    */
   override set width(value: number) {
@@ -1154,10 +1006,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Height of the 3D viewport in pixels
-   *
-   * Unlike a plain pixi.js `Container`, setting it resizes the viewport instead of scaling
-   * the view, the same as `TilingSprite.height`.
+   * Height of the 3D viewport in pixels; setting it resizes the viewport, as
+   * {@link View3D#width | width} does
    * @example
    * ```ts
    * view.height = 240;
@@ -1169,7 +1019,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Resizes the viewport's height and turns {@link View3D#autoResize | autoResize} off
+   * Sets the height
    * @param value - Height in pixels.
    */
   override set height(value: number) {
@@ -1229,30 +1079,32 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Projects a world-space point, in the space of {@link View3D#root | root}, to pixi's global 2D
-   * coordinates
+   * Projects a world-space point, such as one from {@link Container3D#getGlobalPosition}, to pixi's
+   * global 2D coordinates
    *
-   * The result is in the same space as `event.global` and pixi's `toGlobal`, so you can assign
-   * it straight to a 2D object's position or compare it with a pointer. It accounts for the
-   * view's {@link View3D#anchor | anchor}, its place on the stage, and the camera's
-   * {@link Camera3D#viewport | viewport}. Convert a point in a node's own space with
-   * {@link Container3D#toGlobal} first.
+   * The result is in the same space as `event.global`, so you can assign it straight to a 2D
+   * object's position. It accounts for the view's {@link View3D#anchor | anchor}, its place on the
+   * stage, and the camera's {@link Camera3D#viewport | viewport}. Convert a point in a node's own
+   * space with {@link Container3D#toGlobal} first.
    *
-   * Returns `null` for a point at or behind a perspective camera, which has no place on screen:
-   * the cue to hide a label that tracks it. The test runs in camera space, before the
-   * perspective divide, so a point close to the camera plane returns `null` rather than a huge or
-   * flipped position. Also returns `null`, and warns once, when the view or the camera's viewport
-   * has zero area.
+   * Returns `null` for a point at or behind a perspective camera: the cue to hide a label that
+   * tracks it. Also returns `null`, and warns once, when the view or the camera's viewport has
+   * zero area. With {@link View3D#autoResize | autoResize}, the view takes the screen size only as
+   * it draws, so a label placed from `app.ticker` lags a frame after a resize; size a view that
+   * carries labels from the renderer's `resize` event instead.
    * @param position - World-space point to project.
    * @param out - 2D point the result is written into. Defaults to a new `Point`.
    * @param skipUpdate - `true` to use cached transforms (see {@link Container3D#getGlobalTransform}).
    * @example
    * ```ts
    * const label = new Text({ text: 'player' });
+   * const world = new Vector3();
+   * const screen = new Point();
    * app.stage.addChild(label);
    *
    * app.ticker.add(() => {
-   *   const p = view3d.worldToScreen(mesh.getGlobalPosition());
+   *   // Reused out objects keep the per-frame code from allocating
+   *   const p = view3d.worldToScreen(mesh.getGlobalPosition(world), screen);
    *   label.visible = p !== null;
    *   if (p) label.position.copyFrom(p);
    * });
@@ -1294,11 +1146,10 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * `event.global`
    *
    * The inverse of {@link View3D#worldToScreen | worldToScreen}: every point on the ray projects
-   * back to `position`. A perspective camera's ray starts at the camera and passes through the
-   * point on its near plane. An orthographic camera's rays run parallel to its forward axis and
-   * start on the camera's plane. Either way, `ray.at(t)` is `t` world units from the camera. For
-   * a perspective camera that is distance along a slanted ray, not depth: the same `t` across the
-   * screen traces a sphere around the camera, not a plane.
+   * back to `position`. A perspective camera's ray starts at the camera; an orthographic camera's
+   * starts on the camera's plane and runs along its forward axis. Either way, `ray.at(t)` is `t`
+   * world units from the camera, which for a perspective camera is distance along a slanted ray,
+   * not depth.
    *
    * When the view or the camera's viewport has zero area, it warns once and returns a ray with a
    * zero origin and direction.
@@ -1356,14 +1207,10 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   /**
    * Converts a point in pixi's global 2D coordinates, such as `event.global`, to the world-space
    * point `distance` units along its {@link View3D#screenToRay | ray}
-   *
-   * A 2D point only fixes a line through the scene, so `distance` picks the point on it,
-   * measured from the camera.
    * @param position - 2D global point to convert.
    * @param distance - Distance along the ray, in world units from the camera.
    * @param out - Point the result is written into. Defaults to a new {@link Vector3}.
    * @param skipUpdate - `true` to use cached transforms (see {@link Container3D#getGlobalTransform}).
-   * @returns The world-space point `distance` units along the ray
    * @example
    * ```ts
    * marker.position.copyFrom(view3d.screenToWorld(e.global, 10));
@@ -1381,7 +1228,6 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * @param plane - World-space plane to intersect.
    * @param out - Point the result is written into. Defaults to a new {@link Vector3}.
    * @param skipUpdate - `true` to use cached transforms (see {@link Container3D#getGlobalTransform}).
-   * @returns The world-space intersection point, or `null` when the ray misses the plane
    * @example
    * ```ts
    * const ground = new Plane(new Vector3(0, 1, 0), 0);
@@ -1400,7 +1246,6 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * @param target - Distance along the ray, or the world-space plane to intersect.
    * @param out - Point the result is written into. Defaults to a new {@link Vector3}.
    * @param skipUpdate - `true` to use cached transforms.
-   * @returns The world-space point, or `null` when the ray misses the plane
    * @example
    * ```ts
    * const spot = view3d.screenToWorld(e.global, ground) ?? view3d.screenToWorld(e.global, 20);
@@ -1413,39 +1258,92 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Tone mapping for the background and every material with `toneMapped` on; see
-   * {@link ToneMapping}
+   * Tone mapping for everything the view draws; see {@link ToneMapping}
    *
-   * The curve is built into material shaders, so a change recompiles the materials in this view
-   * on the next frame. Switching back to a curve used before reuses the compiled shaders, but
-   * every mesh still rebuilds its draw state, so don't change it every frame.
+   * With no enabled `'beforeToneMapping'` effect in {@link View3D#passes | passes}, the curve is
+   * built into the material shaders, and a change recompiles them on the next frame. With one, the
+   * scene draws as linear light, so the effects see brightness above 1, and the curve runs once
+   * over the whole image after the last of them; a change rebuilds the render graph. Either way, don't change it every
+   * frame.
+   *
+   * The two look the same apart from see-through surfaces: with an effect, transparent surfaces
+   * blend, and glass refracts, in linear light before the curve.
    * @example
    * ```ts
    * view.toneMapping = 'reinhard';
    * ```
-   * @see {@link View3D#exposure} For the brightness multiplier applied before the curve.
    */
   public get toneMapping(): ToneMapping {
     return this._toneMapping;
   }
 
   /**
-   * Sets the tone mapping, marking the materials to recompile when it changes
-   * @param value - Curve for materials with `toneMapped` on.
+   * Sets the tone mapping
+   * @param value - The curve for everything the view draws.
    */
   public set toneMapping(value: ToneMapping) {
     if (this._toneMapping === value) return;
     this._toneMapping = value;
+    if (this._passesInitialized && this._graph.sceneIsLinear) {
+      this._teardownGraph();
+      return;
+    }
     this._toneMappingBit = TONE_MAPPING_BITS[value];
     this._invalidateMaterialShaders();
   }
 
   /**
-   * How soft the edges of this view's shadows are: `'hard'`, `'pcf'` or `'pcf-high'`; see
-   * {@link ShadowFilter}
+   * How this view culls its meshes outside the camera's view; see {@link CullMode}
    *
-   * The filter is built into the shadow sampling in material shaders, so a change recompiles
-   * them, with the same cost as changing {@link View3D#toneMapping | toneMapping}.
+   * A change rebuilds nothing. A {@link BatchedMesh3D} ignores it and culls by its own
+   * {@link BatchedMesh3D#cull | cull}.
+   * @default 'gpu'
+   * @example
+   * ```ts
+   * view.cull = gpuBound ? 'cpu' : 'gpu';
+   * ```
+   */
+  public get cull(): CullMode {
+    return this._sceneBatch.cull;
+  }
+
+  /**
+   * Sets how this view culls its meshes
+   * @param value - The culling mode.
+   */
+  public set cull(value: CullMode) {
+    this._sceneBatch.cull = value;
+  }
+
+  /**
+   * Texels per logical pixel the scene is drawn at, or `'inherit'` to take the resolution of the
+   * 2D target the view lands on
+   *
+   * Absolute, like a pixi filter's `resolution`: `1` on a DPR 2 screen draws the scene at half the
+   * physical size and stretches it over the view. Lower it for dynamic resolution when a device
+   * falls behind. Post effects' textures follow it unless an effect sets its own, and
+   * `Camera3D.jitter` comes out in the scene's pixels.
+   *
+   * A resolution other than the target's turns on {@link View3DOptions#composite | composite mode}.
+   * Turning composite mode on or off rebuilds the render graph on the next render, like assigning
+   * {@link View3D#passes}, so a dynamic-resolution loop that returns to the target's resolution
+   * rebuilds at every crossing; `composite: true`, or an enabled post effect, keeps that to once at
+   * most. Any other change rebuilds nothing, and allocates new textures only when the size crosses
+   * a power of two or the canvas size.
+   * @default 'inherit'
+   * @example
+   * ```ts
+   * // Draw the scene at two thirds of the screen's width and height
+   * view.resolution = app.renderer.resolution * 0.67;
+   * ```
+   */
+  public resolution: number | 'inherit';
+
+  /**
+   * How soft the edges of this view's shadows are; see {@link ShadowFilter}
+   *
+   * Once a light in the view casts shadows, a change recompiles the materials on the next frame;
+   * before that it compiles nothing.
    * @default 'pcf'
    * @example
    * ```ts
@@ -1457,7 +1355,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Sets the shadow filter, marking the materials to recompile when it changes
+   * Sets the shadow filter
    * @param value - Edge filtering for the shadows this view draws.
    */
   public set shadowFilter(value: ShadowFilter) {
@@ -1467,12 +1365,11 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Distance fog, or `null` for none, which leaves fog out of every shader
+   * Distance fog, or `null` for none
    *
    * The view keeps the object you assign, so changing its `color`, `near`, `far` or `density`
-   * later is free. Its `type` is read-only: assign a new object to switch curves. A new curve, or
-   * turning fog on or off, recompiles the materials on the next frame, with the same cost as
-   * changing {@link View3D#toneMapping | toneMapping}.
+   * later is free. A new curve, or turning fog on or off, recompiles the materials on the next
+   * frame, like changing {@link View3D#toneMapping | toneMapping}.
    * @example
    * ```ts
    * const haze: Fog = { type: 'linear', color: 0xadb2ba, near: 30, far: 55 };
@@ -1488,8 +1385,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Sets the fog, marking the materials to recompile when the curve changes
-   * @param value - Fog settings, kept by reference, or `null` for none.
+   * Sets the fog
+   * @param value - Fog settings, or `null` for none.
    */
   public set fog(value: Fog | null) {
     if (this._fog === value) return;
@@ -1505,15 +1402,16 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * Passes and post effects added to this view
    *
    * One list holds both kinds: a {@link MeshPass} redraws the meshes that opt in at its stage, a
-   * {@link PostEffect} filters the finished image, and any other {@link Pass3D} runs where it
-   * says. Each item knows where it runs, so the array order only matters among post effects,
-   * which run in that order.
+   * {@link PostEffect} filters the scene's light or the finished picture, and any other
+   * {@link Pass3D} runs where it says. Items at the same stage run in array order, and the post
+   * effects run `'beforeToneMapping'` ones first, then the tone curve, then `'afterToneMapping'`
+   * ones.
    *
    * Assigning a new array rebuilds the render graph on the next render; changing the array in
    * place does nothing. Flipping an item's `enabled` also rebuilds the graph, which suits a
-   * settings toggle. For changes every frame, use each item's own properties, which are cheap
-   * uniform writes. A view with an enabled post effect draws its scene into a texture first;
-   * otherwise it draws straight to the screen (see {@link createDefaultGraph3D}).
+   * settings toggle; for changes every frame, use each item's own properties. Turning a scene
+   * output on or off recompiles the materials on the next frame, and so does turning on the first
+   * `'beforeToneMapping'` effect or turning off the last.
    *
    * The items stay yours: replacing the list never destroys them, and one instance can serve
    * several views.
@@ -1529,20 +1427,15 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Sets the pass list (`null` clears it), tearing down the render graph so the next render rebuilds it
-   * @param value - Passes and post effects to run; the array is copied, the items are not.
+   * Sets the pass list; `null` clears it
+   * @param value - Passes and post effects to run; the array is copied.
    */
   public set passes(value: readonly Pass3D[] | null) {
     this._passes = value ? value.slice() : [];
-    if (this._passesInitialized) this._teardownGraphForRebuild();
+    if (this._passesInitialized) this._teardownGraph();
   }
 
-  /**
-   * Bitmask of which passes are enabled, compared each frame to spot a flip
-   *
-   * Pass `i` sets bit `i & 31`, so passes 32 apart share a bit: while one of them is enabled, a
-   * flip of the other goes unnoticed.
-   */
+  /** Bit `i & 31` per enabled pass, so a flip goes unnoticed while the pass 32 places away is enabled */
   private _computePassesKey(): number {
     let key = 0;
     for (let i = 0; i < this._passes.length; i++) {
@@ -1552,51 +1445,51 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Tears the render graph down so the next render rebuilds it
-   *
-   * The rebuild works out the pass list and composite mode again, and the material sweep re-keys
-   * every mesh against the new passes.
-   *
-   * The passes unload first, while this view's global bind group still exists: freeing the shadow
-   * map points the shadow slot at the empty depth texture and re-records every bundle that baked
-   * the old map before it dies. The new shadow pass starts with an empty map, so every light is
-   * asked to redraw its shadow, whatever its update rate.
+   * Needs the view's bind group, so `unload` runs it before pixi's own; the passes unload before the
+   * graph is destroyed, and every light redraws its shadow, since the new shadow map starts empty
    */
-  private _teardownGraphForRebuild(): void {
-    this._unloadPasses();
+  private _teardownGraph(): void {
+    this._graph.unload();
     for (let i = 0; i < this.lights.length; i++) this.lights[i].refreshShadows();
     this._graph.destroy();
     this._passesInitialized = false;
+    this._graphGlobalData = null;
     this._invalidateMaterialShaders();
   }
 
   /**
    * Light from the surroundings, which fills in where the direct lights don't reach
    *
-   * - A `CubeTexture`: image-based lighting from a cube map, reflections included. The renderer
-   *   prefilters each new cube map on the first frame that uses it, a one-off cost it caches.
+   * - A `CubeTexture`: image-based lighting from a cube map, reflections included. The first frame
+   *   that uses a cube map prefilters it, once, into a copy 128 to 256 pixels wide per face that
+   *   lighting and reflections read, so faces wider than 256 sharpen the background but not
+   *   reflections. The copy stays on the GPU until the cube map is destroyed with `destroy(true)` or
+   *   `Assets.unload`, even after the view switches away. A float cube, such as one {@link loadHdr}
+   *   makes from an `.hdr` file, is read as linear light, so an HDR environment keeps highlights
+   *   brighter than white; any other format is read as sRGB. On WebGL the prefilter needs
+   *   `EXT_color_buffer_float`, and throws without it.
    * - A {@link Hemisphere}: a cheap gradient from sky to ground, with no textures. A good default
    *   on mobile.
-   * - `null`: none. Materials compile without the environment code, and the view skips the setup
-   *   an environment needs.
+   * - `null`: none, and the cheapest.
    *
-   * Each material shader is built for one kind, so switching between kinds recompiles the
-   * materials on the next frame, with the same cost as changing
+   * Switching between kinds recompiles the materials on the next frame, like changing
    * {@link View3D#toneMapping | toneMapping}. Changing a hemisphere's colours is free.
    * @example
    * ```ts
    * view.environment = { skyColor: 0x88ccff, groundColor: 0x553311 };
    *
    * view.environment = await Assets.load<CubeTexture>('studio.cubemap');
+   *
+   * // An HDR panorama keeps the sun brighter than white
+   * view.environment = await Assets.load<CubeTexture>('sunset.hdr');
    * ```
-   * @see {@link Hemisphere} For the gradient.
    */
   public get environment(): CubeTexture | Hemisphere | null {
     return this._environment;
   }
 
   /**
-   * Sets the environment, marking the materials to recompile when its kind changes
+   * Sets the environment
    * @param value - Cube map, hemisphere gradient, or `null` for none.
    */
   public set environment(value: CubeTexture | Hemisphere | null) {
@@ -1611,7 +1504,54 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Enables shadow sampling after the first packed light starts casting
+   * Drawn behind the scene: a cube map, a {@link Hemisphere} gradient, a plain colour, or `null`
+   * for none
+   *
+   * Exposure and tone mapping apply to it. Set it to the same object as the
+   * {@link View3D#environment | environment} and the sky you see matches the light and reflections
+   * the scene receives. A hemisphere's fields are read every frame, so changing them is free. A view
+   * with no meshes draws nothing, background included, until a mesh joins its scene.
+   *
+   * A colour takes any `ColorSource` in display (sRGB) space and reads back as a hex number; its
+   * alpha is ignored. Exposure and the tone curve shift it on screen: under `'aces'`, white draws
+   * as light grey. To fade distant geometry into it, give the fog the same
+   * {@link Fog#color | color}. For a flat backdrop with no fog that shows the exact colour, leave
+   * `background` null and set the app's `backgroundColor`, which is never tone-mapped.
+   * @example
+   * ```ts
+   * const env = await Assets.load<CubeTexture>('env.cubemap');
+   * view.environment = env;
+   * view.background = env; // show the same cube map behind the scene
+   *
+   * // One hemisphere lights the scene and draws the sky behind it
+   * const sky: Hemisphere = { skyColor: 0x88ccff, groundColor: 0x553311 };
+   * view.environment = sky;
+   * view.background = sky;
+   * sky.skyColor = 0xff8800; // sunset, on the next frame
+   *
+   * // Distant geometry fades into a plain background
+   * view.background = 'skyblue';
+   * view.fog = { type: 'linear', color: 'skyblue', near: 20, far: 60 };
+   * view.background; // 0x87ceeb
+   * ```
+   */
+  public get background(): CubeTexture | Hemisphere | number | null {
+    return this._background;
+  }
+
+  /**
+   * Sets the background
+   * @param value - Cube map, hemisphere gradient, display-space colour, or `null` for none.
+   */
+  public set background(value: CubeTexture | Hemisphere | ColorSource | null) {
+    this._background =
+      value === null || value instanceof CubeTexture || (typeof value === 'object' && 'skyColor' in value)
+        ? value
+        : Color.shared.setValue(value).toNumber();
+  }
+
+  /**
+   * Turns shadow sampling on once one of the first `MAX_LIGHTS` packed lights casts
    * @internal
    */
   public _syncShadowSampling(): void {
@@ -1637,29 +1577,16 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     }
   }
 
-  /**
-   * Marks every mesh and batch item in this view to look up its shader again on the next frame
-   *
-   * For a view setting that is part of the shader cache key, such as `toneMapping`. The flag
-   * makes the scene sweep run `ensureMaterial` again. Material data doesn't change, since a
-   * material's struct is fixed at construction, so nothing is uploaded again.
-   *
-   * The scene batch's items are the `_meshSlots` array, where a removed mesh leaves a `null` until
-   * its slot is reused. User batches have no holes, but only process the indices in
-   * `_dirtyIndices`, so that list is refilled from the start with every index, replacing any
-   * partial list rather than appending past its end.
-   */
+  /** Refills each user batch's `_dirtyIndices` from the start, since appending every index could run past its end */
   private _invalidateMaterialShaders(): void {
-    for (let b = 0; b < this._meshBatches.length; b++) {
+    const meshes = this.meshes.items;
+    for (let i = 0; i < meshes.length; i++) meshes[i]._markBatchDirty();
+
+    for (let b = 1; b < this._meshBatches.length; b++) {
       const batch = this._meshBatches[b];
       const items = batch.items;
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (!item) continue;
-
-        item._batchDirty = true;
-      }
-      if (b > 0 && batch._dirtyIndices) {
+      for (let i = 0; i < items.length; i++) items[i]._batchDirty = true;
+      if (batch._dirtyIndices) {
         for (let i = 0; i < items.length; i++) batch._dirtyIndices[i] = i;
         batch._dirtyCount = items.length;
       }
@@ -1667,11 +1594,15 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * pixi.js `ViewContainer` hook that sets the view's 2D bounds from
-   * {@link View3D#width | width}, {@link View3D#height | height} and
-   * {@link View3D#anchor | anchor}, for 2D layout and culling
+   * Queues a mesh for the next scene update; `Mesh3D._queueMeshUpdate` makes sure it isn't queued already
    * @internal
    */
+  public _onRenderableUpdate(mesh: Mesh3D): void {
+    const queue = this._renderablesToUpdate;
+    queue.list[queue.index++] = mesh;
+  }
+
+  /** @internal */
   protected updateBounds(): void {
     const bounds = this._bounds;
 
@@ -1687,27 +1618,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Registers `child` and its subtree with this view: sets each node's scene depth, queues its
-   * transform update, and indexes the meshes, batches and lights it finds
-   *
-   * `Container3D.addChild` and `addChildAt` call it without `ancestorPickState`, which the first
-   * call works out from the parent chain and the recursion passes down. `events` must exist before the first
-   * call, because attaching registers pick candidates on it; that's why the constructor creates
-   * it before attaching `root`.
-   *
-   * - A mesh is marked to look up its shader again, since it may carry one compiled for another
-   *   view with different tone mapping or shadow settings.
-   * - A barrier (`eventMode: 'none'` or `interactiveChildren: false`) blocks picking for its whole
-   *   subtree, and an interactive node below it can't lift the block. An interactive node covers
-   *   its subtree. Any other node passes its parent's state on.
-   * - A node goes on the pick list when nothing above blocks it and either its own mode makes it
-   *   a candidate, or it is `'passive'` with a hit volume under an interactive ancestor, which a
-   *   hit on it goes to. Later `eventMode` and `hitVolume` changes reach `events` through their
-   *   setters.
-   * - Each explicit hit volume clips its descendants, so it counts toward
-   *   `events._clipVolumeCount`, which skips all clip work while it is 0.
-   * @param child - Node to register, along with its subtree.
-   * @param ancestorPickState - Whether an ancestor blocks or covers picking; derived from the parent chain when omitted.
+   * Registers `child` and its subtree; pick state follows the rule of `getAncestorPickState` in
+   * `FederatedEventTarget3D.ts`, and `events` must exist first, since picking registers on it
    * @internal
    */
   public _attach(child: Container3D, ancestorPickState: AncestorPickState = getAncestorPickState(child)) {
@@ -1749,10 +1661,12 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
         this._skinnedMeshes.add(child);
       }
 
-      if (child.morph) {
+      if (child._morph) {
         this._morphedMeshes.add(child);
       }
-      child._batchDirty = true;
+      child.geometry._meshes.add(child);
+      child.material._meshes.add(child);
+      child._markBatchDirty();
     } else if (child instanceof Light) {
       this.lights.push(child);
     }
@@ -1768,24 +1682,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Undoes `View3D._attach` for `child` and its subtree, freeing mesh slots, batches and light
-   * entries
-   *
-   * `Container3D.removeChild` and `removeChildren` call it.
-   *
-   * - A mesh's `_lastWorldVisible` and `_lastBonePitIndex` reset along with the store row they
-   *   describe, so attaching it again works like a first attach. A mesh that comes back hidden
-   *   then reads as a visibility flip, which writes its store row: every member of a pass needs a
-   *   row, or its id reaches the instance buffer as -1.
-   * - A morphed mesh frees its weight slot in the renderer's shared morph store, since being in
-   *   the scene is what holds the slot.
-   * - A light drops its cached shadow state: each cascade's camera data and, on WebGPU, its cull
-   *   results, whose bundles baked the shadow pass's bind group over this view's bone pit. The
-   *   shadow pass rebuilds them against whichever view draws the light next.
-   * - A node leaves the pick list through its own list slot, so implicit entries (`'passive'`
-   *   under an interactive ancestor) go too. Pick state is cleared without a `pointerout`; see
-   *   `EventBoundary3D._clearPickState`.
-   * @param child - Node to unregister, along with its subtree.
+   * Unregisters `child` and its subtree; a mesh's `_lastWorldVisible` resets so one that comes back
+   * hidden still writes its store row. The root never detaches, so `destroy` frees its mesh lists and morph slot.
    * @internal
    */
   public _detach(child: Container3D) {
@@ -1803,11 +1701,14 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
       }
     } else if (child instanceof Mesh3D) {
       const slotIndex = this._meshSlots.getIndex(child);
-      this._sceneBatch.setItemActive(slotIndex, 0);
+      this._sceneBatch.setPassesAt(slotIndex, 0);
 
       this._meshSlots.remove(child);
       this.meshes.remove(child);
       this._sceneBatch.storeBuffer.remove(child);
+      child.geometry._meshes.remove(child);
+      child.material._meshes.remove(child);
+      child.didRenderableUpdate = false;
       child._lastWorldVisible = 1;
       child._lastBonePitIndex = -1;
 
@@ -1815,9 +1716,9 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
         this._skinnedMeshes.remove(child);
       }
 
-      if (child.morph) {
+      if (child._morph) {
         this._morphedMeshes.remove(child);
-        child.morph._store?.freeSlot(child.morph);
+        child._morph._store?.freeSlot(child._morph);
       }
     } else if (child instanceof Light) {
       const index = this.lights.indexOf(child);
@@ -1840,14 +1741,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     child._view3d = null;
   }
 
-  /**
-   * Enqueues `child` into the per-depth update bucket consumed by the next transform pass
-   *
-   * Buckets are keyed by `_relativeSceneDepth` so ancestors are visited before
-   * descendants.
-   * @param child - Node whose transform needs updating.
-   * @internal
-   */
+  /** @internal */
   public _onChildUpdate(child: Container3D) {
     let childrenToUpdate = this._childrenToUpdate[child._relativeSceneDepth];
 
@@ -1862,11 +1756,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Rebuilds every batch's draw commands next frame
-   *
-   * The bluntest invalidation: a change normally dirties only the batch and pass it touches.
-   * Keep this for what the whole view binds, such as a shared store (materials, bones, morphs,
-   * geometry atlas) reallocating under every recorded command.
+   * Rebuilds every batch's draw commands next frame; keep it for what the whole view binds, such as a
+   * shared store reallocating
    * @internal
    */
   public _invalidateDrawCaches(): void {
@@ -1874,10 +1765,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Re-records every batch's WebGPU bundles next frame, leaving the draw commands alone
-   *
-   * Cheaper than {@link View3D#_invalidateDrawCaches}; use it when only state a bundle bakes in
-   * changed, such as the shadow-map binding moving to a different texture.
+   * Re-records every batch's WebGPU bundles next frame, keeping the draw commands
    * @internal
    */
   public _invalidateBundleCaches(): void {
@@ -1885,10 +1773,18 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Not available on `View3D`
-   *
-   * The view has no child list of its own; add 3D objects under {@link View3D#root | root}
-   * with `view.root.addChild()`.
+   * Lets go of the pooled textures this view still binds, before pixi's texture pool destroys them;
+   * without a graph there's nothing to do, since its teardown already let them go
+   * @internal
+   */
+  public _releasePooledTextures(): void {
+    if (!this._passesInitialized) return;
+    this._graph._releaseTransients();
+    this._invalidateBundleCaches();
+  }
+
+  /**
+   * Not available on `View3D`; use `view.root.addChild()` instead
    * @throws {Error} Always.
    * @ignore
    */
@@ -1987,93 +1883,90 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
   }
 
   /**
-   * Builds the render graph when there is none, from the `graph` option or
-   * {@link createDefaultGraph3D}, then indexes its passes in `passByBit`
-   *
-   * `View3DPipeGpu.execute` and `View3DPipeGl.execute` call it every frame. It first compares the
-   * passes' `enabled` flags with the key the graph was built with, an O(passes) check. A flip
-   * changes which stages have passes, whether the view composites and the ping-pong slots, so a
-   * mismatch tears the graph down for a rebuild; compiled shaders and pooled textures carry over.
-   *
-   * Both builders get the same options, so one that starts from `createDefaultGraph3D` keeps
-   * `passes` and `composite` working. The default builder compiles its graph but a custom one may
-   * not, so the graph is compiled again here, which is idempotent and cheap.
-   *
-   * Materials and `updateView3DScene` reach a pass through its bit in `passByBit`, not through the
-   * graph. Passes that take no meshes, such as full-screen effects, own no draw list. Two cameras
-   * may share a pass name: one pass owns the list and the others only draw it, and the view
-   * camera's pass owns it even when a texture camera's pass comes first. A name used twice without
-   * a camera throws, and so does a descriptor on a pass that doesn't own its name, since only the
-   * owner's descriptor is used.
-   * @param renderer - Renderer the graph is built for.
+   * Builds the render graph when there is none or it went stale, compiling it again since a custom
+   * builder may not have; the view camera's pass owns a shared draw-list bit even when a texture camera's comes first
+   * @throws If the graph was built with another renderer's global data.
    * @internal
    */
-  public _ensureInitialized(renderer: WebGLRenderer | WebGPURenderer): void {
-    if (this._passesInitialized && this._passes.length > 0 && this._passesEnabledKey !== this._computePassesKey()) {
-      this._teardownGraphForRebuild();
+  public _ensureInitialized(
+    renderer: WebGLRenderer | WebGPURenderer,
+    globalData: View3DGlobalData,
+    targetResolution: number,
+  ): void {
+    const sceneResolution = this.resolution === 'inherit' ? targetResolution : this.resolution;
+    const composite = this._composite || sceneResolution !== targetResolution;
+
+    if (this._passesInitialized) {
+      const passesChanged = this._passes.length > 0 && this._passesEnabledKey !== this._computePassesKey();
+      const compositeChanged =
+        composite !== this._compositeRequested && !(composite && this._graph.sceneColor !== this._graph.defaultColor);
+      if (passesChanged || compositeChanged) this._teardownGraph();
     }
 
-    if (this._passesInitialized) return;
-
-    const graphOptions: DefaultGraph3DOptions = { composite: this._composite, passes: this._passes };
-    this._graph = this._buildGraph
-      ? this._buildGraph(renderer, graphOptions)
-      : createDefaultGraph3D(renderer, graphOptions).graph;
-    this._graph.compile();
-    this._passesEnabledKey = this._computePassesKey();
-
-    for (const k in this.passByBit) delete this.passByBit[k];
-    this._dirtyHookBits = 0;
-    for (const graphPass of this._graph.passes) {
-      const pass = graphPass as RenderPass;
-      if (pass.bit === RenderPassBit.NONE) continue;
-      const owner = this.passByBit[pass.bit];
-      if (pass.camera) {
-        if (owner) continue;
-      } else if (owner && !owner.camera) {
-        throw new Error(`Render pass "${pass.name}" is used twice in this view; give the second one a camera.`);
+    if (this._passesInitialized) {
+      if (this._graphGlobalData !== globalData) {
+        throw new Error('View3D: a view renders with one renderer; its render graph was built for another');
       }
-      this.passByBit[pass.bit] = pass;
-      this._dirtyHookBits |= pass.bit;
+    } else {
+      this._graphGlobalData = globalData;
+
+      const graphOptions: DefaultGraph3DOptions = {
+        composite,
+        passes: this._passes,
+        toneMapping: this._toneMapping,
+        globalTextureBindings: globalData.globalTextureBindings,
+      };
+      this._graph = this._buildGraph
+        ? this._buildGraph(renderer, graphOptions)
+        : createDefaultGraph3D(renderer, graphOptions).graph;
+      this._graph.compile();
+      this._toneMappingBit = this._graph.sceneIsLinear ? null : TONE_MAPPING_BITS[this._toneMapping];
+      this._passesEnabledKey = this._computePassesKey();
+      this._compositeRequested = composite;
+
+      for (const k in this.passByBit) delete this.passByBit[k];
+      this._dirtyHookBits = 0;
+      for (const graphPass of this._graph.passes) {
+        const pass = graphPass as RenderPass;
+        if (pass.bit === RenderPassBit.NONE) continue;
+        const owner = this.passByBit[pass.bit];
+        if (pass.camera) {
+          if (owner) continue;
+        } else if (owner && !owner.camera) {
+          throw new Error(`Render pass "${pass.name}" is used twice in this view; give the second one a camera.`);
+        }
+        this.passByBit[pass.bit] = pass;
+        this._dirtyHookBits |= pass.bit;
+      }
+
+      for (const graphPass of this._graph.passes) {
+        const pass = graphPass as RenderPass;
+        if (pass.bit === RenderPassBit.NONE || !pass.descriptor) continue;
+        if (this.passByBit[pass.bit] === pass) continue;
+        throw new Error(
+          `Render pass "${pass.name}" has a descriptor, but another pass owns that name. ` +
+            'Put the descriptor there, or give this pass its own name.',
+        );
+      }
+
+      this._passesInitialized = true;
     }
 
-    for (const graphPass of this._graph.passes) {
-      const pass = graphPass as RenderPass;
-      if (pass.bit === RenderPassBit.NONE || !pass.descriptor) continue;
-      if (this.passByBit[pass.bit] === pass) continue;
-      throw new Error(
-        `Render pass "${pass.name}" has a descriptor, but another pass owns that name. ` +
-          'Put the descriptor there, or give this pass its own name.',
-      );
-    }
-
-    this._passesInitialized = true;
+    this._graph.resolution = this._graph.sceneColor === this._graph.defaultColor ? targetResolution : sceneResolution;
   }
 
   /**
    * Frees this view's GPU memory now, for a scene you'll show again later
    *
    * The next render that draws the view rebuilds everything, so nothing needs re-creating by
-   * hand. It frees the recorded draw commands and WebGPU bundles, and with them their hold on
-   * material textures and geometry buffers; the shadow map; each light's shadow state; the
-   * view's uniforms and bind groups; and the GPU copies of the buffers the view owns. CPU data
-   * stays: the scene and every typed array, the way a 2D texture keeps its source image across
-   * `unload`.
+   * hand. It frees the view's draw state, shadow map, uniforms and buffers, and keeps CPU data:
+   * the scene and every typed array, the way a 2D texture keeps its source image across `unload`.
+   * The scene's geometry and textures stay on the GPU; {@link Container3D#unload} says how to free them.
    *
-   * It frees the GPU copies for every renderer that drew the view, not only one, so a view shown
-   * by two renderers re-uploads on both: a one-frame hitch, not a fault.
-   *
-   * pixi's renderer garbage collector calls it for a view that has been out of every rendered
-   * tree for `gcMaxUnusedTime`. A view still on a rendered stage is never collected, even when
-   * hidden. Calling it again, or after {@link View3D#destroy}, does nothing.
-   *
-   * The order matters. The batches go first, so their recorded draws let go of what they
-   * captured. Lights drop their shadow state and ask to redraw it into the next map, whatever
-   * their update rate. The passes then free the shadow map while the view's bind groups still
-   * exist, so the shadow slot can point at an empty texture first. pixi's own `unload` comes last:
-   * each renderer destroys the global data it keeps on the view, bind group before uniform buffer,
-   * and the next frame makes it again. Every renderer's data goes, because a WebGPU bind group left
-   * alive would keep serving its native bind group over the freed buffers.
+   * pixi's garbage collector calls it for a view that has been out of the stage for
+   * `gcMaxUnusedTime`. It never collects a view still in a stage, even a hidden one, nor one that
+   * is a render group or left the stage inside one (`isRenderGroup`, `cacheAsTexture`, or rendered
+   * directly, as `extract` does); set `autoGarbageCollect` to `false` to keep any view.
    * @example
    * ```ts
    * view.visible = false; // hiding alone never frees anything
@@ -2082,6 +1975,8 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * @see {@link View3D#destroy} For permanent teardown.
    */
   public override unload(): void {
+    if (this.destroyed) return;
+
     for (let i = 0; i < this._meshBatches.length; i++) this._meshBatches[i].unload();
 
     for (let i = 0; i < this.lights.length; i++) {
@@ -2091,47 +1986,20 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
       light.refreshShadows();
     }
 
-    this._unloadPasses();
-
     this._bonePit.unload();
+
+    if (this._passesInitialized) this._teardownGraph();
 
     super.unload();
   }
 
   /**
-   * Frees the GPU state the passes own: the shadow map, and each pass bind group's references to
-   * the stores of the renderer the graph was built for
-   *
-   * `unload` runs it after the batches and lights let go of theirs. The renderer's
-   * garbage-collection registry (`View3DGCRegistry`) also runs it on every `unload` event, where
-   * `unload` has already freed everything, and for each view when the renderer is destroyed,
-   * before the pipe frees those stores. Idempotent.
-   * @internal
-   */
-  public _unloadPasses(): void {
-    if (this._passesInitialized) this._graph.unload();
-  }
-
-  /**
    * Destroys this view and the GPU resources it owns
    *
-   * The view's own GPU state always goes, whatever `options` says: its uniforms and bind groups,
-   * its render graph, its bone matrices and its batch of scene meshes. A {@link BatchedMesh3D}
-   * owns its own batch, so that stays.
-   *
-   * The scene under {@link View3D#root | root} isn't a pixi child, so pixi's container teardown
-   * never reaches it. With the `children` flag, `root` is destroyed and gets `options`,
-   * `geometry`, `material` and `texture` included. Without it, the nodes survive for you to
-   * reuse, detached from `root` so none of them points at the freed view.
-   *
-   * Calling it again does nothing.
-   *
-   * The order matters. `unload` runs first, so every bind group dies before the buffers it binds.
-   * The scene detaches next, while the scene batch can still unwind each mesh's slot. Detaching
-   * frees each morphed mesh's slot in the renderer's morph store, which outlives the view; a root
-   * that is itself a morphed mesh is never detached, so it frees its slot here. pixi's `destroy`
-   * runs last: its second `unload` finds nothing left to free, and the view's child list is
-   * empty, so the throwing `removeChildren` override is never reached.
+   * The view's own GPU state always goes, whatever `options` says. With the `children` flag,
+   * {@link View3D#root | root} is destroyed too, with the same `options`, so the `geometry`,
+   * `material` and `texture` flags apply to it. Without the flag, the scene's nodes survive for you
+   * to reuse, but they're removed from `root`, which is left empty.
    * @example
    * ```ts
    * view.destroy({ children: true });
@@ -2143,6 +2011,13 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     if (this.destroyed) return;
 
     this.unload();
+
+    const root = this.root;
+    if (root instanceof Mesh3D && !root.destroyed) {
+      root.geometry._meshes.remove(root);
+      root.material._meshes.remove(root);
+      root.didRenderableUpdate = false;
+    }
 
     if (resolveDestroy3DFlag(options, 'children')) {
       this.root.destroy(options);
@@ -2157,7 +2032,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
 
     const morphedMeshes = this._morphedMeshes.items;
     for (let i = 0; i < morphedMeshes.length; i++) {
-      const morph = morphedMeshes[i].morph!;
+      const morph = morphedMeshes[i]._morph!;
       morph._store?.freeSlot(morph);
     }
 
@@ -2165,20 +2040,20 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
 
     this._meshSlots.items.length = 0;
     this._meshSlots.count = 0;
-    this.meshes.clear();
-    this._skinnedMeshes.clear();
-    this._morphedMeshes.clear();
-    this.lights.length = 0;
-
-    for (const depth in this._childrenToUpdate) delete this._childrenToUpdate[depth];
+    (this.meshes as UnstableList<Mesh3D> | null) = null;
+    (this._skinnedMeshes as UnstableList<Mesh3D> | null) = null;
+    (this._morphedMeshes as UnstableList<Mesh3D> | null) = null;
+    (this._childrenToUpdate as View3D['_childrenToUpdate'] | null) = null;
+    (this._renderablesToUpdate as View3D['_renderablesToUpdate'] | null) = null;
 
     this.events.destroy();
 
-    for (const k in this.passByBit) delete this.passByBit[k];
+    (this.passByBit as Record<number, RenderPass> | null) = null;
     this._dirtyHookBits = 0;
 
-    this._meshBatches.length = 0;
-
     super.destroy(options);
+
+    (this.lights as Light[] | null) = null;
+    (this._meshBatches as Mesh3DBatch[] | null) = null;
   }
 }

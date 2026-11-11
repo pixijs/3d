@@ -6,15 +6,6 @@ import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
 const NESTED_MARKER_PATTERN = /\{\{(.*?)\}\}/g;
 
-/**
- * Collects slot names that appear as `{{name}}` markers inside any of the
- * values about to be injected
- *
- * The template doesn't name these slots, but another slot's code does, and
- * `fillTemplateSlots` fills markers recursively, so code for them isn't unused.
- * `wgslStageSlotsPlugin` makes the same check.
- * @param slotCode - Code chunks about to be injected, keyed by slot name
- */
 function collectIndirectSlots(slotCode: Record<string, string[]>): Set<string> {
   const indirect = new Set<string>();
   for (const codes of Object.values(slotCode)) {
@@ -45,11 +36,7 @@ function warnUnusedSlots(
   }
 }
 
-/**
- * GLSL compiler plugin that gathers slot code for the current stage and injects
- * it into the matching template slots
- * @internal
- */
+/** @internal */
 export const glslStageSlotsPlugin: ShaderCompilerPlugin = {
   injectCode(context) {
     if (!context.stage) return {};

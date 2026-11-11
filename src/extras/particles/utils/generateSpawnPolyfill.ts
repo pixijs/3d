@@ -19,34 +19,16 @@ import type { SpawnAttribute, SpawnFn, SpawnShape } from './spawnPlan';
 
 const VERTS = 4;
 
-/**
- * `lo + (hi - lo) · r`, the exact expression the generated code inlines
- * @param lo - Value at `r = 0`
- * @param hi - Value at `r = 1`
- * @param r - Blend factor, 0..1
- * @returns The interpolated value.
- */
+/** The exact expression `generateSpawn` inlines; another form rounds differently */
 function lerp(lo: number, hi: number, r: number): number {
   return lo + (hi - lo) * r;
 }
-/** `SPREAD.speed` in the system's spread table; the one spread no attribute owns */
+/** Must match `SPREAD.speed` in `ParticleSystem3D.ts` */
 const SPEED_OFFSET = 2;
 
 /**
- * The interpreted twin of `generateSpawn`, for pages that forbid `new Function`
- *
- * Same arguments, same contract, same bytes: each particle is assembled as one
- * vertex row, the shape's position then every attribute in list order, and the
- * row is stamped across the quad as 32-bit words, so packed attributes copy
- * bit-exact. The loop reads the attribute list's numbers from a flat table,
- * five ints per attribute (element index, components, source, store and
- * spread), and switches on them per particle, which is the ~30 ns a particle
- * the generated function gets back.
- * @param attributes - The attributes a spawn writes, in the order it writes them
- * @param kinds - Each attribute's override kind for this pattern, parallel to `attributes`
- * @param positionKind - The position override's kind
- * @param shape - The stride, space and frame mode the function is built for
- * @returns The interpreted spawn function.
+ * `generateSpawn` for pages that forbid `new Function`, writing the same bytes in the same draw
+ * order. It copies the row as 32-bit words, since a float copy can change packed bits.
  * @internal
  */
 export function generateSpawnPolyfill(
@@ -93,7 +75,7 @@ export function generateSpawnPolyfill(
 
           origin = origin3.set(lerp(lo.x, hi.x, rng()), lerp(lo.y, hi.y, rng()), lerp(lo.z, hi.z, rng()));
         } else {
-          origin = (plan.positionRaw as (rng: () => number, index: number) => PointData3D)(rng, index);
+          origin = (plan.positionRaw as (rng: () => number, n: number) => PointData3D)(rng, n);
         }
 
         pos.set(origin.x + pos.x, origin.y + pos.y, origin.z + pos.z);
@@ -142,7 +124,7 @@ export function generateSpawnPolyfill(
           } else if (kind === PAIR) {
             value = lerp(los[i] as number, his[i] as number, rng());
           } else {
-            value = (raws[i] as (rng: () => number, index: number) => number)(rng, index);
+            value = (raws[i] as (rng: () => number, n: number) => number)(rng, n);
           }
 
           if (store === AS_TINT) {
@@ -184,7 +166,7 @@ export function generateSpawnPolyfill(
           if (components > 2) p.z = lerp(lo.z, hi.z, rng());
           if (components > 3) p.w = lerp(lo.w, hi.w, rng());
         } else {
-          const q = (raws[i] as (rng: () => number, index: number) => PointData4D)(rng, index);
+          const q = (raws[i] as (rng: () => number, n: number) => PointData4D)(rng, n);
 
           p.x = q.x;
           p.y = q.y;

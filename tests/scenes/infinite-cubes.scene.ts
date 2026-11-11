@@ -10,8 +10,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Static 3-level nesting test: base lit cube → wrapped → wrapped, each captured into a ContainerTexture and
-// shown on the next cube (aspect-stretched into the window). Verifies container-texture recursion to depth 3.
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x05060c,
@@ -55,7 +53,6 @@ export const scene: TestScene = {
       return { container };
     };
 
-    // Base (deepest): a lit orange cube.
     const base = makeLayer(0, new Material3D({ baseColor: 0xff7a33, metallic: 0.1, roughness: 0.45 }), true);
     const tex0 = new ContainerTexture({
       container: base.container,
@@ -64,7 +61,6 @@ export const scene: TestScene = {
       resolution: 1,
     });
 
-    // Layer 1: a cube showing the base capture.
     const layer1 = makeLayer(1, new FlatMaterial({ baseColor: 'white', baseColorTexture: tex0 }), false);
     const tex1 = new ContainerTexture({
       container: layer1.container,
@@ -73,11 +69,9 @@ export const scene: TestScene = {
       resolution: 1,
     });
 
-    // Layer 2 (on screen): a cube showing layer 1.
     const layer2 = makeLayer(2, new FlatMaterial({ baseColor: 'white', baseColorTexture: tex1 }), false);
     app.stage.addChild(layer2.container);
 
-    // Render the captured layers (deepest first) before the screenshot frame.
     tex0.render(app.renderer);
     tex1.render(app.renderer);
   },

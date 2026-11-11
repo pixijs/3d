@@ -4,18 +4,18 @@ import type { DestroyOptions, MeshOptions, Texture } from 'pixi.js';
 /**
  * Constructor options for {@link DepthMapViewer}
  *
- * Takes every pixi `MeshOptions` field except the geometry, shader and texture the viewer builds itself, so
- * `label`, `position` and the rest of the container options pass straight through.
+ * Also takes pixi's `MeshOptions`, such as `label` and `position`, except `geometry` and `shader`,
+ * which the viewer builds.
  * @example
  * ```ts
- * const viewer = new DepthMapViewer({ texture: shadowMap, size: 384, position: { x: 8, y: 8 } });
+ * const viewer = new DepthMapViewer({ texture: depthArray, size: 384, position: { x: 8, y: 8 } });
  * app.stage.addChild(viewer);
  * ```
  * @category extras:debug
  * @advanced
  */
 export interface DepthMapViewerOptions extends Omit<MeshOptions<Geometry, Shader>, 'geometry' | 'shader' | 'texture'> {
-  /** Depth array texture to show, such as a shadow map's render target */
+  /** Depth array texture to show */
   texture: Texture;
   /**
    * Width and height of the quad, in pixels
@@ -25,21 +25,16 @@ export interface DepthMapViewerOptions extends Omit<MeshOptions<Geometry, Shader
 }
 
 /**
- * Debug quad that visualises a depth array texture (e.g. the cascaded shadow
- * map) as greyscale
+ * Debug quad that shows a depth array texture in greyscale
  *
- * Renders a square quad (256×256 by default) in the 2D scene showing the first four array layers
- * in a 2×2 grid: top-left layer 0, top-right layer 1, bottom-left layer 2, bottom-right layer 3.
- * Add it to the stage like any 2D mesh while tuning shadows, then remove it. Works on both
- * backends.
+ * Shows the first four layers in a 2×2 grid: layer 0 top-left, 1 top-right, 2 bottom-left and 3
+ * bottom-right. Add it to the stage like any 2D mesh while debugging, then remove it.
  * @category extras:debug
  * @advanced
  */
 export class DepthMapViewer extends Mesh<Geometry, Shader> {
   /**
-   * Default {@link DepthMapViewerOptions} merged under every constructor call
-   *
-   * `new DepthMapViewer(opts)` resolves as `{ ...DepthMapViewer.defaultOptions, ...opts }`.
+   * Defaults for every new `DepthMapViewer`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * DepthMapViewer.defaultOptions.size = 512;
@@ -51,10 +46,7 @@ export class DepthMapViewer extends Mesh<Geometry, Shader> {
 
   /**
    * Builds the quad and the shader that reads `options.texture`
-   *
-   * On WebGPU it switches the shader's sampler binding to `non-filtering`: pixi lays out every
-   * WGSL `sampler` as filtering, and a depth texture can't be sampled through one.
-   * @param options - Viewer options; see {@link DepthMapViewerOptions}
+   * @param options - Options for the viewer
    */
   constructor(options: DepthMapViewerOptions) {
     const { texture, size, ...rest } = { ...DepthMapViewer.defaultOptions, ...definedProps(options) };
@@ -191,9 +183,9 @@ export class DepthMapViewer extends Mesh<Geometry, Shader> {
   }
 
   /**
-   * Frees the GPU copies of the quad geometry and its buffers; the next render uploads them again
+   * Frees the quad's GPU buffers; the next render uploads them again
    *
-   * The shader holds no GPU memory of its own: its compiled programs live in pixi's shared program cache.
+   * The shader holds no GPU memory of its own, since pixi caches compiled programs.
    */
   public override unload(): void {
     if (this.destroyed) return;
@@ -206,13 +198,11 @@ export class DepthMapViewer extends Mesh<Geometry, Shader> {
   }
 
   /**
-   * Destroys the viewer along with the quad geometry and shader it built
+   * Destroys the viewer and the quad and shader it built
    *
-   * The viewed texture belongs to its owner (the shadow pass, usually), so as on any pixi `Mesh` it's only
-   * destroyed when `options.texture` asks for it, and its source only when `options.textureSource` does too;
-   * `destroy(true)` sets both and so frees the shadow map itself. The compiled programs stay in pixi's program
-   * cache, shared with any other viewer.
-   * @param options - Container destroy options, forwarded to pixi's `Mesh.destroy`
+   * As on any pixi `Mesh`, the viewed texture is destroyed only when `options` asks for it, and
+   * `destroy(true)` destroys its source as well, so call `destroy()` when viewing a live shadow map.
+   * @param options - Destroy options, as for pixi's `Mesh.destroy`
    */
   public override destroy(options?: DestroyOptions): void {
     if (this.destroyed) return;

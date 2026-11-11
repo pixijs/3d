@@ -5,17 +5,6 @@ import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Verifies `material.topology` overrides the geometry's topology.
- *
- * The cube's geometry is triangle-list, but the material requests `line-list`.
- * The expected resolution chain (`matPd.topology || passPd.topology ||
- * material.topology || geometry.topology`) should land on `material.topology`
- * and render the cube using line primitives instead of filled triangles.
- *
- * If the field doesn't propagate through to the pipeline key, the cube would
- * render as a filled white cube and the snapshot would fail.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x000000,

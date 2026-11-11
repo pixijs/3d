@@ -10,7 +10,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** The bits of the shadow pass this file reaches for, without pulling in a backend type. */
 interface ShadowPassProbe {
   renderTarget: { depthStencilTexture: { source: { arrayLayerCount: number } } };
   targetVersion: number;
@@ -97,7 +96,7 @@ describe('shadow atlas sizing, which the pass base shares between backends, so W
   });
 
   it('keeps the high-water mark when a caster goes away', async () => {
-    const lights = view3d.root.children.filter((c) => c instanceof DirectionalLight) as DirectionalLight[];
+    const lights = view3d.root.children.filter((c) => c instanceof DirectionalLight);
     const before = probe().targetVersion;
     view3d.root.removeChild(lights[lights.length - 1]);
     await settle();

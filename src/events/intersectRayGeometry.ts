@@ -5,37 +5,18 @@ import type { HitResult3D } from './HitResult3D';
 const EPSILON = 1e-7;
 
 /**
- * Tests a ray against every triangle of a `Geometry3D` with the Möller-Trumbore method
- *
- * A ray that misses `geom.bounds3D` returns before the triangle loop, so a miss costs the same
- * on any mesh size. Bounds and vertex data are read on every call, so edits to the geometry
- * take effect on the next pick. The loop keeps the closest `t`; its names follow the method:
- * `e1` and `e2` are the triangle's edges, `h = direction × e2`, `s = origin - a` and
- * `q = s × e1`.
- *
- * - Back faces hit too: only a ray parallel to the triangle is rejected, not the sign of `a`, so
- *   meshes authored with inverted normals still pick.
- * - The normal is the triangle's flat normal from its edges, so it exists even without an
- *   `aNormal` attribute.
- * - The UV is interpolated from `aUV` when it is float32. Other `aUV` data, such as quantised
- *   int16, is skipped rather than decoded wrong, and `out.uv` gets the hit's barycentric
- *   coordinates instead.
- *
- * Only float32 `aPosition` data and `'triangle-list'` topology can hit. Quantised positions
- * (KHR_mesh_quantization) are only dequantised in the shader, and a line, strip or point index
- * buffer would decode as nonsense triangles; both count as a miss. Use `'box'` or a proxy
- * geometry for those.
- * @param localRay - The ray in the geometry's local space
- * @param geom - The geometry to test every triangle of
- * @param out - Scratch buffer filled with the closest hit's point / normal / UV; untouched on a miss
- * @returns The parametric `t` of the closest hit (`>= 0`), or `-1` for a miss, for non-triangle-list topology, and
- * for geometry with no float32 `aPosition` data
+ * Back faces hit too, so meshes with inverted winding still pick. A ray starting inside the bounds
+ * always runs the triangle loop, since `intersectBoxT` then gives the exit distance, not the entry.
+ * @returns The `t` of the closest hit, or `-1` for a miss.
  * @internal
  */
-export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitResult3D): number {
+export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitResult3D, maxT = Infinity): number {
   if (geom.topology !== 'triangle-list') return -1;
 
-  if (!localRay.intersectsBox(geom.bounds3D)) return -1;
+  const bounds = geom.bounds3D;
+  const boundsT = localRay.intersectBoxT(bounds);
+  if (boundsT === -1) return -1;
+  if (boundsT >= maxT && !bounds.containsPoint(localRay.origin)) return -1;
 
   const positionAttr = geom.attributes.aPosition;
   if (!positionAttr) return -1;
@@ -54,7 +35,7 @@ export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitRe
   const dy = localRay.direction.y;
   const dz = localRay.direction.z;
 
-  let bestT = Infinity;
+  let bestT = maxT;
   let bestTri = -1;
   let bestU = 0;
   let bestV = 0;

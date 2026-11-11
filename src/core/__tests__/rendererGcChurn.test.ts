@@ -16,14 +16,10 @@ import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
 const SIZE = 96;
-/** Cycles before the first sample, so lazily created singletons (BRDF LUT, shaders, pipelines) are in. */
 const WARMUP = 5;
-/** Cycles between the two samples; the slope is per one of these. */
 const CYCLES = 40;
-/** Every Nth cycle swaps the shadow tier mid-cycle so the map re-creation path churns too. */
 const FLIP_PERIOD = 5;
 
-/** A collectable texture; pixi only auto-collects sources that opt in */
 function makeCollectableTexture(color: string): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 4;
@@ -36,7 +32,6 @@ function makeCollectableTexture(color: string): Texture {
   return texture;
 }
 
-/** A triangle with one morph target, so the morph store's delta arena and weight slots churn. */
 function morphedTriangle(): Geometry3D {
   return new Geometry3D({
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
@@ -46,12 +41,10 @@ function morphedTriangle(): Geometry3D {
   });
 }
 
-/** Anything carrying pixi's GC idle clock: a texture source, a buffer, or a View3D */
 interface GcClocked {
   _gcLastUsed: number;
 }
 
-/** How many renderers hold a GPU copy of this resource; 0 once it has been collected */
 function gpuCopies(resource: TextureSource): number {
   const gpuData = (resource as unknown as { _gpuData: Record<number, unknown> })._gpuData;
   let n = 0;
@@ -61,16 +54,6 @@ function gpuCopies(resource: TextureSource): number {
   return n;
 }
 
-/**
- * Sweep after backdating `stale`'s clocks, so only those age out and everything the last frame
- * touched survives
- *
- * Pixi's own 60 s threshold stays: nothing this test creates is ever a minute idle, so the sweep
- * doesn't depend on how long the run has taken. Pixi's WebGPU bind-group cache is swept on the
- * same clock, so every cached native bind group is backdated too. The sweep then drops the ones
- * whose resources died this cycle instead of leaving them orphaned, and anything still drawn is
- * recreated on its next bind.
- */
 function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
   for (const resource of stale) resource._gcLastUsed = performance.now() - 100_000;
 
@@ -85,10 +68,6 @@ function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
   renderer.gc.run();
 }
 
-/**
- * A View that stays on the stage for the whole run, drawn every frame and never collected. The
- * samples read what the renderer keeps on it: one payload, the same object throughout.
- */
 function buildResidentView(app: Application<Renderer>): View3D {
   const view3d = new View3D({ width: SIZE, height: SIZE });
   const cube = new Mesh3D({
@@ -111,11 +90,6 @@ interface CycleScene {
   batched: BatchedMesh3D;
 }
 
-/**
- * One cycle's scene, built from fresh objects so every destroy path runs: a ground receiver, a
- * textured caster (collectable texture), a caster on a `dynamic` geometry (its own GPU buffers,
- * never atlased), a morphed mesh, a one-slot batch, and a shadow-casting sun.
- */
 function buildCycleScene(app: Application<Renderer>): CycleScene {
   const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
   app.stage.addChild(view3d);
@@ -155,7 +129,7 @@ function buildCycleScene(app: Application<Renderer>): CycleScene {
   batched.setGeometryAt(0, new CubeGeometry({ width: 1, height: 1, depth: 1 }));
   batched.setMaterialAt(0, new Material3D({ baseColor: 0xff3366, metallic: 0, roughness: 0.5 }));
   batched.setMatrixAt(0, new Matrix4().makeTranslation(0, 1.5, -2.5));
-  batched.setItemActive(0, RenderPassBit.OPAQUE);
+  batched.setPassesAt(0, RenderPassBit.OPAQUE);
 
   const sun = new DirectionalLight({ color: 0xfff4e0, intensity: 4, castShadow: true });
   sun.rotation.set((-55 * Math.PI) / 180, (55 * Math.PI) / 180, 0);
@@ -167,12 +141,6 @@ function buildCycleScene(app: Application<Renderer>): CycleScene {
   return { view3d, sun, texture, dynamicGeometry, meshes: [ground, textured, dynamic, morphed], batched };
 }
 
-/**
- * One churn cycle, which renders a fresh scene and then runs it through all three release paths
- * in turn: collected by pixi's GC while off the stage and revived, unloaded by hand and revived,
- * emptied and destroyed. Every revival renders inside a validation scope, since a bind group,
- * bundle or VAO left pointing at freed memory shows up there and nowhere else.
- */
 async function runCycle(app: Application<Renderer>, cycle: number): Promise<void> {
   const renderer = app.renderer;
   const { view3d, sun, texture, dynamicGeometry, meshes, batched } = buildCycleScene(app);
@@ -191,7 +159,7 @@ async function runCycle(app: Application<Renderer>, cycle: number): Promise<void
   collectStale(renderer, view3d, texture.source, ...dynamicGeometry.buffers);
   expect(
     view3d._gpuData[renderer.uid] ?? null,
-    "off the stage nothing rescues the View, so pixi's hash ran its payload and cleared the slot",
+    "off the stage nothing rescues the View, so pixi's hash cleared the GC slot",
   ).toBe(null);
   expect(gpuCopies(texture.source)).toBe(0);
   app.stage.addChild(view3d);
@@ -211,11 +179,17 @@ async function runCycle(app: Application<Renderer>, cycle: number): Promise<void
   view3d.destroy({ children: true });
 }
 
-/** Per-store internals the samples read: live rows, high-water mark, growth leftovers. */
 interface StoreProbe {
   _freeCount: number;
   _count: number;
   _retiredBuffers: unknown[];
+  _retiredTextures: unknown[];
+  bufferVersion: number;
+}
+
+interface MaterialStoreProbe {
+  _end: number;
+  _freePlaces: Map<number, number[]>;
   _retiredTextures: unknown[];
   bufferVersion: number;
 }
@@ -234,25 +208,23 @@ interface AtlasProbe {
   _retiredBuffers: unknown[];
   _retiredGeometries: unknown[];
   _deadVertexCount: number;
-  vertexCount: number;
+  _vertexCount: number;
   _bufferVersion: number;
 }
 
 interface PipeProbe {
-  materialStoreBuffer: StoreProbe;
+  materialStoreBuffer: MaterialStoreProbe;
   geometryDataStoreBuffer: StoreProbe;
   _morphStoreBuffer: MorphStoreProbe;
   atlasPool: { _atlases: Record<string, AtlasProbe> };
   _managedViews: { _managedViews: { items: Record<number, unknown> } };
 }
 
-/** One of pixi's GC-registered hashes: `context[hash]` is the record of tracked items. */
 interface ManagedHashEntry {
   context: Record<string, unknown> & { name?: string };
   hash: string;
 }
 
-/** The renderer internals the samples read, on either backend; optional ones exist on one only. */
 interface RendererProbe {
   gc: { _managedResourceHashes: ManagedHashEntry[]; _managedResources: unknown[] };
   renderTarget: {
@@ -267,13 +239,11 @@ interface RendererProbe {
   mipChain3d?: { _cache: Record<number, unknown> };
 }
 
-/** Every metric of one sample, by contract: `flat` must equal the warm sample, `info` is printed and never asserted */
 interface Sample {
   flat: Record<string, number>;
   info: Record<string, number>;
 }
 
-/** Entries that hold something; pixi's hashes null a slot rather than delete it */
 function liveEntries(record: Record<string, unknown>): number {
   let n = 0;
   for (const key in record) {
@@ -288,15 +258,6 @@ function sumOver<T>(items: Iterable<T>, read: (item: T) => number): number {
   return total;
 }
 
-/**
- * Every resource count the engine owns, taken once after the warm-up and once at the end
- *
- * The resident View keeps one payload per renderer for its whole life. A payload minted afresh
- * mid-run (each mints its own uniform group, so the group's uid stands for the payload), a slot
- * left behind, or a second enrolment listener moves its `resident.*` metrics. Pixi buckets pooled
- * textures by size, flags, format and scale mode, so a leak there shows as a climbing
- * `transient.textures`.
- */
 function sample(app: Application<Renderer>, resident: View3D): Sample {
   const renderer = app.renderer as unknown as RendererProbe;
   const pipe = renderer.renderPipes.view3d;
@@ -304,7 +265,7 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   const info: Record<string, number> = {};
 
   flat['resident.gpuDataKeys'] = Object.keys(resident._gpuData).length;
-  flat['resident.payload'] = resident._gpuData[app.renderer.uid].globalUniformGroup.uid;
+  flat['resident.globalData'] = resident._gpuData[app.renderer.uid].globalUniformGroup.uid;
   flat['resident.unloadListeners'] = resident.listenerCount('unload');
 
   let tombstones = 0;
@@ -319,32 +280,34 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   info['gc.tombstones'] = tombstones;
   flat['pipe.managedViews'] = liveEntries(pipe._managedViews._managedViews.items);
 
-  const stores = [
-    ['material', pipe.materialStoreBuffer],
-    ['geometry', pipe.geometryDataStoreBuffer],
-  ] as const;
-  for (const [name, store] of stores) {
-    flat[`store.${name}.live`] = store._count - store._freeCount;
-    flat[`store.${name}.highWater`] = store._count;
-    flat[`store.${name}.retired`] = store._retiredBuffers.length;
-    flat[`store.${name}.retiredTextures`] = store._retiredTextures.length;
-    info[`store.${name}.bufferVersion`] = store.bufferVersion;
-  }
+  const material = pipe.materialStoreBuffer;
+  const freedTexels = sumOver(material._freePlaces.entries(), ([length, places]) => length * places.length);
+  flat['store.material.live'] = material._end - freedTexels;
+  flat['store.material.highWater'] = material._end;
+  flat['store.material.retiredTextures'] = material._retiredTextures.length;
+  info['store.material.bufferVersion'] = material.bufferVersion;
+
+  const geometry = pipe.geometryDataStoreBuffer;
+  flat['store.geometry.live'] = geometry._count - geometry._freeCount;
+  flat['store.geometry.highWater'] = geometry._count;
+  flat['store.geometry.retired'] = geometry._retiredBuffers.length;
+  flat['store.geometry.retiredTextures'] = geometry._retiredTextures.length;
+  info['store.geometry.bufferVersion'] = geometry.bufferVersion;
 
   const morph = pipe._morphStoreBuffer;
-  flat['store.morph.deltaCursor'] = morph._deltaCursor;
-  flat['store.morph.weightCursor'] = morph._weightCursor;
-  flat['store.morph.freeSlots'] = sumOver(morph._freeSlots.values(), (list) => list.length);
-  flat['store.morph.freeDeltaBlocks'] = sumOver(morph._freeDeltaBlocks.values(), (list) => list.length);
-  flat['store.morph.retired'] = morph._retiredBuffers.length;
-  info['store.morph.bufferVersion'] = morph.bufferVersion;
+  flat['store._morph.deltaCursor'] = morph._deltaCursor;
+  flat['store._morph.weightCursor'] = morph._weightCursor;
+  flat['store._morph.freeSlots'] = sumOver(morph._freeSlots.values(), (list) => list.length);
+  flat['store._morph.freeDeltaBlocks'] = sumOver(morph._freeDeltaBlocks.values(), (list) => list.length);
+  flat['store._morph.retired'] = morph._retiredBuffers.length;
+  info['store._morph.bufferVersion'] = morph.bufferVersion;
 
   const atlases = Object.values(pipe.atlasPool._atlases);
   flat['atlas.count'] = atlases.length;
   flat['atlas.liveAllocations'] = sumOver(atlases, (atlas) => atlas._liveAllocations.length);
   flat['atlas.retiredBuffers'] = sumOver(atlases, (atlas) => atlas._retiredBuffers.length);
   flat['atlas.retiredGeometries'] = sumOver(atlases, (atlas) => atlas._retiredGeometries.length);
-  info['atlas.vertexHighWater'] = sumOver(atlases, (atlas) => atlas.vertexCount);
+  info['atlas.vertexHighWater'] = sumOver(atlases, (atlas) => atlas._vertexCount);
   info['atlas.deadVertices'] = sumOver(atlases, (atlas) => atlas._deadVertexCount);
   info['atlas.bufferVersion'] = sumOver(atlases, (atlas) => atlas._bufferVersion);
 
@@ -364,6 +327,7 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
       flat[`listeners.${name}.${event}`] = source.listenerCount(event);
     }
   }
+  flat['listeners.TexturePool.evict'] = TexturePool.listenerCount('evict');
   flat['ticker.shared'] = Ticker.shared.count;
   flat['ticker.app'] = app.ticker.count;
 
@@ -377,18 +341,11 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   return { flat, info };
 }
 
-/** Chrome's non-standard heap gauge, after a forced GC when the page exposes one; NaN elsewhere. */
 function heapBytes(): number {
   (globalThis as { gc?: () => void }).gc?.();
   return (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? NaN;
 }
 
-/**
- * Every metric's warm and end value and its slope per cycle, printed with the verdict
- *
- * The table matters as much as the assertion: it puts numbers on what one create, render,
- * collect and destroy cycle leaves behind.
- */
 function formatTable(warm: Sample, end: Sample): string {
   const rows: string[][] = [];
   for (const kind of ['flat', 'info'] as const) {
@@ -419,7 +376,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       try {
-        /** A plain 2D sprite behind the View, which keeps the renderer drawing while the View is out of the tree */
         const sprite = new Sprite(makeCollectableTexture('#224466'));
         sprite.width = sprite.height = SIZE;
         app.stage.addChild(sprite);

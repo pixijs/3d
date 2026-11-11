@@ -11,7 +11,6 @@ function framed(source: TextureSource, x: number, y: number, w: number, h: numbe
   return new Texture({ source, frame: new Rectangle(x, y, w, h), rotate });
 }
 
-/** The derivation contract: row0 = the frame quad's uv edge vectors, offset = its top-left corner. */
 function expectFrameApplied(material: FlatMaterial, texture: Texture): void {
   const uvs = texture.uvs;
   expect(Array.from(material.data.uvTransformRow0!)).toEqual([
@@ -28,20 +27,25 @@ describe('uv frame derivation', () => {
     const source = makeSource();
     const material = new FlatMaterial({ baseColorTexture: framed(source, 0, 0, 32, 32) });
     const enqueued: unknown[] = [];
-    material._uploadQueue = { enqueueDirty: (m) => void enqueued.push(m), remove: () => {} };
+    material._uploadQueue = {
+      enqueueDirty: (m) => void enqueued.push(m),
+      remove: () => {},
+      uniformResource: () => {
+        throw new Error('no row is bound here');
+      },
+    };
 
-    void material.textureCacheKey;
-    expect(material['_textureCacheKey']).not.toBe(-1);
+    const dirtyId = material._descriptorDirtyId;
 
     const next = framed(source, 32, 32, 32, 32);
     material.textures.baseColor = next;
 
     expectFrameApplied(material, next);
-    expect(material['_textureCacheKey']).not.toBe(-1);
+    expect(material._descriptorDirtyId, 'same source: no re-key').toBe(dirtyId);
     expect(enqueued).toContain(material);
 
     material.textures.baseColor = framed(makeSource(), 0, 0, 32, 32);
-    expect(material['_textureCacheKey']).toBe(-1);
+    expect(material._descriptorDirtyId, 'new source: every mesh re-keys').toBeGreaterThan(dirtyId);
   });
 
   it('resets to identity when an unframed texture is assigned', () => {
@@ -67,7 +71,13 @@ describe('uv frame derivation', () => {
     const source = new TextureSource({ width: 96, height: 96 });
     const material = new FlatMaterial({ baseColorTexture: framed(source, 32, 0, 32, 32) });
     const enqueued: unknown[] = [];
-    material._uploadQueue = { enqueueDirty: (m) => void enqueued.push(m), remove: () => {} };
+    material._uploadQueue = {
+      enqueueDirty: (m) => void enqueued.push(m),
+      remove: () => {},
+      uniformResource: () => {
+        throw new Error('no row is bound here');
+      },
+    };
 
     material.textures.baseColor = framed(source, 32, 0, 32, 32);
 
@@ -91,6 +101,6 @@ describe('uv frame derivation', () => {
 
     material.uvTransform = undefined;
     expect(material.uvTransform).toBeUndefined();
-    expectFrameApplied(material, material.textures.baseColor!);
+    expectFrameApplied(material, material.textures.baseColor);
   });
 });

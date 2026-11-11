@@ -5,10 +5,6 @@ import { Ray } from '~/math/shapes/Ray';
 import { Vector3 } from '~/math/vector/Vector3';
 import { View3D } from '~/scene/View3D';
 
-/**
- * An 800×600 view with its camera 10 units up +Z, facing -Z, and no transform pass run, so the
- * cached camera transform is still identity
- */
 function makeView() {
   const view3d = new View3D({ width: 800, height: 600 });
   view3d.camera.position.set(0, 0, 10);
@@ -16,7 +12,6 @@ function makeView() {
   return view3d;
 }
 
-/** Half the 800 px view width in world units, so one unit covers 80 px */
 const ORTHO_HALF_WIDTH = 5;
 
 function expectPointClose(actual: { x: number; y: number }, x: number, y: number) {
@@ -66,6 +61,27 @@ describe('View3D.worldToScreen', () => {
 
     expectPointClose(view3d.worldToScreen({ x: 1, y: 0, z: 0 })!, 480, 300);
     expectPointClose(view3d.worldToScreen({ x: 0, y: 1, z: 0 })!, 400, 220);
+  });
+
+  test('an orthographic zoom of 2 shows the scene twice as large', () => {
+    const view3d = makeView();
+    view3d.camera.mode = 'orthographic';
+    view3d.camera.orthographicSize = ORTHO_HALF_WIDTH;
+    view3d.camera.zoom = 2;
+
+    expectPointClose(view3d.worldToScreen({ x: 1, y: 0, z: 0 })!, 560, 300);
+    expectPointClose(view3d.worldToScreen({ x: 0, y: 1, z: 0 })!, 400, 140);
+  });
+
+  test('a perspective zoom of 2 shows the scene twice as large', () => {
+    const view3d = makeView();
+    const offsetAtZoom1 = view3d.worldToScreen({ x: 1, y: 0, z: 0 })!.x - 400;
+
+    view3d.camera.zoom = 2;
+
+    const offsetAtZoom2 = view3d.worldToScreen({ x: 1, y: 0, z: 0 })!.x - 400;
+
+    expect(offsetAtZoom2 / offsetAtZoom1).toBeCloseTo(2);
   });
 
   test('respects the camera viewport sub-rectangle, putting the origin at the centre of the right half', () => {

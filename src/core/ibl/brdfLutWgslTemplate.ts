@@ -1,11 +1,9 @@
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
 
 /**
- * WGSL template for the BRDF lookup table pass; `generateBrdfLut` describes the integral
+ * WGSL shader for the BRDF table; `k = roughness² / 2` is Karis's choice for IBL, not the one for direct light
  *
- * The vertex stage negates y because WebGPU puts clip y = +1 on texture row 0, which is also
- * where UV v = 0 reads. Without it the table would come out flipped in roughness, so 0.9 would
- * read as 0.1.
+ * The vertex stage flips y, since WebGPU puts texture row 0 at clip y = +1; without it the table flips in roughness.
  * @internal
  */
 export const brdfLutWgslTemplate: ShaderBitTemplate = {

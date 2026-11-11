@@ -6,27 +6,29 @@ import { PointShape } from '~/extras/particles/emitterShapes/PointShape';
 import { SphereShape } from '~/extras/particles/emitterShapes/SphereShape';
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 import type { ParticleSystem3DOptions } from '~/extras/particles/ParticleSystem3D';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { Container3D } from '~/scene/Container3D';
+import { packParticleColor } from '~/scene/particles/utils/packParticleColor';
 
 const STEP = 1 / 60;
 
 const ticker = new Ticker();
 
-/**
- * Steps a system through a ticker whose frame took `seconds`, as autoUpdate would
- * @param system - The system to step.
- * @param seconds - The frame's duration.
- */
 function step(system: ParticleSystem3D, seconds: number): void {
   ticker.deltaMS = seconds * 1000;
   system.update(ticker);
 }
 
 function makeSystem(options: ParticleSystem3DOptions = {}): ParticleSystem3D {
-  return new ParticleSystem3D({ seed: 'test', autoUpdate: false, capacity: 8, emitRate: 0, ...options });
+  return new ParticleSystem3D({
+    createRandom: () => seededRandom('test'),
+    autoUpdate: false,
+    capacity: 8,
+    emitRate: 0,
+    ...options,
+  });
 }
 
-/** The size lane of a slot's first vertex. Non-zero means the slot has been written since the last clear */
 function sizeAt(system: ParticleSystem3D, index: number): number {
   return system.data.f32[index * 4 * system.data.floatStride + 3];
 }
@@ -38,12 +40,10 @@ function positionAt(system: ParticleSystem3D, index: number): [number, number, n
   return [f[o], f[o + 1], f[o + 2]];
 }
 
-/** Float `component` of a declared attribute on a slot's first vertex */
 function laneAt(system: ParticleSystem3D, index: number, name: string, component = 0): number {
   return system.data.f32[index * 4 * system.data.floatStride + system.data.offsets[name] / 4 + component];
 }
 
-/** Slots written since the last clear. Liveness is the shader's business, so this is all a test can count */
 function writtenCount(system: ParticleSystem3D): number {
   let n = 0;
 
@@ -233,6 +233,51 @@ describe('ParticleSystem3D', () => {
     system.destroy();
   });
 
+  it('replays the same particles after gotoAndPlay(0)', () => {
+    const system = makeSystem({
+      capacity: 32,
+      emitRate: 40,
+      life: [1, 2],
+      speed: [1, 3],
+      shape: new SphereShape({ radius: 1 }),
+      bursts: [{ time: 0.1, count: 4 }],
+    });
+    const run = (): Uint8Array => {
+      for (let i = 0; i < 12; i++) system.update();
+
+      return new Uint8Array(system.data.f32.buffer.slice(0));
+    };
+    const first = run();
+
+    system.clear();
+    system.time = 0;
+    system.gotoAndPlay(0);
+
+    expect(run()).toEqual(first);
+
+    system.destroy();
+  });
+
+  it('restarts the random stream on every seek, and not when the clock is scrubbed', () => {
+    const createRandom = vi.fn<() => () => number>(() => seededRandom('seek'));
+    const system = makeSystem({ createRandom, life: 100, speed: [1, 3], shape: new SphereShape({ radius: 1 }) });
+
+    system.spawn(1);
+    const first = positionAt(system, 0);
+
+    system.update();
+    system.time = 0;
+    system.spawn(1);
+    expect(positionAt(system, 1), 'scrubbing the clock carries the stream on').not.toEqual(first);
+
+    system.gotoAndStop(3);
+    system.spawn(1);
+    expect(positionAt(system, 2), 'gotoAndStop starts it over, whatever the time').toEqual(first);
+    expect(createRandom).toHaveBeenCalledTimes(2);
+
+    system.destroy();
+  });
+
   it('calls onUpdate after each step, swappable at runtime and released on destroy', () => {
     const system = makeSystem({ emitRate: 60, life: 100 });
     const calls: number[] = [];
@@ -333,7 +378,7 @@ describe('ParticleSystem3D', () => {
   it('replays identically from the same seed and differs from another', () => {
     const run = (seed: string): Uint8Array => {
       const system = new ParticleSystem3D({
-        seed,
+        createRandom: () => seededRandom(seed),
         autoUpdate: false,
         capacity: 32,
         emitRate: 40,
@@ -353,6 +398,62 @@ describe('ParticleSystem3D', () => {
 
     expect(run('same')).toEqual(run('same'));
     expect(run('same')).not.toEqual(run('other'));
+  });
+
+  it('calls spawn functions with the place in the burst, wherever the pool cursor is', () => {
+    const system = makeSystem({ capacity: 8 });
+    const positions = [
+      { x: 1, y: 0, z: 0 },
+      { x: 2, y: 0, z: 0 },
+      { x: 3, y: 0, z: 0 },
+    ];
+
+    system.spawn(6);
+    system.spawn(3, { position: (_rng, i) => positions[i] });
+
+    expect(positionAt(system, 6)).toEqual([1, 0, 0]);
+    expect(positionAt(system, 7)).toEqual([2, 0, 0]);
+    expect(positionAt(system, 0), 'the burst wraps the pool').toEqual([3, 0, 0]);
+
+    system.destroy();
+  });
+
+  it('takes sizeEnd, alphaEnd and spin per spawn when the system composes them', () => {
+    const system = makeSystem({ life: 1, sizeEnd: 1, alphaEnd: 0, spin: 1 });
+
+    system.spawn(1, { sizeEnd: 4.5, alphaEnd: 0.25, spin: 2 });
+    system.spawn(1);
+
+    expect(laneAt(system, 0, 'aSizeEnd')).toBe(4.5);
+    expect(laneAt(system, 0, 'aAlphaEnd')).toBe(0.25);
+    expect(laneAt(system, 0, 'aSpin')).toBe(2);
+    expect(laneAt(system, 1, 'aSizeEnd')).toBe(1);
+    expect(laneAt(system, 1, 'aAlphaEnd')).toBe(0);
+    expect(laneAt(system, 1, 'aSpin')).toBe(1);
+
+    const plain = makeSystem({ life: 1 });
+
+    expect(() => plain.spawn(1, { sizeEnd: 2 })).toThrow(/nothing takes 'sizeEnd'/);
+
+    system.destroy();
+    plain.destroy();
+  });
+
+  it('takes colorEnd per spawn for that burst only, leaving emission on the system colour', () => {
+    const system = makeSystem({ life: 10, colorEnd: 0xff0000, emitRate: 30 });
+    const colorEndAt = (index: number): number =>
+      system.data.u32[index * 4 * system.data.floatStride + system.data.offsets.aColorEnd / 4];
+
+    system.spawn(1, { colorEnd: '#00ff00' });
+    system.spawn(1, { colorEnd: 0x0000ff });
+    step(system, STEP * 2);
+
+    expect(writtenCount(system)).toBe(3);
+    expect(colorEndAt(0)).toBe(packParticleColor(0x00ff00, 1));
+    expect(colorEndAt(1)).toBe(packParticleColor(0x0000ff, 1));
+    expect(colorEndAt(2)).toBe(packParticleColor(0xff0000, 1));
+
+    system.destroy();
   });
 
   it('binds a shader flipbook as one sheet with its grid, and a random one as frames', () => {
@@ -375,7 +476,7 @@ describe('ParticleSystem3D guards and lifecycle', () => {
   it('rejects an override nothing takes, and one shaped wrong for its attribute', () => {
     const system = makeSystem({ life: 1 });
 
-    expect(() => system.spawn(1, { speed: 3 } as never)).toThrow(/nothing takes 'speed'/);
+    expect(() => system.spawn(1, { speed: 3 })).toThrow(/nothing takes 'speed'/);
     expect(() => system.spawn(1, { velocity: 5 as never })).toThrow(/velocity/);
     expect(() => system.spawn(1, { life: [1, { x: 0 }] as never })).toThrow(/life/);
     expect(() => system.spawn(1, { position: [{ x: 0, y: 0, z: 0 }, 2] as never })).toThrow(/position/);
@@ -514,7 +615,7 @@ describe('ParticleSystem3D guards and lifecycle', () => {
 
   it('steps itself on the shared ticker only while autoUpdate is on, and never after destroy', () => {
     const before = Ticker.shared.count;
-    const system = new ParticleSystem3D({ seed: 'ticker', capacity: 4, emitRate: 0 });
+    const system = new ParticleSystem3D({ createRandom: () => seededRandom('ticker'), capacity: 4, emitRate: 0 });
 
     expect(Ticker.shared.count).toBe(before + 1);
 
@@ -530,7 +631,7 @@ describe('ParticleSystem3D guards and lifecycle', () => {
 
   it('steps after the frame moved the emitter and before the render', () => {
     const system = new ParticleSystem3D({
-      seed: 'order',
+      createRandom: () => seededRandom('order'),
       capacity: 4,
       emitRate: 0,
       life: 100,
@@ -586,7 +687,7 @@ describe('ParticleSystem3D guards and lifecycle', () => {
     expect(system.rotation.y).toBeCloseTo(0.5);
     expect(system.cursor).toBe('pointer');
     expect(system.gravity!.y).toBe(-2);
-    expect(Object.hasOwn(system, 'seed')).toBe(false);
+    expect(Object.hasOwn(system, 'createRandom')).toBe(false);
     expect(Object.hasOwn(system, 'life')).toBe(false);
 
     parent.destroy({ children: true });

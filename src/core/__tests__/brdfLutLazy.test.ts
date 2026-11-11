@@ -1,4 +1,4 @@
-import { getApp, readCanvasPixels } from '@test-utils';
+import { expectCleanRender, getApp, readCanvasPixels } from '@test-utils';
 import { RendererType } from 'pixi.js';
 import type { Application, Renderer, Texture } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
@@ -11,13 +11,11 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 64;
 
-/** The pipe's lookup texture, which is private */
 function brdfLut(app: Application<Renderer>): Texture | undefined {
   const pipes = app.renderer.renderPipes as unknown as Record<string, { _brdfLutTexture?: Texture }>;
   return pipes.view3d._brdfLutTexture;
 }
 
-/** Brightness of the canvas's centre pixel, from 0 to 255 */
 function centreBrightness(canvas: HTMLCanvasElement): number {
   const [r, g, b] = readCanvasPixels(canvas, canvas.width / 2, canvas.height / 2, 1, 1);
   return Math.max(r, g, b);
@@ -36,10 +34,6 @@ for (const preference of ['webgl', 'webgpu'] as const) {
         expect(app.renderer.type).toBe(preference === 'webgpu' ? RendererType.WEBGPU : RendererType.WEBGL);
         app.stage.addChild(view3d);
 
-        /**
-         * Clearcoated on purpose: with no environment its shader still fetches the lookup, from the
-         * slot's placeholder, and has to draw all the same
-         */
         const sphere = new Mesh3D({
           geometry: new SphereGeometry({ radius: 1 }),
           material: new Material3D({
@@ -84,6 +78,38 @@ for (const preference of ['webgl', 'webgpu'] as const) {
         app.render();
         expect(centreBrightness(app.canvas)).toBeGreaterThan(64);
         expect(brdfLut(app)).toBe(made);
+      } finally {
+        view3d.destroy({ children: true, geometry: true, material: true });
+        app.destroy(true);
+      }
+    });
+
+    it('holds only the scale and bias the lighting reads, two half floats a texel, 256 texels a side', async () => {
+      const app = await getApp<Renderer>({
+        id: `brdf-lut-format-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE, resolution: 1, backgroundColor: 0x000000 },
+      });
+      const view3d = new View3D({ width: SIZE, height: SIZE });
+
+      try {
+        app.stage.addChild(view3d);
+        view3d.root.addChild(
+          new Mesh3D({
+            geometry: new SphereGeometry({ radius: 1 }),
+            material: new Material3D({ baseColor: 0xffffff, metallic: 0, roughness: 0.5 }),
+            castShadow: false,
+            receiveShadow: false,
+          }),
+        );
+        view3d.camera.position.set(0, 0, 3);
+        view3d.environment = { skyColor: 0xffffff, groundColor: 0xffffff };
+
+        await expectCleanRender(app);
+
+        const lut = brdfLut(app);
+        expect(lut?.source.format).toBe('rg16float');
+        expect(lut?.source.pixelWidth).toBe(256);
+        expect(lut?.source.pixelHeight).toBe(256);
       } finally {
         view3d.destroy({ children: true, geometry: true, material: true });
         app.destroy(true);

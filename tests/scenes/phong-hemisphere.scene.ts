@@ -6,9 +6,6 @@ import { PhongMaterial } from '~/materials/phong/PhongMaterial';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Phong (left) and PBR (right) white spheres under one hemisphere environment
-// and no direct lights — pins that Phong consumes the env-source ambient, in
-// the same brightness family as the PBR substrate diffuse.
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x202020,

@@ -16,15 +16,6 @@ function diffPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   return n;
 }
 
-/**
- * Counts the pixels that change when a morphed wall's weight goes from 0 to 1
- *
- * The camera looks down on a floor, and a low light throws the wall's long shadow toward the
- * camera. The wall's one morph target shoves it 40 units along x, taking its shadow off the framed
- * floor.
- * @param preference - The backend to render with
- * @param casts - Whether the wall casts its shadow
- */
 async function diffOverMorph(preference: 'webgl' | 'webgpu', casts: boolean): Promise<number> {
   const W = 128;
   const app = await getApp({
@@ -80,14 +71,6 @@ async function diffOverMorph(preference: 'webgl' | 'webgpu', casts: boolean): Pr
   }
 }
 
-/**
- * The pixels the moving shadow changes on its own: the change over the morph with the wall
- * casting, minus the change with casting off
- *
- * A shadow that holds the base pose stays put at both weights and adds nothing, so a large count
- * means the shadow followed the morph, wherever on screen it lands.
- * @param preference - The backend to render with
- */
 async function shadowContribution(preference: 'webgl' | 'webgpu'): Promise<number> {
   const withShadow = await diffOverMorph(preference, true);
   const noShadow = await diffOverMorph(preference, false);

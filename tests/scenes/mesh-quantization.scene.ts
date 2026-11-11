@@ -1,13 +1,3 @@
-/**
- * Visual regression for KHR_mesh_quantization support.
- *
- * `duck-quantized/Duck.gltf` ships positions/normals/UVs as int16/int8 with
- * `KHR_mesh_quantization` declared. The snapshot should match the standard
- * (non-quantized) Duck within snapshot tolerance, exercising:
- *   - shader-side dequantization (`getPositionBit`)
- *   - VEC3→VEC4 padding inside `Geometry3D` for non-float vertex data
- *   - bounds computed from quantized integer positions
- */
 import type { TestScene } from '@test-utils';
 import { Assets, Container } from 'pixi.js';
 
@@ -16,20 +6,29 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
+import { model } from '../../examples/assets/manifest';
+
+const UNNORMALIZED_DUCK = model('gltf.DuckQuantized');
+const NORMALIZED_SHADER_BALL = model('gltf.ShaderBall');
+
 export const scene: TestScene = {
-  assets: ['duck-quantized/Duck.gltf'],
+  assets: [UNNORMALIZED_DUCK, NORMALIZED_SHADER_BALL],
   create: async (app, _context) => {
     const container = new Container();
     app.stage.addChild(container);
 
-    const source = Assets.get<Scene3DSource>('duck-quantized/Duck.gltf');
+    const source = Assets.get<Scene3DSource>(UNNORMALIZED_DUCK);
     const model = new Model3D(source);
-    model.position.y = -0.85;
+    model.position.set(-0.85, -0.85, 0);
+
+    const ball = new Model3D(Assets.get<Scene3DSource>(NORMALIZED_SHADER_BALL));
+    ball.scale.set(0.5, 0.5, 0.5);
+    ball.position.set(0.85, -0.85, 0);
 
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
 
     container.addChild(view3d);
-    view3d.root.addChild(model);
+    view3d.root.addChild(model, ball);
 
     const light = new DirectionalLight({
       color: 0xffffff,

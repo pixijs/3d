@@ -3,8 +3,7 @@ import { Geometry, State } from 'pixi.js';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
- * The sky's own shader bit: the cube position input, the look-up direction it passes to the
- * fragment, and the cubemap with its sampler, the same on both backends
+ * The cube sky's shader bit, the same on both backends
  * @internal
  */
 export const backgroundBit: ShaderBit = {
@@ -24,12 +23,8 @@ export const backgroundBit: ShaderBit = {
 };
 
 /**
- * ShaderBit defining the gradient background's bindings: the {@link Hemisphere}'s linear sky and
- * ground colours and its unit up axis
- *
- * Same attributes and inter-stage as {@link backgroundBit}. Only the `background` group differs.
- * That group holds the pass's own uniforms. The shader does not read the global `uHemisphere*`
- * ones, because they hold valid data only while the view's environment is a hemisphere.
+ * The gradient sky's shader bit; its own uniforms, since the global `uHemisphere*` ones hold valid
+ * data only while the view's environment is a hemisphere
  * @internal
  */
 export const backgroundGradientBit: ShaderBit = {
@@ -49,7 +44,7 @@ export const backgroundGradientBit: ShaderBit = {
   },
 };
 
-/** GLSL vertex stage shared by the cube and gradient templates; `backgroundVertexWgsl` documents both */
+/** GLSL twin of `backgroundVertexWgsl` in `BackgroundPass.ts` */
 const backgroundVertexGl = /* glsl */ `#version 300 es
 
 {{header}}
@@ -66,9 +61,7 @@ void main() {
 `;
 
 /**
- * GLSL half of the cube sky's shader template
- *
- * `backgroundTemplate` in `BackgroundPass.ts` holds the WGSL half and documents what both do.
+ * GLSL half of `backgroundTemplate` in `BackgroundPass.ts`
  * @internal
  */
 export const backgroundGlTemplate = {
@@ -81,7 +74,7 @@ out vec4 fragColor;
 
 void main() {
   vec4 sampleColor = texture(uCube, normalize(vDir));
-  vec3 sampleLinear = pow(sampleColor.rgb, vec3(2.2));
+  vec3 sampleLinear = decodeToLinear(sampleColor.rgb);
   vec3 finalColor = sampleLinear * uExposure;
   {{end}}
   fragColor = vec4(finalColor, sampleColor.a);
@@ -90,10 +83,7 @@ void main() {
 };
 
 /**
- * GLSL vertex/fragment templates for the {@link Hemisphere} gradient background
- *
- * Shares the cube template's vertex stage. `backgroundGradientTemplate` in `BackgroundPass.ts`
- * holds the WGSL half.
+ * GLSL half of `backgroundGradientTemplate` in `BackgroundPass.ts`
  * @internal
  */
 export const backgroundGradientGlTemplate = {
@@ -114,9 +104,7 @@ void main() {
 };
 
 /**
- * Creates the sky cube: 36 unindexed vertices around the origin, whose positions double as the
- * directions the shader looks the cubemap up in
- * @returns The sky cube geometry
+ * The sky cube, whose vertex positions are the directions the shader looks the cubemap up in
  * @internal
  */
 export function createBackgroundGeometry(): Geometry {
@@ -176,12 +164,7 @@ export function createBackgroundGeometry(): Geometry {
   });
 }
 
-/**
- * Creates the sky's render state: no depth test or write, no culling and no blending, so the sky
- * paints over whatever its target already holds
- * @returns The background render state
- * @internal
- */
+/** @internal */
 export function createBackgroundState(): State {
   const state = new State();
 

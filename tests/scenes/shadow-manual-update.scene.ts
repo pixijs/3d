@@ -8,20 +8,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Manual shadow update mode (`update: 'manual'`) across frames: the
- * cascade only re-renders when the light's one-shot invalidation fires, and a
- * freshly added light is force-invalidated.
- *
- * The caster starts hidden. Visibility never changes pass membership, so the
- * shadow pass stays active and the forced first update renders a validly
- * *empty* map (the compaction sees no visible casters) — consuming the
- * one-shot. Manual mode means manual: revealing the caster is a scene change
- * the app made, so the app calls {@link Light.refreshShadows} to request
- * the re-render, and the shadow MUST then appear on the next step. Guards the
- * manual-mode invalidation lifecycle on both backends (each honours update
- * rates identically).
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x1a1a2e,
@@ -43,8 +29,6 @@ export const scene: TestScene = {
     ground.rotation.set(-Math.PI / 2, 0, 0);
     view3d.root.addChild(ground);
 
-    // Caster wrapped so `worldVisible` cascades from the parent — hidden on the
-    // first frame, revealed before the second.
     const wrap = new Container3D();
     wrap.visible = false;
     view3d.root.addChild(wrap);
@@ -69,12 +53,8 @@ export const scene: TestScene = {
     view3d.camera.position.set(0, 2, 4);
     view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 
-    // Frame 1: caster hidden → the shadow pass renders a validly empty map,
-    // consuming the new light's forced invalidation.
     app.render();
 
-    // Reveal the caster and request the manual re-render; the shadow must
-    // appear on the next step (the harness renders the final frame).
     wrap.visible = true;
     sun.refreshShadows();
     app.render();

@@ -1,14 +1,9 @@
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * Applies the material's {@link BaseMaterial3D#uvTransform} to the mesh UVs, in the vertex shader
+ * Applies the material's {@link BaseMaterial3D#uvTransform} to the mesh UVs
  *
- * The fragment stage interpolates the transformed UV like any other, so mip selection needs nothing
- * extra. One transform covers every texture of the material.
- *
- * It adds two `Material` fields from the transform matrix: `uvTransformRow0`, its `(a, b, c, d)`,
- * and `uvOffset`, its `(tx, ty)`. A UV `(u, v)` becomes `(a * u + b * v + tx, c * u + d * v + ty)`.
- * The material starts them at the identity, so with no transform the UVs pass through unchanged.
+ * List it in a custom material's bits for `uvTransform` to work there.
  * @category rendering
  * @advanced
  */

@@ -1,7 +1,7 @@
 import path from 'path';
 
 import { playwright } from '@vitest/browser-playwright';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 import { downloadAssets } from './scripts/assets/download-assets.mts';
 import BrowserCommands from './scripts/test/compare-command.mts';
@@ -64,14 +64,15 @@ export default defineConfig({
     alias: {
       '~': path.resolve(import.meta.dirname, './src'),
       '@test-utils': path.resolve(import.meta.dirname, './tests/test-utils.ts'),
-      // The package names the examples import by, so a scene can drive an
-      // example's demo modules and pin what the examples actually render.
+      // The published package names, resolved to the source, so code written the way
+      // users import the package runs under the test harness.
       '@pixi/3d/extras': path.resolve(import.meta.dirname, './src/extras/index.ts'),
       '@pixi/3d': path.resolve(import.meta.dirname, './src/index.ts'),
     },
   },
   test: {
     name: 'browser',
+    exclude: [...configDefaults.exclude, '.claude/**', '.context/**', '.pipeline/**', '.repos/**'],
     // Run test files in long-lived iframes instead of a fresh iframe per file.
     // A fresh iframe re-imports the whole src module graph (~390 files x full
     // graph dominated CI wall clock) and the context churn is what crashes
@@ -83,6 +84,9 @@ export default defineConfig({
     // paravirtual GPU and memory.
     maxWorkers: process.env.GITHUB_ACTIONS ? 2 : undefined,
     setupFiles: ['./tests/setup.ts'],
+    // Keeps every run's results after `| tail` has cut the terminal output.
+    reporters: ['default', 'json'],
+    outputFile: { json: '.temp/vitest-last.json' },
     // Second console channel: vitest's browser provider relays the page's
     // console to the terminal independently of Vite's forwardConsole. Drop it
     // in CI (PixiJS warning spam); failures still surface via the test reporter.

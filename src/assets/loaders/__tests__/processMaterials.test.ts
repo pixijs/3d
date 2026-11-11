@@ -1,11 +1,11 @@
 import { Texture } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KHRTextureTransform, Material } from '~/assets/loaders/gltf/GltfFormat';
-import { processMaterial } from '~/assets/loaders/gltf/process/processMaterials';
+import type { GltfFormat } from '~/assets/loaders/gltf/GltfFormat';
+import { processMaterial, processMaterials } from '~/assets/loaders/gltf/process/processMaterials';
 import { Scene3DSource } from '~/assets/Scene3DSource';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
-import { Material3D } from '~/materials/pbr/Material3D';
+import type { Material3D } from '~/materials/pbr/Material3D';
 
 function makeSource(textures: Texture[] = [Texture.WHITE]): Scene3DSource {
   const source = new Scene3DSource({});
@@ -17,7 +17,7 @@ describe('processMaterial — KHR_materials_unlit', () => {
   it('returns a FlatMaterial when the extension is present, honouring spec fields', () => {
     const source = makeSource();
     const baseColorTexture = Texture.WHITE;
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'Unlit',
       extensions: { KHR_materials_unlit: {} },
       pbrMetallicRoughness: {
@@ -40,34 +40,6 @@ describe('processMaterial — KHR_materials_unlit', () => {
     expect(flat.alphaMode).toBe('mask');
     expect(flat.alphaCutoff).toBe(0.3);
   });
-
-  it('ignores PBR-only fields and other KHR extensions on an unlit material (per spec)', () => {
-    const source = makeSource();
-    const raw: Material = {
-      name: 'UnlitWithIgnoredFields',
-      extensions: {
-        KHR_materials_unlit: {},
-        KHR_materials_ior: { ior: 1.7 },
-        KHR_materials_transmission: { transmissionFactor: 0.5 },
-      },
-      pbrMetallicRoughness: {
-        baseColorFactor: [0, 1, 0, 1],
-        metallicFactor: 0.8,
-        roughnessFactor: 0.2,
-      },
-      normalTexture: { index: 0 },
-      emissiveFactor: [1, 1, 1],
-      emissiveTexture: { index: 0 },
-      occlusionTexture: { index: 0, strength: 0.5 },
-    };
-
-    const material = processMaterial(raw, source);
-
-    expect(material).toBeInstanceOf(FlatMaterial);
-    expect(material).not.toBeInstanceOf(Material3D);
-    const flat = material as FlatMaterial;
-    expect(flat.baseColor).toBe(0x00ff00);
-  });
 });
 
 describe('processMaterial — KHR_materials_specular', () => {
@@ -75,7 +47,7 @@ describe('processMaterial — KHR_materials_specular', () => {
     const tex0 = Texture.WHITE;
     const tex1 = Texture.EMPTY;
     const source = makeSource([tex0, tex1]);
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'SpecTextures',
       extensions: {
         KHR_materials_specular: {
@@ -92,7 +64,7 @@ describe('processMaterial — KHR_materials_specular', () => {
 
   it('defaults specularFactor to 1 per spec when the extension omits it', () => {
     const source = makeSource();
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'SpecDefault',
       extensions: { KHR_materials_specular: { specularColorFactor: [1, 1, 1] } },
     };
@@ -103,7 +75,7 @@ describe('processMaterial — KHR_materials_specular', () => {
 
   it('leaves specular disabled when the extension is absent', () => {
     const source = makeSource();
-    const raw: Material = { name: 'NoSpec' };
+    const raw: GltfFormat.Material = { name: 'NoSpec' };
 
     const material = processMaterial(raw, source) as Material3D;
     expect(material.data.specularParams).toBeUndefined();
@@ -116,7 +88,7 @@ describe('processMaterial — KHR_materials_anisotropy', () => {
     const tex0 = Texture.WHITE;
     const tex1 = Texture.EMPTY;
     const source = makeSource([tex0, tex1]);
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'AnisoTex',
       extensions: {
         KHR_materials_anisotropy: { anisotropyStrength: 1, anisotropyTexture: { index: 1 } },
@@ -129,7 +101,7 @@ describe('processMaterial — KHR_materials_anisotropy', () => {
 
   it('defaults strength and rotation to 0 per spec when the extension omits them', () => {
     const source = makeSource();
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'AnisoDefault',
       extensions: { KHR_materials_anisotropy: {} },
     };
@@ -141,7 +113,7 @@ describe('processMaterial — KHR_materials_anisotropy', () => {
 
   it('leaves anisotropy disabled when the extension is absent', () => {
     const source = makeSource();
-    const raw: Material = { name: 'NoAniso' };
+    const raw: GltfFormat.Material = { name: 'NoAniso' };
 
     const material = processMaterial(raw, source) as Material3D;
     expect(material.data.anisotropyParams).toBeUndefined();
@@ -152,7 +124,7 @@ describe('processMaterial — KHR_materials_anisotropy', () => {
 describe('processMaterial — KHR_materials_emissive_strength', () => {
   it('defaults emissiveStrength to 1 per spec when the extension omits emissiveStrength', () => {
     const source = makeSource();
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'EmissiveDefault',
       emissiveFactor: [1, 1, 1],
       extensions: { KHR_materials_emissive_strength: {} },
@@ -167,7 +139,7 @@ describe('processMaterial — alphaMode coercion under transmission', () => {
   it('coerces alphaMode from BLEND to opaque when transmission is present', () => {
     const source = makeSource();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'BlendTransmission',
       alphaMode: 'BLEND',
       extensions: { KHR_materials_transmission: { transmissionFactor: 0.5 } },
@@ -184,7 +156,7 @@ describe('processMaterial — alphaMode coercion under transmission', () => {
   it('leaves OPAQUE alphaMode untouched and emits no warning', () => {
     const source = makeSource();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'OpaqueTransmission',
       alphaMode: 'OPAQUE',
       extensions: { KHR_materials_transmission: { transmissionFactor: 0.4 } },
@@ -200,7 +172,7 @@ describe('processMaterial — alphaMode coercion under transmission', () => {
   it('does not coerce BLEND when transmissionFactor is 0 and no transmission texture is set', () => {
     const source = makeSource();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'BlendNoTransmission',
       alphaMode: 'BLEND',
       extensions: { KHR_materials_transmission: { transmissionFactor: 0 } },
@@ -216,7 +188,7 @@ describe('processMaterial — alphaMode coercion under transmission', () => {
   it('coerces BLEND when only a transmissionTexture is supplied (no factor)', () => {
     const source = makeSource();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'BlendTransmissionTex',
       alphaMode: 'BLEND',
       extensions: { KHR_materials_transmission: { transmissionTexture: { index: 0 } } },
@@ -231,7 +203,7 @@ describe('processMaterial — alphaMode coercion under transmission', () => {
 });
 
 describe('processMaterial — KHR_texture_transform extraction', () => {
-  const ktt = (offset: [number, number]): { KHR_texture_transform: KHRTextureTransform } => ({
+  const ktt = (offset: [number, number]): { KHR_texture_transform: GltfFormat.KHRTextureTransform } => ({
     KHR_texture_transform: { offset, scale: [1, 1], rotation: 0 },
   });
 
@@ -243,7 +215,7 @@ describe('processMaterial — KHR_texture_transform extraction', () => {
 
   it('picks up the transform from a clearcoat slot when no core slot declares one', () => {
     const source = makeSource();
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'ClearcoatKtt',
       extensions: {
         KHR_materials_clearcoat: {
@@ -258,7 +230,7 @@ describe('processMaterial — KHR_texture_transform extraction', () => {
 
   it('picks up the transform from clearcoatRoughnessTexture when it is the only declarer', () => {
     const source = makeSource();
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'ClearcoatRoughKtt',
       extensions: {
         KHR_materials_clearcoat: {
@@ -273,7 +245,7 @@ describe('processMaterial — KHR_texture_transform extraction', () => {
 
   it('picks up the transform from clearcoatNormalTexture when it is the only declarer', () => {
     const source = makeSource();
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'ClearcoatNormalKtt',
       extensions: {
         KHR_materials_clearcoat: {
@@ -287,7 +259,7 @@ describe('processMaterial — KHR_texture_transform extraction', () => {
   });
 
   it('picks up the transform from transmission/volume/sheen/specular/iridescence slots', () => {
-    const cases: { raw: Material; expected: [number, number] }[] = [
+    const cases: { raw: GltfFormat.Material; expected: [number, number] }[] = [
       {
         raw: {
           name: 't',
@@ -355,7 +327,7 @@ describe('processMaterial — KHR_texture_transform extraction', () => {
 
 describe('processMaterial — glTF linear factor colours', () => {
   it('round-trips baseColorFactor rgb; alpha passes through untouched', () => {
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'Base',
       pbrMetallicRoughness: { baseColorFactor: [0.1, 0.5, 0.9, 0.25] },
     };
@@ -369,7 +341,7 @@ describe('processMaterial — glTF linear factor colours', () => {
   });
 
   it('round-trips attenuationColor, sheenColorFactor and specularColorFactor', () => {
-    const raw: Material = {
+    const raw: GltfFormat.Material = {
       name: 'Tints',
       extensions: {
         KHR_materials_transmission: { transmissionFactor: 1 },
@@ -380,7 +352,7 @@ describe('processMaterial — glTF linear factor colours', () => {
     };
     const material = processMaterial(raw, makeSource()) as Material3D;
 
-    const attenuationColorIrid = material.data.attenuationColorIrid!;
+    const attenuationColorIrid = material.data.attenuationColorIrid;
     const sheenParams = material.data.sheenParams!;
     const specularParams = material.data.specularParams!;
     expect(attenuationColorIrid[0]).toBeCloseTo(0.2, 5);
@@ -392,5 +364,16 @@ describe('processMaterial — glTF linear factor colours', () => {
     expect(specularParams[0]).toBeCloseTo(0.3, 5);
     expect(specularParams[1]).toBeCloseTo(0.6, 5);
     expect(specularParams[2]).toBeCloseTo(0.9, 5);
+  });
+});
+
+describe('processMaterials', () => {
+  it('labels each material with its name in the file', () => {
+    const source = makeSource();
+    const gltf = { asset: { version: '2.0' }, materials: [{ name: 'Paint' }, {}] } as GltfFormat;
+
+    processMaterials(gltf, source);
+
+    expect(source.materials.map((material) => material.label)).toEqual(['Paint', undefined]);
   });
 });

@@ -1,12 +1,13 @@
 import { expectCleanRender, getApp } from '@test-utils';
-import { CanvasSource, Texture } from 'pixi.js';
+import { CanvasSource, Texture, TextureStyle } from 'pixi.js';
 import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { MAX_BATCH_TEXTURES } from '~/core/batcher/batchConstants';
+import { MERGE_THRESHOLD } from '~/core/batcher/batchConstants';
 import type { DrawCommandList } from '~/core/batcher/DrawCommandList';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
+import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
@@ -14,7 +15,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** A collectable texture — pixi only auto-collects sources that opt in (image sources do). */
 function makeCollectableTexture(color: string): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 4;
@@ -27,10 +27,18 @@ function makeCollectableTexture(color: string): Texture {
   return texture;
 }
 
-/**
- * Frames the scene and lights it; without a light every PBR surface renders black and a frame
- * comparison would pass on two black images
- */
+function makeCheckerTexture(): Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 2;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, 2, 2);
+  ctx.fillStyle = '#ff0000';
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.fillRect(1, 1, 1, 1);
+  return new Texture({ source: new CanvasSource({ resource: canvas }) });
+}
+
 function lightAndFrame(view3d: View3D): void {
   const sun = new DirectionalLight({ color: 0xffffff, intensity: 4 });
   sun.rotation.set((-45 * Math.PI) / 180, (35 * Math.PI) / 180, 0);
@@ -40,7 +48,6 @@ function lightAndFrame(view3d: View3D): void {
   view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
 }
 
-/** A sparse grid of the rendered frame — enough to tell a correct frame from a broken one. */
 function readPixels(app: Application<Renderer>, view3d: View3D): number[] {
   const { pixels, width, height } = app.renderer.extract.pixels(view3d);
   const samples: number[] = [];
@@ -53,12 +60,10 @@ function readPixels(app: Application<Renderer>, view3d: View3D): number[] {
   return samples;
 }
 
-/** Anything carrying pixi's GC idle clock — a texture source, a buffer, or a geometry. */
 interface GcClocked {
   _gcLastUsed: number;
 }
 
-/** How many renderers hold a GPU copy of this resource — 0 once it has been collected. */
 function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   let n = 0;
   for (const uid in resource._gpuData) {
@@ -67,15 +72,10 @@ function gpuCopies(resource: { _gpuData: Record<number, unknown> }): number {
   return n;
 }
 
-/** Makes `resources` look idle by any threshold — unless a frame stamps them again. */
 function backdate(...resources: GcClocked[]): void {
   for (const resource of resources) resource._gcLastUsed = performance.now() - 100_000;
 }
 
-/**
- * Sweep with a 1 s idle threshold after backdating `stale`'s clocks, so only those age out and
- * everything the last frame touched survives.
- */
 function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
   const saved = renderer.gc.maxUnusedTime;
   renderer.gc.maxUnusedTime = 1000;
@@ -84,7 +84,6 @@ function collectStale(renderer: Renderer, ...stale: GcClocked[]): void {
   renderer.gc.maxUnusedTime = saved;
 }
 
-/** The list's capture map, reached for its size and membership. */
 function captures(list: DrawCommandList): Map<unknown, unknown> {
   return (list as unknown as { _captures: Map<unknown, unknown> })._captures;
 }
@@ -108,7 +107,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           geometry,
           material: new Material3D({ baseColorTexture: texture, metallic: 0, roughness: 0.5 }),
         });
-        /** Untextured, it keeps the view non-empty, so removing the textured mesh is a plain rebuild */
         const keeper = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0xffffff }) });
         keeper.position.set(0, -3, 0);
         view3d.root.addChild(mesh, keeper);
@@ -180,7 +178,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it('survives a live batch texture being unloaded and re-uploads it', async () => {
+    it('survives a drawn material texture being unloaded and re-uploads it', async () => {
       const app = await getApp<Renderer>({
         id: `capture-texture-unload-${preference}`,
         appOptions: { preference, width: 128, height: 128, backgroundColor: 0x000000 },
@@ -214,6 +212,178 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
+    it('re-keys the group of every material in a run when the texture they share is resized', async () => {
+      const app = await getApp<Renderer>({
+        id: `capture-texture-rekey-run-${preference}`,
+        appOptions: { preference, width: 128, height: 128, backgroundColor: 0x000000 },
+      });
+
+      try {
+        const view3d = new View3D({ width: 128, height: 128 });
+        app.stage.addChild(view3d);
+
+        lightAndFrame(view3d);
+        const texture = makeCollectableTexture('#ff8800');
+        const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1 });
+        for (let i = 0; i < 2; i++) {
+          const mesh = new Mesh3D({
+            geometry,
+            material: new Material3D({ baseColorTexture: texture, metallic: 0, roughness: 0.25 + i * 0.5 }),
+          });
+          mesh.position.set(i * 1.5 - 0.75, 0, 0);
+          view3d.root.addChild(mesh);
+        }
+
+        app.render();
+        const list = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE].commandList;
+        const keysOf = () =>
+          list.commands
+            .slice(0, list.count)
+            .map((cmd) => `${cmd.batchBindGroup!._keyLow}:${cmd.batchBindGroup!._keyHigh}`);
+        const keys = keysOf();
+        expect(keys.length, 'WebGPU draws the run direct, a command per material; WebGL merges it').toBe(
+          preference === 'webgpu' ? 2 : 1,
+        );
+
+        texture.source.resize(8, 8);
+        await expectCleanRender(app);
+        const resized = keysOf();
+        for (let i = 0; i < keys.length; i++) {
+          expect(resized[i], `command ${i}'s group, though only the run's first material is captured`).not.toBe(
+            keys[i],
+          );
+        }
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('draws a swapped texture on the next frame, through the rebuild the swap causes', async () => {
+      const app = await getApp<Renderer>({
+        id: `capture-texture-swap-${preference}`,
+        appOptions: { preference, width: 128, height: 128, backgroundColor: 0x000000 },
+      });
+
+      try {
+        const view3d = new View3D({ width: 128, height: 128 });
+        app.stage.addChild(view3d);
+
+        lightAndFrame(view3d);
+        const orange = makeCollectableTexture('#ff8800');
+        const blue = makeCollectableTexture('#0044ff');
+        const material = new Material3D({ baseColorTexture: orange, metallic: 0, roughness: 0.5 });
+        view3d.root.addChild(new Mesh3D({ geometry: new CubeGeometry({ width: 2, height: 2, depth: 2 }), material }));
+
+        app.render();
+        const before = readPixels(app, view3d);
+        const pd = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
+        const dirtyId = pd.commandList.dirtyId;
+
+        material.textures.baseColor = blue;
+        await expectCleanRender(app);
+        expect(pd.commandList.dirtyId, 'the swap rebuilt the list').toBeGreaterThan(dirtyId);
+        expect(pd.commandList.commands[0].batchBindGroup!.getResource(0)).toBe(blue.source);
+        expect(readPixels(app, view3d)).not.toEqual(before);
+
+        material.textures.baseColor = orange;
+        await expectCleanRender(app);
+        expect(readPixels(app, view3d)).toEqual(before);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('rebinds a fresh material bind group after material.unload() on an untextured material', async () => {
+      const app = await getApp<Renderer>({
+        id: `capture-material-unload-${preference}`,
+        appOptions: { preference, width: 128, height: 128, backgroundColor: 0x000000 },
+      });
+
+      try {
+        const view3d = new View3D({ width: 128, height: 128 });
+        app.stage.addChild(view3d);
+
+        lightAndFrame(view3d);
+        const material = new Material3D({ baseColor: 0xff8800, metallic: 0, roughness: 0.5 });
+        const mesh = new Mesh3D({ geometry: new CubeGeometry({ width: 2, height: 2, depth: 2 }), material });
+        view3d.root.addChild(mesh);
+
+        app.render();
+        const before = readPixels(app, view3d);
+        expect(before.some((channel) => channel > 0)).toBe(true);
+        const pd = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
+        const drawDirtyId = pd.drawDirtyId;
+        const group = pd.commandList.commands[0].batchBindGroup!;
+        const materialGroup = () =>
+          preference === 'webgl' ? material._getMergedBindGroup() : material._getBindGroup();
+        expect(group).toBe(materialGroup());
+
+        material.unload();
+        expect(group.resources, 'unload dropped the bound group whole').not.toBeNull();
+        expect(materialGroup(), 'the material builds a new one').not.toBe(group);
+
+        await expectCleanRender(app);
+        expect(pd.drawDirtyId, 'the meshes rebuilt their commands').toBeGreaterThan(drawDirtyId);
+        const rebound = pd.commandList.commands[0].batchBindGroup!;
+        expect(rebound).not.toBe(group);
+        expect(rebound.resources, 'the draw binds a live group').not.toBeNull();
+        expect(rebound).toBe(materialGroup());
+        expect(readPixels(app, view3d)).toEqual(before);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('rebinds a fresh merged bind group after the bound material’s unload()', async () => {
+      const app = await getApp<Renderer>({
+        id: `capture-merged-material-unload-${preference}`,
+        appOptions: { preference, width: 128, height: 128, backgroundColor: 0x000000 },
+      });
+
+      try {
+        const view3d = new View3D({ width: 128, height: 128 });
+        app.stage.addChild(view3d);
+
+        lightAndFrame(view3d);
+        const geometry = new CubeGeometry({ width: 0.5, height: 0.5, depth: 0.5 });
+        const meshes = Array.from({ length: MERGE_THRESHOLD + 1 }, (_, i) => {
+          const mesh = new Mesh3D({
+            geometry,
+            material: new Material3D({ baseColor: 0xff8800, metallic: 0, roughness: i / MERGE_THRESHOLD }),
+          });
+          mesh.position.set(i - 3, 0, 0);
+          return mesh;
+        });
+        view3d.root.addChild(...meshes);
+
+        app.render();
+        const before = readPixels(app, view3d);
+        expect(before.some((channel) => channel > 0)).toBe(true);
+        const pd = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE];
+        expect(pd.commandList.count, 'more materials than the threshold on one geometry: one merged draw').toBe(1);
+        const drawDirtyId = pd.drawDirtyId;
+        const group = pd.commandList.commands[0].batchBindGroup!;
+        const bound = meshes.find((mesh) => mesh.material._getMergedBindGroup() === group);
+        expect(bound, 'the draw binds one of the run’s merged groups').toBeDefined();
+
+        bound!.material.unload();
+        expect(group.resources, 'unload dropped the bound merged group whole').not.toBeNull();
+
+        await expectCleanRender(app);
+        expect(pd.drawDirtyId, 'the meshes rebuilt their commands').toBeGreaterThan(drawDirtyId);
+        expect(pd.commandList.count).toBe(1);
+        const rebound = pd.commandList.commands[0].batchBindGroup!;
+        expect(rebound).not.toBe(group);
+        expect(rebound.resources, 'the draw binds a live group').not.toBeNull();
+        expect(rebound, 'the same material starts the run and rebuilt its group').toBe(
+          bound!.material._getMergedBindGroup(),
+        );
+        expect(readPixels(app, view3d)).toEqual(before);
+      } finally {
+        app.destroy();
+      }
+    });
+
     it('keeps a drawn dynamic geometry’s buffers through a sweep and lets them age out after removal', async () => {
       const app = await getApp<Renderer>({
         id: `capture-dynamic-geometry-${preference}`,
@@ -225,7 +395,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.stage.addChild(view3d);
         lightAndFrame(view3d);
 
-        /** Dynamic, so it stays out of the shared atlas and the buffers drawn are its own */
         const geometry = new CubeGeometry({ width: 2, height: 2, depth: 2, dynamic: true });
         const mesh = new Mesh3D({
           geometry,
@@ -291,7 +460,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         const positions = geometry.getBuffer('aPosition');
         const grown = new Float32Array((positions.data as Float32Array).length + 9);
-        grown.set(positions.data as Float32Array);
+        grown.set(positions.data);
         positions.data = grown;
         expect(
           pd.drawDirtyId,
@@ -332,7 +501,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const shifted = original.map((v, i) => (i % 3 === 0 ? v + 1.5 : v));
         positions.data = shifted;
         app.render();
-        /** The cube shifted along x, drawn through the ordinary update path */
         const moved = readPixels(app, view3d);
         expect(moved).not.toEqual(before);
         positions.data = original;
@@ -373,7 +541,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         batched.setGeometryAt(0, new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 }));
         batched.setMaterialAt(0, new Material3D({ baseColorTexture: texture }));
         batched.setMatrixAt(0, new Matrix4());
-        batched.setItemActive(0, RenderPassBit.OPAQUE);
+        batched.setPassesAt(0, RenderPassBit.OPAQUE);
         view3d.root.addChild(batched);
 
         app.render();
@@ -418,9 +586,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it('leaves nothing bound to a removed model’s textures once its build no longer needs them', async () => {
+    it('leaves nothing bound to a removed merged run’s texture once its materials are destroyed', async () => {
       const app = await getApp<Renderer>({
-        id: `capture-bind-group-trim-${preference}`,
+        id: `capture-bind-group-trim-merged-${preference}`,
         appOptions: { preference, width: 128, height: 128 },
       });
 
@@ -430,30 +598,89 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         lightAndFrame(view3d);
 
         const geometry = new CubeGeometry({ width: 0.5, height: 0.5, depth: 0.5 });
-        /** One more texture than a bind group holds, so the build needs two groups */
-        const textures = Array.from({ length: MAX_BATCH_TEXTURES + 1 }, (_, i) =>
-          makeCollectableTexture(`hsl(${i * 30}, 80%, 50%)`),
-        );
-        const meshes = textures.map((texture, i) => {
-          const mesh = new Mesh3D({ geometry, material: new Material3D({ baseColorTexture: texture }) });
-          mesh.position.set(i - 5, 0, 0);
+        const texture = makeCollectableTexture('#ff8800');
+        const meshes = Array.from({ length: MERGE_THRESHOLD + 1 }, (_, i) => {
+          const mesh = new Mesh3D({
+            geometry,
+            material: new Material3D({ baseColorTexture: texture, roughness: i / MERGE_THRESHOLD }),
+          });
+          mesh.position.set(i - 3, 0, 0);
           return mesh;
         });
-        /** Untextured, it keeps the view non-empty, so the removal is a rebuild that needs one group */
         const keeper = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0xffffff }) });
         keeper.position.set(0, -2, 0);
         view3d.root.addChild(keeper, ...meshes);
         app.render();
 
+        const list = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE].commandList;
+        expect(list.count, 'the keeper draws direct, the textured run merges').toBe(2);
+        const commands = list.commands.slice(0, list.count);
+        expect(commands.some((cmd) => cmd.batchBindGroup === meshes[0].material._getMergedBindGroup())).toBe(true);
+        expect(captures(list).has(texture.source), 'the list captures what the merged draw binds').toBe(true);
         view3d.root.removeChild(...meshes);
         app.render();
 
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         try {
+          for (const mesh of meshes) mesh.material.destroy();
+          texture.destroy(true);
+          expect(
+            warn.mock.calls.filter((call) => String(call[1]).includes('BindGroup')),
+            'every group that held the source, the first material’s merged group and the direct groups built before the rewind, holds it unwatched',
+          ).toEqual([]);
+        } finally {
+          warn.mockRestore();
+        }
+
+        await expectCleanRender(app);
+        expect(
+          captures(list).has(texture.source),
+          'once the texture goes, the list rebuilds without it, dead command included',
+        ).toBe(false);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('leaves nothing bound to a removed model’s textures once its materials are destroyed', async () => {
+      const app = await getApp<Renderer>({
+        id: `capture-bind-group-trim-direct-${preference}`,
+        appOptions: { preference, width: 128, height: 128 },
+      });
+
+      try {
+        const view3d = new View3D({ width: 128, height: 128 });
+        app.stage.addChild(view3d);
+        lightAndFrame(view3d);
+
+        const geometry = new CubeGeometry({ width: 0.5, height: 0.5, depth: 0.5 });
+        const textures = Array.from({ length: 4 }, (_, i) => makeCollectableTexture(`hsl(${i * 60}, 80%, 50%)`));
+        const meshes = textures.map((texture, i) => {
+          const mesh = new Mesh3D({ geometry, material: new Material3D({ baseColorTexture: texture }) });
+          mesh.position.set(i - 2, 0, 0);
+          return mesh;
+        });
+        const keeper = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0xffffff }) });
+        keeper.position.set(0, -2, 0);
+        view3d.root.addChild(keeper, ...meshes);
+        app.render();
+
+        const list = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE].commandList;
+        const groups = new Set(list.commands.slice(0, list.count).map((cmd) => cmd.batchBindGroup));
+        expect(groups.size, 'one draw per material, each binding its own group').toBe(meshes.length + 1);
+        for (const texture of textures) expect(captures(list).has(texture.source)).toBe(true);
+
+        view3d.root.removeChild(...meshes);
+        app.render();
+        for (const texture of textures) expect(captures(list).has(texture.source), 'the rebuild swept it').toBe(false);
+
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          for (const mesh of meshes) mesh.material.destroy();
           for (const texture of textures) texture.destroy(true);
           expect(
             warn.mock.calls.filter((call) => String(call[1]).includes('BindGroup')),
-            'pixi warns when a destroyed source is still in a bind group',
+            'the material’s own group is the only one that held the source, and it went with the material',
           ).toEqual([]);
         } finally {
           warn.mockRestore();
@@ -463,7 +690,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it('rebuilding the transparent pass every frame adds no listeners and no captures', async () => {
+    it('a transparent pass whose order flips every frame rebuilds each time and adds no listeners or captures', async () => {
       const app = await getApp<Renderer>({
         id: `capture-always-rebuild-${preference}`,
         appOptions: { preference, width: 128, height: 128 },
@@ -475,11 +702,13 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         lightAndFrame(view3d);
 
         const texture = makeCollectableTexture('#ff8800');
-        const mesh = new Mesh3D({
-          geometry: new CubeGeometry({ width: 2, height: 2, depth: 2 }),
-          material: new Material3D({ baseColorTexture: texture, alphaMode: 'blend' }),
-        });
-        view3d.root.addChild(mesh);
+        const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1 });
+        const material = new Material3D({ baseColorTexture: texture, alphaMode: 'blend' });
+        for (const z of [1.5, -1.5]) {
+          const mesh = new Mesh3D({ geometry, material });
+          mesh.position.z = z;
+          view3d.root.addChild(mesh);
+        }
 
         app.render();
         const pd = view3d._sceneBatch.drawLists[RenderPassBit.TRANSPARENT];
@@ -487,14 +716,117 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(captures(pd.commandList).has(texture.source)).toBe(true);
         const captureCount = captures(pd.commandList).size;
         const listeners = texture.source.listenerCount('change');
+        const built = pd.commandList.dirtyId;
 
-        for (let i = 0; i < 5; i++) app.render();
+        for (let i = 0; i < 5; i++) {
+          view3d.camera.position.set(3, 4, i % 2 === 0 ? -7 : 7);
+          view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
+          app.render();
+        }
 
+        expect(pd.commandList.dirtyId, 'the camera swapped sides every frame, so every frame rebuilt').toBe(built + 5);
         expect(texture.source.listenerCount('change')).toBe(listeners);
         expect(captures(pd.commandList).size).toBe(captureCount);
       } finally {
         app.destroy();
       }
     });
+
+    it('draws with a texture’s new sampler after style.update(), in the bundled opaque pass', async () => {
+      const app = await getApp<Renderer>({
+        id: `capture-style-change-${preference}`,
+        appOptions: { preference, width: 64, height: 64, backgroundColor: 0x000000 },
+      });
+
+      try {
+        const view3d = new View3D({ width: 64, height: 64 });
+        app.stage.addChild(view3d);
+        lightAndFrame(view3d);
+
+        const texture = makeCheckerTexture();
+
+        const mesh = new Mesh3D({
+          geometry: new CubeGeometry({ width: 2, height: 2, depth: 2 }),
+          material: new FlatMaterial({ baseColorTexture: texture }),
+        });
+        view3d.root.addChild(mesh);
+
+        app.render();
+        const before = readPixels(app, view3d);
+
+        texture.source.style.scaleMode = 'nearest';
+        texture.source.style.update();
+        await expectCleanRender(app);
+        const afterUpdate = readPixels(app, view3d);
+
+        mesh.invalidate();
+        await expectCleanRender(app);
+        const afterRebuild = readPixels(app, view3d);
+
+        expect(afterRebuild, 'the sampler change shows at all').not.toEqual(before);
+        expect(afterUpdate, 'the bundled pass picks up the new sampler without a rebuild').toEqual(afterRebuild);
+
+        mesh.removeFromParent();
+        mesh.material.destroy();
+        texture.destroy(true);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    for (const replace of [false, true]) {
+      it(`draws the style a texture got back while out of the view, through ${replace ? 'source.style' : 'style.update()'}`, async () => {
+        const app = await getApp<Renderer>({
+          id: `capture-style-restore-${replace ? 'replace' : 'update'}-${preference}`,
+          appOptions: { preference, width: 64, height: 64, backgroundColor: 0x000000 },
+        });
+
+        try {
+          const view3d = new View3D({ width: 64, height: 64 });
+          app.stage.addChild(view3d);
+          lightAndFrame(view3d);
+
+          const texture = makeCheckerTexture();
+          const source = texture.source;
+          const original = source.style;
+          const scaleMode = original.scaleMode;
+          const nearest = new TextureStyle({ scaleMode: 'nearest' });
+          const setNearest = (on: boolean): void => {
+            if (replace) {
+              source.style = on ? nearest : original;
+              return;
+            }
+            source.style.scaleMode = on ? 'nearest' : scaleMode;
+            source.style.update();
+          };
+
+          const geometry = new CubeGeometry({ width: 2, height: 2, depth: 2 });
+          const mesh = new Mesh3D({ geometry, material: new FlatMaterial({ baseColorTexture: texture }) });
+          const keeper = new Mesh3D({ geometry, material: new FlatMaterial({ baseColor: 0xffffff }) });
+          keeper.position.set(0, -3, 0);
+          view3d.root.addChild(mesh, keeper);
+
+          await expectCleanRender(app);
+          const before = readPixels(app, view3d);
+
+          setNearest(true);
+          await expectCleanRender(app);
+          expect(readPixels(app, view3d), 'the sampler change shows at all').not.toEqual(before);
+
+          mesh.removeFromParent();
+          await expectCleanRender(app);
+          setNearest(false);
+          view3d.root.addChild(mesh);
+          await expectCleanRender(app);
+          expect(readPixels(app, view3d), 'drawn again, it samples with the restored style').toEqual(before);
+
+          mesh.removeFromParent();
+          mesh.material.destroy();
+          texture.destroy(true);
+        } finally {
+          app.destroy();
+        }
+      });
+    }
   });
 }

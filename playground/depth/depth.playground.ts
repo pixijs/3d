@@ -2,8 +2,11 @@ import type { Scene3DSource } from '@pixi/3d';
 import { DirectionalLight, Mesh3D, Model3D, SphereGeometry, View3D } from '@pixi/3d';
 import { Application, Assets, Ticker } from 'pixi.js';
 
+import { model } from '../../examples/assets/manifest';
 import { rendererPreference } from '../src/getPreference';
 import { DepthEffectMaterial } from './DepthEffectMaterial';
+
+const AVOCADO_URL = model('gltf.Avocado');
 
 export default async function () {
   const app = new Application();
@@ -11,10 +14,7 @@ export default async function () {
   await app.init({ resizeTo: window, preference: rendererPreference });
   document.body.appendChild(app.canvas);
 
-  await Assets.init({ basePath: '/test-assets/' });
-  await Assets.load('avocado.glb');
-
-  const source = Assets.get<Scene3DSource>('avocado.glb');
+  const source = await Assets.load<Scene3DSource>(AVOCADO_URL);
   const model = new Model3D(source);
 
   model.scale.set(10, 10, 10);

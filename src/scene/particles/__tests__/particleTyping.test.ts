@@ -3,25 +3,16 @@ import { describe, expect, it } from 'vitest';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { ParticleContainer3D } from '~/scene/particles/ParticleContainer3D';
 
-/** Declared with `satisfies`, so its attribute names survive as literal keys */
 const trajectoryBit = {
   name: 'typing-trajectory',
   attributes: { aVel: 'float32x3', aBirth: 'float32', aTint: 'unorm8x4' },
 } satisfies ShaderBit;
 
-/**
- * Declared with an annotation, so its attribute names collapsed to an index signature. The
- * container must still accept it, and fall back to runtime checks.
- */
 const annotatedBit: ShaderBit = {
   name: 'typing-annotated',
   attributes: { aWind: 'float32x2' },
 };
 
-/**
- * Negative assertions live in a function nothing calls: a `@ts-expect-error`
- * line is still executed if reached, and these calls would throw at runtime.
- */
 function typeOnly(): void {
   const typed = new ParticleContainer3D({ capacity: 1, extraBits: [trajectoryBit] });
 

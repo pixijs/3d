@@ -1,7 +1,17 @@
 import { warn } from 'pixi.js';
 
-import { bindingType, isStorageType, parseStorageType, RESOURCE_TYPES } from '../../shader/codegen/parseBindingType';
+import {
+  bindingFields,
+  bindingType,
+  capitalize,
+  isStorageType,
+  isUniformBufferType,
+  parseStorageType,
+  parseUniformBufferType,
+  RESOURCE_TYPES,
+} from '../../shader/codegen/parseBindingType';
 import type { ShaderBit, StructDefinition } from '../../shader/ShaderBit';
+import { resolveBindGroups } from '../../shader/ShaderBitTemplate';
 import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
@@ -10,7 +20,8 @@ interface BindGroupData {
   bindingIndex: number;
   resources: Record<string, string>;
   storages: Record<string, string>;
-  bindAsUniform: boolean;
+  uniformBuffers: Record<string, string>;
+  uniformGroups: Record<string, boolean>;
 }
 
 function createBindGroupData(groupIndex: number): BindGroupData {
@@ -19,7 +30,8 @@ function createBindGroupData(groupIndex: number): BindGroupData {
     bindingIndex: 0,
     resources: Object.create(null),
     storages: Object.create(null),
-    bindAsUniform: false,
+    uniformBuffers: Object.create(null),
+    uniformGroups: Object.create(null),
   };
 }
 
@@ -37,45 +49,26 @@ function warnInvalidStorageType(bitName: string, bindingName: string, type: stri
   );
 }
 
-/**
- * Capitalizes the first letter of a string (for PascalCase struct names)
- * @param str - The group name to turn into a struct name
- */
-function capitalize(str: string): string {
-  return str.charAt(0).toUpperCase() + str.slice(1);
+function warnInvalidUniformBufferType(bitName: string, bindingName: string, type: string): void {
+  warn(
+    `[collectBindings] Bit "${bitName}" binding "${bindingName}" has invalid uniform buffer type: "${type}". ` +
+      `Expected format: uniform<StructName>`,
+  );
 }
 
-/**
- * The structured data returned by `collectBindings`
- *
- * Stored on `context.data.bindings` and consumed by `emitBindingsWgsl`.
- * @internal
- */
+/** @internal */
 export interface CollectedBindings {
-  /** All struct definitions: explicit (`bit.structs`) plus group-generated */
   structs: Record<string, StructDefinition>;
-  /** Per-bind-group uniform/resource/storage data, keyed by group name */
   bindGroups: Record<string, BindGroupData>;
-  /** The template the bindings were collected against */
-  template: ShaderBitTemplate;
 }
 
 /**
- * Collects binding data from shader bits into structured objects without
- * generating any WGSL source
- *
- * The returned data is stored on `context.data` so that `preCompile` plugins
- * can modify it before emission.
- * @param bits - Array of shader bits containing binding definitions
- * @param template - Template defining bind group names
- * @returns The collected structs and per-group binding data
+ * The first bit to declare a binding sets its type, as it sets its stage tag in `compileWgslSource`
  * @internal
  */
 export function collectBindings(bits: ShaderBit[], template: ShaderBitTemplate): CollectedBindings {
-  const bindGroupNames = new Set(template.bindGroups);
-
   const bindGroups: Record<string, BindGroupData> = Object.create(null);
-  template.bindGroups.forEach((name, index) => {
+  resolveBindGroups(template).forEach(({ name }, index) => {
     bindGroups[name] = createBindGroupData(index);
   });
 
@@ -95,10 +88,9 @@ export function collectBindings(bits: ShaderBit[], template: ShaderBitTemplate):
 
     for (const [groupName, bindings] of Object.entries(bit.bindings)) {
       if (!bindings) continue;
-      const structName = capitalize(groupName);
-      const isBound = bindGroupNames.has(groupName);
+      const isBound = groupName in bindGroups;
 
-      for (const [name, spec] of Object.entries(bindings)) {
+      for (const { name, spec, uniformGroup: fieldGroup } of bindingFields(bindings, groupName)) {
         const type = bindingType(spec);
         if (RESOURCE_TYPES.has(type)) {
           if (isBound) {
@@ -121,7 +113,24 @@ export function collectBindings(bits: ShaderBit[], template: ShaderBitTemplate):
               sto[name] = storageStructName;
             }
           }
+        } else if (isUniformBufferType(type)) {
+          if (isBound) {
+            const structName = parseUniformBufferType(type);
+            if (!structName) {
+              warnInvalidUniformBufferType(bit.name, name, type);
+              continue;
+            }
+            const buffers = bindGroups[groupName].uniformBuffers;
+            if (!(name in buffers)) {
+              buffers[name] = structName;
+              structs[structName] ??= {};
+            } else if (buffers[name] !== structName) {
+              warnBindingConflict(name, structName, buffers[name]);
+            }
+          }
         } else {
+          const uniformGroup = isBound ? fieldGroup : groupName;
+          const structName = capitalize(uniformGroup);
           if (!(structName in structs)) structs[structName] = {};
           const structDef = structs[structName];
           if (structDef[name] && structDef[name] !== type) {
@@ -129,60 +138,38 @@ export function collectBindings(bits: ShaderBit[], template: ShaderBitTemplate):
           } else {
             structDef[name] = type as StructDefinition[string];
           }
-          if (isBound) {
-            bindGroups[groupName].bindAsUniform = true;
-          }
+          if (isBound) bindGroups[groupName].uniformGroups[uniformGroup] = true;
         }
       }
     }
   }
 
-  return { structs, bindGroups, template };
+  return { structs, bindGroups };
 }
 
-/**
- * One `@binding` slot in a bind group, in emission order
- * @internal
- */
 interface BindingMapEntry {
-  /** Binding name — the uniform-block entry uses the group's own name, matching `generateGroupMap` */
   name: string;
-  /** Binding index within the group */
   binding: number;
-  /** What the binding declares: a uniform block, a texture/sampler resource, or a storage buffer */
   kind: 'uniform' | 'resource' | 'storage';
-  /** WGSL type: the struct name for `uniform`/`storage`, the resource type otherwise */
   type: string;
 }
 
-/**
- * Per-group binding layout, keyed by group name
- * @internal
- */
 type WgslBindingMap = Record<string, { groupIndex: number; entries: BindingMapEntry[] }>;
 
 /**
- * Derives the per-group binding layout from collected data
- *
- * Per group: uniform block first, then resources, then storages, indices assigned sequentially.
- *
- * `emitBindingsWgsl` emits FROM this map, so the layout the parity
- * tests inspect and the layout the GPU sees are one and the same; the GL
- * twin of this assignment lives in `generateGroupMap`.
- * @param collected - Binding data from `collectBindings`
- * @returns The per-group binding layout
+ * Must number bindings as `generateGroupMap` does for WebGL; `bindingParity.test.ts` checks it
  * @internal
  */
 export function buildWgslBindingMap(collected: CollectedBindings): WgslBindingMap {
-  const { bindGroups, template } = collected;
+  const { bindGroups } = collected;
   const map: WgslBindingMap = Object.create(null);
 
-  for (const groupName of template.bindGroups) {
+  for (const groupName in bindGroups) {
     const group = bindGroups[groupName];
     const entries: BindingMapEntry[] = [];
     let binding = group.bindingIndex;
 
-    if (group.bindAsUniform) {
+    if (group.uniformGroups[groupName]) {
       entries.push({ name: groupName, binding: binding++, kind: 'uniform', type: capitalize(groupName) });
     }
     for (const name in group.resources) {
@@ -190,6 +177,12 @@ export function buildWgslBindingMap(collected: CollectedBindings): WgslBindingMa
     }
     for (const name in group.storages) {
       entries.push({ name, binding: binding++, kind: 'storage', type: group.storages[name] });
+    }
+    for (const name in group.uniformBuffers) {
+      entries.push({ name, binding: binding++, kind: 'uniform', type: group.uniformBuffers[name] });
+    }
+    for (const name in group.uniformGroups) {
+      if (name !== groupName) entries.push({ name, binding: binding++, kind: 'uniform', type: capitalize(name) });
     }
 
     map[groupName] = { groupIndex: group.groupIndex, entries };
@@ -199,17 +192,24 @@ export function buildWgslBindingMap(collected: CollectedBindings): WgslBindingMa
 }
 
 /**
- * Generates WGSL source from previously collected binding data, emitting
- * bindings straight from `buildWgslBindingMap` so source and map cannot
- * diverge
- *
- * Struct fields are emitted as-is, in the order the struct table holds them.
- * @param collected - Binding data from `collectBindings`
- * @returns WGSL struct and binding declaration source
+ * Emits from `buildWgslBindingMap`, so the source can't drift from the map the parity test checks
  * @internal
  */
 export function emitBindingsWgsl(collected: CollectedBindings): string {
-  const { structs } = collected;
+  const { structs, bindGroups } = collected;
+
+  for (const groupName in bindGroups) {
+    const { uniformBuffers } = bindGroups[groupName];
+    for (const name in uniformBuffers) {
+      const structName = uniformBuffers[name];
+      if (Object.keys(structs[structName] ?? {}).length === 0) {
+        throw new Error(
+          `[emitBindingsWgsl] Binding "${name}" is "uniform<${structName}>", but no bit declares fields for a ` +
+            `"${structName}" struct.`,
+        );
+      }
+    }
+  }
 
   const out: string[] = [];
 
@@ -224,7 +224,7 @@ export function emitBindingsWgsl(collected: CollectedBindings): string {
 
   const map = buildWgslBindingMap(collected);
 
-  for (const groupName of collected.template.bindGroups) {
+  for (const groupName in map) {
     const { groupIndex, entries } = map[groupName];
 
     for (const entry of entries) {
@@ -242,12 +242,7 @@ export function emitBindingsWgsl(collected: CollectedBindings): string {
   return out.join('\n');
 }
 
-/**
- * WGSL compiler plugin that collects binding data, shares the resolved structs
- * via `context.data`, and injects the struct + binding declarations into the
- * `{{header}}` slot
- * @internal
- */
+/** @internal */
 export const wgslBindingsPlugin: ShaderCompilerPlugin = {
   collectData(context) {
     context.data.bindings = collectBindings(context.bits, context.template);

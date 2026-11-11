@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { GraphDebugRecording } from '../GraphDebugRecording';
-import type { GraphDebugBundleSnapshot, GraphDebugDrawBuildSnapshot, GraphDebugSnapshot } from '../GraphDebugSnapshot';
+import type { GraphDebugDrawBuildSnapshot, GraphDebugSnapshot } from '../GraphDebugSnapshot';
 
 describe('GraphDebugRecording', () => {
   it('records complete serialisable frames with timing and rebuild summaries', () => {
@@ -55,41 +55,9 @@ describe('GraphDebugRecording', () => {
       GraphDebugRecording.defaultOptions = defaults;
     }
   });
-
-  it('counts dynamic passes separately from rebuilds', () => {
-    const recording = new GraphDebugRecording();
-
-    recording.start(0);
-    recording.record(makeSnapshot(1, 'dynamic'), 16);
-    recording.stop(16);
-
-    expect(recording.frames[0]).toMatchObject({
-      drawRebuiltBatchPassCount: 0,
-      dynamicDrawBatchPassCount: 1,
-      firstCaptureBatchPassCount: 0,
-    });
-  });
-
-  it('counts bundle recordings separately from draw rebuilds', () => {
-    const recording = new GraphDebugRecording();
-
-    recording.start(0);
-    recording.record(makeSnapshot(1, 'reused', 'recorded'), 16);
-    recording.stop(16);
-
-    expect(recording.frames[0]).toMatchObject({
-      drawRebuiltBatchPassCount: 0,
-      bundleRecordedBatchPassCount: 1,
-      bundleInvalidatedBatchPassCount: 0,
-    });
-  });
 });
 
-function makeSnapshot(
-  captureId: number,
-  drawStatus: GraphDebugDrawBuildSnapshot['status'],
-  bundleStatus: GraphDebugBundleSnapshot['status'] = 'not-used',
-): GraphDebugSnapshot {
+function makeSnapshot(captureId: number, drawStatus: GraphDebugDrawBuildSnapshot['status']): GraphDebugSnapshot {
   return {
     version: 4,
     captureId,
@@ -131,12 +99,7 @@ function makeSnapshot(
               commandListDirtyId: captureId,
               causes: drawStatus === 'rebuilt' ? [{ code: 'material-changed' }] : [],
             },
-            bundle: {
-              status: bundleStatus,
-              bundleDirtyId: bundleStatus === 'not-used' ? null : captureId,
-              lastBundleDirtyId: bundleStatus === 'not-used' ? null : captureId,
-              causes: bundleStatus === 'recorded' ? [{ code: 'bundle-only-change' }] : [],
-            },
+            bundle: { status: 'not-used', bundleDirtyId: null, lastBundleDirtyId: null, causes: [] },
             draws: [],
           },
         ],

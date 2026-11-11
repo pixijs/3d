@@ -9,7 +9,7 @@ import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Pass3D } from '~/post-processing/Pass3D';
-import type { PassContext, PassStage } from '~/post-processing/Pass3D';
+import type { PassContext, SceneStage } from '~/post-processing/Pass3D';
 import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Mesh3D } from '~/scene/Mesh3D';
@@ -17,7 +17,7 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 128;
 
-type FeedMode = 'none' | Exclude<PassStage, 'post'>;
+type FeedMode = 'none' | SceneStage;
 
 interface GlassScene {
   view3d: View3D;
@@ -25,23 +25,14 @@ interface GlassScene {
   feedCamera: Camera3D;
 }
 
-/**
- * The view sees a green wall through a clear glass pane; a feed camera, far above, sees only a red
- * wall and draws it into its texture
- *
- * The glass must read green. Red means the view's opaque copy was taken from the feed. The view
- * sits in the right half of a blue canvas, away from the origin the feed's own rect starts at, so
- * blue means the copy took the feed's rect of the screen instead of the view's.
- */
 function buildScene(
   app: Application<Renderer>,
   options: { feedMode: FeedMode; composite: boolean; feedMips?: boolean },
 ): GlassScene {
-  const view3d = new View3D({ width: SIZE, height: SIZE, composite: options.composite });
+  const view3d = new View3D({ toneMapping: 'none', width: SIZE, height: SIZE, composite: options.composite });
   view3d.position.set(SIZE, 0);
   view3d.camera.position.set(0, 0, 3);
 
-  /** An unlit wall, so the readback sees its colour as authored in a view with no lights */
   const wall = (color: number, y: number): Mesh3D => {
     const mesh = new Mesh3D({
       geometry: new PlaneGeometry({ width: 40, height: 40 }),
@@ -54,7 +45,6 @@ function buildScene(
   view3d.root.addChild(wall(0x00ff00, 0));
   view3d.root.addChild(wall(0xff0000, 200));
 
-  /** A clear, flat pane: IOR 1 and no thickness, so it shows what is straight behind it */
   const glass = new Mesh3D({
     geometry: new PlaneGeometry({ width: 3, height: 3 }),
     material: new Material3D({
@@ -69,14 +59,12 @@ function buildScene(
   });
   view3d.root.addChild(glass);
 
-  /** View-sized, so a copy taken from the feed's target would fill the glass with the red wall */
   const feed = RenderTexture.create({
     width: SIZE,
     height: SIZE,
     resolution: 1,
     autoGenerateMipmaps: options.feedMips ?? false,
   });
-  /** Level with the red wall, far outside the view camera's frustum */
   const feedCamera = new Camera3D({ renderTexture: feed });
   feedCamera.position.set(0, 200, 3);
   view3d.root.addChild(feedCamera);
@@ -89,9 +77,8 @@ function buildScene(
   return { view3d, feed, feedCamera };
 }
 
-/** Reads the view's depth copy and draws nothing, so the graph keeps the copy in the frame */
 class ReadsOpaqueDepth extends Pass3D {
-  public readonly stage: Exclude<PassStage, 'post'> = 'afterTransparent';
+  public readonly stage: SceneStage = 'afterTransparent';
 
   public build(graph: RenderGraph, ctx: PassContext): void {
     graph.addPass({
@@ -112,12 +99,6 @@ interface Verdict {
   rgb: string;
 }
 
-/**
- * What a pixel of the glass pane shows, and its RGB for the failure message
- *
- * The glass is lit and tone mapped on top of what it refracts, so the verdict is the channel
- * that dominates rather than an exact colour.
- */
 function wallShown(r: number, g: number, b: number): Verdict {
   const rgb = `rgb(${r}, ${g}, ${b})`;
 
@@ -128,18 +109,12 @@ function wallShown(r: number, g: number, b: number): Verdict {
   return { wall: 'none', rgb };
 }
 
-/**
- * The view's centre, where only the glass pane is, in the canvas frame the last render drew
- *
- * Reads the canvas itself: `extract.pixels` on the stage would render it again into another target.
- */
 function seenThroughGlass(app: Application<Renderer>): Verdict {
   const [r, g, b] = readCanvasPixels(app.canvas, SIZE + SIZE / 2, SIZE / 2, 1, 1);
 
   return wallShown(r, g, b);
 }
 
-/** The same pixel in `texture`, which the stage was rendered into */
 function seenThroughGlassIn(app: Application<Renderer>, texture: RenderTexture): Verdict {
   const { pixels, width, height } = app.renderer.extract.pixels({ target: texture });
   const i = ((height >> 1) * width + ((width * 3) >> 2)) * 4;
@@ -147,7 +122,6 @@ function seenThroughGlassIn(app: Application<Renderer>, texture: RenderTexture):
   return wallShown(pixels[i], pixels[i + 1], pixels[i + 2]);
 }
 
-/** Renders one frame, failing on any WebGPU validation error the frame raised */
 async function renderClean(app: Application<Renderer>): Promise<void> {
   const device = (app.renderer as WebGPURenderer).gpu?.device;
   device?.pushErrorScope('validation');
@@ -162,10 +136,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       const mode = composite ? 'composite' : 'direct';
 
       for (const feedMode of ['none', 'beforeOpaque', 'afterOpaque'] as const) {
-        /**
-         * With and without mipmaps on the feed: the graph generates them before the view's copies,
-         * which on WebGL binds the view's outer target again, without the view's rect
-         */
         const feedMipsCases = feedMode === 'none' ? [false] : [false, true];
         for (const feedMips of feedMipsCases) {
           const feedLabel =
@@ -202,10 +172,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         }
       }
 
-      /**
-       * WebGL draws an antialiased frame with a View3D in it black, feed or no feed (#461), so a
-       * verdict there says nothing about the copy
-       */
       const msaaDrawsNothing = preference === 'webgl';
       it.skipIf(msaaDrawsNothing)(
         `glass refracts the view's scene on a multisampled canvas, with the feed at 'afterOpaque' (${mode})`,
@@ -251,10 +217,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
             useBackBuffer: true,
           },
         });
-        /**
-         * Drawing the stage here makes the graph drop every render target it cached, while the pooled
-         * textures under the feed's target and the scene's stay the same
-         */
         const offscreen = RenderTexture.create({ width: SIZE * 2, height: SIZE, resolution: 1 });
 
         let feed: RenderTexture | null = null;
@@ -301,7 +263,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           scene.view3d.destroy();
 
           expect(graph['_sceneDrawTarget']).toBeNull();
-          expect(graph['_cameraTargets'].size).toBe(0);
+          expect(graph['_cameraTargets']).toBeNull();
         } finally {
           feed?.destroy(true);
           app.destroy();
@@ -320,7 +282,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           feed = scene.feed;
           const { view3d, feedCamera } = scene;
 
-          /** What happens between the view's opaque draw and the copy of it, in order */
           const events: string[] = [];
           let drawnTarget: RenderTarget | null = null;
           let copiedTarget: RenderTarget | null = null;
@@ -343,10 +304,10 @@ for (const preference of ['webgpu', 'webgl'] as const) {
             if (!isFeed) copiedTarget = source.target;
             copyColor(source, dest, session);
           });
-          vi.spyOn(renderTargetSystem, 'bind').mockImplementation(((...args: Parameters<typeof bind>) => {
+          vi.spyOn(renderTargetSystem, 'bind').mockImplementation((...args: Parameters<typeof bind>) => {
             events.push('bind');
             return bind(...args);
-          }) as typeof bind);
+          });
 
           const betweenOpaqueDrawAndCopy = (): string[] => {
             events.length = 0;
@@ -372,11 +333,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       it(`the view's depth copy reads the view's target, after a camera pass bound its own (${mode})`, async () => {
-        /**
-         * View-sized, with the view moved to the origin below, so the depth copy takes the whole
-         * texture, since WebGPU rejects a partial copy of one. No ticker: `renderClean` waits on the
-         * device, and a frame the ticker drew meanwhile would count with the one under test.
-         */
         const app = await getApp<Renderer>({
           id: `opaque-copy-depth-${mode}-${preference}`,
           appOptions: { preference, width: SIZE, height: SIZE, resolution: 1, useBackBuffer: true, autoStart: false },
@@ -401,11 +357,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
             }
             renderForward(desc, session);
           });
-          /**
-           * Records the depth copy and runs it on WebGPU only: pixi's WebGL depth copy wraps `dest` in a
-           * render target of its own, which destroying the renderer destroys while the shared pool
-           * still holds it
-           */
           const copies = vi.spyOn(pipe, 'copyDepth').mockImplementation((source, dest, session) => {
             copiedTarget = source.target;
             if (preference === 'webgpu') copyDepth(source, dest, session);

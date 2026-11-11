@@ -1,10 +1,7 @@
 import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
 
 /**
- * GLSL template for the BRDF lookup table pass; `generateBrdfLut` describes the integral
- *
- * Unlike the WGSL template, the vertex stage needs no y flip: WebGL puts texture row 0 at
- * clip y = -1, where UV v = 0 reads.
+ * The GLSL version of `brdfLutWgslTemplate`, without its y flip, since WebGL puts texture row 0 at clip y = -1
  * @internal
  */
 export const brdfLutGlslTemplate: ShaderBitTemplate = {

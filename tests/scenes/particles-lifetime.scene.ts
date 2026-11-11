@@ -9,14 +9,6 @@ import { View3D } from '~/scene/View3D';
 
 import { puffTexture } from './helpers/particleTextures';
 
-// A bare container plus the lifetime bit, with the system clock pinned at 5s.
-// Six particles in a row, alternating alive and dead by their birth and life,
-// so the capture is three puffs with a gap between each. Nothing on the CPU
-// knows which is which: the shader decides from the birth record.
-//
-// This is the first scene where a shader reads an attribute an extra bit
-// declared, so it is also the proof that the derived layout is wired through
-// on both backends rather than stripped as unused.
 export const scene: TestScene = {
   create: async (app) => {
     const view3d = new View3D({ width: app.screen.width, height: app.screen.height });
@@ -44,14 +36,13 @@ export const scene: TestScene = {
     view3d.root.addChild(particles);
     particles.uniforms.uParticleTime = 5;
 
-    // [birth, life] → progress at t = 5
     const records: [number, number][] = [
-      [0, 10], // 0.5   alive
-      [0, 4], // 1.25  expired
-      [3, 4], // 0.5   alive
-      [7, 4], // -0.5  not yet born
-      [4.5, 1], // 0.5   alive
-      [0, 4.99], // 1.002 just expired
+      [0, 10],
+      [0, 4],
+      [3, 4],
+      [7, 4],
+      [4.5, 1],
+      [0, 4.99],
     ];
 
     records.forEach(([aBirth, aLife], i) => {

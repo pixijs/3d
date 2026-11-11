@@ -19,11 +19,8 @@ export class QuaternionTrack extends Track {
   }
 
   /**
-   * Blends a sample in, aligning its hemisphere with the running average first
-   *
-   * `q` and `-q` encode the same rotation, so a component-wise lerp between
-   * opposite hemispheres cancels toward zero and explodes the pose for a frame.
-   * Flipping the incoming sample to match keeps the shortest arc.
+   * Blends a sample in along the shortest arc, negating it first when it sits in the opposite
+   * hemisphere from the running average, so the blend doesn't cancel toward zero
    * @param values - The running weighted average, updated in place
    * @param sample - The freshly evaluated quaternion to blend in
    * @param t - Blend factor for `sample` against `values`

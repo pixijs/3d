@@ -1,17 +1,17 @@
 import type { TEXTURE_FORMATS } from 'pixi.js';
 
 /**
- * Discriminant keeping colour and depth resource handles distinct in the type system
+ * Whether a {@link ResourceHandle} names a colour or a depth texture
  * @category rendering
  * @advanced
  */
 export type ResourceKind = 'color' | 'depth';
 
 /**
- * Opaque value naming one texture in a {@link RenderGraph}
+ * Names one texture in a {@link RenderGraph}; the texture behind it can change from frame to frame
  *
- * The graph hands these out and resolves them to textures each frame. `_kind` keeps colour and
- * depth handles apart in the type system, and `_id` indexes the graph's resource table.
+ * Declare it in a pass's `setup`, and get the texture in `render` with {@link RenderGraph#getTexture}.
+ * A handle works only in the graph that made it.
  * @category rendering
  * @advanced
  */
@@ -34,76 +34,74 @@ export type ColorHandle = ResourceHandle<'color'>;
  */
 export type DepthHandle = ResourceHandle<'depth'>;
 
-/**
- * The pool request for a graph-allocated transient, worked out again each frame
- *
- * The graph builds one from {@link TransientTextureOptions}, or from a camera's render texture,
- * and passes it to `TexturePool.getOptimalTexture` before the transient's first use each frame.
- * @internal
- */
+/** @internal */
 export interface ResourceDescriptor {
-  /** Content width in texels; the pooled texture may be wider */
   width: number;
-  /** Content height in texels; the pooled texture may be taller */
   height: number;
-  /** Texture format */
   format: TEXTURE_FORMATS;
-  /** Whether the texture has a mip chain, which the graph fills after the texture's last writer each frame */
   autoGenerateMipmaps?: boolean;
-  /** Texture sampling filter; the pool's default is `'linear'` */
+  antialias?: boolean;
   scaleMode?: 'nearest' | 'linear';
-  /** Debug label written onto the pooled source while the transient holds it */
   label?: string;
 }
 
 /**
- * Options for a graph-allocated texture, such as a screen-space intermediate
+ * Options for a texture the graph allocates, such as an effect's intermediate
  *
- * Reads like a pixi `TextureSourceOptions`: `width` and `height` are the logical size and
- * `resolution` multiplies them into texels. The engine supplies the defaults: the logical size
- * is the view's viewport and the resolution is the view's own, so `{}` is the physical viewport.
+ * Sized as in pixi: `width` and `height` are logical pixels, and `resolution` multiplies them into
+ * texels. `{}` gives a texture the size of the scene colour.
  *
- * The texture comes from pixi's `TexturePool`. Its content is the size asked for, at the
- * texture's origin, and the texture itself is rounded up to the next power of two, or to the
- * canvas size when that fits and is smaller.
+ * The texture comes from pixi's `TexturePool`, which rounds its size up, to the next power of two or
+ * to the canvas size. The content sits at the texture's origin, and `texture.frame` gives its size.
  * @category rendering
  * @advanced
  */
 export interface TransientTextureOptions {
   /**
-   * Logical width
+   * Width in logical pixels
    * @default the view's viewport width
    */
   width?: number;
   /**
-   * Logical height
+   * Height in logical pixels
    * @default the view's viewport height
    */
   height?: number;
   /**
-   * Device pixels per logical pixel — pixi's meaning, as on filters and render textures
+   * Texels per logical pixel, as on pixi's render textures
    *
-   * `'inherit'` matches the view's own target. `1` gives one texel per logical pixel: half
-   * the physical size on a DPR 2 screen, a third on DPR 3, which is the usual choice for
-   * cheaper AO or blur.
+   * `'inherit'` follows the scene's, {@link RenderGraph#resolution}. A number is absolute: `1` is
+   * half the physical size on a DPR 2 screen, a common choice for a cheaper blur or AO.
    * @default 'inherit'
    */
   resolution?: number | 'inherit';
   /**
    * Texture format
-   * @default the view's target format for colour, `'depth24plus-stencil8'` for depth
+   * @default the scene colour's format for colour, or the view target's when the scene colour has
+   *   none of its own; `'depth24plus-stencil8'` for depth
    */
   format?: TEXTURE_FORMATS;
   /**
-   * Whether the texture has a mip chain, which the graph fills after the pass that last writes it each frame
+   * Whether the texture has a mip chain, which the graph fills after the pass that last writes it each
+   * frame; a depth texture's mips stay empty
    * @default false
    */
   autoGenerateMipmaps?: boolean;
+  /**
+   * Whether the texture is multisampled, which smooths the edges of the triangles drawn into it
+   *
+   * Only a texture scene passes draw meshes into needs it: an effect's output is one fullscreen
+   * triangle with no edges to smooth, and the samples take four times the texture's memory. Passes
+   * sample it like any other texture, since the graph resolves it after it's written, but each
+   * sampled depth costs a copy into a single-sample texture every frame.
+   * @default false
+   */
+  antialias?: boolean;
   /**
    * Sampling filter
    * @default 'linear' for colour, 'nearest' for depth
    */
   scaleMode?: 'nearest' | 'linear';
-  /** Debug label propagated to the texture source */
+  /** Debug label, which also names the texture in errors */
   label?: string;
 }

@@ -9,12 +9,8 @@ import type { Ray } from './Ray';
 /**
  * A sphere from `center` and `radius`, mostly used as a bounding volume
  *
- * A sphere is the cheapest volume to test and stays the same shape under rotation, which is why
- * frustum culling uses one. {@link Mesh3D#boundingSphere} gives a mesh's in world space.
- *
- * A negative radius marks the sphere empty, and a new sphere starts empty. Methods that change the
- * sphere do so in place, or write into an `out` sphere when you pass one and leave this sphere as
- * it is.
+ * The cheapest volume to test, and unlike a {@link Box} it doesn't grow when rotated.
+ * {@link Mesh3D#boundingSphere} gives a mesh's bounding sphere in world space.
  * @example
  * ```ts
  * const blast = new Sphere(new Vector3(), 4);
@@ -24,9 +20,7 @@ import type { Ray } from './Ray';
  *   if (blast.intersectsSphere(enemy.boundingSphere)) enemy.takeDamage(50);
  * }
  * ```
- * @see {@link Box} For the axis-aligned bounding box counterpart
- * @see {@link Plane} For half-space intersection tests
- * @see {@link Ray} For ray-sphere hit tests
+ * @see {@link Ray#intersectSphere} For the point where a ray hits the sphere
  * @category maths
  * @standard
  */
@@ -59,8 +53,8 @@ export class Sphere {
   /**
    * Creates a new `Sphere`
    *
-   * Left out, the sphere is empty (radius `-1`) at the origin. A center passed in becomes the
-   * sphere's own; it is not copied.
+   * Left out, the center is the origin and the radius is `-1`, which makes the sphere empty. A center
+   * passed in becomes the sphere's own; it is not copied.
    * @param center - The center of the sphere
    * @param radius - The radius of the sphere
    */
@@ -87,10 +81,7 @@ export class Sphere {
   }
 
   /**
-   * Sets this sphere to the smallest sphere around `box`'s corners
-   *
-   * The center is the box's center and the radius half its diagonal. An empty box gives an empty
-   * sphere.
+   * Sets this sphere to the smallest sphere around `box`'s corners; an empty box gives an empty sphere
    * @example
    * ```ts
    * const bounds = new Sphere().setFromBox(model.getLocalBounds());
@@ -222,9 +213,7 @@ export class Sphere {
   }
 
   /**
-   * Returns true when this sphere and `box` overlap
-   *
-   * Empty spheres never intersect.
+   * Returns true when this sphere and `box` overlap; an empty sphere never does
    * @example
    * ```ts
    * if (blast.intersectsBox(crate.bounds)) crate.shatter();
@@ -237,9 +226,7 @@ export class Sphere {
   }
 
   /**
-   * Returns true when this sphere and `sphere` overlap
-   *
-   * Empty spheres never intersect.
+   * Returns true when this sphere and `sphere` overlap; an empty sphere never does
    * @example
    * ```ts
    * if (ball.boundingSphere.intersectsSphere(paddle.boundingSphere)) bounce();
@@ -255,9 +242,7 @@ export class Sphere {
   }
 
   /**
-   * Returns true when `plane` passes through this sphere or touches it
-   *
-   * Empty spheres never intersect.
+   * Returns true when `plane` passes through this sphere or touches it; never for an empty sphere
    * @example
    * ```ts
    * const splashing = ball.boundingSphere.intersectsPlane(water);
@@ -272,13 +257,13 @@ export class Sphere {
   }
 
   /**
-   * Returns true when `ray` enters this sphere; same as {@link Ray#intersectsSphere}
+   * Returns true when `ray` hits this sphere; same as {@link Ray#intersectsSphere}
    * @example
    * ```ts
    * const hovered = mesh.boundingSphere.intersectsRay(pointerRay);
    * ```
    * @param ray - The ray to test
-   * @returns Whether the ray enters this sphere
+   * @returns Whether the ray hits this sphere
    */
   public intersectsRay(ray: Ray): boolean {
     return ray.intersectsSphere(this);
@@ -287,14 +272,14 @@ export class Sphere {
   /**
    * Transforms this sphere by an affine `matrix`
    *
-   * The center moves as a point and the radius grows by the matrix's largest axis scale
-   * ({@link Matrix4#getMaxScaleOnAxis}), so the sphere still bounds the shape under rotation and
-   * per-axis scale. Under shear, as when a non-uniformly scaled parent holds a rotated child, that
-   * scale can come out too small; the square root of {@link Matrix4#getMaxSingularValueSq} always
-   * covers the shape. An empty sphere stays empty.
+   * The radius scales by the matrix's largest axis scale, so the sphere still bounds the shape under
+   * rotation and per-axis scale. Under shear, as when a non-uniformly scaled parent holds a rotated
+   * child, the radius can come out too small; for one that always fits, multiply the original
+   * radius by the square root of {@link Matrix4#getMaxSingularValueSq} yourself. An empty sphere
+   * stays empty.
    *
    * `matrix` must be affine (bottom row `[0, 0, 0, 1]`), as a {@link Container3D#worldTransform}
-   * always is. Projection matrices are not supported.
+   * always is and a projection matrix isn't.
    * @example
    * ```ts
    * const worldBounds = new Sphere();

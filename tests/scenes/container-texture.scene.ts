@@ -12,7 +12,6 @@ export const scene: TestScene = {
     backgroundColor: 0x1a1a22,
   },
   create: async (app) => {
-    // 2D container authored at a fixed 512×512 design size.
     const container = new Container();
     container.addChild(
       new Graphics().roundRect(0, 0, 512, 512, 48).fill(0x2266cc),
@@ -42,7 +41,6 @@ export const scene: TestScene = {
 
     view3d.camera.position.set(0, 0, 3);
 
-    // Rendered manually here, before the harness draws the scene.
     texture.render(app.renderer);
   },
 };

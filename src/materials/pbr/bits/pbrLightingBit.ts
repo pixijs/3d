@@ -1,48 +1,15 @@
+import { mathConstantsBit } from '../../../core/shader/bits/mathConstantsBit';
 import { createLightingBit } from '../../../core/shader/createLightingBit';
 
 /**
- * Cook-Torrance direct lighting for the PBR material, plus the ambient lights' diffuse
- *
- * Built with {@link createLightingBit}, which owns the light loop, attenuation and shadows; this bit
- * supplies only the BRDF. Without it the material shows its `albedo` unlit.
- *
- * Per light:
- *
- * - Distribution: GGX, with `a2 * INV_PI` hoisted out of the loop. The denominator has no guard:
- *   `pbrMaterialBit` floors roughness at 0.045, so it never drops below `a2`, which is above zero.
- *   An added epsilon would swamp `a2²` on smooth surfaces and flatten the highlight instead of
- *   sharpening it.
- * - Visibility: height-correlated Smith GGX with each square root replaced by its linear fit in the
- *   cosine (Hammon 2017). That drops the square roots at the cost of up to about 30% error against
- *   the exact form, worst where light and view both graze. The `max` only covers
- *   `N·L = N·V = 0`, where the lobe is zero anyway.
- * - Fresnel: Schlick's `(1 - x)⁵` in the spherical-Gaussian form `exp2((-5.55473x - 6.98316)x)`
- *   (Karis 2013, "Real Shading in Unreal Engine 4"): one `exp2` instead of a `pow`, never more than
- *   about 0.004 off. `iblBit`, `transmissionBit`, `clearcoatBit`, `iridescenceBit` and
- *   `phongLightingBit` use the same form.
- *
- * Ambient lights add `albedo * (1 - metallic) / PI`: diffuse only, with the same `1 / PI` as the
- * direct diffuse, so an ambient light reads at the same scale as a directional one.
- *
- * Reads `normal`, `viewDir`, `albedo`, `metallic`, `roughness`, `fresnelF0`, `f90`, `occlusion`,
- * `emissive`, `ambient` and `directLight` as `pbrMaterialBit` and the feature bits left them. Adds
- * to `ambient`, fills `directLight`, and writes `finalColor` as
- * `ambient * occlusion + directLight + emissive`. The sheen and anisotropy lobes reuse its loop-wide
- * `nDotV` and `INV_PI` and its per-light `halfVector` and `nDotH`; anisotropy also replaces its
- * `specular`.
+ * The GGX divide takes no epsilon, which would flatten smooth highlights; `pbrMaterialBit` floors roughness
+ * instead. The sheen and anisotropy lobes read this bit's locals, and anisotropy replaces its `specular`
  * @internal
  */
 export const pbrLightingBit = createLightingBit({
   name: 'pbrLighting',
 
-  header: {
-    gpu: /*wgsl*/ `
-const INV_PI: f32 = 0.31830988618;
-`,
-    gl: /*glsl*/ `
-const float INV_PI = 0.31830988618;
-`,
-  },
+  requires: [mathConstantsBit],
 
   preLighting: {
     gpu: /*wgsl*/ `

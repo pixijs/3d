@@ -29,8 +29,8 @@ export interface TintEffectOptions extends PostEffectOptions {
 /**
  * Multiplies the frame by a flat colour
  *
- * The multiply applies to the finished image, after tone mapping, as `Container.tint` does in 2D.
- * Its source is the smallest example of a single-shader {@link PostEffect}.
+ * By default it tints the finished picture, after the tone curve, as `Container.tint` does in 2D.
+ * With `stage: 'beforeToneMapping'` it tints the scene's light instead.
  * @example
  * ```ts
  * view.passes = [new TintEffect({ tint: 0xff8888 })];
@@ -40,16 +40,14 @@ export interface TintEffectOptions extends PostEffectOptions {
  */
 export class TintEffect extends PostEffect {
   /**
-   * Default {@link TintEffectOptions} merged under every constructor call
-   *
-   * `new TintEffect(opts)` resolves as `{ ...TintEffect.defaultOptions, ...opts }`. Mutate to change defaults
-   * process-wide.
+   * Defaults for every new `TintEffect`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * TintEffect.defaultOptions.tint = 0xffd9b3;
    * ```
    */
   public static defaultOptions: TintEffectOptions = {
+    stage: 'afterToneMapping',
     tint: 0xffffff,
   };
 
@@ -96,7 +94,7 @@ vec4 effect(vec2 uv) {
 
   /**
    * Sets the colour the frame is multiplied by
-   * @param value - Colour to multiply the frame by; its alpha is ignored
+   * @param value - Any colour; its alpha is ignored.
    */
   public set tint(value: ColorSource) {
     const color = Color.shared.setValue(value);

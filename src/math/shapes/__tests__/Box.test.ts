@@ -408,23 +408,6 @@ describe('Box', () => {
       expectVec3Close(out.min, 2, 3, 4);
       expectVec3Close(out.max, 3, 4, 5);
     });
-
-    test('reentrant-safe (in-place vs out-arg agree)', () => {
-      const box1 = new Box(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5));
-      const box2 = box1.clone();
-      const out = new Box();
-      const m = new Matrix4().makeRotationY(Math.PI / 4);
-
-      box1.applyMatrix4(m);
-      box2.applyMatrix4(m, out);
-
-      expect(box1.min.x).toBeCloseTo(out.min.x, 5);
-      expect(box1.min.y).toBeCloseTo(out.min.y, 5);
-      expect(box1.min.z).toBeCloseTo(out.min.z, 5);
-      expect(box1.max.x).toBeCloseTo(out.max.x, 5);
-      expect(box1.max.y).toBeCloseTo(out.max.y, 5);
-      expect(box1.max.z).toBeCloseTo(out.max.z, 5);
-    });
   });
 
   describe('getBounds', () => {

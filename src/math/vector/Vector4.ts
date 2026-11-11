@@ -6,18 +6,15 @@ import type { PointLike4D } from './PointLike4D';
 /**
  * A four-component vector, such as a position with a `w`, an RGBA colour or a plane equation
  *
- * `w` defaults to `1`, the value for a position. Give a direction `w = 0` and a 4x4 matrix turns it
- * without moving it. Math methods work on all four components, change the vector they're called on
- * and return it; pass an `out` point last to write the result there instead. Where a method takes a
- * point, any {@link PointData4D} works, such as a plain `{ x, y, z, w }` object.
+ * Math methods work on all four components, change the vector they're called on and return it; pass
+ * an `out` point last to write the result there instead. Where a method takes a point, any
+ * {@link PointData4D} works, such as a plain `{ x, y, z, w }` object.
  * @example
  * ```ts
  * const clip = new Vector4(point.x, point.y, point.z, 1).applyMatrix4(camera.viewProjection);
  *
  * if (clip.w > 0) clip.divideScalar(clip.w);
  * ```
- * @see {@link PointData4D} For basic x,y,z,w interface
- * @see {@link PointLike4D} For point manipulation interface
  * @category maths
  * @standard
  */
@@ -47,7 +44,7 @@ export class Vector4 implements PointLike4D {
    */
   public z = 0;
   /**
-   * The fourth component, `1` for a position and `0` for a direction by convention
+   * The fourth component, by convention `1` for a position and `0` for a direction
    * @example
    * ```ts
    * const behindCamera = clip.w <= 0;
@@ -89,8 +86,6 @@ export class Vector4 implements PointLike4D {
 
   /**
    * Sets all four components
-   *
-   * `y` and `z` default to `x`, and `w` defaults to `1`, not to `x`.
    * @example
    * ```ts
    * position.set(0, 2, -5);
@@ -99,8 +94,7 @@ export class Vector4 implements PointLike4D {
    * @param x - The x component
    * @param y - The y component, defaults to `x`
    * @param z - The z component, defaults to `x`
-   * @param w - The fourth component, defaults to `1`
-   * @returns This vector, for chaining
+   * @param w - The fourth component, defaults to `1`, not to `x`
    */
   public set(x = 0, y = x, z = x, w = 1): this {
     this.x = x;
@@ -118,7 +112,6 @@ export class Vector4 implements PointLike4D {
    * previousClip.copyFrom(clip);
    * ```
    * @param p - The point to copy from
-   * @returns This vector, for chaining
    */
   public copyFrom(p: PointData4D): this {
     this.x = p.x;
@@ -145,13 +138,12 @@ export class Vector4 implements PointLike4D {
   }
 
   /**
-   * Checks whether `x`, `y`, `z` and `w` all match exactly (no epsilon tolerance)
+   * Checks whether `x`, `y`, `z` and `w` all match `p` exactly, with no tolerance
    * @example
    * ```ts
    * if (!tint.equals(lastTint)) applyTint(tint);
    * ```
    * @param p - The point to compare against
-   * @returns `true` when all four components are equal
    */
   public equals(p: PointData4D): boolean {
     return p.x === this.x && p.y === this.y && p.z === this.z && p.w === this.w;
@@ -163,7 +155,6 @@ export class Vector4 implements PointLike4D {
    * ```ts
    * const startColor = color.clone();
    * ```
-   * @returns A new `Vector4` with the same component values
    */
   public clone(): Vector4 {
     return new Vector4(this.x, this.y, this.z, this.w);
@@ -189,7 +180,6 @@ export class Vector4 implements PointLike4D {
    * ```
    * @param array - The source array
    * @param offset - Index of the first component in `array`
-   * @returns This vector, for chaining
    */
   public fromArray(array: number[] | Float32Array, offset = 0): this {
     this.x = array[offset];
@@ -202,13 +192,11 @@ export class Vector4 implements PointLike4D {
 
   /**
    * Writes this vector's values into `array` starting at `offset`
-   *
-   * Allocates a new array when one is not supplied.
    * @example
    * ```ts
    * color.toArray(instanceColors, instanceIndex * 4);
    * ```
-   * @param array - The destination array; created when omitted
+   * @param array - The destination array; a new one is allocated when omitted
    * @param offset - Index of the first component in `array`
    * @returns The destination array
    */
@@ -467,10 +455,7 @@ export class Vector4 implements PointLike4D {
     return out as this;
   }
 
-  /**
-   * Computes the length of this vector across all four components
-   * @returns The length
-   */
+  /** Computes the length of this vector across all four components */
   // oxlint-disable-next-line pixi3d/require-standard-example -- same operation as on Vector3
   public magnitude(): number {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w);
@@ -485,7 +470,6 @@ export class Vector4 implements PointLike4D {
    * ```ts
    * const moving = velocity.magnitudeSquared() > 0.0001;
    * ```
-   * @returns The squared length
    */
   public magnitudeSquared(): number {
     return this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w;
@@ -498,7 +482,6 @@ export class Vector4 implements PointLike4D {
    * const colorDifference = pixel.distanceTo(keyColor);
    * ```
    * @param v - The point to measure to
-   * @returns The distance
    */
   public distanceTo(v: PointData4D): number {
     return Math.sqrt(this.distanceToSquared(v));
@@ -513,7 +496,6 @@ export class Vector4 implements PointLike4D {
    * if (pixel.distanceToSquared(keyColor) < tolerance * tolerance) pixel.w = 0;
    * ```
    * @param v - The point to measure to
-   * @returns The squared distance
    */
   public distanceToSquared(v: PointData4D): number {
     const dx = this.x - v.x;
@@ -527,14 +509,13 @@ export class Vector4 implements PointLike4D {
   /**
    * Computes the dot product of this vector and `v`
    *
-   * With a plane `(nx, ny, nz, d)` and a point whose `w` is 1, it's the point's signed distance from
-   * the plane.
+   * With a plane `(nx, ny, nz, d)` whose normal has unit length and a point whose `w` is 1, it's the
+   * point's signed distance from the plane.
    * @example
    * ```ts
    * const inFront = clipPlane.dot(point) > 0;
    * ```
    * @param v - The other vector
-   * @returns The dot product
    */
   public dot(v: PointData4D): number {
     return this.x * v.x + this.y * v.y + this.z * v.z + this.w * v.w;
@@ -560,7 +541,8 @@ export class Vector4 implements PointLike4D {
    * Multiplies this vector by `m`, `w` included, without a divide
    *
    * A position (`w = 1`) picks up the matrix's translation and a direction (`w = 0`) doesn't. With a
-   * projection matrix the result is in clip space; divide by `w` for the position on screen.
+   * projection matrix the result is in clip space; divide by `w` to get x and y from -1 to 1 across
+   * the view.
    * @example
    * ```ts
    * clip.set(point.x, point.y, point.z).applyMatrix4(camera.viewProjection);

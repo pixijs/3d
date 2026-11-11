@@ -9,14 +9,6 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Two transmissive cubes in two {@link View3D} insets of DIFFERENT sizes,
- * composited in one frame over a shared 2D grid. Exercises the renderer-shared
- * transient pool: the views render sequentially and recycle pooled opaque
- * copies from different power-of-two buckets, and each view's CopyOpaque
- * re-copies before it samples — so neither glass shows stale content from the
- * other. A correct render shows the grid refracting through both cubes.
- */
 function addGlassView(app: Application, size: number, cx: number, cy: number): void {
   const view3d = new View3D({ width: size, height: size, anchor: 0.5 });
   view3d.position.set(cx, cy);
@@ -65,7 +57,6 @@ export const scene: TestScene = {
     backdrop.stroke({ color: 0x3a7ca5, width: 1.5, alpha: 1 });
     app.stage.addChild(backdrop);
 
-    // Different sizes → different power-of-two buckets (96→128, 150→256).
     addGlassView(app, 96, w * 0.3, h * 0.5);
     addGlassView(app, 150, w * 0.68, h * 0.5);
   },

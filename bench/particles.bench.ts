@@ -8,6 +8,7 @@
  * count grows, so the ladder is not a fill-rate test.
  */
 
+import { seededRandom } from '@pixi/3d';
 import { ParticleSystem3D, SphereShape } from '@pixi/3d/extras';
 import { frame } from 'benchy';
 import { Ticker } from 'pixi.js';
@@ -36,7 +37,7 @@ frame('particles', {
       colorEnd: displayColor(data.colorEnd),
       gravity: data.gravity,
       drag: data.drag,
-      seed: String(data.seed),
+      createRandom: () => seededRandom(String(data.seed)),
       autoUpdate: false,
     });
     stage.view.root.addChild(system);

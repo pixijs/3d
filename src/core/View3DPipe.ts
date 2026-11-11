@@ -1,125 +1,65 @@
 import type { Geometry, Shader, State, Texture, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
+import type { ToneMapping } from '../scene/View3D';
 import type { DrawTarget } from './render-graph/RenderGraph';
 import type { ColorHandle } from './render-graph/ResourceHandle';
 import type { RenderForwardDescriptor } from './render-passes/RenderForwardDescriptor';
 import type { ReadonlyRect, RenderSession } from './render-passes/RenderSession';
 
 /**
- * Slot indices of pass-sampled resources within the global bind group
- *
- * Values differ by backend: WebGPU's separate sampler binding puts each of these one slot later
- * than WebGL does. So a pass reads the index from here instead of hardcoding it in `setup()`'s
- * `b.sample(handle, slot)`. One named source of truth per backend; grow by adding a key as more
- * passes sample globals.
- * @internal
- */
-export interface GlobalSlots {
-  /** Opaque-colour copy from `CopyOpaquePass`, read by transmission and blended refraction (GPU 8 / GL 7) */
-  readonly opaqueColor: number;
-  /** Opaque-depth copy from `CopyDepthPass`, read by blended refraction and depth effects (GPU 7 / GL 6) */
-  readonly opaqueDepth: number;
-  /** Cascaded shadow-map array from the shadow pass, read by every lit shader (GPU 5 / GL 4) */
-  readonly shadowMap: number;
-}
-
-/**
- * Backend-neutral interface a render pass programs against (`this.pipe`)
- *
- * The two concrete pipes, `View3DPipeGpu` (WebGPU) and `View3DPipeGl` (WebGL), implement it, so a
- * pass that types `pipe` as `View3DPipe` carries **zero** runtime imports from `core/gpu/**` or
- * `core/gl/**`.
- *
- * This is the execute-phase seam: mesh draws go through `renderForward` with a
- * declarative `RenderForwardDescriptor`; the backend translates intent
- * (`sort` / `cache`) into its own mechanism.
+ * What a render pass calls on its view's pipe, so it needs no import from `core/gl` or `core/gpu`
  * @internal
  */
 export interface View3DPipe {
-  /** The renderer this pipe serves */
   readonly renderer: WebGLRenderer | WebGPURenderer;
 
-  /** Backend-specific slot indices for pass-sampled global resources (see `GlobalSlots`) */
-  readonly globalSlots: GlobalSlots;
-
   /**
-   * Prepare a pass's forward meshes (upload GPU buffers) in the graph's prepare pre-sweep, before
-   * the render pass opens: the seam a cull compute runs in. No-op on WebGL and for passes that
-   * rebuild their draws every frame (distance-sorted ones).
+   * Uploads a pass's forward draw data and runs its cull compute before any render pass opens; WebGPU only, and
+   * only for a pass that caches its draws
    */
   prepareForward(desc: RenderForwardDescriptor, session: RenderSession): void;
 
-  /**
-   * Draw a pass's forward meshes per the declarative descriptor. The backend
-   * walks `session.view3d._meshBatches`, sorts (key or camera distance), builds
-   * its draw commands, and caches them according to the descriptor's policy.
-   */
+  /** Draws a pass's forward meshes, sorted and cached as `desc` asks */
   renderForward(desc: RenderForwardDescriptor, session: RenderSession): void;
 
-  /**
-   * Draw a single geometry with a shader and state straight to the active target, bypassing the
-   * batcher, for passes that own their geometry such as the skybox. Bind groups ride on
-   * `shader.groups[]`, set by the caller. Wraps `renderer.encoder.draw`, identical on both backends.
-   */
+  /** Draws one geometry to the active target, outside the batcher; the caller sets `shader.groups` */
   renderGeometry(geometry: Geometry, shader: Shader, state: State): void;
 
-  /**
-   * Copy the colour in `source`'s content rect into `dest`'s frame, writing mip 0 only
-   *
-   * `source` is a camera's draw target, from `RenderGraph._drawTarget`. The copy nulls
-   * `session.activeTarget`, so the next pass binds its target again. WebGPU closes the open
-   * render pass to copy, and WebGL leaves the copy's framebuffer bound. `generateMips` produces
-   * mip levels 1+ separately.
-   */
+  /** Copies `source`'s content rect into `dest`'s frame, mip 0 only, and nulls `session.activeTarget` */
   copyColor(source: DrawTarget, dest: Texture, session: RenderSession): void;
 
   /**
-   * Regenerate `handle`'s mip levels 1+ from level 0, in-band in the frame
-   * encoder so write → mip-gen → sample stays one ordered submission. The graph
-   * calls it after the last writer of any colour whose source asks for mips.
-   * WebGPU records per-level downsamples; WebGL defers to `gl.generateMipmap`.
-   * No-op for single-level textures.
+   * Like `copyColor`, but through `toneMapping`, or a plain format change when that's `null`
+   *
+   * The graph resolves an antialiased `source` first; the pipe resolves an antialiased `dest` after writing it.
    */
+  outputColor(source: DrawTarget, dest: Texture, session: RenderSession, toneMapping: ToneMapping | null): void;
+
+  /** Fills `handle`'s mips from level 0 in the frame's encoder, so the write, the mips and the reads stay in order */
   generateMips(handle: ColorHandle, session: RenderSession): void;
 
   /**
-   * Copy the depth in `source`'s content rect into `dest`, at the origin of its source
+   * Resolves the bound target's multisampled colour into its texture, leaving it bound
    *
-   * `source` is the same as for `copyColor`, and the copy nulls `session.activeTarget` the same
-   * way. On WebGL pixi wraps `dest` in a depth-only RenderTarget, caches it, and blits into it.
+   * WebGL needs it: pixi resolves only in `finishRenderPass`, which a pass that only draws never calls.
    */
+  resolveColor(): void;
+
+  /** Like `copyColor` for depth, but writes at texel (0, 0) of `dest` whatever its frame */
   copyDepth(source: DrawTarget, dest: Texture, session: RenderSession): void;
 
   /**
-   * Narrow the live GPU viewport to `viewport`, in physical pixels and already in the backend's
-   * convention (`frameToPhysicalViewport` bakes the WebGL root Y flip)
-   *
-   * The graph executor calls this to confine a camera pass's draws to that camera's frame, and
-   * again to put the view's own rect back. Nothing else in the frame sets the viewport, so the
-   * two calls have to be exactly paired: pixi's GL adaptor caches the last rect it set and
-   * would otherwise skip re-applying it.
+   * Narrows the live GPU viewport, in physical pixels in the backend's convention; pair each call with one that
+   * restores the rect, since pixi's GL adaptor skips setting a viewport equal to the one it cached
    */
   setViewport(viewport: ReadonlyRect): void;
 
-  /**
-   * Reset depth to the far plane over `session.activeViewport`, the live GPU rect, so overlapping
-   * insets and 2D depth survive
-   *
-   * The backends differ too much for a `renderGeometry` call: WebGPU rasterises a fullscreen
-   * triangle with the colour mask off, and WebGL scissors a native `gl.clear(DEPTH)`.
-   */
+  /** Resets depth over `session.activeViewport` only, so other insets and 2D depth survive */
   clearDepth(session: RenderSession): void;
 
   /**
-   * Ready the view for this frame: its lights, then its global uniforms
-   *
-   * Called by the pipe's own `execute` after the scene update, which built the view camera whose
-   * projection the shadow cascade fit reads, and before the session goes to the graph. So
-   * everything that is true of the view regardless of which passes run is settled up front.
-   *
-   * Running before {@link RenderGraph#resolve} is what lets a pass's `condition` ask about this
-   * frame rather than the last one: the view camera's frustum and the frame's lights are already
-   * written by the time it is called.
+   * Packs this frame's lights, then writes the global uniforms; it runs after the scene update builds the view
+   * camera the shadow fit reads, and before `RenderGraph.resolve`, so a pass's `condition` sees this frame
    */
   prepareView(session: RenderSession): void;
 }

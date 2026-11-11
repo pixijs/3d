@@ -4,7 +4,7 @@
  * does.
  */
 
-import { Geometry3D, Material3D } from '@pixi/3d';
+import { Geometry3D, linearToSrgb, Material3D } from '@pixi/3d';
 import type { AmbientLight, DirectionalLight, PointLight, View3D } from '@pixi/3d';
 import type { FrameStage } from 'benchy';
 import { BufferImageSource, Texture } from 'pixi.js';
@@ -31,14 +31,9 @@ export type PixiStage = FrameStage<{
  */
 export const LIGHT_SCALE = Math.PI;
 
-/** Linear to display-encoded, because the engine decodes the colours it is given. */
-function linearToDisplay(value: number): number {
-  return value <= 0.003_130_8 ? value * 12.92 : 1.055 * Math.pow(value, 1 / 2.4) - 0.055;
-}
-
 /** A linear colour from the data, as the engine takes it. */
 export function displayColor(color: Readonly<Vec3>, scale = 1): Vec3 {
-  return [linearToDisplay(color[0] * scale), linearToDisplay(color[1] * scale), linearToDisplay(color[2] * scale)];
+  return [linearToSrgb(color[0] * scale), linearToSrgb(color[1] * scale), linearToSrgb(color[2] * scale)];
 }
 
 export function toGeometry(geometry: Geometry): Geometry3D {

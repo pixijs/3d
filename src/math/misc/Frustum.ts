@@ -7,30 +7,19 @@ import type { PointData3D } from '../vector/PointData3D';
 /**
  * A volume bounded by six planes that face inward, most often the volume a camera sees
  *
- * Every {@link Camera3D} keeps one as {@link Camera3D#frustum}, rebuilt each frame, and by default
- * the engine culls meshes against it. Test against it yourself to skip work for things no camera
- * can see, or build your own from a matrix or from planes to cull against another volume.
- *
- * A point is inside when it lies on the inner side of all six planes, boundary included.
+ * Each {@link Camera3D} has one as {@link Camera3D#frustum}. Test against it to skip work for
+ * things the camera can't see, or build your own from a matrix or from planes to cull against
+ * another volume.
  * @example
  * ```ts
  * const onScreen = enemies.filter((enemy: Mesh3D) =>
  *   camera.frustum.intersectsSphere(enemy.boundingSphere),
  * );
  * ```
- * @see {@link Plane} For the half-spaces enclosing the frustum
- * @see {@link Box} For axis-aligned bounding box intersections
- * @see {@link Sphere} For bounding sphere intersections
  * @category maths
  * @standard
  */
 export class Frustum {
-  /**
-   * Backing store for {@link Frustum#planesData}
-   *
-   * One flat array rather than six `Plane` objects, so a frustum allocates once and the
-   * intersection tests loop over contiguous floats.
-   */
   private readonly _planes: Float32Array;
 
   /**
@@ -59,8 +48,8 @@ export class Frustum {
   /**
    * The six planes as 24 floats, `[nx, ny, nz, c]` per plane in {@link Frustum#getPlane} order
    *
-   * This is the frustum's own storage, not a copy: writing to it changes the frustum. The engine's
-   * culling reads it directly. Pass it to your own shader to cull on the GPU.
+   * This is the frustum's own storage, not a copy: writing to it changes the frustum. Pass it to
+   * your own shader to cull on the GPU.
    * @example
    * ```ts
    * device.queue.writeBuffer(frustumBuffer, 0, camera.frustum.planesData);
@@ -194,7 +183,7 @@ export class Frustum {
   }
 
   /**
-   * Returns true when all six planes match `frustum` exactly (no epsilon tolerance)
+   * Returns true when all six planes match `frustum` exactly, with no tolerance
    * @example
    * ```ts
    * if (!camera.frustum.equals(lastFrustum)) {
@@ -216,7 +205,7 @@ export class Frustum {
   }
 
   /**
-   * Writes plane `index` into `out` (or a new `Plane`) and returns it
+   * Writes plane `index` into `out` and returns it
    *
    * After {@link Frustum#setFromProjectionMatrix} the planes are ordered right, left, bottom, top,
    * far, near.

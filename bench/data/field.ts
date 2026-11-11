@@ -1,6 +1,6 @@
 /**
  * The field scenes: many separate meshes, each with its own transform (`field`, `materials`, `textures`,
- * `geometries`, and the lit field `post` draws effects over), and one batch of instances whose matrices are
+ * `geometries`, `churn`, and the lit field `post` draws effects over), and one batch of instances whose matrices are
  * rewritten every frame (`instances`).
  */
 
@@ -132,6 +132,24 @@ export function texturesScene(materials: number): FieldScene {
 /** The textures field at 32 materials, spread over `geometries` distinct geometries rather than eight. */
 export function geometriesScene(geometries: number): FieldScene {
   return fieldScene(5000, texturedPalette(rng(2200 + geometries), 32), 2, geometryVariants(geometries));
+}
+
+/** The `geometries` field at 500 geometries and 6000 objects, for `churn` to move in and out of the scene. */
+export function churnScene(): FieldScene {
+  return fieldScene(6000, texturedPalette(rng(2700), 32), 2, geometryVariants(500));
+}
+
+/**
+ * `count` objects standing still over the first `geometries` of the field's 8 geometries and `materials` plain
+ * materials: the population `batched churn` hides and shows. The default is 8 × 4, 32 instance groups.
+ */
+export function instancedChurnScene(count: number, materials = 4, geometries = 8): FieldScene {
+  const random = rng(2400);
+  const palette: PbrSpec[] = [];
+  for (let i = 0; i < materials; i++) {
+    palette.push({ color: hsvToLinear(i / materials, 0.6, 0.9), roughness: random.range(0.3, 0.8), metalness: 0 });
+  }
+  return fieldScene(count, palette, 24, fieldGeometries().slice(0, geometries));
 }
 
 /**

@@ -10,15 +10,7 @@ const lightMap: Record<string, number> = {
   spot: 2,
 };
 
-/**
- * Converts `KHR_lights_punctual` lights into descriptor lights
- *
- * A spot's cone becomes a `coneAngle` of the outer angle in degrees and a `penumbra` of
- * `1 - inner / outer`, clamped to 0 to 1. A light with no `range` gets 0, which means infinite.
- * @param gltfRaw - Parsed glTF JSON
- * @param descriptor - Receives the light presets
- * @internal
- */
+/** @internal */
 export function processLights(gltfRaw: GltfFormat, descriptor: Scene3DDescriptor): void {
   if (gltfRaw.extensions?.KHR_lights_punctual?.lights) {
     const lights = gltfRaw.extensions.KHR_lights_punctual.lights;

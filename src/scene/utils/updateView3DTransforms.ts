@@ -5,12 +5,8 @@ import { Container3D } from '../Container3D';
 import type { View3D } from '../View3D';
 
 /**
- * Stand-in parent for scene roots, so the recursive update never has to null-check
- * `container.parent`
- *
- * Its `worldTransform` stays at identity and `worldVisible` stays at 1, so
- * `parent.worldTransform * local` and `parent.worldVisible * _visible` give a root its
- * own values without a branch. Never mutate it, parent it, or add it to a scene.
+ * Parent for roots, so the update never null-checks; its identity `worldTransform` and `worldVisible` of 1 must
+ * never change
  */
 const TEMP_PARENT_3D = /* @__PURE__ */ (() => {
   const p = new Container3D();
@@ -19,18 +15,7 @@ const TEMP_PARENT_3D = /* @__PURE__ */ (() => {
 })();
 
 /**
- * Per-frame transform pass for a {@link View3D}
- *
- * Drains the depth-bucketed work queue populated by `View3D._onChildUpdate`,
- * in ancestor-before-descendant order, and recomputes `worldTransform` /
- * `worldVisible` for every container in each dirty subtree via
- * {@link updateTransformAndChildren3D}.
- *
- * Skips a queued container whose `_view3d` or `_relativeSceneDepth` changed after it was
- * queued, because it moved to another View3D or to another depth: the queue for where it is
- * now picks it up. Increments `view3d._updateTick` once per call, so a container reached twice
- * in one pass is updated once.
- * @param view3d - the View whose dirty containers should be flushed
+ * Skips a queued container whose view or depth changed after it was queued, since the queue where it is now has it
  * @internal
  */
 export function updateView3DTransforms(view3d: View3D) {
@@ -62,38 +47,8 @@ export function updateView3DTransforms(view3d: View3D) {
 }
 
 /**
- * Recursively recomputes `worldTransform` and `worldVisible` for `container`
- * and its descendants, multiplying parent transforms down the chain
- *
- * Dedupes via `updateTick` so a container visited from a shallower depth
- * bucket earlier in the same pass is skipped on revisit. `didChange` is cleared
- * first, so a setter that runs during the update can queue the container again
- * for the next frame.
- *
- * Dirty propagation:
- * - `transformDirty` and `visibleDirty` OR in `container`'s own
- *   `_worldTransformDirty` / `_worldVisibleDirty` so an ancestor change
- *   cascades to descendants.
- * - World visibility is the product of the 0/1 flags down the chain, resolved
- *   only when the chain reports a visibility change.
- * - Matrix work runs only when the container is visible and the chain reports
- *   a transform change, so a visibility-only flip costs no matrix math. Hidden
- *   subtrees keep `_worldTransformDirty` so showing them again recomputes.
- * - The local matrix is rebuilt only when the container's own position,
- *   rotation or scale changed, not when only an ancestor moved.
- *   `_localTransformDirty` is cleared only then, so a pending pose change on a
- *   hidden container survives until it is shown.
- *
- * A recomputed world matrix bumps `_worldTransformId`, which caches such as
- * `Mesh3D.boundingSphere` and the picker's `_getInverseWorldTransform` compare
- * against, and is published at once through `_storeWorldTransform`: a mesh
- * writes its store row while the matrix is hot, rather than the scene sweep
- * reading it cold later in the frame.
- * @param container - container being updated this step
- * @param parent - resolved parent for the multiply (may be `TEMP_PARENT_3D` for roots)
- * @param updateTick - per-frame dedupe tick from `view3d._updateTick`
- * @param transformDirty - whether some ancestor's transform changed
- * @param visibleDirty - whether some ancestor's visibility changed
+ * Updates a subtree once per `updateTick`; clears `didChange` first, so a setter run mid-update re-queues, and leaves a
+ * hidden node's transform dirty flags set for when it's shown
  * @internal
  */
 export function updateTransformAndChildren3D(
@@ -113,6 +68,7 @@ export function updateTransformAndChildren3D(
 
   if (visibleDirty) {
     container._worldVisible = parent._worldVisible * container._visible;
+    container._storeWorldVisible();
   }
 
   if (container._worldVisible && transformDirty) {

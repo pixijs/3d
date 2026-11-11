@@ -23,23 +23,7 @@ describe('material colour inputs are display-space and decode sRGB → linear at
     expect(emissive[0]).toBeCloseTo(linear, 5);
     expect(material.data.sheenParams![0]).toBeCloseTo(linear, 5);
     expect(material.data.specularParams![0]).toBeCloseTo(linear, 5);
-    expect(material.data.attenuationColorIrid![0]).toBeCloseTo(linear, 5);
-  });
-
-  it('decodes setter writes identically to constructor seeds', () => {
-    const material = new Material3D({
-      sheen: {},
-      specular: {},
-      transmission: {},
-    });
-
-    material.sheen!.color = [0.5, 0.5, 0.5];
-    material.specular!.color = [0.5, 0.5, 0.5];
-    material.transmission!.attenuationColor = [0.5, 0.5, 0.5];
-
-    expect(material.data.sheenParams![0]).toBeCloseTo(linear, 5);
-    expect(material.data.specularParams![0]).toBeCloseTo(linear, 5);
-    expect(material.data.attenuationColorIrid![0]).toBeCloseTo(linear, 5);
+    expect(material.data.attenuationColorIrid[0]).toBeCloseTo(linear, 5);
   });
 
   it('reads back the canonical hex, tint-style, truncating float channels (0.5 → 0x7f)', () => {

@@ -6,13 +6,8 @@ import { Container3D } from '~/scene/Container3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { updateTransformAndChildren3D } from '~/scene/utils/updateView3DTransforms';
 
-/** Stands in for `TEMP_PARENT_3D`, the transform pass's root parent: identity world transform, `worldVisible` 1 */
 const tempParent = new Container3D();
 let tick = 0;
-/**
- * Runs the transform pass over `node` and its subtree, which recomputes `worldTransform` and bumps
- * `_worldTransformId`
- */
 const runTransformPass = (node: Container3D) => updateTransformAndChildren3D(node, tempParent, ++tick, false, false);
 
 const makeMesh = (size: number, dynamic = false) =>
@@ -21,7 +16,6 @@ const makeMesh = (size: number, dynamic = false) =>
     material: new Material3D({ baseColor: 0xffffff }),
   });
 
-/** The local bounding sphere radius the cull derives from the geometry's AABB: half its diagonal */
 const localRadius = (mesh: Mesh3D) => {
   const { min, max } = mesh.geometry.bounds3D;
   return 0.5 * Math.hypot(max.x - min.x, max.y - min.y, max.z - min.z);

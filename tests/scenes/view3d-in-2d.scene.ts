@@ -8,35 +8,15 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/**
- * Two overlapping {@link View3D}s, each holding one cube, composited directly
- * over a 2D grid backdrop (no opaque card behind them). This exercises the
- * WebGPU keep-encoder-open path end to end:
- *  - both Views draw into the single live 2D render pass (no per-view target
- *    switch),
- *  - each View resets its own depth via the in-pass depth-clear draw, so the
- *    overlapping Views don't depth-fight (the front cube wins by draw order,
- *    not by stale shared depth),
- *  - the depth-clear draw is colour-masked, so the 2D grid survives everywhere
- *    the cubes don't cover.
- *
- * The `delay` lets the auto-started ticker render several frames so the
- * screenshot lands on a steady-state keep-open frame (frame 1 primes depth
- * with a push; frame 2+ keep the encoder open). Before the fix the cubes
- * self-occluded against un-cleared depth and vanished on WebGPU.
- */
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x10202a,
   },
-  // Past frame 1 so the screenshot lands on a keep-open frame, not the prime.
   delay: 120,
   create: async (app) => {
     const w = app.screen.width;
     const h = app.screen.height;
 
-    // -- 2D grid backdrop. Must survive everywhere the cubes don't cover,
-    //    which proves the depth-clear draw masks colour. --
     const backdrop = new Graphics();
     const step = 24;
     for (let x = 0; x <= w; x += step) backdrop.moveTo(x, 0).lineTo(x, h);
@@ -74,9 +54,6 @@ export const scene: TestScene = {
       return card;
     };
 
-    // Two overlapping cards — the second drawn after the first, overlapping its
-    // lower-right. Correct output: both cubes visible, grid showing through the
-    // gaps, the second cube layered over the first in the overlap region.
     makeCard(w * 0.42, h * 0.42, 0xff5566, [-0.5, 0.7, 0.0]);
     makeCard(w * 0.6, h * 0.6, 0x66ccff, [0.3, -0.6, 0.1]);
   },

@@ -8,7 +8,7 @@ import { View3D } from '~/scene/View3D';
 import { buildCubeGrid } from './cubeGrid';
 
 interface VisibilitySceneOptions {
-  /** Cull mode the view renders under (fixed at construction). */
+  /** Cull mode the view renders under. */
   cull: CullMode;
   /** `'blend'` routes the grid through the immediate transparent pass (its sort-time filter). */
   alphaMode?: 'opaque' | 'blend';

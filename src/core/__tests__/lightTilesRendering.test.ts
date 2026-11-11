@@ -17,7 +17,6 @@ import { PointLight } from '~/scene/lights/PointLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** Reads one pixel from the currently bound framebuffer without changing renderer state. */
 function readPixel(gl: WebGL2RenderingContext, x: number, y: number): number[] {
   const pixel = new Uint8Array(4);
   gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
@@ -38,7 +37,6 @@ function wallView(size: number): View3D {
   return view3d;
 }
 
-/** Draws into explicit graph attachments, independently of the camera's default target. */
 class TargetForwardPass extends ForwardRenderPass {
   public center: number[] = [];
 

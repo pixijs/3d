@@ -7,7 +7,6 @@ import { Material3D } from '~/materials/pbr/Material3D';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-/** The private fields holding a store's two views, each null until first read */
 interface StoreViews {
   _buffer: unknown;
   _texture: unknown;
@@ -35,7 +34,6 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         const pipe = app.renderer.renderPipes.view3d;
         const stores = {
-          material: pipe.materialStoreBuffer,
           mesh: view3d._sceneBatch.storeBuffer,
           geometry: pipe.geometryDataStoreBuffer,
           bones: view3d._bonePit,
@@ -48,12 +46,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
             return [name, { buffer: _buffer !== null, texture: _texture !== null }];
           }),
         );
-        const asTexture = { buffer: false, texture: true };
-        const asBuffer = { buffer: true, texture: false };
-        const other = preference === 'webgpu' ? asBuffer : asTexture;
+        const other = preference === 'webgpu' ? { buffer: true, texture: false } : { buffer: false, texture: true };
 
-        expect(made, 'both backends read the material store through its texture').toEqual({
-          material: asTexture,
+        expect(made).toEqual({
           mesh: other,
           geometry: other,
           bones: other,

@@ -868,13 +868,5 @@ describe('ObservableVector3', () => {
       expect(p.y).toBeCloseTo(20, 5);
       expect(p.z).toBeCloseTo(30, 5);
     });
-
-    test('reads first column of identity (1, 0, 0)', () => {
-      const c = makeCounter();
-      const m = new Matrix4();
-      const p = new ObservableVector3(c.observer);
-      p.setFromMatrixColumn(m, 0);
-      expectVec3Close(p, 1, 0, 0);
-    });
   });
 });

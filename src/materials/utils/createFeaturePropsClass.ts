@@ -5,17 +5,6 @@ import type { BaseMaterial3D } from '../BaseMaterial3D';
 import { linearToSrgb, writeLinearRgb } from '../BaseMaterial3D';
 import type { MaterialData } from './createMaterialDataClass';
 
-/**
- * How one prop of a feature-props object reaches the material
- *
- * - `lane`: one float of a vector field, such as `clearcoatParams[1]`.
- * - `scalar`: a whole scalar field, through the generated {@link MaterialData} accessor.
- * - `colour`: the first three lanes of a vector field. Like `Container.tint`, it takes any colour
- *   source and reads back as a hex number; the field holds the colour in linear light.
- * - `texture`: a named texture slot, written through `material.textures`. A `readonly` one gets
- *   no setter, because its slot is fixed at construction and may not exist.
- * @internal
- */
 type FeaturePropBinding =
   | { kind: 'lane'; field: string; lane: number }
   | { kind: 'scalar'; field: string }
@@ -25,19 +14,8 @@ type FeaturePropBinding =
 type FeaturePropsSchema = Record<string, FeaturePropBinding>;
 
 /**
- * Build the class behind a runtime feature-props object, such as `material.clearcoat`
- *
- * Each prop becomes a getter and setter on the prototype, so props read like plain fields and an
- * instance holds only its material, data and colour views. The schema is keyed by the props
- * interface, so a missing or misspelt binding is a compile error rather than a write that never
- * reaches the material.
- *
- * Lane setters compare against `Math.fround(value)`. Vector fields are float32 views, which round
- * what they store, so an inexact number like 0.3 would never match and every write would queue an
- * upload.
- *
- * A material builds one instance per feature group it was constructed with.
- * @param schema - One binding per prop of the props interface `T`
+ * Builds the class behind a feature-props object such as `material.clearcoat`; lane setters compare
+ * with `Math.fround(value)`, or re-setting an inexact value like 0.3 would queue an upload each time
  * @internal
  */
 export function createFeaturePropsClass<T>(
@@ -52,9 +30,7 @@ export function createFeaturePropsClass<T>(
   class FeatureProps {
     public readonly _material: BaseMaterial3D;
     public readonly _data: MaterialData;
-    /** Each colour prop's three lanes, cut once at construction */
     public readonly _colours: Record<string, Float32Array> = Object.create(null);
-    /** The hex value each colour prop reads back */
     public readonly _tints: Record<string, number> = Object.create(null);
 
     constructor(material: BaseMaterial3D) {
@@ -134,4 +110,23 @@ export function createFeaturePropsClass<T>(
   }
 
   return FeatureProps as new (material: BaseMaterial3D) => T;
+}
+
+/**
+ * Read a feature-props object back as a plain object of its props, such as the `clearcoat` options
+ * `clone` passes to the copy's constructor
+ *
+ * The names come from the prototype, where {@link createFeaturePropsClass} defines every prop of the
+ * schema as enumerable, so they can't drift from the getters. The instance's own fields
+ * (`_material`, `_data`, the colour views) aren't on the prototype, so they stay out. A `readonly`
+ * texture prop the group was built without reads `undefined`.
+ * @param props - An instance of a class {@link createFeaturePropsClass} built
+ * @returns Each prop's current value, by name
+ * @internal
+ */
+export function readFeatureProps<T extends object>(props: T): T {
+  const values: Partial<T> = {};
+  for (const name of Object.keys(Object.getPrototypeOf(props)) as (keyof T)[]) values[name] = props[name];
+
+  return values as T;
 }

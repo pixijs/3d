@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { uploadFloatRange, uploadTexelRange } from '~/core/buffers/dataTextureLayout';
 
-/** A stand-in source that records the texel range each upload asks pixi for */
 function spySource() {
   const update = vi.fn<(start: number, end: number) => void>();
 

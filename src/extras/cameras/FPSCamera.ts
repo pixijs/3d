@@ -18,13 +18,12 @@ import type { View3D } from '../../scene/View3D';
  * const walker: Omit<FPSCameraOptions, 'view'> = { position: { x: 0, y: 1.7, z: 5 }, moveSpeed: 3 };
  * const fpsCamera = new FPSCamera({ view: view3d, ...walker });
  * ```
- * @see {@link FPSCamera} For the constructed controller.
  * @category extras:camera
  * @standard
  */
 export interface FPSCameraOptions {
   /**
-   * The {@link View3D} to drive; the controller moves `view.camera` and listens for pointer events on the View
+   * The view whose camera the controller drives and whose pointer events it reads
    * @example
    * ```ts
    * const fpsCamera = new FPSCamera({ view: view3d });
@@ -80,10 +79,8 @@ export interface FPSCameraOptions {
    */
   autoUpdate?: boolean;
   /**
-   * Request pointer lock on the canvas when the View is pressed, so the mouse looks around
-   * without a button held
-   *
-   * Dragging still looks around while unlocked, which is how touch input works.
+   * Request pointer lock on the canvas when the View is pressed; {@link FPSCamera#pointerLock}
+   * has the details
    * @default false
    * @example
    * ```ts
@@ -92,12 +89,8 @@ export interface FPSCameraOptions {
    */
   pointerLock?: boolean;
   /**
-   * Keep the browser's context menu from opening over the View, so a right-button drag
-   * doesn't open it
-   *
-   * The View's `hitArea` bounds it like any other pointer event, and the menu still opens while
-   * `enabled` is `false`. On Windows the menu opens on release, so a right-button drag that ends
-   * outside the View still opens it.
+   * Keep the browser's context menu from opening over the View;
+   * {@link FPSCamera#preventContextMenu} covers where it still opens
    * @default true
    * @example
    * ```ts
@@ -106,9 +99,8 @@ export interface FPSCameraOptions {
    */
   preventContextMenu?: boolean;
   /**
-   * Read WASD / arrow keys, Space and Shift from `window` for movement
-   *
-   * Set `false` to drive {@link FPSCamera#move | move} yourself.
+   * Read WASD or arrow keys, Space and Shift from `window` for movement; set `false` to move only
+   * through {@link FPSCamera#move | move}
    * @default true
    * @example
    * ```ts
@@ -152,17 +144,15 @@ const _yawAxis = new Vector3(0, 1, 0);
 const _pitchAxis = new Vector3(1, 0, 0);
 
 /**
- * First-person walker for a {@link View3D}'s camera
+ * First-person controller for a {@link View3D}'s camera
  *
- * Drag (or move the mouse under pointer lock) to look around; WASD / arrow keys walk
- * along the view direction and strafe, Space / Shift move along world Y. Yaw is
- * unbounded and pitch is clamped to {@link FPSCamera#maxPitch | maxPitch}.
- * The {@link FPSCamera#move | move} vector takes input from anything else,
- * such as an on-screen joystick.
+ * Drag, or move the mouse under pointer lock, to look around. WASD or the arrow keys walk and
+ * strafe, and Space and Shift move along world Y. The {@link FPSCamera#move | move} vector takes
+ * input from anything else, such as an on-screen joystick.
  *
- * Look input arrives through the View's federated pointer events. Movement is applied by
- * {@link FPSCamera#update | update()}, which runs from `Ticker.shared` unless
- * {@link FPSCamera#autoUpdate | autoUpdate} is off.
+ * A look drag or pointer lock starts from a press on the View, within its `hitArea`. The controller
+ * blocks the browser's context menu over the View so a right-button drag can look around; see
+ * {@link FPSCamera#preventContextMenu | preventContextMenu}.
  * @example
  * ```ts
  * import { FPSCamera } from '@pixi/3d/extras';
@@ -180,13 +170,8 @@ const _pitchAxis = new Vector3(1, 0, 0);
  * // On teardown:
  * fpsCamera.destroy();
  * ```
- * @remarks
- * The controller blocks the browser's context menu over the View so a right-button drag can
- * look around. Set {@link FPSCamera#preventContextMenu | preventContextMenu} to `false` to
- * keep the menu.
  * @see {@link FPSCameraOptions} For all constructor options.
- * @see {@link OrbitCamera} For orbit / zoom / pan interaction.
- * @see {@link Camera3D} For the underlying camera.
+ * @see {@link OrbitCamera} For orbiting, zooming and panning around a target.
  * @category extras:camera
  * @standard
  */
@@ -217,7 +202,7 @@ export class FPSCamera extends EventEmitter<{
   unlock: [];
 }> {
   /**
-   * Default {@link FPSCameraOptions} merged under every constructor call; mutate to change defaults process-wide
+   * Defaults for every new `FPSCamera`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * FPSCamera.defaultOptions.pointerLock = true;
@@ -261,7 +246,10 @@ export class FPSCamera extends EventEmitter<{
   public enabled: boolean;
 
   /**
-   * Request pointer lock on the canvas when the View is pressed
+   * Request pointer lock on the canvas when the View is pressed, so the mouse looks around without
+   * a button held
+   *
+   * Only a mouse press requests the lock; touch and pen still look by dragging.
    * @example
    * ```ts
    * fpsCamera.pointerLock = settings.captureMouse;
@@ -270,8 +258,11 @@ export class FPSCamera extends EventEmitter<{
   public pointerLock: boolean;
 
   /**
-   * Whether the browser's context menu is kept from opening over the View;
-   * {@link FPSCameraOptions#preventContextMenu} covers where it still opens
+   * Whether the browser's context menu is kept from opening over the View, so a right-button drag
+   * doesn't open it
+   *
+   * It applies only within the View's `hitArea` and only while `enabled` is on. On Windows the menu
+   * opens on release, so a right-button drag that ends outside the View still opens it.
    * @example
    * ```ts
    * fpsCamera.preventContextMenu = false;
@@ -315,10 +306,10 @@ export class FPSCamera extends EventEmitter<{
   public maxPitch = 0;
 
   /**
-   * External movement input, each axis in `[-1, 1]`
+   * Movement input from outside the keyboard, each axis -1 to 1
    *
-   * `x` strafes right, `y` rises along world Y, `z` walks forward. Added to the keyboard
-   * input on every update; set it from a joystick or gamepad and leave it at zero otherwise.
+   * `x` strafes right, `y` rises along world Y and `z` walks forward. It adds to the keys on every
+   * update, so the camera keeps moving until you set it back to zero.
    * @example
    * ```ts
    * app.ticker.add(() => {
@@ -345,11 +336,8 @@ export class FPSCamera extends EventEmitter<{
   private _lastY = 0;
 
   /**
-   * Creates a new `FPSCamera` bound to `options.view`
-   *
-   * Listeners are wired immediately; call {@link FPSCamera#destroy | destroy()}
-   * to remove them.
-   * @param options - construction options; see {@link FPSCameraOptions}
+   * Starts listening for input on `options.view` right away
+   * @param options - Options for the controller
    */
   constructor(options: FPSCameraOptions) {
     super();
@@ -470,8 +458,8 @@ export class FPSCamera extends EventEmitter<{
   }
 
   /**
-   * Adds or removes the `window` key listeners
-   * @param value - Whether to read movement keys from `window`
+   * Sets whether movement keys are read from `window`
+   * @param value - `true` to read them
    */
   public set keyboard(value: boolean) {
     if (value === this._keyboard) return;
@@ -506,8 +494,8 @@ export class FPSCamera extends EventEmitter<{
   }
 
   /**
-   * Connects to or disconnects from `Ticker.shared`
-   * @param value - Whether to run `update()` every frame
+   * Sets whether `update()` runs from `Ticker.shared`
+   * @param value - `true` to update every frame
    */
   public set autoUpdate(value: boolean) {
     if (value === this._autoUpdate) return;
@@ -522,9 +510,10 @@ export class FPSCamera extends EventEmitter<{
   }
 
   /**
-   * Remove every listener, release pointer lock, and drop event subscribers
+   * Removes its input listeners and every `change`, `lock` and `unlock` listener, exits pointer lock
+   * and stops auto-updating
    *
-   * The View and camera are owned by the caller and are left intact.
+   * The View and its camera are left as they are.
    * @example
    * ```ts
    * fpsCamera.destroy();
@@ -556,10 +545,10 @@ export class FPSCamera extends EventEmitter<{
   }
 
   /**
-   * Apply this frame's movement input to the camera
+   * Moves the camera by this frame's movement input
    *
-   * Runs every frame while {@link FPSCamera#autoUpdate | autoUpdate} is on. Call
-   * it yourself when driving the controller from your own loop.
+   * Runs every frame while {@link FPSCamera#autoUpdate | autoUpdate} is on; call it yourself every
+   * frame when it's off. Does nothing while `enabled` is off.
    *
    * Walking follows the full view direction, pitch included, so walking forward while looking down
    * descends. Strafing stays level, and Space and Shift move along world Y whatever the pitch.

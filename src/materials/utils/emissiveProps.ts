@@ -6,8 +6,8 @@ import { createFeaturePropsClass } from './createFeaturePropsClass';
  * Options for a material's own glow, the `emissive` group of {@link Material3D} and
  * {@link PhongMaterial}
  *
- * Passing the group turns the glow on. It is added after lighting, so it shows in the dark. Follows
- * glTF's emissive colour and texture plus `KHR_materials_emissive_strength`.
+ * Passing the group turns the glow on. It's added after lighting, so it shows in the dark, and
+ * follows glTF's emissive colour and texture plus `KHR_materials_emissive_strength`.
  * @example
  * ```ts
  * const lamp = new Material3D({ emissive: { color: 0xffcc66, strength: 3 } });
@@ -18,8 +18,6 @@ import { createFeaturePropsClass } from './createFeaturePropsClass';
 export interface EmissiveOptions {
   /**
    * Glow colour, multiplied by `texture` when there is one
-   *
-   * White when the group is passed without it, so a texture-only glow shows as authored.
    * @default 0xffffff
    * @example
    * ```ts
@@ -89,10 +87,7 @@ export interface EmissiveProps {
 }
 
 /**
- * The props class behind `material.emissive`
- *
- * Shared by every material that composes `emissiveBit` (Material3D, PhongMaterial): the bit fixes
- * the field names (`emissive`, `emissiveStrength`) and the slot name (`emissive`).
+ * Field and slot names here must match what `emissiveBit` declares
  * @internal
  */
 export const EmissivePropsClass = createFeaturePropsClass<EmissiveProps>({

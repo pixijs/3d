@@ -1,12 +1,12 @@
 import { BufferImageSource, CubeTexture, Texture } from 'pixi.js';
 
 /**
- * Makes {@link CubeTexture}s of one solid colour, for a plain background or a flat environment
+ * Makes {@link CubeTexture}s of one solid colour, for a flat environment
  *
- * Each face is a single texel, so the cube costs almost no memory.
+ * Channels are display (sRGB) values, as in an image. For a plain background, set
+ * {@link View3D#background} to the colour itself, which needs no texture.
  * @example
  * ```ts
- * view3d.background = ColorCubeTexture.from(0x87ceeb);
  * view3d.environment = ColorCubeTexture.fromRGB(40, 44, 60);
  * ```
  * @category rendering
@@ -17,7 +17,7 @@ export class ColorCubeTexture {
    * Creates a cube texture of one colour, given as a hex number
    * @example
    * ```ts
-   * view3d.background = ColorCubeTexture.from(0x202830, 255, 'night-sky');
+   * view3d.environment = ColorCubeTexture.from(0x202830, 255, 'night-sky');
    * ```
    * @param color - Colour as `0xRRGGBB`
    * @param alpha - Alpha, from 0 to 255

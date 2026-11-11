@@ -87,7 +87,7 @@ export class BoxShape implements EmitterShape {
   public depth = 0;
 
   /**
-   * Default {@link BoxShapeOptions} merged under every constructor call; mutate to change them process-wide
+   * Defaults for every new `BoxShape`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * BoxShape.defaultOptions.height = 0;
@@ -118,7 +118,7 @@ export class BoxShape implements EmitterShape {
    * ```
    * @param rng - The system's random source
    * @param outPos - Receives the spawn offset, relative to the emitter
-   * @param outDir - Receives the direction, always +Y
+   * @param outDir - Receives +Y
    * @advanced
    */
   public sample(rng: () => number, outPos: Vector3, outDir: Vector3): void {

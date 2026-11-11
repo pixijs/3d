@@ -1,5 +1,5 @@
 import { expectCleanRender, getApp } from '@test-utils';
-import type { Renderer, RenderTarget } from 'pixi.js';
+import type { Renderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
@@ -11,7 +11,6 @@ import { View3D } from '~/scene/View3D';
 
 const SIZE = 64;
 
-/** Routed like water through the blended-refraction pass; no core material sets that bit, so it is set directly. */
 function refractiveCube(): Mesh3D {
   const material = new Material3D({ baseColor: 0xffffff, metallic: 0, roughness: 0.1, transmission: { factor: 1 } });
   material._passBit = RenderPassBit.BLENDED_REFRACTION;
@@ -51,7 +50,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         view3d.root.addChild(refractiveCube());
         await expectCleanRender(app);
-        const overCanvas = init.mock.calls.filter(([target]) => (target as RenderTarget).colorTexture === canvasSource);
+        const overCanvas = init.mock.calls.filter(([target]) => target.colorTexture === canvasSource);
         expect(overCanvas).toEqual([]);
 
         init.mockRestore();

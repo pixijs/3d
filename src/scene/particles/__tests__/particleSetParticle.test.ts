@@ -19,7 +19,6 @@ const trajectoryBit: ShaderBit = {
   attributes: { aVel: 'float32x3', aBirth: 'float32', aTint: 'unorm8x4' },
 };
 
-/** Float index of vertex `v` of particle `i` */
 function vertex(particles: ParticleContainer3D, i: number, v: number): number {
   return (i * 4 + v) * particles.data.floatStride;
 }
@@ -63,7 +62,7 @@ describe('ParticleContainer3D.setParticle', () => {
     expect([f32[o + 3], f32[o + 4]]).toEqual([0.5, 0.25]);
   });
 
-  it('sRGB-decodes the built-in tint from any ColorSource, matching setParticleAt', () => {
+  it('packs the built-in tint from any ColorSource as authored, matching setParticleAt', () => {
     const particles = new ParticleContainer3D({ capacity: 4 });
     const { u32, offsets } = particles.data;
 
@@ -111,7 +110,7 @@ describe('ParticleContainer3D.setParticle', () => {
   it('refuses a value of the wrong shape for its attribute', () => {
     const particles = new ParticleContainer3D({ capacity: 4, extraBits: [trajectoryBit] });
 
-    expect(() => particles.setParticle(0, { aVel: { x: 1, y: 2 } as never })).toThrow(/'aVel' takes \{ x, y, z \}/);
+    expect(() => particles.setParticle(0, { aVel: { x: 1, y: 2 } })).toThrow(/'aVel' takes \{ x, y, z \}/);
     expect(() => particles.setParticle(0, { aBirth: { x: 1 } as never })).toThrow(/'aBirth' takes a number/);
   });
 });

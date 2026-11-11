@@ -4,19 +4,14 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
  * Shader helpers that sample the opaque pass's colour or depth copy at a world position, for custom
  * material bits such as refraction or water
  *
- * {@link Material3D} always includes this bit, so a bit in a Material3D's `extraBits` can call the
- * helpers as they are. Don't add the bit there again: nothing removes duplicate bits, so the
- * helpers would be defined twice and the shader would fail to compile. Other materials add it to
- * their own bit list. The helpers read the camera group, which every material shader binds.
+ * List it in your bit's `requires` to get:
  *
- * - `screenUVFromWorld(worldPos)` projects a world position to a UV in a screen copy. The copies
- *   are pooled textures that can be larger than the view, so the UV is scaled onto the part the
- *   view fills (`uViewportUVScale`) and clamped to it. WGSL flips Y for its top-left texture origin;
- *   GLSL doesn't need to. Use it directly for an offset refraction tap or a depth `textureLoad`.
- * - `sampleScreenCopy(tex, [sampler,] worldPos, lod)` samples a colour copy there at mip `lod`,
- *   pulling the clamp in by half a texel of that mip so a blurred tap stays off the padding. WGSL
- *   takes a sampler; GLSL's `sampler2D` carries its own. Colour only: load depth with
- *   `textureLoad`.
+ * - `screenUVFromWorld(worldPos)`: the UV of a world position in a screen copy, for an offset
+ *   refraction tap or a depth `textureLoad`. A copy can be larger than the view, so the UV is scaled
+ *   and clamped to the part the view fills.
+ * - `sampleScreenCopy(tex, [sampler,] worldPos, lod)`: samples a colour copy there at mip `lod`,
+ *   keeping a blurred tap inside the view's part of the copy. WGSL takes a sampler and GLSL doesn't.
+ *   Colour only: load depth with `textureLoad`.
  * @category rendering
  * @advanced
  */

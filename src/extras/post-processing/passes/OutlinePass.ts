@@ -7,9 +7,6 @@ import { solidMeshDescriptor } from './solidMeshShader';
 
 /**
  * Constructor options for {@link OutlinePass}
- *
- * Every {@link MeshPassOptions} field except the ones the outline fixes: its `name` (materials opt in as
- * `outline`), its shader `descriptor`, and `textures`.
  * @example
  * ```ts
  * new OutlinePass({ width: 0.05, color: 0x1a0f33, stage: 'afterTransparent' });
@@ -17,12 +14,12 @@ import { solidMeshDescriptor } from './solidMeshShader';
  * @category extras:post-processing
  * @standard
  */
-export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'descriptor' | 'textures'> {
+export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'descriptor'> {
   /**
    * How far each vertex is pushed out along its normal, in the mesh's local units
    *
-   * Local units mean a scaled mesh gets a scaled outline. Where a mesh splits its normals at a
-   * hard edge, as a cube does, the pushed faces part and the outline has gaps at those edges.
+   * A scaled mesh gets a scaled outline. Where a mesh splits its normals at a hard edge, as a cube
+   * does, the outline has gaps at those edges.
    * @default 0.03
    * @example
    * ```ts
@@ -31,7 +28,7 @@ export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'desc
    */
   width?: number;
   /**
-   * Ink colour
+   * Outline colour
    * @default 0x000000
    * @example
    * ```ts
@@ -42,15 +39,11 @@ export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'desc
 }
 
 /**
- * Inverted-hull outline: redraws opted-in meshes as a slightly larger shell, showing only its
- * back faces
+ * Draws an ink outline around opted-in meshes, for a toon look
  *
- * The shell's front faces are culled, so only the inside of the shell draws, and the mesh itself
- * hides all of it except the rim around its silhouette. That rim is the outline.
- *
- * The view half of a toon look: add it to `View3D.passes`, and meshes join by opting into the
- * `outline` pass on their material (`passes: { outline: true }`). Skinned and morphed meshes
- * outline correctly because the shell is drawn through the engine's own vertex path.
+ * Each mesh is redrawn as a slightly larger shell showing only its back faces, which the mesh
+ * hides except for a rim around its silhouette. Add the pass to `View3D.passes`, and opt a mesh in
+ * with `passes: { outline: true }` on its material. Skinned and morphed meshes outline correctly.
  * @example
  * ```ts
  * new View3D({ passes: [new OutlinePass({ width: 0.05 })] });
@@ -61,10 +54,7 @@ export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'desc
  */
 export class OutlinePass extends MeshPass {
   /**
-   * Default {@link OutlinePassOptions} merged under every constructor call
-   *
-   * `new OutlinePass(opts)` resolves as `{ ...OutlinePass.defaultOptions, ...opts }`. Mutate to change defaults
-   * process-wide.
+   * Defaults for every new `OutlinePass`; an option passed as `undefined` keeps its default
    * @example
    * ```ts
    * OutlinePass.defaultOptions.width = 0.05;
@@ -89,7 +79,6 @@ export class OutlinePass extends MeshPass {
     super({
       ...rest,
       name: 'outline',
-      textures: false,
       descriptor: {
         shaderDescriptor: solidMeshDescriptor({ color, extrude: width }),
         state,

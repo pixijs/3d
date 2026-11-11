@@ -1,25 +1,17 @@
 import type { ShaderBit } from '../ShaderBit';
+import { resolveBindGroups } from '../ShaderBitTemplate';
 import type { ShaderBitTemplate } from '../ShaderBitTemplate';
-import { bindingType, isStorageType, RESOURCE_TYPES } from './parseBindingType';
+import { bindingFields, bindingType, isStorageType, isUniformBufferType, RESOURCE_TYPES } from './parseBindingType';
 
 interface GroupData {
-  hasUniforms: boolean;
   resources: Record<string, boolean>;
   storages: Record<string, boolean>;
+  uniformBuffers: Record<string, boolean>;
+  uniformGroups: Record<string, boolean>;
 }
 
 /**
- * Maps each group's binding indices to binding names, for WebGL
- *
- * Within a group, the uniform struct takes the first index, under the group's name. Textures and
- * samplers follow, then storage buffers, each in the order bits first declare them. A group the
- * template doesn't list, such as `material`, only adds struct fields, so it gets no indices.
- *
- * WebGPU assigns its indices in `buildWgslBindingMap`, and the two must agree;
- * `bindingParity.test.ts` checks that they do.
- * @param bits - Shader bits contributing bindings
- * @param template - The template whose `bindGroups` order defines group indices
- * @returns Record<groupIndex, Record<bindingIndex, uniformName>>
+ * Must assign the indices `buildWgslBindingMap` does, as `bindingParity.test.ts` checks
  * @internal
  */
 export function generateGroupMap(
@@ -28,11 +20,14 @@ export function generateGroupMap(
 ): Record<number, Record<number, string>> {
   const groupData: Record<string, GroupData> = Object.create(null);
 
-  for (const name of template.bindGroups) {
+  const groups = resolveBindGroups(template);
+
+  for (const { name } of groups) {
     groupData[name] = {
-      hasUniforms: false,
       resources: Object.create(null),
       storages: Object.create(null),
+      uniformBuffers: Object.create(null),
+      uniformGroups: Object.create(null),
     };
   }
 
@@ -43,14 +38,16 @@ export function generateGroupMap(
       const group = groupData[groupName];
       if (!group) continue;
 
-      for (const [name, spec] of Object.entries(bindings!)) {
+      for (const { name, spec, uniformGroup } of bindingFields(bindings!, groupName)) {
         const type = bindingType(spec);
         if (RESOURCE_TYPES.has(type)) {
           group.resources[name] = true;
         } else if (isStorageType(type)) {
           group.storages[name] = true;
+        } else if (isUniformBufferType(type)) {
+          group.uniformBuffers[name] = true;
         } else {
-          group.hasUniforms = true;
+          group.uniformGroups[uniformGroup] = true;
         }
       }
     }
@@ -58,18 +55,20 @@ export function generateGroupMap(
 
   const result: Record<number, Record<number, string>> = {};
 
-  template.bindGroups.forEach((groupName, groupIndex) => {
+  groups.forEach(({ name: groupName }, groupIndex) => {
     const group = groupData[groupName];
     const map: Record<number, string> = {};
     let bindingIndex = 0;
 
-    if (group.hasUniforms) {
-      map[bindingIndex++] = groupName;
-    }
+    if (group.uniformGroups[groupName]) map[bindingIndex++] = groupName;
 
     for (const name in group.resources) map[bindingIndex++] = name;
 
     for (const name in group.storages) map[bindingIndex++] = name;
+
+    for (const name in group.uniformBuffers) map[bindingIndex++] = name;
+
+    for (const name in group.uniformGroups) if (name !== groupName) map[bindingIndex++] = name;
 
     result[groupIndex] = map;
   });

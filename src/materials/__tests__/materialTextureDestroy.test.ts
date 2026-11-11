@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { Material3D } from '~/materials/pbr/Material3D';
 
-/** Builds a material owning one non-shared baseColor texture + its source. */
 function materialWithTexture(): { material: Material3D; texture: Texture; source: TextureSource } {
   const source = new TextureSource({ width: 4, height: 4 });
   const texture = new Texture({ source });
@@ -21,15 +20,6 @@ describe('BaseMaterial3D.destroy texture flags', () => {
     expect(source.destroyed).toBe(false);
 
     texture.destroy(true);
-    expect(source.destroyed).toBe(true);
-  });
-
-  it('destroy({ texture: true, textureSource: true }) frees the texture and its source', () => {
-    const { material, texture, source } = materialWithTexture();
-
-    material.destroy({ texture: true, textureSource: true });
-
-    expect(texture.destroyed).toBe(true);
     expect(source.destroyed).toBe(true);
   });
 

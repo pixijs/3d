@@ -9,21 +9,6 @@ import { Mesh3D } from '~/scene/Mesh3D';
 import { Sprite3D } from '~/scene/Sprite3D';
 import { View3D } from '~/scene/View3D';
 
-// The three billboard modes side by side, seen from an elevated off-axis camera
-// — the one angle that separates them. Spherical faces the lens square on,
-// cylindrical keeps its feet on the ground so it reads foreshortened, and 'none'
-// stays welded to world +Z and skews.
-//
-// The back row pins the two cases that would break silently: a feet-anchored
-// cylindrical sprite whose bottom edge must sit exactly on the ground plane, and
-// one under a rotated parent, which must spin around its tilted axis rather than
-// world up. Unlit flats throughout, so nothing depends on lighting.
-
-/**
- * A deliberately lopsided marker: bright top half, dark bottom half, and a
- * corner wedge in the image's top-left. Any flip or mirror in the quad's UVs or
- * winding shows up immediately.
- */
 function markerCanvas(top: string, bottom: string, wedge: string): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = 64;
@@ -52,7 +37,6 @@ function marker(top: string, bottom: string, wedge: string): Texture {
   return texture;
 }
 
-/** Checkerboard for the ground, so the sprites' contact points are readable. */
 function groundTexture(): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 8;
@@ -77,7 +61,6 @@ export const scene: TestScene = {
     view3d.camera.position.set(5.4, 5.0, 5.4);
     view3d.camera.lookAt({ x: 0, y: 0.7, z: 0 });
 
-    // Ground plane, so the feet-anchored sprite has something to stand on.
     const ground = new Mesh3D({
       geometry: new PlaneGeometry({ width: 7, height: 7 }),
       material: new FlatMaterial({ baseColorTexture: groundTexture() }),
@@ -85,7 +68,6 @@ export const scene: TestScene = {
     ground.rotation.x = -Math.PI / 2;
     view3d.root.addChild(ground);
 
-    // Solid depth reference between the two rows.
     const cube = new Mesh3D({
       geometry: new CubeGeometry({ width: 0.7, height: 0.7, depth: 0.7 }),
       material: new FlatMaterial({ baseColor: 0xe8e2d0 }),
@@ -93,7 +75,6 @@ export const scene: TestScene = {
     cube.position.set(0, 0.35, -1.8);
     view3d.root.addChild(cube);
 
-    // 64x96 px at 64 ppu → 1 x 1.5 world units.
     const place = (sprite: Sprite3D, x: number, y: number, z: number): Sprite3D => {
       sprite.position.set(x, y, z);
       view3d.root.addChild(sprite);
@@ -133,9 +114,6 @@ export const scene: TestScene = {
       1.2,
     );
 
-    // Feet on the ground: anchor.y = 1 puts the image's bottom edge on the
-    // node's origin, and cylindrical keeps it there from any camera angle.
-    // 'mask' routes it through the opaque pass — the foliage path.
     place(
       new Sprite3D({
         texture: marker('#ffbb44', '#8a5a10', '#ffffff'),
@@ -149,8 +127,6 @@ export const scene: TestScene = {
       -1.8,
     );
 
-    // Tilted parent: the spin axis follows the node's own up column, so this one
-    // leans while still turning toward the camera.
     const tilted = new Container3D();
     tilted.position.set(2.1, 0, -1.8);
     tilted.rotation.z = Math.PI / 7;

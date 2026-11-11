@@ -1,32 +1,14 @@
 import { Buffer, BufferUsage, createIndicesForQuads } from 'pixi.js';
 
-/**
- * Vertices one particle occupies: the four corners of its quad
- * @internal
- */
+/** @internal */
 export const VERTS_PER_PARTICLE = 4;
 
-/**
- * Indices one particle occupies: two triangles
- * @internal
- */
+/** @internal */
 export const INDICES_PER_PARTICLE = 6;
 
-/**
- * Largest capacity a 16-bit index buffer can address (65536 / 4 verts)
- * @internal
- */
+/** @internal */
 export const MAX_U16_CAPACITY = 16384;
 
-/**
- * The static `aUV` buffer, one corner id per vertex in the order {@link cornerIds} writes
- *
- * The particle bit reads the id as a `[-0.5, 0.5]` corner offset and the material
- * reads it as the sprite's UV. `unorm8x2` holds an exact 0 and 1 in half the bytes
- * two floats take, once its stride is padded to the 4 bytes WebGPU requires.
- * @param vertexCount - Vertices to cover, four per quad
- * @internal
- */
 function buildUvBuffer(vertexCount: number): Buffer {
   return new Buffer({
     data: cornerIds(vertexCount),
@@ -37,13 +19,8 @@ function buildUvBuffer(vertexCount: number): Buffer {
 }
 
 /**
- * The corner ids for `vertexCount` vertices, four to a quad: `(0, 1)`, `(1, 1)`, `(1, 0)`, `(0, 0)`
- *
- * Each id takes 4 bytes, `u` and `v` then padding, so only the 255s need writing;
- * corner 3 is all zero. The order runs round the quad's edge, so
- * `createIndicesForQuads`' `0-1-2 / 0-2-3` split covers it, and since the particle
- * bit puts `v = 0` on the top edge it winds counter-clockwise on screen.
- * @param vertexCount - Vertices to cover, four per quad
+ * Corners `(0, 1)`, `(1, 1)`, `(1, 0)`, `(0, 0)` round the quad's edge, as `createIndicesForQuads`
+ * splits it, padded to the 4-byte stride WebGPU requires, which `ParticleContainer3D` gives `aUV`
  */
 function cornerIds(vertexCount: number): Uint8Array {
   const data = new Uint8Array(vertexCount * 4);
@@ -60,65 +37,37 @@ function cornerIds(vertexCount: number): Uint8Array {
   return data;
 }
 
-/**
- * Quad indices via pixi's own generator, the one its 2D `ParticleContainer`
- * uses
- *
- * The buffer is supplied here because pixi keys its u16/u32 switch on index
- * count; the real u16 ceiling is the max vertex index, at 16384 quads.
- * @param capacity - Quads to cover; past `MAX_U16_CAPACITY` the indices are 32-bit
- * @internal
- */
+/** Passes pixi its own array, since pixi moves to 32-bit indices by index count, not by the highest index */
 function buildIndices(capacity: number): Uint16Array | Uint32Array {
   const indices =
     capacity <= MAX_U16_CAPACITY
       ? new Uint16Array(capacity * INDICES_PER_PARTICLE)
       : new Uint32Array(capacity * INDICES_PER_PARTICLE);
 
-  return createIndicesForQuads(capacity, indices) as Uint16Array | Uint32Array;
+  return createIndicesForQuads(capacity, indices);
 }
 
 /**
- * A corner buffer and an index buffer every container draws from
- *
- * The corner ids repeat for every quad and the indices are the same six per
- * quad stepped by four, so one pair covering the largest capacity seen serves
- * everyone, each geometry drawing its own prefix through `indexCount`.
+ * The corner and index buffers every container draws a prefix of, through its geometry's `indexCount`
  * @internal
  */
 export interface SharedQuadBuffers {
-  /** The per-corner `aUV` ids, four per quad */
   readonly corners: Buffer;
-  /** Six indices per quad, `u16` up to `MAX_U16_CAPACITY` quads and `u32` past it */
   readonly indices: Buffer;
-  /** Quads the pair covers */
   capacity: number;
-  /** Live containers drawing from the pair */
   users: number;
 }
 
-/** Quads the first pair covers; a bigger request doubles from there */
 const MIN_SHARED_QUADS = 256;
 
-/** One pair per index width, so a small container never pays for 32-bit indices */
+/** One pair per index width, so a small container never draws with 32-bit indices */
 let shared16: SharedQuadBuffers | null = null;
 let shared32: SharedQuadBuffers | null = null;
 
 /**
- * The shared pair covering at least `capacity` quads, grown in place when the
- * current one is too small
+ * The shared pair covering at least `capacity` quads, grown in place when too small
  *
- * Growth reallocates both buffers, which every container drawing from them
- * picks up on its next bind, and the pair never shrinks. It lives as long as
- * a container holds it: `acquireQuadBuffers` counts a container in,
- * `releaseQuadBuffers` counts it out and destroys the pair on the last one,
- * and the next acquire builds a fresh pair.
- *
- * Plain pixi `Buffer`s rather than `Buffer3D`: every draw build that records a
- * container captures them like any other geometry buffer, so a reallocation's
- * `change` event re-records the bundles and VAOs that baked the old ones, and
- * pixi's GC may reclaim the pair while no container draws.
- * @param capacity - Fewest quads the pair must cover
+ * Plain pixi `Buffer`s, so a growth's `change` event re-records the draws that baked the old ones.
  * @internal
  */
 export function ensureQuadBuffers(capacity: number): SharedQuadBuffers {
@@ -160,9 +109,7 @@ export function ensureQuadBuffers(capacity: number): SharedQuadBuffers {
 }
 
 /**
- * The shared pair covering at least `capacity` quads, held by one more
- * container until its `releaseQuadBuffers`
- * @param capacity - Fewest quads the pair must cover
+ * {@link ensureQuadBuffers}, counting one more user until its {@link releaseQuadBuffers}
  * @internal
  */
 export function acquireQuadBuffers(capacity: number): SharedQuadBuffers {
@@ -174,9 +121,7 @@ export function acquireQuadBuffers(capacity: number): SharedQuadBuffers {
 }
 
 /**
- * Lets go of a pair taken with `acquireQuadBuffers`, destroying it once no
- * container holds it
- * @param pair - The pair `acquireQuadBuffers` returned
+ * Lets go of a pair taken with {@link acquireQuadBuffers}, destroying it once no container holds it
  * @internal
  */
 export function releaseQuadBuffers(pair: SharedQuadBuffers): void {

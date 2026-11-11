@@ -15,8 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 const BETA_REMOTE = 'https://github.com/pixijs-userland/pixi-3d-beta.git';
 
-/** Paths dropped from the mirror: our CI, our hooks, and agent instructions. */
-const EXCLUDE = ['.github', '.husky', '.claude', '.vscode', 'AGENTS.md', 'CLAUDE.md'];
+/** Paths dropped from the mirror: our CI, our hooks, and contributor instructions. */
+const EXCLUDE = ['.github', '.husky', '.claude', '.vscode', 'AGENTS.md', 'CLAUDE.md', 'CODING_STANDARDS.md'];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const overlay = path.join(here, 'files');

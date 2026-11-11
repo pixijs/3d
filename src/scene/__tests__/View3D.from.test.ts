@@ -10,7 +10,6 @@ import type { Mesh3D } from '~/scene/Mesh3D';
 import { Model3D } from '~/scene/Model3D';
 import { View3D } from '~/scene/View3D';
 
-/** The four corners of the triangle mesh's bounds, which span 0 to 1 on x and y in the xy plane */
 const TRIANGLE_BOUNDS_CORNERS = [
   { x: 0, y: 0, z: 0 },
   { x: 1, y: 0, z: 0 },
@@ -23,7 +22,6 @@ interface SourceOptions {
   light?: boolean;
 }
 
-/** Two scenes: 'A' holds the triangle mesh (plus an optional camera and light node), 'B' is empty */
 function createSource({ camera, light }: SourceOptions = {}): Scene3DSource {
   const children = [0];
 
@@ -40,7 +38,7 @@ function createSource({ camera, light }: SourceOptions = {}): Scene3DSource {
       { label: 'Cam', children: [], camera: 0, position: new Float32Array([0, 0, 5]) },
       { label: 'Lamp', children: [], light: 0 },
     ],
-    cameras: [{ fov: Math.PI / 2, near: 0.5, far: 50, mode: 0 }],
+    cameras: [{ fov: 90, near: 0.5, far: 50, mode: 0 }],
     lights: [{ type: 1, intensity: 2 }],
   });
 
@@ -53,11 +51,13 @@ function createSource({ camera, light }: SourceOptions = {}): Scene3DSource {
 describe('View3D.from', () => {
   it('makes a model of the source the root and forwards view and model options', () => {
     const source = createSource();
+    const paint = new Material3D();
     const view = View3D.from(source, {
       width: 300,
       height: 200,
       toneMapping: 'reinhard',
       receiveShadow: false,
+      materials: [paint],
       label: 'hero',
     });
 
@@ -68,6 +68,7 @@ describe('View3D.from', () => {
     expect(view.toneMapping).toBe('reinhard');
     expect(view.label).toBe('hero');
     expect((view.root.children[0] as Mesh3D).receiveShadow).toBe(false);
+    expect((view.root.children[0] as Mesh3D).material).toBe(paint);
   });
 
   it('picks the named scene', () => {

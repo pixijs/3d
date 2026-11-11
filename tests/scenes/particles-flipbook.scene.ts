@@ -2,16 +2,11 @@ import type { TestScene } from '@test-utils';
 
 import { ParticleSystem3D } from '~/extras/particles/ParticleSystem3D';
 import type { ParticleFrameMode } from '~/extras/particles/ParticleSystem3D';
+import { seededRandom } from '~/math/utils/seededRandom';
 import { View3D } from '~/scene/View3D';
 
 import { ringSheetTexture } from './helpers/particleTextures';
 
-// One column per frame mode over an eight-frame sheet of rings that grow and
-// thin, laid out four to a row so the grid modes have to find the second row.
-// Each column holds six particles, spawned a fixed step apart, so age
-// increases up the column and the mode's effect reads off the picture:
-// 'random' scatters, 'animate' walks at its own frame rate, and 'overLife'
-// stretches the whole sheet across the lifetime.
 const MODES: { frameMode: ParticleFrameMode; life: number; color: number }[] = [
   { frameMode: 'random', life: 4, color: 0xffaa44 },
   { frameMode: 'animate', life: 4, color: 0x66ddff },
@@ -38,7 +33,7 @@ export const scene: TestScene = {
         frameMode: mode.frameMode,
         frameRate: 2,
         capacity: 8,
-        seed: `flipbook-${mode.frameMode}`,
+        createRandom: () => seededRandom(`flipbook-${mode.frameMode}`),
         autoUpdate: false,
         emitRate: 0,
         life: mode.life,

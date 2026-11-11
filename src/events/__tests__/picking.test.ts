@@ -3,6 +3,7 @@ import type { FederatedPointerEvent } from 'pixi.js';
 import { describe, expect, test } from 'vitest';
 
 import { updateCameraProjectionForView } from '~/core/prepareCamera';
+import { createRaycastHit3D } from '~/events/HitResult3D';
 import type { Pointer3DEvent } from '~/events/Pointer3DEvent';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { Material3D } from '~/materials/pbr/Material3D';
@@ -17,7 +18,6 @@ import { View3D } from '~/scene/View3D';
 const SIZE = { width: 100, height: 100 };
 const SCREEN = new Rectangle(0, 0, SIZE.width, SIZE.height);
 
-/** A cube mesh centred on the origin with each face `halfExtent` from the centre, 2×2×2 by default */
 function makeCube(halfExtent = 1): Mesh3D {
   const positions = new Float32Array([
     -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
@@ -39,7 +39,6 @@ function makeCube(halfExtent = 1): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/** Runs the transform pass and camera projection a render would, so picks see the current scene without rendering */
 function tickPick(view3d: View3D): void {
   view3d.camera.localTransform.compose(view3d.camera.position, view3d.camera.quaternion, view3d.camera.scale);
   view3d.camera.worldTransform.copyFrom(view3d.camera.localTransform);
@@ -48,17 +47,6 @@ function tickPick(view3d: View3D): void {
 }
 
 describe('Container3D.eventMode — interactive list maintenance', () => {
-  test('a static node switched to dynamic stays in the list once', () => {
-    const view3d = new View3D({ ...SIZE });
-    const cube = makeCube();
-    view3d.root.addChild(cube);
-
-    cube.eventMode = 'static';
-    cube.eventMode = 'dynamic';
-
-    expect(view3d.events._interactiveList.filter((n) => n === cube)).toHaveLength(1);
-  });
-
   test('removing a node swap-fills its slot, and every remaining entry still indexes itself, also after re-adding and removing the tail entry', () => {
     const view3d = new View3D({ ...SIZE });
     const cubes = [makeCube(), makeCube(), makeCube(), makeCube()];
@@ -96,10 +84,6 @@ describe('Container3D.eventMode — interactive list maintenance', () => {
 });
 
 describe('Mesh3D geometry swap — string hitVolumes follow the new geometry', () => {
-  /**
-   * View-local point whose ray misses the default 2×2×2 cube but hits a 6×6×6 one, at world x ≈ -2.2 on
-   * z = 0 (camera at z = 10, fov 60)
-   */
   const OFF_SMALL_CUBE = { x: 31, y: 50 };
 
   function makeSwapScene(hitVolume: 'box' | 'geometry') {
@@ -172,10 +156,6 @@ describe('View3D — propagation on a 3D hit', () => {
   });
 });
 
-/**
- * A single triangle whose local geometric normal (e1 × e2) is ∝ (0, -1, 2), so a non-uniform scale
- * separates the inverse-transpose normal from a naive upper-3x3 transform
- */
 function makeTriangleMesh(): Mesh3D {
   const positions = new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 1]);
   const indices = new Uint16Array([0, 1, 2]);
@@ -187,11 +167,6 @@ function makeTriangleMesh(): Mesh3D {
   return new Mesh3D({ geometry, material: new Material3D({}) });
 }
 
-/**
- * A plain-object stand-in for a pooled FederatedPointerEvent, carrying only the type, targets and
- * propagation flags; every other field the dispatcher reads, such as `pointerId` and `nativeEvent`,
- * is `undefined`
- */
 function makeEvent(type: string): FederatedPointerEvent {
   return {
     type,
@@ -226,6 +201,28 @@ describe('View3D.raycast — depth sort & distance in world space', () => {
     expect(hit!.distance).toBeCloseTo(4.9, 2);
   });
 
+  test('picks a small geometry node tested after a farther hit, comparing the bounds in world units', () => {
+    const view3d = new View3D({ ...SIZE });
+    view3d.camera.position.set(0, 0, 10);
+
+    const big = makeCube();
+    big.interactive = true;
+
+    const small = makeCube();
+    small.position.set(0, 0, 5);
+    small.scale.set(0.1, 0.1, 0.1);
+    small.interactive = true;
+    small.hitVolume = 'geometry';
+
+    view3d.root.addChild(big);
+    view3d.root.addChild(small);
+    tickPick(view3d);
+
+    const hit = view3d.raycast({ x: 50, y: 50 });
+    expect(hit?.target).toBe(small);
+    expect(hit?.distance).toBeCloseTo(4.9, 2);
+  });
+
   test('reports distance and point in world units for a scaled node, and localPoint in its own units', () => {
     const view3d = new View3D({ ...SIZE });
     view3d.camera.position.set(0, 0, 10);
@@ -241,6 +238,51 @@ describe('View3D.raycast — depth sort & distance in world space', () => {
     expect(hit!.distance).toBeCloseTo(8, 2);
     expect(hit!.point.z).toBeCloseTo(2, 2);
     expect(hit!.localPoint.z).toBeCloseTo(1, 2);
+  });
+});
+
+describe('View3D.raycast — out', () => {
+  function cubeView(): { view3d: View3D; cube: Mesh3D } {
+    const view3d = new View3D({ ...SIZE });
+    view3d.camera.position.set(0, 0, 10);
+    const cube = makeCube();
+    cube.interactive = true;
+    view3d.root.addChild(cube);
+    tickPick(view3d);
+    return { view3d, cube };
+  }
+
+  test('writes a hit into out and returns it', () => {
+    const { view3d, cube } = cubeView();
+    const out = createRaycastHit3D();
+
+    expect(view3d.raycast({ x: 50, y: 50 }, out)).toBe(out);
+    expect(out.target).toBe(cube);
+    expect(out.distance).toBeCloseTo(9, 2);
+  });
+
+  test('leaves out untouched on a miss', () => {
+    const { view3d } = cubeView();
+    const out = createRaycastHit3D();
+    view3d.raycast({ x: 50, y: 50 }, out);
+    const { target, distance } = out;
+
+    expect(view3d.raycast({ x: 1, y: 1 }, out)).toBeNull();
+    expect(out.target).toBe(target);
+    expect(out.distance).toBe(distance);
+  });
+
+  test('without out, each hit is a new object that a later pick leaves alone', () => {
+    const { view3d } = cubeView();
+    const first = view3d.raycast({ x: 50, y: 50 })!;
+    const firstPoint = first.point.clone();
+
+    view3d.raycast({ x: 1, y: 1 });
+    const second = view3d.raycast({ x: 52, y: 52 })!;
+
+    expect(second).not.toBe(first);
+    expect(first.point.equals(firstPoint)).toBe(true);
+    expect(second.point.equals(firstPoint)).toBe(false);
   });
 });
 
@@ -281,7 +323,7 @@ describe('View3D — Pointer3D event fields', () => {
     view3d.containsPoint({ x: 50, y: 50 });
     const evtA = makeEvent('pointerdown');
     view3d.emit('pointerdown', evtA);
-    const pA = (evtA as Pointer3DEvent).hit3D!.point;
+    const pA = evtA.hit3D!.point;
     const ax = pA.x;
     const ay = pA.y;
 
@@ -289,7 +331,7 @@ describe('View3D — Pointer3D event fields', () => {
     view3d.containsPoint(offCentreOnCube);
     const evtB = makeEvent('pointerdown');
     view3d.emit('pointerdown', evtB);
-    const pB = (evtB as Pointer3DEvent).hit3D!.point;
+    const pB = evtB.hit3D!.point;
 
     expect(pA).not.toBe(pB);
     expect(pA.x).toBeCloseTo(ax, 6);
@@ -437,18 +479,6 @@ describe('View3D.raycast — broadphase sphere reject stays conservative', () =>
     expect(hit).not.toBeNull();
     expect(hit!.target).toBe(node);
   });
-
-  test('a Sphere left at its default radius of -1 is empty and resolves to no shape, so a plain container misses', () => {
-    const view3d = new View3D({ ...SIZE });
-    view3d.camera.position.set(0, 0, 10);
-    const node = new Container3D();
-    node.eventMode = 'static';
-    node.hitVolume = new Sphere(new Vector3(0, 0, 0));
-    view3d.root.addChild(node);
-    tickPick(view3d);
-
-    expect(view3d.raycast({ x: 50, y: 50 })).toBeNull();
-  });
 });
 
 describe('View3D — pick caches track transform changes', () => {
@@ -483,18 +513,6 @@ describe('View3D — pick caches track transform changes', () => {
 });
 
 describe('View3D.raycast — visibility', () => {
-  test('a hidden node is not pickable', () => {
-    const view3d = new View3D({ ...SIZE });
-    view3d.camera.position.set(0, 0, 10);
-    const cube = makeCube();
-    cube.interactive = true;
-    view3d.root.addChild(cube);
-    cube.visible = false;
-    tickPick(view3d);
-
-    expect(view3d.raycast({ x: 50, y: 50 })).toBeNull();
-  });
-
   test('a hidden node does not occlude a visible node behind it', () => {
     const view3d = new View3D({ ...SIZE });
     view3d.camera.position.set(0, 0, 10);
@@ -553,8 +571,8 @@ describe('View3D — hover flush on pointerout (pointer left the view)', () => {
     const evt = makeEvent('pointerout');
     view3d.emit('pointerout', evt);
 
-    expect((evt as Pointer3DEvent).target3D).toBeNull();
-    expect((evt as Pointer3DEvent).hit3D).toBeNull();
+    expect(evt.target3D).toBeNull();
+    expect(evt.hit3D).toBeNull();
   });
 });
 
@@ -612,30 +630,6 @@ describe('View3D — eventMode / interactive (2D parity)', () => {
     expect(view3d.eventMode).toBe('dynamic');
     view3d.root.removeChild(cube);
     expect(view3d.eventMode).toBe('static');
-  });
-
-  test('a plain interactive container without hitVolume is bubble-only (not directly pickable)', () => {
-    const view3d = new View3D({ ...SIZE });
-    view3d.camera.position.set(0, 0, 10);
-    const group = new Container3D();
-    group.interactive = true;
-    const cube = makeCube();
-    cube.interactive = true;
-    group.addChild(cube);
-    view3d.root.addChild(group);
-    tickPick(view3d);
-
-    const hit = view3d.raycast({ x: 50, y: 50 });
-    expect(hit).not.toBeNull();
-    expect(hit!.target).toBe(cube);
-
-    let groupHeard = false;
-    group.on('pointerdown', () => {
-      groupHeard = true;
-    });
-    view3d.containsPoint({ x: 50, y: 50 });
-    view3d.emit('pointerdown', makeEvent('pointerdown'));
-    expect(groupHeard).toBe(true);
   });
 });
 

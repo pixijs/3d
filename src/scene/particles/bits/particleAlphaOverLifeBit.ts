@@ -1,11 +1,10 @@
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * Ramps a particle's opacity from its spawn value to `aAlphaEnd` across its
- * life; the standard fade-out when the end is zero
+ * Ramps a particle's opacity from its spawn value to `aAlphaEnd` across its life; set the end to 0
+ * to fade out
  *
- * Reads `particleProgress` from {@link particleLifetimeBit} and writes the
- * alpha channel of the `particleColor` local the particle bit seeds.
+ * Compose it after {@link particleLifetimeBit}.
  * @category scene
  * @advanced
  */

@@ -5,11 +5,11 @@ import { renderGltfModel } from './frameModel';
 
 const URL = model('gltf.PointsLinesTrianglesTest');
 
-// Skipped: WebGL draws no points or lines; point and line topologies turn the whole WebGPU frame black.
 export const scene: TestScene = {
   assets: [URL],
   app: { backgroundColor: 0x191919 },
   skip: true,
+  skipReason: 'WebGL draws no points or lines; point and line topologies turn the whole WebGPU frame black',
   create: async (app) => {
     await renderGltfModel(app, { url: URL });
   },

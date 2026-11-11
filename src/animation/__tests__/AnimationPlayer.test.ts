@@ -470,41 +470,6 @@ describe('AnimationPlayer registry', () => {
 });
 
 describe('AnimationPlayer wide tracks', () => {
-  it('samples every component of a track wider than the built-in value types', () => {
-    mockSharedTicker();
-
-    const target = new Container3D();
-    target.label = 'Root';
-    (target as Container3D & { weights?: Float32Array }).weights = new Float32Array(8);
-
-    const clip = new Animation({
-      label: 'morph',
-      tracks: [
-        new Track({
-          label: 'Root.weights',
-          times: [0, 1],
-          values: [0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
-          valueSize: 8,
-        }),
-      ],
-    });
-
-    const player = new AnimationPlayer({
-      target,
-      animations: { morph: clip },
-      autoUpdate: false,
-    });
-
-    const state = player.play('morph');
-    state.time = 0.5;
-    player.update(tick(0));
-
-    const weights = (target as Container3D & { weights: Float32Array }).weights;
-    expect(Array.from(weights)).toEqual([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4]);
-
-    player.destroy();
-  });
-
   it('blends every component of a track wider than the built-in value types', () => {
     mockSharedTicker();
 

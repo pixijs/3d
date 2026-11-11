@@ -7,7 +7,6 @@ import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
-// Static snapshot of the `live-2d-on-cube` example: a 2D scene rendered to a ContainerTexture, on a cube.
 export const scene: TestScene = {
   app: {
     backgroundColor: 0x0c0e16,
@@ -50,7 +49,6 @@ export const scene: TestScene = {
 
     view3d.camera.position.set(0, 0, 4);
 
-    // Rendered manually, before the scene draws.
     texture.render(app.renderer);
   },
 };

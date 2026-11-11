@@ -2,10 +2,7 @@ import type { ColorSource } from 'pixi.js';
 
 import type { PointData3D } from '../../../math/vector/PointData3D';
 
-/**
- * World-up `(0, 1, 0)`, the default for {@link Hemisphere.up}
- * @internal
- */
+/** @internal */
 export const HEMISPHERE_DEFAULT_UP = { x: 0, y: 1, z: 0 } as const;
 
 /**
@@ -13,20 +10,15 @@ export const HEMISPHERE_DEFAULT_UP = { x: 0, y: 1, z: 0 } as const;
  * background behind it
  *
  * Assign one to {@link View3D.environment}. A surface facing `up` takes the sky colour, one facing
- * the other way takes the ground colour, and anything between blends the two:
- * `mix(groundColor, skyColor, dot(normal, up) * 0.5 + 0.5) * intensity`. Reflections read the
- * same gradient, so a white hemisphere lights a surface the same as an all-white cube map.
+ * the other way takes the ground colour, and anything between blends the two. Reflections read the
+ * same gradient. It needs no cube map, so it's cheaper than one, especially on mobile. It casts no
+ * shadows.
  *
- * It costs a few instructions per pixel and no texture reads, so it suits mobile, where sampling
- * a cube map costs more. It casts no shadows.
+ * Assigned to {@link View3D#background}, it draws the same gradient behind the scene. Use one
+ * object for both and the sky matches the light the scene receives.
  *
- * Assigned to {@link View3D#background}, it draws the same gradient behind the scene, with the
- * view direction in place of the normal. Use one object for both and the sky matches the light
- * the scene receives.
- *
- * It's a plain object, not a class: pass an object literal. The view reads its fields every
- * frame and only parses a colour that changed, so changing one is a property write, cheap enough
- * for a sunset or a biome transition.
+ * It's a plain object: pass an object literal. The view reads its fields every frame, so a
+ * colour can be animated, for a sunset say.
  * @example
  * ```ts
  * new View3D({

@@ -4,26 +4,17 @@ import { writeLinearRgb } from '../materials/BaseMaterial3D';
 import { HEMISPHERE_DEFAULT_UP } from '../scene/lights/environment/Hemisphere';
 import type { Hemisphere } from '../scene/lights/environment/Hemisphere';
 
-/**
- * Scratch for parsing the sky colour
- *
- * Each colour gets its own: `Color` skips the parse when its source equals the last one it saw,
- * and a single instance alternating between sky and ground would never match.
- */
+/** One scratch per colour, since `Color` skips the parse when its source repeats */
 const skyScratch = new Color();
-/** Scratch for parsing the ground colour; see `skyScratch` */
 const groundScratch = new Color();
 
 /**
- * Writes a hemisphere's three shader inputs: linear sky colour, linear ground colour, unit up axis
- *
- * Decodes the colours from sRGB and scales them by `intensity`. Normalises `up`, and writes zeros
- * for a zero-length one. Every reader uses this one conversion, so the lighting systems' global
- * `uHemisphere*` uniforms and the background pass's gradient agree on the same object.
- * @param hemisphere - The hemisphere to read
- * @param sky - Receives the linear sky colour
- * @param ground - Receives the linear ground colour
- * @param up - Receives the unit up axis
+ * Writes a hemisphere's linear sky and ground colours, scaled by its intensity, and its unit up axis; every
+ * reader goes through this, so the lighting and the background agree
+ * @param hemisphere - The hemisphere.
+ * @param sky - Receives the sky colour.
+ * @param ground - Receives the ground colour.
+ * @param up - Receives the up axis, zeros when it has no length.
  * @internal
  */
 export function writeHemisphere(
