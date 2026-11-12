@@ -3,6 +3,7 @@ import type { Application, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Mesh3DData } from '~/core/batcher/Mesh3DData';
+import { MAX_LIGHTS } from '~/core/lightLimits';
 import type { ForwardRenderPass } from '~/core/render-passes/ForwardRenderPass';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
@@ -14,7 +15,7 @@ import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { PointLight } from '~/scene/lights/PointLight';
 import { Mesh3D } from '~/scene/Mesh3D';
-import { MAX_LIGHTS, View3D } from '~/scene/View3D';
+import { View3D } from '~/scene/View3D';
 
 const RENDERERS = ['webgl', 'webgpu'] as const;
 

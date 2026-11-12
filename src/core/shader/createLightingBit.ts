@@ -1,4 +1,4 @@
-import { MAX_LIGHTS } from '../../scene/View3D';
+import { MAX_LIGHTS } from '../lightLimits';
 import { LIGHT_DEPTH_BINS, LIGHT_TILES_X, LIGHT_TILES_Y } from '../LightTiles';
 import type { ShaderBit } from './ShaderBit';
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { FLOATS_PER_LIGHT } from '~/core/lightLimits';
 import {
   binLightTiles,
   LIGHT_DEPTH_BINS,
@@ -13,7 +14,7 @@ import type { RenderSession } from '~/core/render-passes/RenderSession';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 import { PointLight } from '~/scene/lights/PointLight';
 import { updateView3DTransforms } from '~/scene/utils/updateView3DTransforms';
-import { FLOATS_PER_LIGHT, View3D } from '~/scene/View3D';
+import { View3D } from '~/scene/View3D';
 
 const TILE_COUNT = LIGHT_TILES_X * LIGHT_TILES_Y;
 const LIGHT_POINT = 1;

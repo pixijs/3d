@@ -1,6 +1,6 @@
 import type { Matrix4 } from '../math/matrix/Matrix4';
 import type { TypedFixedArray } from '../math/utils/misc';
-import { FLOATS_PER_LIGHT } from '../scene/View3D';
+import { FLOATS_PER_LIGHT } from './lightLimits';
 import type { ReadonlyRect, RenderSession } from './render-passes/RenderSession';
 
 /** @internal */
@@ -40,7 +40,7 @@ function writeGridPlanes(e: TypedFixedArray<16>, axis: number, lines: number, of
 }
 
 /**
- * Bins lights into screen tiles and depth intervals; light `i` is bit `i`, so `MAX_LIGHTS` in `View3D.ts` stops at 32
+ * Bins lights into screen tiles and depth intervals; light `i` is bit `i`, so `MAX_LIGHTS` in `lightLimits.ts` stops at 32
  *
  * Tests every grid line, as a sphere crossing the camera plane breaks their order, and pads bins for float32 rounding.
  * @param out - Receives the tile masks, tile `(x, y)` at `y * LIGHT_TILES_X + x`.

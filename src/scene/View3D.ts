@@ -16,6 +16,7 @@ import { Mesh3DBatch } from '../core/batcher/Mesh3DBatch';
 import type { Mesh3DData } from '../core/batcher/Mesh3DData';
 import { BonePit } from '../core/buffers/BonePit';
 import { LightDataList } from '../core/LightDataList';
+import { MAX_LIGHTS } from '../core/lightLimits';
 import type { RenderGraph } from '../core/render-graph/RenderGraph';
 import { RenderPassBit } from '../core/render-passes/RenderPass';
 import type { RenderPass } from '../core/render-passes/RenderPass';
@@ -71,22 +72,6 @@ declare global {
     interface View3DOptions {}
   }
 }
-
-/**
- * Most lights a view draws at once
- *
- * Ambient lights don't count. Past the limit, the visible lights last in {@link View3D#lights}
- * are left out. It can't exceed 32, the bits of the light mask in `LightTiles.ts`.
- * @category scene
- * @advanced
- */
-export const MAX_LIGHTS = 32;
-
-/**
- * Floats per light slot in `LightDataList`: four `vec4`s, as the `MAX_LIGHTS * 4` size of `uLightData` assumes
- * @internal
- */
-export const FLOATS_PER_LIGHT = 16;
 
 /**
  * The tone curve and display encode a view applies to what it draws; see {@link View3D#toneMapping}
