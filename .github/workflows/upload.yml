@@ -1,12 +1,13 @@
 name: Upload (S3)
 
 # Mirrors `.s3_uploads/` (the CDN bundle + API docs, see `npm run dist`) to S3:
-# a manual run lands in s3://<bucket>/<branch>/, a published release in
-# s3://<bucket>/<tag>/, and a non-prerelease also refreshes
-# s3://<bucket>/release/. Branch pushes don't upload, to save CI minutes; run it
-# from the Actions tab for a branch that needs one. Without the AWS secrets it
-# only builds.
+# a push to main lands in s3://<bucket>/main/, a manual run in
+# s3://<bucket>/<branch>/, a published release in s3://<bucket>/<tag>/, and a
+# non-prerelease also refreshes s3://<bucket>/release/. Other branches upload
+# only when run from the Actions tab. Without the AWS secrets it only builds.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   release:
     types: [published]
@@ -36,7 +37,7 @@ jobs:
       # region straight out of the step environment. Destinations go through env
       # vars rather than `${{ }}` interpolation so a ref name can't inject shell.
       - name: Deploy Branch
-        if: github.event_name == 'workflow_dispatch' && env.HAS_AWS == 'true'
+        if: github.event_name != 'release' && env.HAS_AWS == 'true'
         run: |
           aws s3 sync .s3_uploads "s3://$AWS_S3_BUCKET/$DEST_DIR" \
             --no-progress --acl public-read --follow-symlinks --delete \
