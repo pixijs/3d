@@ -37,7 +37,7 @@ body:
         - [StackBlitz](https://stackblitz.com/edit/pixijs-v8)
         - [JSFiddle](https://jsfiddle.net/yavg3stL/)
 
-        **Keep it minimal:** Include only the essential code needed to reproduce the bug. Check our [Bug Reproduction Guidelines](https://github.com/pixijs/3d/tree/main/.github/bug-repro-guidelines.md) for best practices.
+        **Keep it minimal:** Include only the essential code needed to reproduce the bug. Check our [Bug Reproduction Guidelines](https://github.com/pixijs/3d/tree/main/.github/bug-repo-guidelines.md) for best practices.
 
         ⚠️ **Important:** Issues without a valid reproduction link will be closed. Please don't submit placeholder or unrelated links.
       placeholder: Reproduction Link
