@@ -39,6 +39,7 @@ export * from './ibl/brdfLutWgslTemplate';
 export * from './ibl/generateBrdfLut';
 export * from './ibl/generateIblSpecialCubemap';
 export * from './LightDataList';
+export * from './lightLimits';
 export * from './LightTiles';
 export * from './prepareCamera';
 export * from './render-graph/assertColorAttachmentLimits';

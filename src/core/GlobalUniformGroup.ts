@@ -1,7 +1,7 @@
 import { UniformGroup } from 'pixi.js';
 import type { UniformData } from 'pixi.js';
 
-import { MAX_LIGHTS } from '../scene/View3D';
+import { MAX_LIGHTS } from './lightLimits';
 import { MAX_SHADOW_SLOTS } from './render-passes/shadow/shadowPassUtils';
 
 /**

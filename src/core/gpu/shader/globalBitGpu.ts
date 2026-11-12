@@ -1,11 +1,11 @@
 import { BindGroup, Texture, TextureStyle } from 'pixi.js';
 import type { WebGPURenderer } from 'pixi.js';
 
-import { MAX_LIGHTS } from '../../../scene/View3D';
 import type { View3D } from '../../../scene/View3D';
 import { View3DGlobalData } from '../../../scene/View3DGlobalData';
 import { EMPTY_BUFFER_RESOURCE } from '../../buffers/emptyBufferResource';
 import { createGlobalUniformGroup } from '../../GlobalUniformGroup';
+import { MAX_LIGHTS } from '../../lightLimits';
 import { MAX_SHADOW_SLOTS } from '../../render-passes/shadow/shadowPassUtils';
 import {
   RenderableStruct,

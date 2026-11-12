@@ -1,10 +1,10 @@
 import { BindGroup, Texture } from 'pixi.js';
 import type { UniformData, WebGLRenderer } from 'pixi.js';
 
-import { MAX_LIGHTS } from '../../../scene/View3D';
 import type { View3D } from '../../../scene/View3D';
 import { View3DGlobalData } from '../../../scene/View3DGlobalData';
 import { createGlobalUniformGroup } from '../../GlobalUniformGroup';
+import { MAX_LIGHTS } from '../../lightLimits';
 import { MAX_SHADOW_SLOTS } from '../../render-passes/shadow/shadowPassUtils';
 import { LightStructGl, ShadowDataStructGl } from '../../shader/bits/shaderStructs';
 import type { ShaderBit } from '../../shader/ShaderBit';

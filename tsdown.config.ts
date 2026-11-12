@@ -26,57 +26,28 @@ const config: UserConfig = {
       // (and the global PixiMixins augmentations they carry) through `exports`.
       // The dts-less second build pass would otherwise regenerate "." without them.
       '.': {
-        import: {
-          types: './dist/index.d.ts',
-          default: './dist/index.mjs',
-        },
-        require: {
-          types: './dist/index.d.cts',
-          default: './dist/index.js',
-        },
+        types: './dist/index.d.ts',
+        default: './dist/index.mjs',
       },
       './extras': {
-        import: {
-          types: './dist/extras/index.d.ts',
-          default: './dist/extras/index.mjs',
-        },
-        require: {
-          types: './dist/extras/index.d.cts',
-          default: './dist/extras/index.js',
-        },
+        types: './dist/extras/index.d.ts',
+        default: './dist/extras/index.mjs',
       },
       './webgl': {
-        import: {
-          types: './dist/core/gl/init.d.ts',
-          default: './dist/core/gl/init.mjs',
-        },
-        require: {
-          types: './dist/core/gl/init.d.cts',
-          default: './dist/core/gl/init.js',
-        },
+        types: './dist/core/gl/init.d.ts',
+        default: './dist/core/gl/init.mjs',
       },
       './webgpu': {
-        import: {
-          types: './dist/core/gpu/init.d.ts',
-          default: './dist/core/gpu/init.mjs',
-        },
-        require: {
-          types: './dist/core/gpu/init.d.cts',
-          default: './dist/core/gpu/init.js',
-        },
+        types: './dist/core/gpu/init.d.ts',
+        default: './dist/core/gpu/init.mjs',
       },
     },
   },
   sourcemap: true,
   treeshake: false,
   unbundle: true,
-  format: ['esm', 'cjs'],
-  outExtensions: (context) => {
-    if (context.format === 'es') {
-      return { js: '.mjs', dts: '.d.ts' };
-    }
-    return { js: '.js', dts: '.d.cts' };
-  },
+  format: ['esm'],
+  outExtensions: () => ({ js: '.mjs', dts: '.d.ts' }),
   plugins: [inlineWorker()],
   platform: 'browser',
 };

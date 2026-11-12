@@ -5,7 +5,7 @@ import type { TypedFixedArray } from '../math/utils/misc';
 import type { Light } from '../scene/lights/Light';
 import type { PointLight } from '../scene/lights/PointLight';
 import type { SpotLight } from '../scene/lights/SpotLight';
-import { FLOATS_PER_LIGHT, MAX_LIGHTS } from '../scene/View3D';
+import { FLOATS_PER_LIGHT, MAX_LIGHTS } from './lightLimits';
 import { cascadeCountFor } from './render-passes/shadow/shadowPassUtils';
 
 /** Smallest radius a light packs, which `PointLight.radius` in `PointLight.ts` states */

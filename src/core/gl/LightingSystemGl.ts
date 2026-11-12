@@ -3,8 +3,8 @@ import type { WebGLRenderer } from 'pixi.js';
 
 import { addLinearRgb } from '../../materials/BaseMaterial3D';
 import type { Light } from '../../scene/lights/Light';
-import { MAX_LIGHTS } from '../../scene/View3D';
 import type { View3D } from '../../scene/View3D';
+import { MAX_LIGHTS } from '../lightLimits';
 import { RenderPassBit } from '../render-passes/RenderPass';
 import type { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import { writeHemisphere } from '../writeHemisphere';

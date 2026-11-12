@@ -28,50 +28,24 @@
     "./dist/index.*",
     "./dist/**/init.*"
   ],
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.cts",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.mjs"
-      },
-      "require": {
-        "types": "./dist/index.d.cts",
-        "default": "./dist/index.js"
-      }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
     },
     "./extras": {
-      "import": {
-        "types": "./dist/extras/index.d.ts",
-        "default": "./dist/extras/index.mjs"
-      },
-      "require": {
-        "types": "./dist/extras/index.d.cts",
-        "default": "./dist/extras/index.js"
-      }
+      "types": "./dist/extras/index.d.ts",
+      "default": "./dist/extras/index.mjs"
     },
     "./package.json": "./package.json",
     "./webgl": {
-      "import": {
-        "types": "./dist/core/gl/init.d.ts",
-        "default": "./dist/core/gl/init.mjs"
-      },
-      "require": {
-        "types": "./dist/core/gl/init.d.cts",
-        "default": "./dist/core/gl/init.js"
-      }
+      "types": "./dist/core/gl/init.d.ts",
+      "default": "./dist/core/gl/init.mjs"
     },
     "./webgpu": {
-      "import": {
-        "types": "./dist/core/gpu/init.d.ts",
-        "default": "./dist/core/gpu/init.mjs"
-      },
-      "require": {
-        "types": "./dist/core/gpu/init.d.cts",
-        "default": "./dist/core/gpu/init.js"
-      }
+      "types": "./dist/core/gpu/init.d.ts",
+      "default": "./dist/core/gpu/init.mjs"
     }
   },
   "publishConfig": {
@@ -101,7 +75,7 @@
     "test:lint": "oxlint --deny-warnings && oxfmt --check && node scripts/build/index.mts --check",
     "test:docs": "node scripts/lint/check-doc-refs.mts && node scripts/lint/check-doc-links.mts && node scripts/lint/check-example-readmes.mts && node scripts/typedoc/check-examples.mts && node scripts/typedoc/check-guides.mts",
     "test:unused": "node scripts/typedoc/check-unused-internal.mts",
-    "test:bundle": "node scripts/build/check-split.mts",
+    "test:bundle": "node scripts/build/check-split.mts && node scripts/build/check-entry-order.mts",
     "test:dts": "node scripts/build/check-dts.mts",
     "lint": "oxlint --fix && oxfmt --write",
     "release": "node scripts/release.mts",
