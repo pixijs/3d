@@ -1,4 +1,4 @@
-/** Line-level parsing of JSDoc blocks, shared by the pixi3d JSDoc rules. */
+/** Line-level parsing of JSDoc blocks, shared by the PixiJS 3D JSDoc rules. */
 
 /** The parts of a `@param` line that the rules check. */
 export interface ParamTag {

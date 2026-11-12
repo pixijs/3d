@@ -148,7 +148,7 @@ if (!fs.existsSync(path.join(dist, 'index.d.ts'))) {
 await Promise.all([ts5, ts6].map(ensureTypescript));
 checkDeclarationsAreClean();
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pixi3d-check-dts-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pixijs-3d-check-dts-'));
 const failures: string[] = [];
 
 try {

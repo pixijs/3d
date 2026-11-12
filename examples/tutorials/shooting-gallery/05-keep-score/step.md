@@ -50,7 +50,7 @@ view3d.root.addChild(sign);
 
 - The texture is 512 × 128 pixels and the plane 2.4 × 0.6 units, the same shape, so the board isn't stretched. A {@link PlaneGeometry} faces +z, toward the camera.
 - The texture takes `board` out of any parent it had, as its {@link ContainerSourceOptions#container | container}, so don't add it to the stage too: that takes it out of the texture, which then captures nothing.
-- The board's background fills the whole texture. On an opaque material, {@link BaseMaterial3D#alphaMode | the default}, any part the container leaves empty shows black; [Rendering 2D into 3D](../../../../src/core/__docs__/container-texture.md#empty-space) has the other ways round it.
+- The board's background fills the whole texture. On an opaque material, {@link BaseMaterial3D#alphaMode | the default}, any part the container leaves empty shows black; [Rendering 2D into 3D](../../../../src/core/__docs__/container-texture.md#transparent-areas) has the other ways round it.
 - {@link FlatMaterial} ignores the lights, so the board shows its own colours, like a lit sign.
 
 ## Show the score

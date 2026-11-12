@@ -14,11 +14,11 @@ import { SkeletonHelper } from '../shared/theme/SkeletonHelper';
 import { SphereHelper } from '../shared/theme/SphereHelper';
 import { TriangleHelper } from '../shared/theme/TriangleHelper';
 import { WireframeHelper } from '../shared/theme/WireframeHelper';
+import { visual } from './galleryVisual';
+import type { VisualSet } from './galleryVisual';
 import type { NameTags } from './nameTags';
 import { LAMP_HEIGHT } from './scene';
 import type { GalleryScene } from './scene';
-import { visual } from './visuals';
-import type { VisualSet } from './visuals';
 
 /** Seconds the struck triangle stays on a face, and how far through the faces each hop jumps */
 const HOP = 0.7;

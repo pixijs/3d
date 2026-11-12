@@ -31,7 +31,7 @@ export const CUBETEXTURE_EMPTY = CubeTexture.from({
     front: Texture.EMPTY,
     back: Texture.EMPTY,
   },
-  label: 'pixi3d-empty-skybox',
+  label: 'pixijs-3d-empty-skybox',
 });
 
 /**

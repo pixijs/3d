@@ -16,11 +16,11 @@ import type { Application, Rectangle } from 'pixi.js';
 import { InsetView } from '../shared/theme/InsetView';
 import { ScreenLines } from '../shared/theme/ScreenLines';
 import type { ThemeStage } from '../shared/theme/ThemeStage';
+import { visual } from './galleryVisual';
+import type { VisualSet } from './galleryVisual';
 import type { ScreenShape } from './layouts';
 import type { NameTags } from './nameTags';
 import type { GalleryScene } from './scene';
-import { visual } from './visuals';
-import type { VisualSet } from './visuals';
 
 /** Where the lens station's camera stands, in the station's space */
 const LENS_EYE = { x: -0.85, y: 0.75, z: 0.3 };

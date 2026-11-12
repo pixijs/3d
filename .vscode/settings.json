@@ -1,0 +1,19 @@
+{
+  "typescript.preferences.autoImportFileExcludePatterns": ["src/*/**/index.ts", "src/index.ts"],
+  "typescript.preferences.autoImportSpecifierExcludeRegexes": ["~/.*"],
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+  "editor.formatOnSave": true,
+  "editor.formatOnSaveMode": "file",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.oxc": "explicit"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  }
+}

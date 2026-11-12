@@ -1,0 +1,9 @@
+for state in rebase-merge rebase-apply CHERRY_PICK_HEAD MERGE_HEAD; do
+  if [ -e "$(git rev-parse --git-path "$state")" ]; then
+    echo "pre-commit: skipped while $state is in progress; CI runs every check on the pushed branch"
+    exit 0
+  fi
+done
+
+npx lint-staged
+npx tsc --noEmit -p tsconfig.json

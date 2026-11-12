@@ -192,7 +192,7 @@ export class ObservableVector3 implements PointLike3D {
    * `new Vector3().copyFrom(node.position)`.
    * @param observer - Optional observer for the clone
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- observer-linked copy; plain copies use Vector3#copyFrom
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- observer-linked copy; plain copies use Vector3#copyFrom
   public clone(observer?: Observer<ObservableVector3>): ObservableVector3 {
     return new ObservableVector3(observer ?? this._observer, this._x, this._y, this._z);
   }
@@ -205,7 +205,7 @@ export class ObservableVector3 implements PointLike3D {
    * ```
    */
   public toString(): string {
-    return `[pixi-3d/math:ObservableVector3 x=${this._x} y=${this._y} z=${this._z}]`;
+    return `[@pixi/3d/math:ObservableVector3 x=${this._x} y=${this._y} z=${this._z}]`;
   }
 
   /**
@@ -773,7 +773,7 @@ export class ObservableVector3 implements PointLike3D {
    * @param out - The target to write the result into, defaults to this point
    * @returns The point the result was written into
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- direction math; see Vector3#transformDirection
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- direction math; see Vector3#transformDirection
   public transformDirection(m: Matrix4, out: PointLike3D = this): this {
     const ex = this._x;
     const ey = this._y;

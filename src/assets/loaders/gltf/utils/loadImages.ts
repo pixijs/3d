@@ -97,15 +97,15 @@ async function pickImages(json: GltfFormat, loader: Loader): Promise<Map<number,
       parsers.set(texture.source, 'texture');
     } else if (extensions.KHR_texture_basisu) {
       throw new Error(
-        `[pixi-3d] glTF texture ${index} has only a KHR_texture_basisu (KTX2) image, which needs pixi's ` +
+        `[@pixi/3d] glTF texture ${index} has only a KHR_texture_basisu (KTX2) image, which needs pixi's ` +
           `KTX2 loader: import 'pixi.js/ktx2' before loading the model`,
       );
     } else if (extensions.EXT_texture_avif) {
       throw new Error(
-        `[pixi-3d] glTF texture ${index} has only an EXT_texture_avif image, and this browser can't decode AVIF`,
+        `[@pixi/3d] glTF texture ${index} has only an EXT_texture_avif image, and this browser can't decode AVIF`,
       );
     } else {
-      throw new Error(`[pixi-3d] glTF texture ${index} has no PNG, JPEG, WebP, AVIF or KTX2 image`);
+      throw new Error(`[@pixi/3d] glTF texture ${index} has no PNG, JPEG, WebP, AVIF or KTX2 image`);
     }
   });
 

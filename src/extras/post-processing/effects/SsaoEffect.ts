@@ -366,7 +366,7 @@ export class SsaoEffect extends PostEffect {
   };
 
   /** `[normalOutput]` when `sceneNormals` is set, otherwise `undefined` */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- set from `sceneNormals`; the view reads it, users don't
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- set from `sceneNormals`; the view reads it, users don't
   public override readonly requiredOutputs?: readonly SceneOutput[];
 
   private readonly _computeUniforms = new UniformGroup({

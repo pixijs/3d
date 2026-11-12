@@ -238,7 +238,7 @@ describe('ObservableVector3', () => {
     test('produces the labeled representation', () => {
       const c = makeCounter();
       const p = new ObservableVector3(c.observer, 1, 2, 3);
-      expect(p.toString()).toBe('[pixi-3d/math:ObservableVector3 x=1 y=2 z=3]');
+      expect(p.toString()).toBe('[@pixi/3d/math:ObservableVector3 x=1 y=2 z=3]');
     });
   });
 

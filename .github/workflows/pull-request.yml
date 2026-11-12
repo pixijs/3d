@@ -1,0 +1,86 @@
+name: Test + Build (Pull Request)
+
+on:
+  pull_request:
+    branches: ['**']
+
+concurrency:
+  group: ${{github.workflow}} - ${{github.ref}}
+  cancel-in-progress: true
+
+jobs:
+  # Everything that doesn't need a browser runs here, alongside the browser
+  # jobs rather than ahead of them.
+  checks:
+    runs-on: namespace-profile-linux-8-16
+    # A hung step would otherwise hold the runner for GitHub's 6h default.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/setup
+
+      # None of the checks read the build's output, so they run beside it.
+      - parallel:
+          - run: npm run test:lint
+          - run: npm run test:types
+          - run: npm run test:docs
+          - run: npm run test:unused
+          - run: npm run build:docs
+          - name: Build, then check the bundle and declarations
+            run: |
+              npm run build
+              npm run test:bundle
+              npm run test:dts
+
+  browser:
+    # The profile fixes the macOS image and machine in Namespace's dashboard, so
+    # the GPU the visual references were checked against only changes when
+    # someone edits it.
+    runs-on: namespace-profile-pixijs
+    timeout-minutes: 10
+    # Each shard runs on its own Mac, so it gets its own GPU. More vitest
+    # workers on one Mac share one GPU process and gain nothing (#556).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/setup
+
+      # Both installs below skip what the cache volume already holds.
+      - name: Cache Playwright browsers and the asset mirror
+        uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: playwright
+          path: ~/.pixijs/mirror
+
+      - name: Install Playwright (Chromium)
+        run: npx playwright install chromium
+
+      - name: Download assets
+        run: npm run download:assets
+
+      # Unit and visual suites run as separate vitest invocations, side by
+      # side: each gets its own Chromium and GPU process, which more workers in
+      # one Chromium don't (#556), and a failure is attributed to the right
+      # half. A "Browser connection was closed" failure here means Chromium
+      # itself died mid-run; investigate the runner/GPU, don't blame the named
+      # file.
+      - parallel:
+          - name: Unit tests
+            run: npm run test:unit -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+          - name: Visual tests
+            run: npm run test:visual -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+      - name: Upload visual diff artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-diffs-${{ matrix.shard }}
+          path: .pr_uploads/visual/
+          if-no-files-found: ignore
+          retention-days: 14

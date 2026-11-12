@@ -20,9 +20,6 @@ export function validateCamera(view3d: View3D): void {
     );
   }
   if (!camera.visible || camera._worldVisible === 0) {
-    throw new Error(
-      'Camera3D is hidden (visible=false or an ancestor is hidden). Cannot render with a hidden camera. ' +
-        'See https://github.com/pixijs/pixi-3d/issues/95',
-    );
+    throw new Error('Camera3D is hidden (visible=false or an ancestor is hidden). Cannot render with a hidden camera.');
   }
 }

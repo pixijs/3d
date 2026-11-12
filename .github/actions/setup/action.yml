@@ -1,0 +1,22 @@
+name: Setup
+description: Installs Node and the npm workspaces from the cached npm downloads
+runs:
+  using: composite
+  steps:
+    - name: Use Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: 24
+
+    # ~/.npm lives on the runner profile's cache volume, so `npm ci` installs
+    # from disk in a few seconds. node_modules itself isn't cached: on macOS
+    # the volume is attached by symlink, and npm replaces a symlinked
+    # node_modules with a real folder.
+    - name: Cache npm downloads
+      uses: namespacelabs/nscloud-cache-action@v1
+      with:
+        path: ~/.npm
+
+    - name: Install Dependencies
+      shell: bash
+      run: npm ci --prefer-offline --no-audit --no-fund

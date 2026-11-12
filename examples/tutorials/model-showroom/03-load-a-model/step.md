@@ -23,7 +23,7 @@ view3d.root.addChild(fox);
 - The file makes the fox about 80 units tall, so dividing 1 by its {@link Container3D#height | height} scales it to 1 unit tall, whatever size the file made it. Setting `fox.height = 1` would scale only y and squash the fox flat, as [Measuring and sizing](../../../../src/__docs__/concepts/scene-graph.md#measuring-and-sizing) explains.
 - The fox's feet are at the model's origin, so it stands on y = 0. It faces +Z, the side you'll put the camera on.
 
-[Loading models](../../../../src/assets/__docs__/models.md#what-a-file-can-bring) covers what else a file can bring.
+[Loading models](../../../../src/assets/__docs__/models.md#file-contents) covers what else a file can bring.
 
 ## Circle it
 

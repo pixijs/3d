@@ -4,8 +4,8 @@ import type { ShaderBit } from './ShaderBit';
 
 /** Unpacks a light in `LightDataList`'s layout; the include guard lets two lighting bits share a shader */
 const GL_GET_LIGHT_HELPER = /*glsl*/ `
-#ifndef PIXI3D_GET_LIGHT_DEFINED
-#define PIXI3D_GET_LIGHT_DEFINED
+#ifndef PIXIJS_3D_GET_LIGHT_DEFINED
+#define PIXIJS_3D_GET_LIGHT_DEFINED
 Light getLight(int index) {
   int offset = index * 4;
   vec4 d0 = uLightData[offset + 0];

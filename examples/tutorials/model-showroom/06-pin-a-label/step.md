@@ -58,6 +58,6 @@ app.ticker.add(() => {
 - {@link View3D#worldToScreen | worldToScreen} turns a point in the scene into a point on the stage, in the same pixels as `event.global`, so `hotspot`, added straight to the stage, can take it as its position. It returns `null` for a point at or behind the camera, the cue to hide the hotspot.
 - `world` and `screen` are made once and filled in every frame, so working out where the head is makes no new objects.
 
-[View3D and the 2D/3D bridge](../../../../src/__docs__/concepts/view3d.md#from-the-3d-world-to-the-screen) covers labels in a moved or scaled container.
+[View3D and 2D content](../../../../src/__docs__/concepts/view3d.md#world-to-screen) covers labels in a moved or scaled container.
 
 Turn the camera, and the dot stays on the fox's head with the tag beside it. Change the animation and the tag changes with it. When the fox runs, its head dips, so for part of each stride the dot hangs just above it: the animation moves the head, and `HEAD` is a fixed point on the model.

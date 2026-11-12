@@ -166,10 +166,10 @@ export class Vector4 implements PointLike4D {
    * ```ts
    * console.log(clip.toString());
    * ```
-   * @returns A string of the form `[pixi-3d/math:Vector4 x=... y=... z=... w=...]`
+   * @returns A string of the form `[@pixi/3d/math:Vector4 x=... y=... z=... w=...]`
    */
   public toString(): string {
-    return `[pixi-3d/math:Vector4 x=${this.x} y=${this.y} z=${this.z} w=${this.w}]`;
+    return `[@pixi/3d/math:Vector4 x=${this.x} y=${this.y} z=${this.z} w=${this.w}]`;
   }
 
   /**
@@ -423,7 +423,7 @@ export class Vector4 implements PointLike4D {
    * @param out - The target to write the result into, defaults to this vector
    * @returns The `out` point
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- same operation as on Vector3
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- same operation as on Vector3
   public normalize(out: PointLike4D = this): this {
     const len = Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w) || 1;
     const inv = 1 / len;
@@ -443,7 +443,7 @@ export class Vector4 implements PointLike4D {
    * @param out - The target to write the result into, defaults to this vector
    * @returns The `out` point
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- same operation as on Vector3
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- same operation as on Vector3
   public setLength(length: number, out: PointLike4D = this): this {
     const len = Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w) || 1;
     const inv = length / len;
@@ -456,7 +456,7 @@ export class Vector4 implements PointLike4D {
   }
 
   /** Computes the length of this vector across all four components */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- same operation as on Vector3
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- same operation as on Vector3
   public magnitude(): number {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w);
   }
@@ -528,7 +528,7 @@ export class Vector4 implements PointLike4D {
    * @param v - The other vector
    * @returns The angle in radians, from 0 to π
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- same operation as on Vector3
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- same operation as on Vector3
   public angleTo(v: PointData4D): number {
     const denominator = Math.sqrt(this.magnitudeSquared() * (v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w));
     if (denominator === 0) return Math.PI / 2;

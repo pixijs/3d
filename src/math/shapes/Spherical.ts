@@ -53,7 +53,7 @@ export class Spherical {
    * @readonly
    * @default 'spherical'
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'spherical';
 
   /**
@@ -207,10 +207,10 @@ export class Spherical {
 
   /**
    * Returns a readable string representation of this spherical
-   * @returns A string in the form `[pixi-3d/math:Spherical radius=1 phi=0 theta=0]`
+   * @returns A string in the form `[@pixi/3d/math:Spherical radius=1 phi=0 theta=0]`
    * @advanced
    */
   public toString(): string {
-    return `[pixi-3d/math:Spherical radius=${this.radius} phi=${this.phi} theta=${this.theta}]`;
+    return `[@pixi/3d/math:Spherical radius=${this.radius} phi=${this.phi} theta=${this.theta}]`;
   }
 }

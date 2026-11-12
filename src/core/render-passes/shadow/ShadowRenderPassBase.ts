@@ -312,7 +312,7 @@ export abstract class ShadowRenderPassBase<
       return;
     }
 
-    if (light.shadow.bounds !== undefined) warnOnce('pixi3d-shadow-bounds-cascades', WARN_BOUNDS_WITH_CASCADES);
+    if (light.shadow.bounds !== undefined) warnOnce('pixijs-3d-shadow-bounds-cascades', WARN_BOUNDS_WITH_CASCADES);
     inverseLightMatrix.getInverse(light.worldTransform);
 
     const cascadeCount = cascadeCountFor(light);
@@ -372,7 +372,7 @@ export abstract class ShadowRenderPassBase<
     } else {
       light._autoShadowBoundsFrozen = true;
       warnOnce(
-        'pixi3d-shadow-autofit-cap',
+        'pixijs-3d-shadow-autofit-cap',
         `Shadow auto-fit: ${casterCount} shadow casters is over the auto-measure cap (${MAX_AUTO_FIT_CASTERS}), ` +
           `so the shadow box was fitted once and frozen. If casters move or spawn outside it, set shadow.bounds, ` +
           `enable shadow.cascades, or call light.fitShadowBounds() after changes.`,
@@ -437,7 +437,7 @@ export abstract class ShadowRenderPassBase<
 
     const size = bounds.getSize(_scratchVec);
     if (Math.max(size.x, size.y, size.z) / mapSize > SHADOW_SOFT_TEXEL_THRESHOLD) {
-      warnOnce('pixi3d-shadow-autofit-large', WARN_SHADOW_BOX_LARGE);
+      warnOnce('pixijs-3d-shadow-autofit-large', WARN_SHADOW_BOX_LARGE);
     }
   }
 
@@ -477,7 +477,7 @@ export abstract class ShadowRenderPassBase<
       return cascadeCount;
     }
 
-    if (castsShadow) warnOnce('pixi3d-shadow-budget', WARN_SHADOW_BUDGET);
+    if (castsShadow) warnOnce('pixijs-3d-shadow-budget', WARN_SHADOW_BUDGET);
 
     light._shadowDataIndex = -1;
     return 0;

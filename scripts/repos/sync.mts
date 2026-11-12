@@ -1,6 +1,6 @@
 /**
  * Checks out the read-only reference repositories in `scripts/repos/manifest.mts` into `.repos/`, so
- * agents and contributors can read the source of the libraries pixi-3d builds on rather than their
+ * agents and contributors can read the source of the libraries PixiJS 3D builds on rather than their
  * compiled output: `npm run sync:repos [name...]`.
  *
  * Each repository is a depth-1 checkout of one commit. An entry that follows an npm package checks out
@@ -109,13 +109,13 @@ function sync(entry: ReferenceRepo): string {
 
   const pin = npmPin ? `${npmPin}@${version}` : (entry.ref as string);
 
-  if (head && npmPin && gitOrNull(['config', 'pixi3d.pin'], dir) === pin) {
+  if (head && npmPin && gitOrNull(['config', 'pixijs-3d.pin'], dir) === pin) {
     return `up to date at ${pin} (${head.slice(0, 7)})`;
   }
 
   const mainClone = MAIN_REPOS_DIR ? path.join(MAIN_REPOS_DIR, entry.name) : null;
   const mainHead = mainClone ? gitOrNull(['rev-parse', 'HEAD'], mainClone) : null;
-  const mainHasPin = npmPin !== null && mainHead !== null && gitOrNull(['config', 'pixi3d.pin'], mainClone!) === pin;
+  const mainHasPin = npmPin !== null && mainHead !== null && gitOrNull(['config', 'pixijs-3d.pin'], mainClone!) === pin;
   const sha = mainHasPin
     ? mainHead
     : npmPin
@@ -137,7 +137,7 @@ function sync(entry: ReferenceRepo): string {
     git(['checkout', '--quiet', '--force', '--detach', 'FETCH_HEAD'], dir);
     git(['clean', '-fdxq'], dir);
   }
-  git(['config', 'pixi3d.pin', pin], dir);
+  git(['config', 'pixijs-3d.pin', pin], dir);
 
   if (head === sha) return `up to date at ${pin} (${sha.slice(0, 7)})`;
   return `${head ? `moved ${head.slice(0, 7)} ->` : 'cloned'} ${pin} (${sha.slice(0, 7)})`;

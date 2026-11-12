@@ -764,10 +764,10 @@ export class Quaternion implements QuaternionData {
    * ```ts
    * console.log(aimRotation.toString());
    * ```
-   * @returns A string in the form `[pixi-3d/math:Quaternion x=0 y=0 z=0 w=1]`
+   * @returns A string in the form `[@pixi/3d/math:Quaternion x=0 y=0 z=0 w=1]`
    */
   public toString(): string {
-    return `[pixi-3d/math:Quaternion x=${this.x} y=${this.y} z=${this.z} w=${this.w}]`;
+    return `[@pixi/3d/math:Quaternion x=${this.x} y=${this.y} z=${this.z} w=${this.w}]`;
   }
 }
 

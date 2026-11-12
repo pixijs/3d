@@ -1,6 +1,6 @@
 ---
 title: Loading models
-description: Loading glTF and GLB files, building models from them, what a file can bring, and freeing a file when you're done with it.
+description: Load glTF and GLB files, build models from them, see what a file can bring, and free a file when you're done with it.
 category: assets
 children:
   - ./compression.md
@@ -8,7 +8,7 @@ children:
 
 # Loading models
 
-PixiJS 3D loads glTF 2.0, an open file format for 3D models. A model comes as a `.gltf` file, JSON that can point to buffer and image files beside it, or as one binary `.glb` file. Importing `@pixi/3d` registers loaders for both with PixiJS's `Assets`, so a model loads like any other asset:
+PixiJS 3D loads glTF 2.0, an open file format for 3D models. A model comes either as a `.gltf` file, which is JSON that can point to buffer and image files beside it, or as one binary `.glb` file. Importing `@pixi/3d` registers loaders for both with PixiJS's `Assets`, so a model loads like any other asset:
 
 ```ts
 import { Model3D } from '@pixi/3d';
@@ -25,7 +25,7 @@ Drop a `.glb` file of your own on [Model viewer](/3d/examples?example=start_mode
 
 ## A source and its models
 
-`Assets.load` returns a {@link Scene3DSource}, which holds the file's geometry, materials, textures and animation clips. A {@link Model3D} builds the file's scene from it under itself as nodes, the 3D counterpart of 2D containers, and you add the model.
+`Assets.load` returns a {@link Scene3DSource}, which holds the file's geometry, materials, textures and animation clips. A {@link Model3D} uses the source to build the file's scene as nodes under itself. Nodes are the 3D counterpart of 2D containers. The model, not the source, is what you add to your scene.
 
 Each model builds its own nodes and shares the source's geometry, materials and textures, the way 2D sprites share a texture. A second model loads nothing, so several copies of a prop cost one load:
 
@@ -42,13 +42,13 @@ for (const x of [-2, 0, 2]) {
 
 For thousands of copies, [Choosing a node for many objects](../../scene/__docs__/scene.md#choosing-a-node-for-many-objects) compares the other ways to draw them.
 
-Because the materials are shared, changing one changes every model that draws it, which is every model built from the source until you give one materials of its own. {@link Scene3DSource#material | source.material} holds the materials the file names, by name:
+Because models share materials, changing one changes every model that draws it. Every model built from the source draws the source's materials until you give it materials of its own. {@link Scene3DSource#material | source.material} holds the file's named materials, keyed by name:
 
 ```ts
 source.material['Paint'].baseColor = 0x3366ff; // tints the paint on every car that draws the source's Paint
 ```
 
-To change one model alone, give it materials of its own with {@link Model3DOptions#materials | materials}. {@link BaseMaterial3D#clone | clone} copies a material with everything the file gave it, textures included, and changes the options you pass:
+To change one model alone, give it materials of its own with {@link Model3DOptions#materials | materials}. {@link BaseMaterial3D#clone | clone} copies a material with everything the file gave it, textures included, then sets the options you pass:
 
 ```ts
 const redCar = new Model3D({
@@ -57,22 +57,22 @@ const redCar = new Model3D({
 });
 ```
 
-A record replaces materials by name, as here. An array replaces them by index into {@link Scene3DSource#materials | source.materials}, and a function is called once for each of them. Assigning {@link Model3D#materials | model.materials} switches a model that's already built, and `undefined` gives it the source's back. Neither destroys the materials it replaces, so destroy your copies when you're done with them. [Materials per model](/3d/examples?example=assets_model-materials) dissolves one of three helmets this way.
+A record replaces materials by name, as here. An array replaces them by index into {@link Scene3DSource#materials | source.materials}, and a function runs once for each of them. Assigning {@link Model3D#materials | model.materials} switches the materials of a model that's already built, and assigning `undefined` gives it the source's materials back. Neither the option nor the assignment destroys the materials it replaces, so destroy your copies when you're done with them. [Materials per model](/3d/examples?example=assets_model-materials) dissolves one of three helmets this way.
 
-{@link Model3DOptions} set a model up as it's built; pass them in place of the source, with the source as `source`. `castShadow` and `receiveShadow` apply to every mesh in it, and {@link Model3DOptions#autoPlay | autoPlay} starts a clip:
+{@link Model3DOptions} set up a model as it's built. Pass them in place of the source, with the source as `source`. `castShadow` and `receiveShadow` apply to every mesh in it, and {@link Model3DOptions#autoPlay | autoPlay} starts a clip:
 
 ```ts
 const water = new Model3D({ source: waterSource, castShadow: false, receiveShadow: false });
 const fox = new Model3D({ source: foxSource, autoPlay: 'Walk' });
 ```
 
-A model keeps the size its file was built at. glTF works in metres, but some files don't keep to them: the fox in [Quick start](../../__docs__/getting-started/quick-start.md#load-a-model) is about 80 units tall. [Measuring and sizing](../../__docs__/concepts/scene-graph.md#measuring-and-sizing) scales a model to the size you want.
+A model keeps the size its file was built at. glTF works in metres, but some files ignore that. The fox in [Quick start](../../__docs__/getting-started/quick-start.md#load-a-model) is about 80 units tall. [Measuring and sizing](../../__docs__/concepts/scene-graph.md#measuring-and-sizing) shows how to scale a model to the size you want.
 
-## What a file can bring
+## File contents
 
-**Meshes and materials.** A glTF mesh is made of one or more parts, each with its own material. A mesh with one part becomes a {@link Mesh3D}, and a mesh with several becomes a {@link Container3D} holding one `Mesh3D` per part. Materials load as {@link Material3D}, or as {@link FlatMaterial}, which ignores lights, when the file marks them unlit.
+**Meshes and materials.** A glTF mesh is made of one or more parts, each with its own material. A mesh with one part becomes a {@link Mesh3D}, and a mesh with several becomes a {@link Container3D} holding one `Mesh3D` per part. Materials load as {@link Material3D}. A material the file marks unlit loads as a {@link FlatMaterial}, which ignores lights.
 
-**Names.** Each node takes its name in the file as its {@link Container3D#label | label}, or `node_<index>` when it has none. A mesh's own name in the file labels nothing, and the parts of a mesh with several get no name from the file, so find them through the container that holds them, by the name of the node the mesh sits on. [Parents and children](../../__docs__/concepts/scene-graph.md#parents-and-children) shows how `getChildByLabel` finds a node by label, and why it can miss the bones a character's mesh bends with. To see what a file holds, {@link Container3D#logHierarchy | logHierarchy} prints the tree to the console:
+**Names.** Each node takes its name in the file as its {@link Container3D#label | label}, or `node_<index>` when it has none. A mesh's own name in the file labels nothing. The parts of a mesh with several parts get no name from the file either. To find them, look up the container that holds them by the name of the node the mesh sits on. [Parents and children](../../__docs__/concepts/scene-graph.md#parents-and-children) shows how `getChildByLabel` finds a node by label, and why it can miss the bones a character's mesh bends with. To see what a file holds, {@link Container3D#logHierarchy | logHierarchy} prints the tree to the console:
 
 ```ts
 car.logHierarchy();
@@ -87,13 +87,13 @@ car.logHierarchy();
 
 **Cameras.** The file's cameras become {@link Camera3D} nodes where the file placed them, listed in {@link Model3D#cameras | model.cameras}. [Switching cameras](../../scene/__docs__/cameras.md#switching-cameras) shows how to draw from one.
 
-**Lights.** The file's lights become {@link DirectionalLight}, {@link PointLight} and {@link SpotLight} nodes. Like lights you make, they cast no shadows until you turn on a directional or spot light's {@link Light#castShadow | castShadow}; point lights cast none.
+**Lights.** The file's lights become {@link DirectionalLight}, {@link PointLight} and {@link SpotLight} nodes. Like lights you make, they cast no shadows until you turn on a directional or spot light's {@link Light#castShadow | castShadow}. Point lights cast none.
 
-**Animation.** When the file has animation clips, the model's {@link Model3D#player | player} plays them; it's `undefined` when the file has none. [Animation](../../animation/__docs__/animation.md) covers playing them.
+**Animation.** When the file has animation clips, the model's {@link Model3D#player | player} plays them. The player is `undefined` when the file has none. [Animation](../../animation/__docs__/animation.md) covers playing them.
 
 ## Showing one model on its own
 
-{@link View3D.from} builds a view around a source. The view's root is a {@link Model3D} of the source, so `view3d.root` is the model:
+{@link View3D.from} builds a view around a source. The view's root is a {@link Model3D} built from the source, so `view3d.root` is the model:
 
 ```ts
 import { View3D } from '@pixi/3d';
@@ -107,7 +107,7 @@ view3d.root.player?.play('Walk');
 The view comes ready to draw the model:
 
 - Its camera is the `camera` you pass, or else the file's first camera. A file with none gets a new camera on the model's +Z side, facing it, just far enough back to fit the whole model in view.
-- When the file brings no lights, a {@link DirectionalLight} goes under the camera, so it lights whatever the camera faces. Pass `light: false` to light the scene yourself.
+- When the file brings no lights, the view adds a {@link DirectionalLight} as a child of the camera, so it lights whatever the camera faces. Pass `light: false` to light the scene yourself.
 
 {@link View3DFromOptions} takes the view's options and the model's, such as `castShadow` and `autoPlay`, in one object.
 
@@ -121,7 +121,7 @@ glTF extensions add features to the format. PixiJS 3D reads these:
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `KHR_materials_clearcoat`, `KHR_materials_sheen`, `KHR_materials_specular`, `KHR_materials_iridescence`, `KHR_materials_anisotropy`, `KHR_materials_ior` | Material features; see [Physical extensions](../../materials/__docs__/physical.md)                 |
 | `KHR_materials_transmission`, `KHR_materials_volume`                                                                                                     | Glass; see [Transmission and volume](../../materials/__docs__/physical.md#transmission-and-volume) |
-| `KHR_materials_emissive_strength`                                                                                                                        | A stronger glow; see [Glow](../../materials/__docs__/pbr.md#glow)                                  |
+| `KHR_materials_emissive_strength`                                                                                                                        | A stronger glow; see [Glow](../../materials/__docs__/pbr.md#emissive-glow)                         |
 | `KHR_materials_unlit`                                                                                                                                    | Materials that ignore lights, as {@link FlatMaterial}                                              |
 | `KHR_texture_transform`                                                                                                                                  | Tiled and offset textures, one transform per material                                              |
 | `KHR_texture_basisu`, `EXT_texture_avif`, `EXT_texture_webp`                                                                                             | KTX2, AVIF and WebP textures                                                                       |
@@ -135,28 +135,30 @@ KTX2 textures, which the GPU can keep compressed, need PixiJS's KTX2 loader. Imp
 import 'pixi.js/ktx2';
 ```
 
-Without it, the {@link loadGltf | loader} uses a texture's other image if it has one, and a texture with only a KTX2 image fails the load, with an error that names the import.
+Without it, the {@link loadGltf | loader} uses a texture's other image if it has one. A texture with only a KTX2 image fails the load, and the error names the import.
 
-PixiJS 3D supports no other extension. Three you may meet:
+PixiJS 3D supports no other extension. You may meet these three:
 
-- `EXT_mesh_gpu_instancing`, which repeats a mesh: only the original draws, at its node.
-- `KHR_materials_pbrSpecularGlossiness`, an older material model: the loader ignores it, so colours and textures kept in it are lost.
-- `KHR_animation_pointer`, which lets clips animate materials, lights and cameras. A file that uses it doesn't load yet, so leave it out when you export.
+- `EXT_mesh_gpu_instancing` repeats a mesh. Only the original draws, at its node.
+- `KHR_materials_pbrSpecularGlossiness` is an older material model. The loader ignores it, so you lose any colours and textures kept in it.
+- `KHR_animation_pointer` lets clips animate materials, lights and cameras. A file that uses it doesn't load yet, so leave it out when you export.
 
 ## Cleaning up
 
-{@link Model3D#destroy | Destroying a model} stops its clips and takes it out of the scene, but leaves the source, which other models may share. Don't pass it flags that destroy geometry, materials or textures; [Destroying](../../__docs__/concepts/resources.md#destroying) explains why.
+{@link Model3D#destroy | Destroying a model} stops its clips and takes it out of the scene, but leaves the source, which other models may share. Don't pass it flags that destroy geometry, materials or textures. [Destroying](../../__docs__/concepts/resources.md#destroying) explains why.
 
-To free a file, destroy every model built from it, then unload the file through `Assets`, as you would a 2D texture. That destroys the source's geometry, materials and textures:
+To free a file, destroy every model built from it, then unload the file through `Assets`, as you would a 2D texture. Unloading destroys the source's geometry, materials and textures:
 
 ```ts
 car.destroy({ children: true });
 await Assets.unload('car.glb');
 ```
 
-For a view from `View3D.from`, {@link View3D#destroy | destroy the view} with `children: true`, which destroys its model too. A material you gave a model is yours: the unload leaves it, so destroy it once no model uses it. Images a file keeps beside it, rather than inside it, load through `Assets` by URL, so unloading the file destroys them for anything else that loaded the same image, such as the other models in a kit that share one texture atlas. Unload a kit's files together, once none of its models is drawn.
+For a view from `View3D.from`, {@link View3D#destroy | destroy the view} with `children: true`, which destroys its model too. A material you gave a model is yours. Unloading the file leaves it, so destroy it once no model uses it.
 
-To free GPU memory for a while and keep the model, take it out of the scene and call {@link Model3D#unload | unload}; adding it back uploads it again. It unloads the source's geometry and materials, which every model built from it shares, so take every one of those models out of the scene before the next frame. [Unloading](../../__docs__/concepts/resources.md#unloading) says how much of that memory comes back.
+A file can keep its images beside it rather than inside it. Those images load through `Assets` by URL, so unloading the file destroys them for anything else that loaded the same image, such as the other models in a kit that share one texture atlas. Unload a kit's files together, once none of its models is drawn.
+
+To free GPU memory for a while but keep the model, take it out of the scene and call {@link Model3D#unload | unload}. Adding it back uploads it again. The call unloads the source's geometry and materials, which every model built from that source shares, so take all of those models out of the scene before the next frame. [Unloading](../../__docs__/concepts/resources.md#unloading) says how much of that memory comes back.
 
 ```ts
 view3d.root.removeChild(car);

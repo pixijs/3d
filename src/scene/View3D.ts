@@ -490,7 +490,7 @@ export interface View3DFromOptions
   light?: boolean;
 }
 
-// oxlint-disable-next-line pixi3d/require-export-jsdoc, pixi3d/require-member-api-doc, no-unused-vars
+// oxlint-disable-next-line pixijs-3d/require-export-jsdoc, pixijs-3d/require-member-api-doc, no-unused-vars
 export interface View3D<TRoot extends Container3D = Container3D> extends PixiMixins.View3D {}
 
 /**

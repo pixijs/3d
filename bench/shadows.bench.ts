@@ -42,7 +42,7 @@ frame('shadows', {
     const { view } = stage;
     const { shadow } = data;
     const quality = QUALITY[shadow.size];
-    if (quality === undefined) throw new Error(`shadows: pixi-3d has no shadow-map preset of ${shadow.size} texels`);
+    if (quality === undefined) throw new Error(`shadows: PixiJS 3D has no shadow-map preset of ${shadow.size} texels`);
     view.shadowQuality = quality;
     // Named even where it is the default, so the filter this bench measures is on the page.
     view.shadowFilter = 'pcf';

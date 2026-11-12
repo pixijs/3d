@@ -50,7 +50,7 @@ export class Ray {
    * @readonly
    * @default 'ray'
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'ray';
 
   /**
@@ -498,10 +498,10 @@ export class Ray {
 
   /**
    * Returns a string representation of this ray
-   * @returns A string in the form `[pixi-3d/math:Ray origin=(0, 0, 0) direction=(0, 0, -1)]`
+   * @returns A string in the form `[@pixi/3d/math:Ray origin=(0, 0, 0) direction=(0, 0, -1)]`
    * @advanced
    */
   public toString(): string {
-    return `[pixi-3d/math:Ray origin=(${this.origin.x}, ${this.origin.y}, ${this.origin.z}) direction=(${this.direction.x}, ${this.direction.y}, ${this.direction.z})]`;
+    return `[@pixi/3d/math:Ray origin=(${this.origin.x}, ${this.origin.y}, ${this.origin.z}) direction=(${this.direction.x}, ${this.direction.y}, ${this.direction.z})]`;
   }
 }

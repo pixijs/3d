@@ -16,7 +16,7 @@ const SUFFIX = '?worker&inline';
  * always minified: a consumer's minifier never touches string contents.
  */
 export const inlineWorker = (): Plugin => ({
-  name: 'pixi3d-inline-worker',
+  name: 'pixijs-3d-inline-worker',
   transform: {
     filter: { code: /import\.meta\.url/ },
     handler(code) {
@@ -24,7 +24,7 @@ export const inlineWorker = (): Plugin => ({
       let count = 0;
 
       for (const match of code.matchAll(WORKER_URL)) {
-        const name = `__pixi3dWorkerUrl${count++}`;
+        const name = `__pixijs3dWorkerUrl${count++}`;
 
         s.prepend(`import ${name} from '${match[2]}${SUFFIX}';\n`);
         s.overwrite(match.index, match.index + match[0].length, `${name}()`);

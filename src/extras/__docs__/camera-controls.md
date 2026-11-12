@@ -8,7 +8,7 @@ category: extras:camera
 
 `@pixi/3d/extras` has two controllers that move {@link View3D#camera | view3d.camera} for you. {@link OrbitCamera} turns it around a point as the user drags, for model viewers and strategy maps. {@link FPSCamera} turns it with the mouse or a finger and moves it with the keys, for walking through a scene.
 
-A controller owns the camera's rotation, so steer through it rather than the camera's {@link Container3D#lookAt | lookAt}: the orbit turns the camera to face its target on every update, and the first-person camera sets the rotation from its yaw and pitch, how far it has turned left or right and tilted up or down.
+A controller owns the camera's rotation, so steer the camera through the controller rather than with the camera's {@link Container3D#lookAt | lookAt}. The orbit camera turns the camera to face its target on every update. The first-person camera sets the rotation from its yaw and pitch. Yaw is how far it has turned left or right, and pitch is how far it has tilted up or down.
 
 ## Orbit camera
 
@@ -29,17 +29,17 @@ const orbit = new OrbitCamera({
 });
 ```
 
-{@link OrbitCamera} lists its mouse and touch gestures, and {@link OrbitCamera#mouseButtons | mouseButtons} and {@link OrbitCamera#touches | touches} reassign them. The controller starts from wherever the camera is, so move the camera away from the {@link OrbitCamera#target | target} first: a new camera sits at the origin, the default target, with no distance to turn or zoom through.
+The {@link OrbitCamera} reference lists its mouse and touch gestures, and {@link OrbitCamera#mouseButtons | mouseButtons} and {@link OrbitCamera#touches | touches} reassign them. The controller starts from wherever the camera is, so move the camera away from the {@link OrbitCamera#target | target} first. A new camera sits at the origin, which is also the default target, so it has no distance to turn or zoom through.
 
-When a file has no camera, {@link View3D.from} places a new one facing the middle of the model, but the orbit's target still starts at the origin, so the orbit turns the camera to face the origin, and the top of a tall model standing there leaves the screen. Pass the model's centre as the target:
+When a model file has no camera, {@link View3D.from} places a new one facing the middle of the model. But the orbit camera's target still starts at the origin, so the controller turns the camera to face the origin, and the top of a tall model standing there goes off screen. Pass the model's centre as the target:
 
 ```ts
 const orbit = new OrbitCamera({ view: view3d, target: view3d.root.getLocalBounds().getCenter() });
 ```
 
-To drag an object without turning the camera, stop the event's propagation, as [Dragging](../../events/__docs__/interaction.md#dragging) shows. A drag that orbits the camera and ends on the model it started on still fires `pointertap` on it; [Clicks, hover and cursors](../../events/__docs__/interaction.md#clicks-hover-and-cursors) shows how to tell the two apart.
+To drag an object without turning the camera, stop the event's propagation, as [Dragging](../../events/__docs__/interaction.md#dragging) shows. A drag that orbits the camera and ends on the model it started on still fires `pointertap` on that model. [Clicks, hover and cursors](../../events/__docs__/interaction.md#clicks-hover-and-cursors) shows how to tell a tap from a drag.
 
-PixiJS listens for the wheel passively, so in a page that scrolls, the wheel scrolls the page as well as zooming, and in Chrome a trackpad pinch zooms the whole page. A listener of your own on the canvas stops both and leaves the zoom working:
+PixiJS listens for wheel events passively, so the browser still acts on them. In a page that scrolls, the wheel scrolls the page as well as zooming the camera, and in Chrome a trackpad pinch zooms the whole page. A wheel listener of your own on the canvas stops both, and the camera still zooms:
 
 ```ts
 app.canvas.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
@@ -47,15 +47,17 @@ app.canvas.addEventListener('wheel', (e) => e.preventDefault(), { passive: false
 
 ### Damping and auto-rotate
 
-With {@link OrbitCamera#enableDamping | enableDamping} on, turning and panning carry on for a moment after the pointer stops moving and ease to a stop; zooming still applies at once. {@link OrbitCamera#autoRotate | autoRotate} turns the camera around the target on its own, for a turntable, and pauses while the user drags.
+With {@link OrbitCamera#enableDamping | enableDamping} on, turning and panning keep going for a moment after the pointer stops moving, then ease to a stop. Zooming still happens at once. {@link OrbitCamera#autoRotate | autoRotate} turns the camera around the target by itself, for a turntable view, and pauses while the user drags.
 
 ### Limits
 
-{@link OrbitCamera#minDistance | minDistance} and {@link OrbitCamera#maxDistance | maxDistance} bound how close to the target and how far from it the camera gets, so size them to the model. An orthographic camera, which draws far things as large as near ones, zooms by changing its {@link Camera3D#zoom | zoom} instead, which {@link OrbitCamera#minZoom | minZoom} and {@link OrbitCamera#maxZoom | maxZoom} bound. {@link OrbitCamera#maxPolarAngle | maxPolarAngle} limits how low the camera goes. The {@link OrbitCamera#polarAngle | polar angle} is 0 straight above the target and π/2 level with it, so a little under π/2 keeps the camera above the target's height, and above a floor the target sits on.
+{@link OrbitCamera#minDistance | minDistance} and {@link OrbitCamera#maxDistance | maxDistance} set how close to the target the camera can get and how far from it, so size them to the model. An orthographic camera draws far things as large as near ones. It zooms by changing its {@link Camera3D#zoom | zoom} instead, between {@link OrbitCamera#minZoom | minZoom} and {@link OrbitCamera#maxZoom | maxZoom}.
+
+{@link OrbitCamera#maxPolarAngle | maxPolarAngle} limits how low the camera goes. The {@link OrbitCamera#polarAngle | polar angle} is 0 straight above the target and π/2 level with it. A little under π/2 keeps the camera above the target's height, and so above a floor the target sits on.
 
 ### Map-style controls
 
-{@link OrbitCamera#zoomToCursor | zoomToCursor} makes the wheel zoom toward the point under the pointer, and a pinch toward the point between the fingers. With {@link OrbitCamera#screenSpacePanning | screenSpacePanning} off, a pan slides the target across the ground at its own height instead of across the screen. With the left button and one finger set to pan, they make a map or strategy-game camera:
+{@link OrbitCamera#zoomToCursor | zoomToCursor} makes the wheel zoom toward the point under the pointer, and a pinch zoom toward the point between the fingers. With {@link OrbitCamera#screenSpacePanning | screenSpacePanning} off, a pan moves the target across the ground at the target's own height instead of across the screen. Set the left button and one finger to pan as well, and these two options make a map or strategy-game camera:
 
 ```ts
 view3d.camera.position.set(0, 10, 10);
@@ -73,11 +75,11 @@ const orbit = new OrbitCamera({
 ```
 
 > [!NOTE]
-> For content built with Z as its up axis rather than Y, such as terrain from map data, keep {@link OrbitCamera#up | up} at its default, +Y, and stand the content upright in a {@link Container3D} with `rotation.x = -Math.PI / 2`.
+> For content built with Z as its up axis rather than Y, such as terrain from map data, keep {@link OrbitCamera#up | up} at its default, +Y. Then stand the content upright in a {@link Container3D} with `rotation.x = -Math.PI / 2`.
 
 ### Moving the camera from code
 
-{@link OrbitCamera#rotate | rotate}, {@link OrbitCamera#pan | pan} and {@link OrbitCamera#zoom | zoom} move the camera as a gesture would, for keyboard shortcuts or buttons, and damping eases a turn or a pan the same way.
+{@link OrbitCamera#rotate | rotate}, {@link OrbitCamera#pan | pan} and {@link OrbitCamera#zoom | zoom} move the camera the way a gesture does. Use them for keyboard shortcuts or buttons. Damping eases a turn or a pan from these calls the same way it eases a gesture.
 
 ```ts
 // Swing round and up from the starting view, and step back a little
@@ -85,7 +87,7 @@ orbit.rotate(0.7, 0.35);
 orbit.zoom(0.8);
 ```
 
-To jump to a new view, set the camera's `position` and the `target` together, and the controller takes up both on its next update, within its limits. With damping on, a turn or pan still gliding when you jump carries on from the new view. [Framing a model](../../scene/__docs__/cameras.md#framing-a-model) works out how far back to put the camera.
+To jump to a new view, set the camera's `position` and the `target` together. The controller picks up both on its next update, within its limits. With damping on, a turn or pan that is still easing to a stop when you jump carries on from the new view. [Framing a model](../../scene/__docs__/cameras.md#framing-a-model) shows how far back to put the camera.
 
 ## First-person camera
 
@@ -99,21 +101,23 @@ const walker = new FPSCamera({
 });
 ```
 
-The [First-person camera](/3d/examples?example=cameras_first-person) example walks a clay maze, with an on-screen stick for touch.
+The [First-person camera](/3d/examples?example=cameras_first-person) example walks through a clay maze and has an on-screen joystick for touch.
 
-Dragging looks around, the WASD or arrow keys walk, and Space and Shift rise and sink. With {@link FPSCamera#pointerLock | pointerLock} on, a mouse press captures the pointer instead of starting a drag, so moving the mouse looks around until the user presses Escape; touch still looks by dragging. The example folds its pane away while the pointer is captured, on the controller's `lock` and `unlock` events. A page in a sandboxed iframe without `allow-pointer-lock` can't capture the pointer, and with `pointerLock` on, the mouse then can't look at all, so turn `pointerLock` off when the document fires `pointerlockerror` before any capture has worked.
+Dragging looks around, the WASD or arrow keys walk, and Space and Shift move the camera up and down. With {@link FPSCamera#pointerLock | pointerLock} on, a mouse press captures the pointer instead of starting a drag. Moving the mouse then looks around until the user presses Escape. Touch still looks by dragging. The example folds its settings pane away while the pointer is captured, using the controller's `lock` and `unlock` events.
 
-The camera starts facing -Z, into the screen, whatever rotation it had before, unless you pass a {@link FPSCamera#yaw | yaw} and {@link FPSCamera#pitch | pitch}. Turn it with those two; unlike a 2D rotation, a positive yaw turns it left. W walks the way the camera looks, pitch included, so looking down while walking sinks the camera through the floor; the controller has no gravity or walls. [Updating each frame](#updating-each-frame) holds it at eye height.
+A page in a sandboxed iframe without `allow-pointer-lock` can't capture the pointer. With `pointerLock` on, the mouse then can't look around at all. If the document fires `pointerlockerror` before any capture has worked, turn `pointerLock` off.
 
-The keys are read from `window`, so typing W into a text field on the page walks too. Turn {@link FPSCamera#keyboard | keyboard} off while a field has focus.
+The camera starts facing -Z, into the screen, whatever rotation it had before, unless you pass a {@link FPSCamera#yaw | yaw} and {@link FPSCamera#pitch | pitch}. Turn the camera by changing those two. Unlike a 2D rotation, a positive yaw turns it left. W walks the way the camera looks, pitch included, so walking while looking down sinks the camera through the floor. The controller has no gravity or walls. [Updating each frame](#updating-manually) shows how to hold the camera at eye height.
+
+The controller reads keys from `window`, so typing W into a text field on the page walks too. Turn {@link FPSCamera#keyboard | keyboard} off while a field has focus.
 
 ### Touch joystick
 
-To walk on a touch screen, draw a joystick as a 2D container above the view, as the example does, so it takes the presses in its corner before the view can. Write the stick into {@link FPSCamera#move | move}, which the controller adds to the keys on every update, and set it back to zero on release:
+To walk on a touch screen, draw a joystick as a 2D container above the view, as the example does. Because it sits above the view, it gets presses in its corner before the view does. Write the joystick's offset into {@link FPSCamera#move | move}, which the controller adds to the keys on every update, and set it back to zero on release:
 
 ```ts
-// In the joystick's globalpointermove listener, with dx and dy the finger's offset from where
-// it pressed, kept within 60 pixels. Screen y grows downward, so pushing the stick up (a
+// In the joystick's globalpointermove listener, where dx and dy are the finger's offset from
+// where it pressed down, kept within 60 pixels. Screen y grows downward, so pushing the joystick up (a
 // negative dy) gives a positive z, which walks forward.
 walker.move.set(dx / 60, 0, -dy / 60);
 
@@ -121,9 +125,9 @@ walker.move.set(dx / 60, 0, -dy / 60);
 walker.move.set(0, 0, 0);
 ```
 
-## Updating each frame
+## Updating manually
 
-By default both controllers update from `Ticker.shared`, while an `Application` renders from its own `app.ticker`. To run code right after the camera moves and before the frame is drawn, turn {@link FPSCamera#autoUpdate | autoUpdate} off and call {@link FPSCamera#update | update} from `app.ticker` yourself; it returns `true` when the camera moved. To hold a walker at eye height:
+By default both controllers update from `Ticker.shared`, while an `Application` renders from its own `app.ticker`. To run code right after the camera moves and before the frame renders, turn {@link FPSCamera#autoUpdate | autoUpdate} off and call {@link FPSCamera#update | update} from `app.ticker` yourself. It returns `true` when the camera moved. To hold the first-person camera at eye height:
 
 ```ts
 walker.autoUpdate = false;
@@ -133,11 +137,13 @@ app.ticker.add((ticker) => {
 });
 ```
 
-Space and Shift then do nothing, and looking down slows the walk, since only the level part of each step is left. {@link OrbitCamera#autoUpdate | OrbitCamera's autoUpdate} works the same way; its glide and auto-rotate move the camera only while something calls `update` every frame.
+Space and Shift then do nothing. Looking down also slows the walk, since only the level part of each step is left. {@link OrbitCamera#autoUpdate | OrbitCamera's autoUpdate} works the same way. Its damping and auto-rotate move the camera only while something calls `update` every frame.
 
 ## Switching controllers
 
-Call {@link OrbitCamera#destroy | destroy} on one controller before you make another for the same view, since two at once fight over the camera. Destroy a controller with its view too: the view doesn't know about it, so one left behind keeps updating from `Ticker.shared` and holds the view in memory, and an {@link FPSCamera} keeps reading keys from `window`. {@link FPSCamera#destroy | Destroying} either one leaves the camera where it is, so a walker can carry on from the orbit's view:
+Call {@link OrbitCamera#destroy | destroy} on one controller before you make another for the same view, since two at once both try to move the camera. Destroy a controller when you destroy its view, too. The view doesn't know about the controller, so a controller left behind keeps updating from `Ticker.shared` and holds the view in memory. A leftover {@link FPSCamera} also keeps reading keys from `window`.
+
+{@link FPSCamera#destroy | Destroying} either controller leaves the camera where it is, so a new first-person camera can carry on from the orbit camera's view:
 
 ```ts
 import { Vector3 } from '@pixi/3d';
@@ -155,7 +161,7 @@ const walker = new FPSCamera({
 
 ## Writing your own controller
 
-A 2D game often scrolls by moving a world container; in 3D you move the camera instead, and a controller is just code that does that every frame. A camera that follows a player keeps an offset from it and eases toward that spot, so it trails a little behind quick moves:
+A 2D game often scrolls by moving a world container. In 3D you move the camera instead, and a controller is code that does that every frame. A camera that follows a player keeps an offset from it and eases toward that spot, so it trails a little behind quick moves:
 
 ```ts
 import { Vector3 } from '@pixi/3d';
@@ -179,4 +185,4 @@ app.ticker.add((ticker) => {
 
 - [Cameras](../../scene/__docs__/cameras.md): field of view, orthographic cameras and framing a model.
 - [Interaction](../../events/__docs__/interaction.md): pointer events on 3D objects.
-- [View3D and the 2D/3D bridge](../../__docs__/concepts/view3d.md): 2D controls drawn over a 3D scene.
+- [View3D and 2D content](../../__docs__/concepts/view3d.md): 2D controls drawn over a 3D scene.

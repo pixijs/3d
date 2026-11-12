@@ -1,0 +1,75 @@
+name: Upload (S3)
+
+# Mirrors `.s3_uploads/` (the CDN bundle + API docs, see `npm run dist`) to S3:
+# a manual run lands in s3://<bucket>/<branch>/, a published release in
+# s3://<bucket>/<tag>/, and a non-prerelease also refreshes
+# s3://<bucket>/release/. Branch pushes don't upload, to save CI minutes; run it
+# from the Actions tab for a branch that needs one. Without the AWS secrets it
+# only builds.
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: ${{github.workflow}} - ${{github.ref}}
+  cancel-in-progress: true
+
+jobs:
+  upload:
+    runs-on: namespace-profile-linux-8-16
+    timeout-minutes: 10
+    # The credentials live on the deploy steps alone, so `npm run dist` and its
+    # whole dependency graph never see them. A step can't read its own `env:`
+    # from its `if:`, so this non-secret flag answers "do we have secrets?".
+    env:
+      HAS_AWS: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/setup
+
+      - name: Build for Distribution
+        run: npm run dist
+
+      # The runner image ships aws-cli v2, which reads the credentials and the
+      # region straight out of the step environment. Destinations go through env
+      # vars rather than `${{ }}` interpolation so a ref name can't inject shell.
+      - name: Deploy Branch
+        if: github.event_name == 'workflow_dispatch' && env.HAS_AWS == 'true'
+        run: |
+          aws s3 sync .s3_uploads "s3://$AWS_S3_BUCKET/$DEST_DIR" \
+            --no-progress --acl public-read --follow-symlinks --delete \
+            --cache-control "max-age=60"
+        env:
+          DEST_DIR: ${{ github.ref_name }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy Release Tag
+        if: github.event_name == 'release' && env.HAS_AWS == 'true'
+        run: |
+          aws s3 sync .s3_uploads "s3://$AWS_S3_BUCKET/$DEST_DIR" \
+            --no-progress --acl public-read --follow-symlinks --delete \
+            --cache-control "max-age=2592000"
+        env:
+          DEST_DIR: ${{ github.event.release.tag_name }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy Latest Release
+        if: github.event_name == 'release' && github.event.release.prerelease == false && env.HAS_AWS == 'true'
+        run: |
+          aws s3 sync .s3_uploads "s3://$AWS_S3_BUCKET/$DEST_DIR" \
+            --no-progress --acl public-read --follow-symlinks --delete \
+            --cache-control "max-age=3600"
+        env:
+          DEST_DIR: 'release'
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}

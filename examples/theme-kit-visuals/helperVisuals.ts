@@ -17,11 +17,11 @@ import { GridHelper } from '../shared/theme/GridHelper';
 import { PathHelper } from '../shared/theme/PathHelper';
 import { PointsHelper } from '../shared/theme/PointsHelper';
 import { RingHelper } from '../shared/theme/RingHelper';
+import { visual } from './galleryVisual';
+import type { VisualSet } from './galleryVisual';
 import type { NameTags } from './nameTags';
 import { ORBIT_HEIGHT, ORBIT_RADIUS } from './scene';
 import type { GalleryScene } from './scene';
-import { visual } from './visuals';
-import type { VisualSet } from './visuals';
 
 const UP = { x: 0, y: 1, z: 0 };
 const PLUS_X = { x: 1, y: 0, z: 0 };

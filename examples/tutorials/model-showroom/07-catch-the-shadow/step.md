@@ -23,7 +23,7 @@ view3d.root.addChild(stand);
 
 - The fox is just under 2 units from nose to tail, so a stand 2.3 across is a little wider than the fox is long. When the fox walks or runs, the tip of its tail swings just past the rim. `radialSegments` is the number of flat sides around the edge, and 96 keeps the rim round up close.
 - A cylinder is centred on its middle, so lowering it by half its height puts its top level with the fox's feet.
-- A mesh you build with `new Mesh3D` casts and catches shadows by {@link Mesh3D.defaultOptions | default}. The stand only has to catch the fox's, so {@link Mesh3D#castShadow | castShadow} off stops it casting one. The sun then spreads its shadow detail over the fox alone, so the fox's shadow comes out sharper, as [Shadows](../../../../src/scene/__docs__/shadows.md#one-box-over-the-scene) explains.
+- A mesh you build with `new Mesh3D` casts and catches shadows by {@link Mesh3D.defaultOptions | default}. The stand only has to catch the fox's, so {@link Mesh3D#castShadow | castShadow} off stops it casting one. The sun then spreads its shadow detail over the fox alone, so the fox's shadow comes out sharper, as [Shadows](../../../../src/scene/__docs__/shadows.md#shadow-bounds) explains.
 
 ## Turn on the sun's shadow
 

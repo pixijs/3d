@@ -1,6 +1,6 @@
 /**
  * What every bench here shares: the stage a bench is handed, typed, the scene's look applied to it, and the scene
- * data as pixi-3d objects (colours, geometries, materials, textures), so each bench file only says what its scene
+ * data as PixiJS 3D objects (colours, geometries, materials, textures), so each bench file only says what its scene
  * does.
  */
 
@@ -16,7 +16,7 @@ import type { PbrSpec, SceneLook, Vec3 } from './data/look.ts';
 import { proceduralMaps } from './data/textures.ts';
 
 /**
- * The pixi-3d stage: the renderer, the view, and the lights it made. It comes up framed as `field` is, with an
+ * The PixiJS 3D stage: the renderer, the view, and the lights it made. It comes up framed as `field` is, with an
  * ambient light and a sun; `applyLook` reframes it for a scene with a look of its own.
  */
 export type PixiStage = FrameStage<{
@@ -64,7 +64,7 @@ export function toMaterial(material: PbrSpec): Material3D {
 /**
  * A texture the data built as bytes, uploaded through pixi's own texture path with a full mip chain.
  *
- * pixi-3d reads a texture's colour as premultiplied by its alpha. pixi premultiplies a byte upload itself only on
+ * PixiJS 3D reads a texture's colour as premultiplied by its alpha. pixi premultiplies a byte upload itself only on
  * WebGL, so the bytes are premultiplied here and uploaded as they are, which draws the same texels on both
  * backends.
  */

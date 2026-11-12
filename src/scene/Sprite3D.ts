@@ -14,8 +14,8 @@ import type { BillboardMode, Mesh3DOptions } from './Mesh3D';
 
 function warnUnsizedTexture(): void {
   warnOnce(
-    'pixi3d-sprite3d-size-unloaded',
-    '[pixi-3d] A Sprite3D was sized in world units while its texture had no dimensions (still ' +
+    'pixijs-3d-sprite3d-size-unloaded',
+    '[@pixi/3d] A Sprite3D was sized in world units while its texture had no dimensions (still ' +
       'loading?). The write was dropped — size the sprite after the texture resolves, or set ' +
       '`scale` directly.',
   );

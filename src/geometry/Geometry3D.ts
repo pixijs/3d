@@ -632,7 +632,7 @@ export class Geometry3D extends Geometry {
     this._morphStore?.freeDeltas(this);
 
     super.unload();
-    // oxlint-disable-next-line pixi3d/destroy-release -- a mesh still using the destroyed geometry removes itself from this list when it detaches or swaps geometry, and clear() resets its index so that remove is a no-op
+    // oxlint-disable-next-line pixijs-3d/destroy-release -- a mesh still using the destroyed geometry removes itself from this list when it detaches or swaps geometry, and clear() resets its index so that remove is a no-op
     this._meshes.clear();
     this._destroyed = true;
 
@@ -705,7 +705,7 @@ export class Geometry3D extends Geometry {
    *
    * Read them as floats, two per vertex, with {@link getAttributeData}.
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- raw stored data; getAttributeData has the read example
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- raw stored data; getAttributeData has the read example
   get uvs(): TypedArray | undefined {
     return this.attributes.aUV?.buffer.data;
   }
@@ -750,7 +750,7 @@ export class Geometry3D extends Geometry {
    * With {@link Geometry3DOptions#quantizeTangents} (the default) it is an `Int16Array` with four
    * values per vertex. Read tangents as floats, four per vertex, with {@link getAttributeData}.
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- raw stored data; getAttributeData has the read example
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- raw stored data; getAttributeData has the read example
   get tangents(): TypedArray | undefined {
     return this.attributes.aTangent?.buffer.data;
   }

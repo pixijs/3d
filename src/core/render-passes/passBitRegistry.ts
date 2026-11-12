@@ -21,7 +21,9 @@ class PassBitRegistry {
     const existing = this._bitsByName[name];
     if (existing !== undefined) {
       if (explicitBit !== undefined && explicitBit !== existing) {
-        warn(`[pixi-3d] pass "${name}" already registered with bit ${existing}; ignoring explicit bit ${explicitBit}.`);
+        warn(
+          `[@pixi/3d] pass "${name}" already registered with bit ${existing}; ignoring explicit bit ${explicitBit}.`,
+        );
       }
       return existing;
     }

@@ -81,13 +81,13 @@ function labelMatches(value: string | null, label: string | RegExp): boolean {
  */
 export interface Size3D {
   /** Extent along x */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- result field, read back from getSize
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- result field, read back from getSize
   width: number;
   /** Extent along y */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- result field, read back from getSize
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- result field, read back from getSize
   height: number;
   /** Extent along z */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- result field, read back from getSize
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- result field, read back from getSize
   depth: number;
 }
 
@@ -349,7 +349,7 @@ const OPTIONS_APPLIED_LATER: Record<string, boolean> = {
   depth: true,
 };
 
-// oxlint-disable-next-line pixi3d/require-export-jsdoc, pixi3d/require-member-api-doc
+// oxlint-disable-next-line pixijs-3d/require-export-jsdoc, pixijs-3d/require-member-api-doc
 export interface Container3D extends PixiMixins.Container3D {}
 
 /** `{} & string` keys rather than `string`, which would swallow the literal keys of the known events */
@@ -419,7 +419,7 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    * {@link Container3D.updateLocalTransform | updateLocalTransform}. Read it, but change the
    * components instead: the next rebuild overwrites it.
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- rebuilt by the view, never set by hand
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- rebuilt by the view, never set by hand
   public localTransform: Matrix4 = new Matrix4();
   /**
    * World transform: the parent's world transform times this node's
@@ -430,7 +430,7 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    * node or an ancestor is hidden, and a node outside any view keeps the identity matrix.
    * {@link Container3D.getGlobalTransform | getGlobalTransform} always works out a current one.
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- rebuilt by the view, never set by hand
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- rebuilt by the view, never set by hand
   public worldTransform: Matrix4 = new Matrix4();
 
   private readonly _position = new ObservableVector3(this, 0, 0, 0);
@@ -455,7 +455,7 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   public children: Container3D[] = [];
 
   /** Parent node, or `null` for a node with none, such as a view's root */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- set by addChild and removeChild, never by hand
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- set by addChild and removeChild, never by hand
   public parent: Container3D | null = null;
 
   /** @internal */
@@ -476,7 +476,7 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
   public boundsVolume: Box | null = null;
 
   /** Whether {@link Container3D.destroy | destroy} has run, as in pixi's `Container` */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   public destroyed = false;
 
   /** Set while this node waits for a transform pass, so it's queued once @internal */
@@ -1697,13 +1697,13 @@ export class Container3D extends EventEmitter<Container3DEvents & AnyEvent> {
    *
    * The view works it out once per frame, so it lags a `visible` change until the next render.
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   get worldVisible(): number {
     return this._worldVisible;
   }
 
   /** The {@link View3D} this node is in, or `null` when it isn't in a scene */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   get view3d(): View3D | null {
     return this._view3d;
   }

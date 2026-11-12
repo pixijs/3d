@@ -26,7 +26,7 @@ node.on('pointerdown', () => {
 - With {@link Container3D#interactiveChildren | interactiveChildren} set to `false`, the view tests that one box per target, not each of the four meshes inside it. [Interaction](../../../../src/events/__docs__/interaction.md#hit-volumes) covers the other shapes a hit volume can take.
 - `pointerdown` fires the moment you press. A `pointertap` waits for the release, and reaches the target only if the pointer is still over it, so a target that slides away in between never gets it.
 
-A target that's already down ignores the hit. The ray passes through meshes that aren't [hit-tested](../../../../src/events/__docs__/interaction.md#which-nodes-take-part), so a target that has slid into a side wall can still be hit through it. To make a mesh stop shots, set its `eventMode` to `'static'` too.
+A target that's already down ignores the hit. The ray passes through meshes that aren't [hit-tested](../../../../src/events/__docs__/interaction.md#event-modes), so a target that has slid into a side wall can still be hit through it. To make a mesh stop shots, set its `eventMode` to `'static'` too.
 
 ## Fall and stand up
 

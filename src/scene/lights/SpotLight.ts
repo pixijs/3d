@@ -104,7 +104,7 @@ export class SpotLight extends Light {
   };
 
   /** Always `'spot'` */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type = 'spot';
 
   /**

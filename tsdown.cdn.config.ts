@@ -15,12 +15,12 @@ import { inlineWorker } from './scripts/build/inline-worker.mts';
 // surface, which is why no barrel exports `core/gl/**` or `core/gpu/**`: each backend
 // stays in the lazy chunk its renderer loader imports.
 //
-// `extras` is a second file, `pixi-3d-extras.mjs`, that a page imports next to the main
+// `extras` is a second file, `pixijs-3d-extras.mjs`, that a page imports next to the main
 // one. It holds only `src/extras/**` and takes the engine as named imports from
-// `./pixi-3d.mjs`, so the main file stays the same size and the engine ships once.
+// `./pixijs-3d.mjs`, so the main file stays the same size and the engine ships once.
 //
 // Every chunk needs a stable name, keyed by the module that fronts it, so a page that
-// cached `pixi-3d.mjs` can still fetch its lazy halves after a redeploy. A chunk that
+// cached `pixijs-3d.mjs` can still fetch its lazy halves after a redeploy. A chunk that
 // matches nothing fails the build rather than shipping under a name that changes with
 // the code.
 const CHUNK_NAMES: [test: RegExp, name: string][] = [
@@ -98,7 +98,7 @@ function checkEngineImports(engine: string): void {
  */
 function checkLayout(): Plugin {
   return {
-    name: 'pixi3d-check-cdn-layout',
+    name: 'pixijs-3d-check-cdn-layout',
     generateBundle(_options, bundle) {
       const failures: string[] = [];
       let engine: string | undefined;
@@ -139,7 +139,7 @@ function checkLayout(): Plugin {
  */
 function importEngine(from: string): Plugin {
   return {
-    name: 'pixi3d-cdn-import-engine',
+    name: 'pixijs-3d-cdn-import-engine',
     resolveId: {
       filter: { id: /^\.\.?\// },
       async handler(source, importer, options) {
@@ -164,7 +164,7 @@ function checkExtrasLayout(engine: string): Plugin {
   const expected = [engine, 'pixi.js'].sort().join();
 
   return {
-    name: 'pixi3d-check-cdn-extras-layout',
+    name: 'pixijs-3d-check-cdn-extras-layout',
     generateBundle(_options, bundle) {
       const failures: string[] = [];
 
@@ -190,13 +190,13 @@ function checkExtrasLayout(engine: string): Plugin {
 
 const banner = `/*!
  * @pixi/3d - v${pkg.version}
- * https://github.com/pixijs/pixi-3d
+ * https://github.com/pixijs/3d
  * @pixi/3d is licensed under the MIT License.
  */`;
 
 function cdn(minify: boolean): UserConfig[] {
   const ext = minify ? '.min.mjs' : '.mjs';
-  const engine = `./pixi-3d${ext}`;
+  const engine = `./pixijs-3d${ext}`;
   const base: UserConfig = {
     outDir: 'dist',
     // The library build cleans `dist/`; this one only adds to it.
@@ -217,7 +217,7 @@ function cdn(minify: boolean): UserConfig[] {
               'add it to CHUNK_NAMES in tsdown.cdn.config.ts.',
           );
         }
-        return `pixi-3d-${chunkName}${ext}`;
+        return `pixijs-3d-${chunkName}${ext}`;
       },
     },
   };
@@ -225,13 +225,13 @@ function cdn(minify: boolean): UserConfig[] {
   return [
     {
       ...base,
-      entry: { 'pixi-3d': './src/index.ts' },
+      entry: { 'pixijs-3d': './src/index.ts' },
       deps: { alwaysBundle: [/^meshoptimizer(\/|$)/], onlyBundle: ['meshoptimizer'], onlyImport: ['pixi.js'] },
       plugins: [inlineWorker(), checkLayout()],
     },
     {
       ...base,
-      entry: { 'pixi-3d-extras': './src/extras/index.ts' },
+      entry: { 'pixijs-3d-extras': './src/extras/index.ts' },
       deps: { onlyBundle: [], onlyImport: ['pixi.js'] },
       plugins: [importEngine(engine), checkExtrasLayout(engine)],
     },

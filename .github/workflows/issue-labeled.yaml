@@ -1,0 +1,29 @@
+name: Issue Labeled
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  reply-labeled:
+    # Checked here rather than on the step, so other labels never boot a runner.
+    if: "${{ github.repository == 'pixijs/3d' && github.event.label.name == 'status: needs reproduction' }}"
+    runs-on: namespace-profile-linux-8-16
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: needs reproduction
+        uses: actions-cool/issues-helper@a610082f8ac0cf03e357eb8dd0d5e2ba075e017e
+        with:
+          actions: 'create-comment, remove-labels'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.issue.number }}
+          body: >-
+            Hello @${{ github.event.issue.user.login }}. Please provide a
+            [minimal reproduction](https://stackoverflow.com/help/minimal-reproducible-example)
+            using [StackBlitz](https://stackblitz.com/edit/pixijs-v8) or
+            [JSFiddle](https://jsfiddle.net/yavg3stL/). Issues marked with
+            `Needs Reproduction` will be closed if they have no activity within
+            7 days.
+          labels: 'Pending Triage'

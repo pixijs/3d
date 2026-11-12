@@ -60,7 +60,7 @@ addShapes(app, far, 10, 'far');
 followPointer(app, far);
 ```
 
-- A view takes 2D filters like any display object, and `BlurFilter` blurs everything the far view draws. [View3D and the 2D/3D bridge](../../../../src/__docs__/concepts/view3d.md) covers filters, masks and several views.
+- A view takes 2D filters like any display object, and `BlurFilter` blurs everything the far view draws. [View3D and 2D content](../../../../src/__docs__/concepts/view3d.md) covers filters, masks and several views.
 - `repeatEdgePixels` makes the blur repeat the pixels at the screen's edges. Without it, the blur mixes in the empty space past the edges, and they fade toward the application's background.
 - The far camera stands twice as far back. `addShapes` fits the ring to what that camera sees, so the far shapes spread across the screen like the near ones but look smaller, and they move less when the camera follows the pointer.
 - A different seed gives the far view its own layout.

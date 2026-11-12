@@ -25,7 +25,7 @@ describe('Vector3 — construction and identity', () => {
   test('toString reports the component values', () => {
     const p = new Vector3(1, 2, 3);
 
-    expect(p.toString()).toBe('[pixi-3d/math:Vector3 x=1 y=2 z=3]');
+    expect(p.toString()).toBe('[@pixi/3d/math:Vector3 x=1 y=2 z=3]');
   });
 });
 

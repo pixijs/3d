@@ -123,7 +123,7 @@ export class MotionBlurEffect extends PostEffect {
   };
 
   /** Always `[velocityOutput]`, so the view writes the velocity while the effect is enabled */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- fixed by the effect; the view reads it, users don't
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- fixed by the effect; the view reads it, users don't
   public override readonly requiredOutputs = [velocityOutput];
 
   protected override readonly uniforms = new UniformGroup({

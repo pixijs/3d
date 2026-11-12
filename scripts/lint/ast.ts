@@ -1,4 +1,4 @@
-/** The slice of the oxlint JS plugin API (ESTree nodes, rule context) the pixi3d rules rely on. */
+/** The slice of the oxlint JS plugin API (ESTree nodes, rule context) the PixiJS 3D rules rely on. */
 
 interface LineColumn {
   line: number;

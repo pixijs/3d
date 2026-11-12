@@ -81,7 +81,7 @@ export function createVisuals({ app, view3d, stage, maze, pane }: VisualsOptions
     new Vector3(-maze.area.halfWidth - WALL_ROOM, 0, -MAZE_EDGE - WALL_ROOM),
     new Vector3(maze.area.halfWidth + WALL_ROOM, 0, maze.area.back),
   ];
-  // The inset's own background covers only a 2 × 2 square behind an orthographic camera, a pixi-3d bug, so an opaque
+  // The inset's own background covers only a 2 × 2 square behind an orthographic camera, a PixiJS 3D bug, so an opaque
   // sheet in the panel's colour lies under the map instead.
   const paper = createHelperMaterial({ color: overlayColor('panel', stage.darkness) });
   // Flattened, so the frustum, at eye height, draws over the walls.

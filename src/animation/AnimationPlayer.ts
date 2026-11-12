@@ -444,14 +444,14 @@ export class AnimationPlayer {
       state.onLoop = null;
     });
 
-    /* oxlint-disable pixi3d/destroy-release -- kept states, playing, stop and update still read these after destroy */
+    /* oxlint-disable pixijs-3d/destroy-release -- kept states, playing, stop and update still read these after destroy */
     this._states.length = 0;
     this._stateCache.clear();
     this._animations.clear();
     this._animationLabels = null;
     this._accumulators = {};
     this._accumulatorList.length = 0;
-    /* oxlint-enable pixi3d/destroy-release */
+    /* oxlint-enable pixijs-3d/destroy-release */
   }
 
   private _removeStopped(): void {

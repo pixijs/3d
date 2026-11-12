@@ -473,14 +473,14 @@ export class BaseMaterial3D<
   public state: State;
 
   /** Whether `destroy()` has run */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   public destroyed = false;
 
   /**
    * Primitive topology for every pass that doesn't set its own; set by the
    * {@link BaseMaterial3DOptions#topology | topology} option, and {@link PassDescriptor} lists what overrides it
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   public readonly topology?: Topology;
 
   /**
@@ -550,7 +550,7 @@ export class BaseMaterial3D<
   public _descriptorDirtyId = 0;
 
   /** Whether back faces are drawn too, lit with their normal flipped; set by the `doubleSided` option */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   public readonly doubleSided: boolean;
 
   /**
@@ -959,8 +959,8 @@ export class BaseMaterial3D<
       this._deriveUvFrame();
     } else if (this._uvTransformRow0 && !isFullFrame(value) && !this._frameMatchesTransform(value)) {
       warnOnce(
-        'pixi3d-uv-frame-secondary',
-        '[pixi-3d] A framed texture landed in a non-baseColor slot but the material UV transform ' +
+        'pixijs-3d-uv-frame-secondary',
+        '[@pixi/3d] A framed texture landed in a non-baseColor slot but the material UV transform ' +
           "(derived from the baseColor slot, or set explicitly) doesn't match its frame. The shared " +
           'transform cannot serve per-slot frames — pack secondary maps to match the baseColor frame.',
       );
@@ -1254,8 +1254,8 @@ export class BaseMaterial3D<
     if (this._uvTransformExplicit) {
       if (framed) {
         warnOnce(
-          'pixi3d-uv-frame-explicit',
-          '[pixi-3d] A framed baseColor texture was assigned but the material has an explicit ' +
+          'pixijs-3d-uv-frame-explicit',
+          '[@pixi/3d] A framed baseColor texture was assigned but the material has an explicit ' +
             'uvTransform, which wins — the frame is not applied. Clear material.uvTransform to ' +
             'derive from the texture frame.',
         );
@@ -1273,8 +1273,8 @@ export class BaseMaterial3D<
     if (framed) {
       if (texture.trim) {
         warnOnce(
-          'pixi3d-uv-frame-trimmed',
-          '[pixi-3d] The baseColor texture is trimmed. Trims describe where a sprite quad shrank ' +
+          'pixijs-3d-uv-frame-trimmed',
+          '[@pixi/3d] The baseColor texture is trimmed. Trims describe where a sprite quad shrank ' +
             'and cannot map onto arbitrary mesh UVs — the trim is ignored; only the frame applies. ' +
             'Pack 3D textures without trimming.',
         );
@@ -1525,7 +1525,7 @@ export class BaseMaterial3D<
     this._uploadQueue?.remove(this);
     this._uploadQueue = null;
     this._storeQueued = false;
-    // oxlint-disable-next-line pixi3d/destroy-release -- a mesh still using the destroyed material removes itself from this list when it detaches or swaps material, and clear() resets its index so that remove is a no-op
+    // oxlint-disable-next-line pixijs-3d/destroy-release -- a mesh still using the destroyed material removes itself from this list when it detaches or swaps material, and clear() resets its index so that remove is a no-op
     this._meshes.clear();
     this._uniformResource?.destroy(false);
     this._uniformResource = null;

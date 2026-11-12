@@ -1,6 +1,6 @@
 ---
 title: Scene graph and transforms
-description: Which way the axes point, how nodes are positioned, rotated, scaled and grouped, and when world transforms update.
+description: Which way the axes point, how to position, rotate, scale and group nodes, and when world transforms update.
 category: core-concepts
 ---
 
@@ -10,16 +10,16 @@ A 3D scene is a tree of {@link Container3D} nodes under a view's {@link View3D#r
 
 ## Axes, units and facing
 
-With the camera unrotated, +X points right, +Y points up, not down as in 2D, and +Z points out of the screen toward you.
+With the camera unrotated, +X points right, +Y points up and +Z points out of the screen toward you. In 2D, +y points down.
 
-glTF, the 3D model format PixiJS 3D loads, measures in metres, and the engine's defaults expect metres too. By default a camera draws nothing more than 1000 units in front of it, its {@link Camera3D#far | far} distance, and a {@link PointLight} fades with the square of the distance, so a scene built at pixel sizes gets cut off and its lamps barely light it. Treat one unit as one metre and build things at their real size.
+glTF, the 3D model format PixiJS 3D loads, measures in metres, and the engine's defaults expect metres too. By default a camera draws nothing more than 1000 units in front of it, its {@link Camera3D#far | far} distance. A {@link PointLight} fades with the square of the distance. At pixel sizes, a scene gets cut off and its lamps barely light it. Treat one unit as one metre and build things at their real size.
 
 Which way a node faces depends on what it is:
 
-- A mesh's front is its +Z side: a {@link PlaneGeometry} faces +Z, and glTF models are built facing +Z.
-- A {@link Camera3D | camera} looks along its -Z axis, into the screen when unrotated, and a directional or spot {@link Light | light} shines along its -Z axis too.
+- A mesh's front is its +Z side. A {@link PlaneGeometry} faces +Z, and glTF models are built facing +Z.
+- A {@link Camera3D | camera} looks along its -Z axis, which points into the screen when the camera is unrotated. A directional or spot {@link Light | light} shines along its -Z axis too.
 
-{@link Container3D#lookAt | lookAt} turns a node to face a point in world space, the scene's own coordinates rather than its parent's, and it knows which way each kind of node faces. This lays a floor flat and aims a sun at its middle:
+{@link Container3D#lookAt | lookAt} turns a node to face a point in world space, which means the scene's own coordinates rather than its parent's. It points a camera's or light's -Z axis at that point, and any other node's +Z side. This lays a floor flat and aims a sun at its middle:
 
 ```ts
 import { DirectionalLight, Material3D, Mesh3D, PlaneGeometry } from '@pixi/3d';
@@ -37,16 +37,16 @@ const sun = new DirectionalLight({ intensity: 3 });
 sun.position.set(-3, 5, 2);
 view3d.root.addChild(floor, sun);
 
-// lookAt works from where the light's parents put it, so add it first.
+// lookAt reads the world transform of the light's parents, so add the light first.
 // This turns its -Z axis toward the middle of the floor.
 sun.lookAt({ x: 0, y: 0, z: 0 });
 ```
 
 ## Position, rotation and scale
 
-{@link Container3D#position | position}, {@link Container3D#rotation | rotation} and {@link Container3D#scale | scale} are {@link ObservableVector3}s, 3D vectors that tell their node when they change, so you can change a component or call any vector method on them. As in 2D, {@link Container3D#x | x}, `y` and `z` are shortcuts for the position's.
+{@link Container3D#position | position}, {@link Container3D#rotation | rotation} and {@link Container3D#scale | scale} are {@link ObservableVector3}s. These 3D vectors tell their node when they change, so you can change one component or call any vector method on them. As in 2D, {@link Container3D#x | x}, `y` and `z` are shortcuts for the position's components.
 
-`rotation` holds three angles in radians, one around each axis. A positive angle turns counter-clockwise as you look down the axis from its + end toward the origin, so a positive `rotation.z` turns a node counter-clockwise on screen, the opposite way to 2D's `rotation`. A positive `rotation.y` turns a node that faces you toward +X, to your right. {@link Container3D#angle | angle} is the same rotation in degrees.
+`rotation` holds three angles in radians, one around each axis. A positive angle turns counter-clockwise as you look down the axis from its + end toward the origin. Since +Z points toward you, a positive `rotation.z` turns a node counter-clockwise on screen, the opposite way to 2D's `rotation`. A positive `rotation.y` turns a node that faces you toward +X, to your right. {@link Container3D#angle | angle} is the same rotation in degrees.
 
 When you set more than one angle, the node turns around Z first, then Y, then X, each around its parent's axes. So to lean a campfire's logs in toward the middle, lean each one around Z and then turn it around Y. A lean around X would come after the turn and tip every log the same way.
 
@@ -65,15 +65,15 @@ log.rotation.set(0, -angle, 0.4); // lean it around Z, then turn the lean toward
 
 ### Rotation and quaternion
 
-A node also has a {@link Container3D#quaternion | quaternion}, a rotation stored as four numbers, and whichever of the two you set last is the one the node uses. `lookAt`, `reparentChild`, loaded models and their animations set the quaternion. Watch for three things:
+A node also has a {@link Container3D#quaternion | quaternion}, a rotation stored as four numbers. The node uses whichever of the two you set last. `lookAt`, `reparentChild`, loaded models and their animations set the quaternion. Watch for three things:
 
 - `rotation` doesn't read back a turn made through the quaternion. A node inside a loaded model reads `0, 0, 0` however the file turned it, so `rotation.y += 0.1` on it replaces the file's rotation. To turn such a node further, change its quaternion, as [Math](../../math/__docs__/math.md#rotations) shows. The file never turns the model itself, so `model.rotation.y` works as usual.
-- Writing values `rotation` already holds, through a component or `set`, changes nothing. `lookAt` never touches `rotation`, so a turret aimed with it stays aimed after `turret.rotation.set(0, 0, 0)`. Assign the whole rotation to switch back: `turret.rotation = { x: 0, y: 0, z: 0 }`.
-- Don't write `rotation` and call `lookAt` on the same node in one frame: if an earlier frame's `lookAt` left the node facing that point, the `rotation` write wins.
+- Setting `rotation` to values it already holds, through a component or `set`, changes nothing. `lookAt` never touches `rotation`, so a turret aimed with it stays aimed after `turret.rotation.set(0, 0, 0)`. To make the node use `rotation` again, assign a whole rotation: `turret.rotation = { x: 0, y: 0, z: 0 }`.
+- Don't write `rotation` and call `lookAt` on the same node in one frame. If an earlier frame's `lookAt` already left the node facing that point, the `rotation` write wins.
 
 ## Parents and children
 
-A plain `Container3D` draws nothing; use one to group nodes that move together. In the floating-shapes tutorial, a container carries each shape around while the mesh inside it spins:
+A plain `Container3D` draws nothing. Use one to group nodes that move together. In the floating-shapes tutorial, a container moves each shape around while the mesh inside it spins:
 
 ```ts
 import { Container3D, Mesh3D } from '@pixi/3d';
@@ -90,18 +90,18 @@ app.ticker.add((ticker) => {
 });
 ```
 
-As with 2D's `ContainerOptions`, every node's constructor also takes {@link Container3DOptions} such as `position`, `rotation` and `label` alongside its own options. The child methods and events match a 2D `Container`'s, such as `addChild`, `removeFromParent` and the `added` event; {@link Container3DEvents} lists the events.
+As with 2D's `ContainerOptions`, every node's constructor takes {@link Container3DOptions}, such as `position`, `rotation` and `label`, on top of its own options. The child methods and events match a 2D `Container`'s, such as `addChild`, `removeFromParent` and the `added` event. {@link Container3DEvents} lists the events.
 
-Unlike 2D, the order of children doesn't decide what covers what: a nearer solid surface hides a farther one.
+Unlike 2D, the order of children doesn't decide what covers what. A nearer solid surface hides a farther one.
 
-{@link Container3D#getChildByLabel | getChildByLabel} finds a node by its {@link Container3D#label | label}. A loaded {@link Model3D | model} labels each node with its name in the file, as [Loading models](../../assets/__docs__/models.md#what-a-file-can-bring) covers, so you can find a part such as a car's wheel:
+{@link Container3D#getChildByLabel | getChildByLabel} finds a node by its {@link Container3D#label | label}. A loaded {@link Model3D | model} labels each node with its name in the file, as [Loading models](../../assets/__docs__/models.md#file-contents) covers. That lets you find a part by name, such as a car's wheel:
 
 ```ts
 const car = new Model3D({ source });
 const wheel = car.getChildByLabel('wheel-front-left', true); // true searches the whole subtree
 ```
 
-In a skinned model, such as a character whose mesh bends with a skeleton, a bone becomes a node only when the file puts a mesh under it, so `getChildByLabel` doesn't find the others. The bones live in a {@link Skeleton} on the model, and [Animation](../../animation/__docs__/animation.md#skinned-meshes) shows how to find one by name and pose it.
+A skinned model, such as a character, has a mesh that bends with a skeleton. A bone becomes a node only when the file puts a mesh under it, so `getChildByLabel` doesn't find the others. Every bone is in a {@link Skeleton} on the model, and [Animation](../../animation/__docs__/animation.md#skinned-meshes) shows how to find one by name and pose it.
 
 ## Local and world space
 
@@ -111,7 +111,7 @@ These methods convert between a node's own space and world space:
 - {@link Container3D#toGlobal | toGlobal} converts a point from the node's own space to world space.
 - {@link Container3D#toLocal | toLocal} converts a point in world space, or in another node's space, into the node's own space.
 
-In [Parents and children](/3d/examples?example=scene_hierarchy), turning an empty `orbit` node carries a planet round the sun while the planet's `position` never changes, and `getGlobalPosition` gives where the orbit has carried it:
+In [Parents and children](/3d/examples?example=scene_hierarchy), turning an empty `orbit` node carries a planet round the sun. The planet's `position` never changes, and `getGlobalPosition` returns where the orbit has moved it:
 
 ```ts
 import { Vector3 } from '@pixi/3d';
@@ -123,11 +123,11 @@ const world = new Vector3();
 
 app.ticker.add((ticker) => {
   orbit.rotation.y += 0.45 * (ticker.deltaMS / 1000);
-  planet.getGlobalPosition(world); // writes into world, so nothing is allocated each frame
+  planet.getGlobalPosition(world); // writes into world, so it allocates nothing each frame
 });
 ```
 
-To place 2D content over a 3D node, pass its world position to {@link View3D#worldToScreen | worldToScreen}, which [View3D and the 2D/3D bridge](./view3d.md#from-the-3d-world-to-the-screen) covers.
+To place 2D content over a 3D node, pass its world position to {@link View3D#worldToScreen | worldToScreen}, which [View3D and 2D content](./view3d.md#world-to-screen) covers.
 
 ### Moving a node to a new parent
 
@@ -139,23 +139,23 @@ hand.reparentChild(sword); // the sword stays put, and from now on follows the h
 
 ## When world transforms update
 
-Changing a position, rotation or scale only marks the node. {@link Container3D#worldTransform | worldTransform} holds what the view worked out the last time it drew, normally once a frame, so it can be out of date:
+Changing a position, rotation or scale only marks the node as changed. {@link Container3D#worldTransform | worldTransform} holds what the view worked out the last time it drew, normally once a frame, so it can be out of date:
 
 - after a change you made since the view last drew,
 - while the node or one of its parents is hidden,
 - for a node that isn't under a view's root.
 
-`getGlobalPosition`, `toGlobal`, `toLocal` and {@link Container3D#getGlobalTransform | getGlobalTransform} walk up through the node's parents on each call, so their result is current even straight after a change. Reading `worldTransform` costs nothing, and suits per-frame code that can use last frame's value.
+`getGlobalPosition`, `toGlobal`, `toLocal` and {@link Container3D#getGlobalTransform | getGlobalTransform} walk up through the node's parents on each call, so their result is current even straight after a change. Reading `worldTransform` costs nothing and suits per-frame code that can use last frame's value.
 
 ## Showing and hiding
 
-{@link Container3D#visible | visible} hides a node and everything under it. Hiding and showing a node costs less than removing it and adding it back, so use it for things that come and go often. Rendering throws while the view's camera or one of its parents is hidden, so keep the camera out of groups you hide.
+{@link Container3D#visible | visible} hides a node and everything under it. Hiding and showing a node costs less than removing it and adding it back, so use `visible` for things that come and go often. Rendering throws while the view's camera or one of its parents is hidden, so keep the camera out of groups you hide.
 
-To take a node out for good, remove or destroy it; [Resources and cleanup](./resources.md#destroying) covers what that frees. The view's camera sits under `view3d.root` too, so clearing a level with `view3d.root.removeChildren()` takes the camera out, and the next render throws. Put each level in a `Container3D` of its own and clear that instead.
+To take a node out for good, remove or destroy it. [Resources and cleanup](./resources.md#destroying) covers what that frees. The view's camera sits under `view3d.root` too, so clearing a level with `view3d.root.removeChildren()` takes the camera out, and the next render throws. Put each level in a `Container3D` of its own and clear that instead.
 
 ## Measuring and sizing
 
-{@link Container3D#getLocalBounds | getLocalBounds} measures a node and everything visible under it as a {@link Box}, in the node's own space: before its own position, rotation and scale apply. Each call walks the subtree, so measure once rather than every frame.
+{@link Container3D#getLocalBounds | getLocalBounds} measures a node and everything visible under it as a {@link Box}. It measures in the node's own space, before the node's own position, rotation and scale apply. Each call walks the subtree, so measure once rather than every frame.
 
 This scales a fox model to two units long and stands it on the ground at y = 0:
 
@@ -170,11 +170,11 @@ fox.scale.set(scale);
 fox.position.y = -bounds.min.y * scale;
 ```
 
-{@link Container3D#width | width}, {@link Container3D#height | height} and {@link Container3D#depth | depth} give the measured size times the scale. Setting one changes the scale on that axis only, and {@link Container3D#setSize | setSize} sets all three, so both stretch a model unless the sizes you ask for keep its proportions. For a fit that keeps them, work out one scale from the bounds, as above. [Size and bounds](/3d/examples?example=scene_bounds) fits three models into equal cubes, stretched with `setSize` or kept in shape with one scale.
+{@link Container3D#width | width}, {@link Container3D#height | height} and {@link Container3D#depth | depth} give the measured size times the scale. Setting one changes the scale on that axis only, and {@link Container3D#setSize | setSize} sets all three. Both stretch a model unless the sizes you ask for keep its proportions. To keep them, work out one scale from the bounds, as above. [Size and bounds](/3d/examples?example=scene_bounds) fits three models into equal cubes, stretched with `setSize` or kept in shape with one scale.
 
 ## Next steps
 
 - [Math](../../math/__docs__/math.md): vectors, quaternions and turning a node with a quaternion.
 - [Cameras](../../scene/__docs__/cameras.md): placing and aiming the camera.
-- [View3D and the 2D/3D bridge](./view3d.md): from world positions to the screen and back.
+- [View3D and 2D content](./view3d.md): from world positions to the screen and back.
 - [Scene objects](../../scene/__docs__/scene.md): the kinds of node a scene is built from.

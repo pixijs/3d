@@ -405,7 +405,7 @@ export class ParticleContainer3D<B extends readonly ShaderBit[] = readonly Shade
   override set billboardMode(value: BillboardMode) {
     if (value === 'none') return;
     warnOnce(
-      'pixi3d-particle-billboard-mode',
+      'pixijs-3d-particle-billboard-mode',
       `[ParticleContainer3D] billboardMode '${value}' is ignored — a particle container orients each quad ` +
         'itself. Pass the `billboard` option to the constructor instead.',
     );

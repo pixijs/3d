@@ -92,7 +92,7 @@ describe('Vector4', () => {
   describe('toString', () => {
     test('produces the labeled representation', () => {
       const p = new Vector4(1, 2, 3, 4);
-      expect(p.toString()).toBe('[pixi-3d/math:Vector4 x=1 y=2 z=3 w=4]');
+      expect(p.toString()).toBe('[@pixi/3d/math:Vector4 x=1 y=2 z=3 w=4]');
     });
   });
 

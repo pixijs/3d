@@ -322,10 +322,10 @@ export class Frustum {
    * ```ts
    * console.log(`${camera.frustum}`);
    * ```
-   * @returns The string `[pixi-3d/math:Frustum]`
+   * @returns The string `[@pixi/3d/math:Frustum]`
    */
   public toString(): string {
-    return `[pixi-3d/math:Frustum]`;
+    return `[@pixi/3d/math:Frustum]`;
   }
 
   private _writePlane(index: number, plane: Plane): void {

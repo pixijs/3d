@@ -165,7 +165,7 @@ export class Vector3 implements PointLike3D {
    * ```
    */
   public toString(): string {
-    return `[pixi-3d/math:Vector3 x=${this.x} y=${this.y} z=${this.z}]`;
+    return `[@pixi/3d/math:Vector3 x=${this.x} y=${this.y} z=${this.z}]`;
   }
 
   /**

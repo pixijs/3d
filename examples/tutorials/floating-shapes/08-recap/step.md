@@ -14,7 +14,7 @@ You've built a scene of clay shapes floating in a lavender sky, with a camera th
 
 ## Where to go next
 
-- [View3D and the 2D/3D bridge](../../../../src/__docs__/concepts/view3d.md) covers views of any size, several views, and filters.
+- [View3D and 2D content](../../../../src/__docs__/concepts/view3d.md) covers views of any size, several views, and filters.
 - [Scene graph and transforms](../../../../src/__docs__/concepts/scene-graph.md) explains positions, rotations and how a parent moves its children.
 - [Materials](../../../../src/materials/__docs__/materials.md) and [Lights](../../../../src/scene/__docs__/lights.md) go further into surfaces and lighting.
 - [Geometry](../../../../src/geometry/__docs__/geometry.md) lists every primitive.

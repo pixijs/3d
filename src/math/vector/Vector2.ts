@@ -143,7 +143,7 @@ export class Vector2 implements PointLike {
    * ```
    */
   public toString(): string {
-    return `[pixi-3d/math:Vector2 x=${this.x} y=${this.y}]`;
+    return `[@pixi/3d/math:Vector2 x=${this.x} y=${this.y}]`;
   }
 
   /**

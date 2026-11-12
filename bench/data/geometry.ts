@@ -3,7 +3,7 @@
  *
  * Generating it is what makes the workload the same everywhere — the same vertex and triangle counts on
  * every machine, in every run, with no asset to fetch. The winding is counter-clockwise for outward faces in a
- * right-handed Y-up space, which is what pixi-3d expects.
+ * right-handed Y-up space, which is what PixiJS 3D expects.
  */
 
 export interface Geometry {

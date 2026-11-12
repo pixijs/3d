@@ -79,8 +79,8 @@ export class CopyOpaquePass extends RenderPass {
       const renderer = this.pipe.renderer;
       if (renderer.type === RendererType.WEBGL && !(renderer as WebGLRenderer).backBuffer.useBackBuffer) {
         warnOnce(
-          `pixi3d-copy-opaque-backbuffer-${renderer.uid}`,
-          '[pixi-3d] Glass is drawing with useBackBuffer off, so a View3D drawn straight to an opaque canvas ' +
+          `pixijs-3d-copy-opaque-backbuffer-${renderer.uid}`,
+          '[@pixi/3d] Glass is drawing with useBackBuffer off, so a View3D drawn straight to an opaque canvas ' +
             'refracts nothing. Pass useBackBuffer: true when you create the Application or renderer.',
         );
       }

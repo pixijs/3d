@@ -41,7 +41,7 @@ const buttons = clips.labels.map((label, i) => {
 });
 ```
 
-- The bar goes on the stage after the view, so it draws over the 3D scene, as [View3D and the 2D/3D bridge](../../../../src/__docs__/concepts/view3d.md#2d-behind-and-over-a-view) explains.
+- The bar goes on the stage after the view, so it draws over the 3D scene, as [View3D and 2D content](../../../../src/__docs__/concepts/view3d.md#2d-behind-and-over-a-view) explains.
 - A button over the view takes the press itself, so a drag that starts on a button doesn't turn the camera.
 
 ## Draw them

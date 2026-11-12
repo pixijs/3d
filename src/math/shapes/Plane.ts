@@ -47,7 +47,7 @@ export class Plane {
    * @readonly
    * @default 'plane'
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'plane';
 
   /**
@@ -325,10 +325,10 @@ export class Plane {
 
   /**
    * Returns a string representation of this plane
-   * @returns A string in the form `[pixi-3d/math:Plane normal=(1, 0, 0) constant=0]`
+   * @returns A string in the form `[@pixi/3d/math:Plane normal=(1, 0, 0) constant=0]`
    * @advanced
    */
   public toString(): string {
-    return `[pixi-3d/math:Plane normal=(${this.normal.x}, ${this.normal.y}, ${this.normal.z}) constant=${this.constant}]`;
+    return `[@pixi/3d/math:Plane normal=(${this.normal.x}, ${this.normal.y}, ${this.normal.z}) constant=${this.constant}]`;
   }
 }

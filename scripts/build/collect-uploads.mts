@@ -6,10 +6,10 @@ import path from 'node:path';
 // typedoc already writes under `.s3_uploads/docs`.
 const dist = path.resolve('dist');
 const out = path.resolve('.s3_uploads');
-const files = readdirSync(dist).filter((name) => name.startsWith('pixi-3d'));
+const files = readdirSync(dist).filter((name) => name.startsWith('pixijs-3d'));
 
 if (files.length === 0) {
-  throw new Error('collect-uploads: no pixi-3d* files in dist/; run `npm run build:cdn` first');
+  throw new Error('collect-uploads: no pixijs-3d* files in dist/; run `npm run build:cdn` first');
 }
 
 mkdirSync(out, { recursive: true });

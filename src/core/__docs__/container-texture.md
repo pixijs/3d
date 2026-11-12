@@ -6,7 +6,7 @@ category: rendering
 
 # Rendering 2D into 3D
 
-A {@link ContainerTexture} draws a PixiJS `Container` into a texture, and a material shows that texture like an image. That puts 2D content on a 3D surface, such as a score board over a shooting gallery:
+A {@link ContainerTexture} draws a PixiJS `Container` into a texture, and a material shows that texture the same way it shows an image. That puts 2D content on a 3D surface, such as a score board over a shooting gallery:
 
 ```ts
 import { ContainerTexture, FlatMaterial, Mesh3D, PlaneGeometry } from '@pixi/3d';
@@ -27,25 +27,25 @@ const sign = new Mesh3D({
 view3d.root.addChild(sign);
 ```
 
-The texture stretches over the whole {@link PlaneGeometry | plane}, so give the plane the board's shape: 2.4 by 0.6 is 512 by 128 scaled down. {@link FlatMaterial} ignores the scene's lights, so the board looks lit from within, like a screen; a lit {@link Material3D} shades it like a poster on a wall. [Container texture](/3d/examples?example=2d3d_container-texture) puts a bouncing PixiJS wordmark and a clock on a monitor's screen this way.
+The texture stretches over the whole {@link PlaneGeometry | plane}, so give the plane the board's shape. The plane's 2.4 by 0.6 is the board's 512 by 128 scaled down. {@link FlatMaterial} ignores the scene's lights, so the board looks lit from within, like a screen. A lit {@link Material3D} shades it like a poster on a wall. [Container texture](/3d/examples?example=2d3d_container-texture) uses this to put a bouncing PixiJS wordmark and a clock on a monitor's screen.
 
 ## The container and its size
 
-The container moves into the texture, out of any parent it had, so it stops drawing on the stage. Adding it back to the stage takes it out of the texture, which then captures nothing. To show the same content in 2D too, build it twice, or show the texture in a [sprite](#which-way-up-it-shows).
+The texture takes the container out of any parent it had, so the container no longer draws on the stage. Adding it back to the stage takes it out of the texture, which then captures nothing. To show the same content in 2D as well, build it twice, or show the texture in a [sprite](#texture-orientation).
 
-{@link ContainerSourceOptions#width | width} and `height` set the capture: the rectangle from (0, 0) to (`width`, `height`), as if the container sat on the stage of a canvas that size. Leave both out and the texture sizes itself to the container's contents, measured once as it's built. That suits only a container whose own transform, such as its position or scale, is left at the defaults; for any other, give the size.
+{@link ContainerSourceOptions#width | width} and `height` set the area the texture captures. That's the rectangle from (0, 0) to (`width`, `height`), as if the container sat on the stage of a canvas that size. Leave both out and the texture sizes itself to the container's contents, measured once when you create it. That works only when the container's own transform, such as its position or scale, is at its defaults. For any other container, give the size.
 
-A `Text` with no `resolution` of its own draws at the renderer's, whatever the texture's {@link ContainerSourceOptions#resolution | resolution}, so give the texture `resolution: app.renderer.resolution` to match the two. {@link ContainerSourceOptions#antialias | antialias} smooths the edges of 2D shapes drawn into the texture; the application's `antialias` option doesn't reach them.
+A `Text` with no `resolution` of its own draws at the renderer's resolution, whatever the texture's {@link ContainerSourceOptions#resolution | resolution} is. Give the texture `resolution: app.renderer.resolution` so the two match. {@link ContainerSourceOptions#antialias | antialias} smooths the edges of 2D shapes drawn into the texture. The application's `antialias` option doesn't apply to them.
 
-## Empty space
+## Transparent areas
 
-An opaque material, the default {@link BaseMaterial3D#alphaMode | alphaMode}, draws the parts the container leaves empty black, and turns the soft edges next to them hard. Fill the container's background, as the board above does, or set {@link ContainerSourceOptions#clearColor | clearColor} to `'black'` to keep those edges smooth. For gaps you see through, such as rounded corners, use `alphaMode: 'blend'`.
+An opaque material, the default {@link BaseMaterial3D#alphaMode | alphaMode}, draws the container's empty parts black and turns the soft edges next to them hard. To keep those edges smooth, fill the container's background, as the board above does, or set {@link ContainerSourceOptions#clearColor | clearColor} to `'black'`. For gaps you can see through, such as rounded corners, use `alphaMode: 'blend'`.
 
-## Keeping it up to date
+## Updating the texture
 
-Nothing redraws the texture unless you turn on `autoUpdate`, described below. Given a `renderer`, it draws once as it's built, unless you turn {@link ContainerSourceOptions#firstRender | firstRender} off. Without one, it stays empty until its first {@link ContainerTexture#render | render}, and an opaque material shows it black. The texture keeps the renderer you give it, in its options or in a `render` call, so later calls can leave it out.
+The texture doesn't redraw itself unless you turn on `autoUpdate`, described below. With a `renderer`, the texture draws once when you create it, unless you turn {@link ContainerSourceOptions#firstRender | firstRender} off. Without one, it stays empty until its first {@link ContainerTexture#render | render}, and an opaque material shows it black. The texture keeps the renderer you give it, in its options or in a `render` call, so later calls can leave it out.
 
-**When the content changes.** A score or a health bar changes far less often than every frame, so render the texture after each change. In between, the surface keeps the last picture and the 2D content isn't drawn again:
+**When the content changes.** A score or a health bar changes far less often than every frame, so render the texture after each change. In between, the surface keeps the last picture and nothing draws the 2D content again:
 
 ```ts
 function setScore(points: number): void {
@@ -63,21 +63,21 @@ app.ticker.add(() => {
 });
 ```
 
-[Container texture](/3d/examples?example=2d3d_container-texture) switches between the two with a row. Set to render on change, it renders only when its clock's second turns, so the bouncing wordmark on the screen lags behind and catches up once a second.
+[Container texture](/3d/examples?example=2d3d_container-texture) has a setting that switches between the two. Set to render on change, it renders only when its clock's seconds change, so the bouncing wordmark on the screen falls behind and catches up once a second.
 
-{@link ContainerSourceOptions#autoUpdate | autoUpdate} renders the texture every frame for you from `Ticker.shared`, once it has a renderer. A default `Application` draws from a ticker of its own, so the surface shows the previous frame's capture. Create the application with `sharedTicker: true` to show the capture in the same frame, or call `render` from `app.ticker` as above.
+{@link ContainerSourceOptions#autoUpdate | autoUpdate} renders the texture every frame from `Ticker.shared`, once it has a renderer. A default `Application` draws from a ticker of its own, so the surface shows the previous frame's capture. To show the capture in the same frame, create the application with `sharedTicker: true`, or call `render` from `app.ticker` as above.
 
-Call `render` before the application draws, never from code that runs during a render, such as an `onRender` callback.
+Call `render` before the application draws. Never call it from code that runs during a render, such as an `onRender` callback.
 
-{@link ContainerTexture#setContainer | setContainer} points a texture at another container and keeps its size and GPU memory, so one screen can switch between menus; render it after the switch.
+{@link ContainerTexture#setContainer | setContainer} makes a texture capture another container. The texture keeps its size and GPU memory, so one screen can switch between menus. Render the texture after the switch.
 
 ## Clicks on the 2D content
 
-The container isn't on the stage, so pointer events never reach its children. Listen on the mesh instead. With {@link Container3D#hitVolume | hitVolume} set to `'geometry'`, a pointer event's {@link Event3DFields#hit3D | e.hit3D} carries {@link RaycastHit3D#uv | uv}, the mesh's own texture coordinate under the pointer, as [Interaction](../../events/__docs__/interaction.md#the-3d-event) shows. It's the coordinate before the material's {@link BaseMaterial3D#uvTransform | uvTransform} or a texture's [frame](#several-textures-from-one-container) changes it. On the board above, which has neither, the spot in the capture is (`uv.x * width`, `(1 - uv.y) * height`); on a glTF mesh flipped as [below](#which-way-up-it-shows), it's (`uv.x * width`, `uv.y * height`).
+The container isn't on the stage, so pointer events never reach its children. Listen on the mesh instead. With {@link Container3D#hitVolume | hitVolume} set to `'geometry'`, a pointer event's {@link Event3DFields#hit3D | e.hit3D} holds {@link RaycastHit3D#uv | uv}, the mesh's own texture coordinate under the pointer, as [Interaction](../../events/__docs__/interaction.md#3d-event-fields) shows. It's the coordinate before the material's {@link BaseMaterial3D#uvTransform | uvTransform} or a texture's [frame](#several-textures-from-one-container) changes it. On the board above, which has neither, the point in the capture is (`uv.x * width`, `(1 - uv.y) * height`). On a glTF mesh flipped as shown [below](#texture-orientation), it's (`uv.x * width`, `uv.y * height`).
 
-## Which way up it shows
+## Texture orientation
 
-The texture stores the container's bottom row first, the other way up from an image. That's upright on a {@link PlaneGeometry | plane} without {@link PlaneGeometryOptions#flipV | flipV}, as the board above shows, and [Geometry](../../geometry/__docs__/geometry.md#textures-on-the-built-in-shapes) says how each built-in shape shows it. On a loaded model's mesh, such as a screen in a glTF room, it's upside down, since glTF starts its texture coordinates at an image's top row. Flip `v`, the vertical texture coordinate, with the mesh material's {@link BaseMaterial3D#uvTransform | uvTransform}, as Geometry's crate does. This flip and the click spot above need texture coordinates stored as floats, which gltfpack doesn't keep by default; [Mesh quantization](../../assets/__docs__/compression.md#mesh-quantization) says why.
+The texture stores the container's bottom row first, the other way up from an image. On a {@link PlaneGeometry | plane} without {@link PlaneGeometryOptions#flipV | flipV}, it shows upright, like the board above. [Geometry](../../geometry/__docs__/geometry.md#textures-on-the-built-in-shapes) says how each built-in shape shows it. On a loaded model's mesh, such as a screen in a glTF room, it shows upside down, because glTF starts its texture coordinates at an image's top row. Flip `v`, the vertical texture coordinate, with the mesh material's {@link BaseMaterial3D#uvTransform | uvTransform}, as the crate in Geometry does. This flip and the click point above both need texture coordinates stored as floats, which gltfpack doesn't keep by default. [Mesh quantization](../../assets/__docs__/compression.md#mesh-quantization) says why.
 
 A 2D `Sprite` shows it upside down as well, so flip the sprite:
 
@@ -94,7 +94,7 @@ A {@link Sprite3D} shows it upside down too, and [Sprite3D](../../scene/__docs__
 
 ## Several textures from one container
 
-Build a {@link ContainerSource}, the source behind a `ContainerTexture`, to cut several textures from one container with frames, as from a sprite sheet; one `render` of the source updates them all. Since the bottom row comes first, a frame's `y` counts up from the container's bottom edge:
+A {@link ContainerSource} is the source behind a `ContainerTexture`. Build one yourself to cut several textures from one container with frames, as from a sprite sheet. One `render` of the source updates them all. Because the bottom row comes first, a frame's `y` counts up from the container's bottom edge:
 
 ```ts
 import { ContainerSource } from '@pixi/3d';
@@ -106,12 +106,12 @@ const play = new Texture({ source: sheet, frame: new Rectangle(0, 128, 128, 128)
 const pause = new Texture({ source: sheet, frame: new Rectangle(128, 128, 128, 128) }); // top right
 ```
 
-## 3D into 3D
+## Nesting a View3D
 
 A {@link View3D} is a 2D display object, so it can go in the container, and the texture then shows its 3D scene. To nest one scene inside another:
 
 - Size the view to the texture with `width` and `height`, not {@link View3D#autoResize | autoResize}, which sizes a view to the canvas even inside a texture.
-- The picture already holds the inner scene's lighting, so show it with a `FlatMaterial`, which doesn't light it again.
+- The picture already includes the inner scene's lighting, so show it with a `FlatMaterial`, which doesn't light it again.
 - Render the innermost texture first, so each texture captures the latest picture of the ones inside it.
 - A texture can't appear inside the container it captures, so give each level its own texture.
 
@@ -119,15 +119,15 @@ For a second angle on the same scene, such as a security monitor, use a second c
 
 ## Cleaning up
 
-{@link ContainerTexture#destroy | destroy()} leaves the texture's `ContainerSource` alive, and with `autoUpdate` on it keeps rendering every frame. `destroy(true)` frees the source and its GPU memory and stops `autoUpdate`. The container survives either way, unless you pass `{ container: true }`, which destroys it and its children along with the source.
+{@link ContainerTexture#destroy | destroy()} leaves the texture's `ContainerSource` alive, and if `autoUpdate` is on, the source keeps rendering every frame. `destroy(true)` frees the source and its GPU memory and stops `autoUpdate`. Either way the container survives, unless you pass `{ container: true }`, which destroys the container and its children along with the source.
 
 ```ts
 texture.destroy(true);
 ```
 
-A material {@link BaseMaterial3D#destroy | destroyed} with `texture: true` destroys the texture but leaves its source alive the same way; add `textureSource: true` to free the source too. {@link Destroy3DOptions} says how these flags reach a mesh's material.
+{@link BaseMaterial3D#destroy | Destroying a material} with `texture: true` destroys the texture but leaves its source alive in the same way. Add `textureSource: true` to free the source too. {@link Destroy3DOptions} says how a mesh passes these flags to its material.
 
 ## Next steps
 
-- [View3D and the 2D/3D bridge](../../__docs__/concepts/view3d.md#from-the-3d-world-to-the-screen): the other way to mix 2D into a scene, a 2D label pinned over a 3D object.
+- [View3D and 2D content](../../__docs__/concepts/view3d.md#world-to-screen): the other way to mix 2D into a scene, a 2D label pinned over a 3D object.
 - [Materials](../../materials/__docs__/materials.md#transparency): the alpha modes that decide what the texture's empty parts show.

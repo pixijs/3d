@@ -213,7 +213,7 @@ export class ObservableQuaternion implements QuaternionData {
    * @param observer - Observer for the copy
    * @returns The new quaternion
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- a copy that keeps the observer is rarely wanted
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- a copy that keeps the observer is rarely wanted
   public clone(observer?: Observer<ObservableQuaternion>): ObservableQuaternion {
     return new ObservableQuaternion(observer ?? this._observer, this._x, this._y, this._z, this._w);
   }
@@ -594,10 +594,10 @@ export class ObservableQuaternion implements QuaternionData {
    * ```ts
    * console.log(ship.quaternion.toString());
    * ```
-   * @returns A string in the form `[pixi-3d/math:ObservableQuaternion x=0 y=0 z=0 w=1]`
+   * @returns A string in the form `[@pixi/3d/math:ObservableQuaternion x=0 y=0 z=0 w=1]`
    */
   public toString(): string {
-    return `[pixi-3d/math:ObservableQuaternion x=${this._x} y=${this._y} z=${this._z} w=${this._w}]`;
+    return `[@pixi/3d/math:ObservableQuaternion x=${this._x} y=${this._y} z=${this._z} w=${this._w}]`;
   }
 }
 

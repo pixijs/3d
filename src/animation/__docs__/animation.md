@@ -6,17 +6,17 @@ category: animation
 
 # Animation
 
-PixiJS 3D plays keyframe animation: the clips a glTF model brings, and animations you build in code. Most of the work goes through three classes:
+PixiJS 3D plays keyframe animation, both the clips in a glTF file and the animations you build in code. Most of the work goes through three classes:
 
-- An {@link Animation} is a named set of keyframe tracks, such as a model's Walk clip. Each track drives one property, such as a bone's rotation or the position of a node (any {@link Container3D} in the scene).
-- An {@link AnimationPlayer} plays animations on a node, such as a model, and everything under it.
+- An {@link Animation} is a named set of keyframe tracks, such as a model's Walk clip. Each track drives one property, such as a bone's rotation or a node's position. A node is any {@link Container3D} in the scene.
+- An {@link AnimationPlayer} plays animations on a node, such as a model, and on everything under it.
 - An {@link AnimationState} is one animation's playback on one player: its time, speed, looping and weight.
 
-To move something by code every frame, such as a spinning coin, you don't need these. Change the node's transform from the ticker, as in 2D; [Scene graph](../../__docs__/concepts/scene-graph.md#parents-and-children) shows how.
+To move something in code every frame, such as a spinning coin, you don't need these classes. Change the node's transform from the ticker, as in 2D. [Scene graph](../../__docs__/concepts/scene-graph.md#parents-and-children) shows how.
 
 ## Playing a model's clips
 
-A {@link Model3D} whose file has animation clips comes with a player, {@link Model3D#player | model.player}, which is `undefined` when the file has none. {@link AnimationPlayer#animationLabels | animationLabels} lists the clips by name, and {@link AnimationPlayer#play | play} starts one and returns its state:
+A {@link Model3D} whose file has animation clips comes with a player, {@link Model3D#player | model.player}. When the file has no clips, `model.player` is `undefined`. {@link AnimationPlayer#animationLabels | animationLabels} lists the clips by name, and {@link AnimationPlayer#play | play} starts one and returns its state:
 
 ```ts
 const fox = new Model3D({ source });
@@ -28,9 +28,9 @@ const walk = fox.player!.play('Walk');
 walk.animationSpeed = 1.5;
 ```
 
-`play` doesn't stop a clip that's already playing; the two [blend](#blending-and-crossfades). To switch clips, call {@link AnimationPlayer#stop | player.stop()}, which stops every animation on the player, each holding its pose, then play the next.
+`play` doesn't stop a clip that's already playing, so the two [blend](#blending-and-crossfades). To switch clips, call {@link AnimationPlayer#stop | player.stop()}, then play the next one. `stop()` stops every animation on the player, and each one holds its pose.
 
-Like an `AnimatedSprite`, a player advances on `Ticker.shared`, which by default isn't `app.ticker`, so slowing or pausing `app.ticker` doesn't reach it. To drive it from your own ticker, turn {@link AnimationPlayer#autoUpdate | autoUpdate} off and call {@link AnimationPlayer#update | update}:
+Like an `AnimatedSprite`, a player advances on `Ticker.shared`. By default that isn't `app.ticker`, so slowing or pausing `app.ticker` doesn't affect the player. To drive the player from your own ticker, turn {@link AnimationPlayer#autoUpdate | autoUpdate} off and call {@link AnimationPlayer#update | update} yourself:
 
 ```ts
 const fox = new Model3D({ source, autoUpdate: false });
@@ -40,9 +40,9 @@ app.ticker.add((ticker) => fox.player?.update(ticker));
 
 ## Controlling playback
 
-{@link AnimationPlayer#getState | getState} returns an animation's state without starting playback. The state's methods follow `AnimatedSprite`'s, such as {@link AnimationState#stop | stop()} and {@link AnimationState#gotoAndPlay | gotoAndPlay()}, but take times in seconds, not frame numbers. Writing {@link AnimationState#time | time} only moves the playhead; {@link AnimationState#gotoAndStop | gotoAndStop(time)} shows the pose straight away.
+{@link AnimationPlayer#getState | getState} returns an animation's state without starting playback. The state's methods match `AnimatedSprite`'s, such as {@link AnimationState#stop | stop()} and {@link AnimationState#gotoAndPlay | gotoAndPlay()}, but they take times in seconds, not frame numbers. Setting {@link AnimationState#time | time} only moves the playhead. {@link AnimationState#gotoAndStop | gotoAndStop(time)} also shows the pose at that time straight away.
 
-{@link AnimationState#loop | loop} is on by default. With it off, the state stops at its end, holds that pose and calls {@link AnimationState#onComplete | onComplete}. `gotoAndPlay(0)` plays it again, or `gotoAndPlay(state.animation.duration)` when a negative {@link AnimationState#animationSpeed | animationSpeed} plays it backwards. Here the walking fox stops, looks around once, then walks on:
+{@link AnimationState#loop | loop} is on by default. With it off, the state stops at its end, holds that pose and calls {@link AnimationState#onComplete | onComplete}. To play it again, call `gotoAndPlay(0)`. If a negative {@link AnimationState#animationSpeed | animationSpeed} plays it backwards, call `gotoAndPlay(state.animation.duration)` instead. Here the walking fox stops, looks around once, then walks on:
 
 ```ts
 fox.player!.stop();
@@ -54,13 +54,13 @@ survey.onComplete = () => fox.player!.play('Walk');
 survey.gotoAndPlay(0);
 ```
 
-Every model built from one source has its own player, so foxes in a crowd can each set their state's `time` to walk out of step.
+Every model built from one source has its own player. Foxes in a crowd can each set a different `time` on their walk state, so they walk out of step.
 
 ## Blending and crossfades
 
-All playing states apply at once, and where two drive a property through tracks with the same label, as a model's clips do, the player mixes them by {@link AnimationState#weight | weight}. Weights are relative, so a clip that alone drives a property shows in full at any weight above 0: lowering its weight doesn't fade it out, but moving weight to another clip does. A track you write for one of a model's bones or nodes doesn't mix with the file's clips; add to a clip's pose as [Skinned meshes](#skinned-meshes) shows.
+All playing states apply at once. Where two states drive a property through tracks with the same label, as a model's clips do, the player mixes them by {@link AnimationState#weight | weight}. Weights are relative. A clip that is the only one driving a property shows in full at any weight above 0, so lowering its weight doesn't fade it out. To fade it out, move weight to another clip. A track you write for one of a model's bones or nodes doesn't mix with the file's clips. Add to the clip's pose instead, as [Skinned meshes](#skinned-meshes) shows.
 
-To crossfade, step the weights each frame: toward 1 on the clip you want and toward 0 on the other. One callback then fades either way, even when you switch mid-fade:
+To crossfade, move the weights a step each frame, toward 1 on the clip you want and toward 0 on the other. One ticker callback then fades either way, even when you switch partway through a fade:
 
 ```ts
 const player = fox.player!;
@@ -88,19 +88,19 @@ const fadeTo = (next: AnimationState) => {
 button.on('pointertap', () => fadeTo(target === walk ? run : walk));
 ```
 
-A stopped state keeps its weight, so the snippet sets a stopped clip's weight to 0 before playing it. The callback sets both weights while it runs, so switch clips by changing its target, as the button does; once you remove the callback, set a faded-out clip's weight above 0 before you play it again, or it changes nothing.
+A stopped state keeps its weight, so the snippet sets a stopped clip's weight to 0 before playing it. While the ticker callback runs, it sets both weights, so switch clips by changing its target, as the button does. Once you remove the callback, set a faded-out clip's weight above 0 before you play it again, or the clip has no effect.
 
-Two cycles that start on the same foot and step in the same order begin the fade in step if the incoming clip starts at the same share of its {@link Animation#duration | duration} as the outgoing clip has reached: set its {@link AnimationState#time | time} before you play it. The fox's walk and run don't match this way.
+Two looping clips that start on the same foot and step in the same order can begin the fade in step. Start the incoming clip at the same fraction of its {@link Animation#duration | duration} that the outgoing clip has reached, by setting its {@link AnimationState#time | time} before you play it. The fox's walk and run don't line up this way.
 
-[Playing clips](/3d/examples?example=animation_clips) crossfades the fox between its clips, and blends its walk with its run.
+[Playing clips](/3d/examples?example=animation_clips) crossfades the fox between its clips and blends its walk with its run.
 
 ## Skinned meshes
 
-A skinned mesh bends with a skeleton: a hierarchy of bones, such as a character's spine and limbs, that each move the vertices tied to them. A {@link Model3D} lists its {@link Skeleton | skeletons} in {@link Model3D#skeletons | model.skeletons}, and every model gets its own, so posing one fox doesn't move another.
+A skinned mesh bends with a skeleton. A skeleton is a hierarchy of bones, such as a character's spine and limbs, and each bone moves the vertices tied to it. A {@link Model3D} lists its {@link Skeleton | skeletons} in {@link Model3D#skeletons | model.skeletons}. Every model gets its own, so posing one fox doesn't move another.
 
-{@link Container3D#getChildByLabel | getChildByLabel} finds only the bones the file puts a mesh under, as [Scene graph](../../__docs__/concepts/scene-graph.md#parents-and-children) explains, and you move those like any node. The rest live only in the skeleton: {@link Skeleton#indexOf | indexOf} finds one by its name in the file, and its local position, rotation and scale sit in flat arrays. {@link Skeleton#localRotation | localRotation} holds each bone's rotation as a [quaternion](../../math/__docs__/math.md#rotations), four numbers per bone. Write into the arrays and set {@link Skeleton#dirty | dirty}, or call {@link Skeleton#setLocalTRS | setLocalTRS}, which does both.
+{@link Container3D#getChildByLabel | getChildByLabel} finds only the bones that the file puts a mesh under, as [Scene graph](../../__docs__/concepts/scene-graph.md#parents-and-children) explains. You move those like any node. The other bones exist only in the skeleton. {@link Skeleton#indexOf | indexOf} finds a bone by its name in the file, and the skeleton keeps each bone's local position, rotation and scale in flat arrays. {@link Skeleton#localRotation | localRotation} holds each bone's rotation as a [quaternion](../../math/__docs__/math.md#rotations), four numbers per bone. Write into the arrays and set {@link Skeleton#dirty | dirty}, or call {@link Skeleton#setLocalTRS | setLocalTRS}, which does both.
 
-A playing clip rewrites the bones it drives on every update, so a pose you write there lasts only until the next one. To add to a clip's pose, turn the model's {@link Model3DOptions#autoUpdate | autoUpdate} off, so you choose the order, and pose the bone right after you update the player:
+A playing clip rewrites the bones it drives on every update, so a pose you write to those bones lasts only until the next update. To add to a clip's pose, turn the model's {@link Model3DOptions#autoUpdate | autoUpdate} off so you choose the order, then pose the bone right after you update the player:
 
 ```ts
 const fox = new Model3D({ source, autoUpdate: false, autoPlay: 'Walk' });
@@ -120,15 +120,15 @@ app.ticker.add((ticker) => {
 });
 ```
 
-While the walk plays, it resets the head on every update, so the turn doesn't pile up; once no playing clip drives the bone, as after `player.stop()`, write the rotation outright, or it turns further every frame. A bone turns about its own axes, which depend on how the file was rigged, so check the axis on your model.
+While the walk plays, it resets the head on every update, so the turn doesn't build up. Once no playing clip drives the bone, as after `player.stop()`, write the whole rotation instead of multiplying onto the current one, or the head turns further every frame. A bone turns about its own axes, which depend on how the file was rigged, so check the axis on your model.
 
 [Driving bones](/3d/examples?example=animation_bones) turns the fox's head toward the pointer the same way.
 
-Picking and culling don't follow the bones: see [Interaction](../../events/__docs__/interaction.md#hit-volumes) for an animated character's hit volume, and [Performance](../../__docs__/concepts/performance.md#culling) for one that vanishes near the screen's edge.
+Picking and culling don't follow the bones. For an animated character's hit volume, see [Interaction](../../events/__docs__/interaction.md#hit-volumes). For a character that vanishes near the screen's edge, see [Performance](../../__docs__/concepts/performance.md#culling).
 
 ## Morph targets
 
-A morph target is another shape stored for the same vertices, such as a smile or a blink. A mesh whose geometry has morph targets has {@link Mesh3D#weights | weights}, one number per target: 0 leaves the base shape, 1 reaches the target, and several targets add up. Clips in the file can drive the weights, or you can set them yourself:
+A morph target is another shape stored for the same vertices, such as a smile or a blink. A mesh whose geometry has morph targets has {@link Mesh3D#weights | weights}, one number per target. At 0 the mesh keeps its base shape, at 1 it takes the target's shape, and several targets add together. Clips in the file can drive the weights, or you can set them yourself:
 
 ```ts
 model.traverse((node) => {
@@ -136,13 +136,13 @@ model.traverse((node) => {
 });
 ```
 
-Write into the array rather than assigning a new one: a clip that has started keeps using the old array. Each model has its own weights, even when several share one source.
+Write into the array rather than assigning a new one, because a clip that has started keeps using the old array. Each model has its own weights, even when several models share one source.
 
-[Morph targets from glTF](/3d/examples?example=animation_morph-targets) plays a cube's clip on its weights. A playing clip rewrites them on every update, so the example stops it when you set one by hand.
+[Morph targets from glTF](/3d/examples?example=animation_morph-targets) plays a cube's clip on its weights. A playing clip rewrites the weights on every update, so the example stops the clip when you set a weight by hand.
 
 ## Animating in code
 
-Build an {@link Animation} from tracks to animate a node's properties in code, such as its position or a mesh's weights. Each track names the property it drives as `'<node label>.<property>'`, and holds keyframe times in seconds with a value for each:
+To animate a node's properties in code, such as its position or a mesh's weights, build an {@link Animation} from tracks. Each track names the property it drives as `'<node label>.<property>'` and holds keyframe times in seconds, with a value for each:
 
 ```ts
 const crate = new Mesh3D({
@@ -160,7 +160,7 @@ const bob = new Animation({
 const player = new AnimationPlayer({ target: crate, animations: [bob], autoPlay: 'bob' });
 ```
 
-The player finds each track's node by label, or a skinned mesh's bone by name, under its `target`, as {@link TrackOptions#label} describes. It looks each label up once, the first time an animation that uses it plays or calls `gotoAndStop`, so add the nodes first. A label that names no node, or a property the player can't animate, does nothing, without a warning: a track can't reach a material, and of the nodes only a {@link Sprite3D} has an `alpha`. When copies under one target share a label, only one animates, so give each copy its own player; players can share one animation.
+The player looks under its `target` for each track's node by label, or for a skinned mesh's bone by name, as {@link TrackOptions#label} describes. It looks each label up once, the first time an animation that uses it plays or you call `gotoAndStop` on its state, so add the nodes before then. A track that names no node, or a property the player can't animate, does nothing and gives no warning. A track can't reach a material, and among nodes only a {@link Sprite3D} has an `alpha`. When copies under one target share a label, only one of them animates, so give each copy its own player. Players can share one animation.
 
 Pick the track class by the property's type:
 
@@ -171,20 +171,20 @@ Pick the track class by the property's type:
 | {@link NumberTrack}     | A number, such as `y`                                           | 1                 |
 | {@link Track}           | An array of numbers, such as `weights`, with `valueSize`        | `valueSize`       |
 
-- A `position` track sets all three coordinates. Animate `y` alone with a {@link NumberTrack} to keep the `x` and `z` you placed the node at.
-- A `rotation` track sets all three angles too, so give it a {@link Vector3Track} even to turn about one axis. `angle` doesn't animate.
+- A `position` track sets all three coordinates. To keep the `x` and `z` you placed the node at, animate `y` alone with a {@link NumberTrack}.
+- A `rotation` track also sets all three angles, so use a {@link Vector3Track} even to turn about one axis. `angle` doesn't animate.
 - On a bone, a track drives only `position`, `quaternion` or `scale`, so turn a bone with a {@link QuaternionTrack}.
-- {@link TrackOptions#interpolation | interpolation} sets how a track fills the time between keyframes. `'CUBICSPLINE'` stores two tangents with each keyframe's value, as {@link TrackOptions#values} lays out.
-- A {@link QuaternionTrack} with `'LINEAR'` interpolation, the default, takes the shorter way between two keyframes, so keep each step under half a turn. A {@link Vector3Track} on `rotation` turns through the angles as you give them.
-- An animation lasts until its last keyframe; set {@link AnimationOptions#duration | duration} longer to hold the end pose before it loops.
+- {@link TrackOptions#interpolation | interpolation} sets how a track fills in values between keyframes. With `'CUBICSPLINE'`, each keyframe stores two tangents beside its value, in the layout {@link TrackOptions#values} describes.
+- With `'LINEAR'` interpolation, the default, a {@link QuaternionTrack} turns the shorter way between two keyframes, so keep each step under half a turn. A {@link Vector3Track} on `rotation` turns through the angles as you give them.
+- An animation ends at its last keyframe. To hold the end pose before it loops, set a longer {@link AnimationOptions#duration | duration}.
 
-[Keyframes](/3d/examples?example=animation_keyframes) assembles the PixiJS logo from a `Vector3Track` per piece, a `QuaternionTrack` that rolls its badge and a `NumberTrack` that flashes a light, and plays the same keyframes with each interpolation.
+[Keyframes](/3d/examples?example=animation_keyframes) assembles the PixiJS logo with a `Vector3Track` for each piece. A `QuaternionTrack` rolls its badge and a `NumberTrack` flashes a light. The example plays the same keyframes with each interpolation.
 
 ## Cleaning up
 
-A model's {@link Model3D#destroy | destroy} destroys its player and skeletons. A player you built isn't tied to its target: destroying the target leaves the player running on `Ticker.shared` while it plays, so call its {@link AnimationPlayer#destroy | destroy} too. Remove the ticker callbacks you added to drive a player or its bones, such as the crossfade and the head turn above.
+A model's {@link Model3D#destroy | destroy} also destroys its player and skeletons. A player you built isn't tied to its target. If it's playing when you destroy the target, it keeps running on `Ticker.shared`, so call its {@link AnimationPlayer#destroy | destroy} too. Also remove the ticker callbacks you added to drive a player or its bones, such as the crossfade and the head turn above.
 
 ## Next steps
 
 - [Loading models](../../assets/__docs__/models.md): where models and their clips come from.
-- [Scene graph and transforms](../../__docs__/concepts/scene-graph.md#rotation-and-quaternion): how `rotation` and `quaternion` share a node.
+- [Scene graph and transforms](../../__docs__/concepts/scene-graph.md#rotation-and-quaternion): how a node's `rotation` and `quaternion` relate, and which one the node uses.

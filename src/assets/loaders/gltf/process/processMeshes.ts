@@ -64,7 +64,7 @@ async function processPrimitive(
 
         (options as Record<string, unknown>)[attributeName] = data;
       } else {
-        warnOnce(`pixi3d-custom-attribute-${i}`, `[pixi-3d] custom attribute ${i} skipped`);
+        warnOnce(`pixijs-3d-custom-attribute-${i}`, `[@pixi/3d] custom attribute ${i} skipped`);
       }
     }
 
@@ -93,7 +93,7 @@ async function processPrimitive(
       );
     } else if (positionAccessor.componentType !== GL_FLOAT) {
       throw new Error(
-        `[pixi-3d] POSITION accessor ${positionAccessorIndex} stores integers but has no min and max, ` +
+        `[@pixi/3d] POSITION accessor ${positionAccessorIndex} stores integers but has no min and max, ` +
           'which glTF requires and the bounds come from.',
       );
     }
@@ -134,13 +134,15 @@ function decodeMorphTargets(
   for (let t = 0; t < targets.length; t++) {
     const accessorIndex = targets[t].POSITION;
     if (accessorIndex === undefined) {
-      warn(`[pixi-3d] morph target ${t} has no POSITION deltas; rendering base pose.`);
+      warn(`[@pixi/3d] morph target ${t} has no POSITION deltas; rendering base pose.`);
       return undefined;
     }
 
     const accessor = gltfRaw.accessors?.[accessorIndex];
     if (accessor && accessor.componentType !== GL_FLOAT) {
-      warn(`[pixi-3d] morph target ${t} uses non-float POSITION deltas, which are not supported; rendering base pose.`);
+      warn(
+        `[@pixi/3d] morph target ${t} uses non-float POSITION deltas, which are not supported; rendering base pose.`,
+      );
       return undefined;
     }
 
@@ -152,7 +154,7 @@ function decodeMorphTargets(
     if (normalIndex !== undefined) {
       const normalAccessor = gltfRaw.accessors?.[normalIndex];
       if (normalAccessor && normalAccessor.componentType !== GL_FLOAT) {
-        warn(`[pixi-3d] morph target ${t} has non-float NORMAL deltas; morphing positions only.`);
+        warn(`[@pixi/3d] morph target ${t} has non-float NORMAL deltas; morphing positions only.`);
       } else {
         entry.normals = getBuffer(gltfRaw, buffers, normalIndex, true) as Float32Array;
         normalCount++;
@@ -163,7 +165,7 @@ function decodeMorphTargets(
   }
 
   if (normalCount > 0 && normalCount < morphTargets.length) {
-    warn(`[pixi-3d] morph targets mix NORMAL deltas; morphing positions only.`);
+    warn(`[@pixi/3d] morph targets mix NORMAL deltas; morphing positions only.`);
     for (const target of morphTargets) target.normals = undefined;
   }
 
@@ -184,7 +186,7 @@ export async function processMeshes(gltfRaw: GltfFormat, buffers: ArrayBuffer[],
       for (let p = 1; p < geometries.length; p++) {
         if (geometries[p].morphTargetCount !== targetCount) {
           warn(
-            `[pixi-3d] mesh ${i} primitive ${p} has ${geometries[p].morphTargetCount} morph targets, ` +
+            `[@pixi/3d] mesh ${i} primitive ${p} has ${geometries[p].morphTargetCount} morph targets, ` +
               `expected ${targetCount} (all primitives of a mesh must match).`,
           );
         }

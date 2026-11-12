@@ -35,6 +35,7 @@ documents each piece.
 - `layouts.ts`: the stations' grids for wide, compact and tall screens, and the camera framing beside the pane and the
   inset.
 - `visuals.ts`: builds every visual and hands each to the pane by name.
+- `galleryVisual.ts`: one visual as the pane sees it, and `visual()`, which shows or hides its parts and tag together.
 - `helperVisuals.ts`: the axes, angle, box frame, ghost, dot, arrow, ring, path, grid, span and points.
 - `meshVisuals.ts`: the wireframe, normals, struck triangle, bounding sphere, light cone, view volume and skeleton.
 - `overlayVisuals.ts`: the inset view and the screen-space ring.

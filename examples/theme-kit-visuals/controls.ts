@@ -4,7 +4,7 @@ import type { FolderApi } from 'tweakpane';
 
 import { ThemePane } from '../shared/theme/ThemePane';
 import type { ThemeStage } from '../shared/theme/ThemeStage';
-import type { GalleryVisual, VisualGroup } from './visuals';
+import type { GalleryVisual, VisualGroup } from './galleryVisual';
 
 /** The folders, in the order the stations read: the small helpers first, the 2D overlays last */
 const GROUPS: readonly VisualGroup[] = ['Helpers', 'Lines and points', 'Mesh and scene', 'Overlays'];

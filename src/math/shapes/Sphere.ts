@@ -47,7 +47,7 @@ export class Sphere {
    * @readonly
    * @default 'sphere'
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'sphere';
 
   /**
@@ -321,10 +321,10 @@ export class Sphere {
 
   /**
    * Returns a string representation of this sphere
-   * @returns A string in the form `[pixi-3d/math:Sphere center=(0, 0, 0) radius=1]`
+   * @returns A string in the form `[@pixi/3d/math:Sphere center=(0, 0, 0) radius=1]`
    * @advanced
    */
   public toString(): string {
-    return `[pixi-3d/math:Sphere center=(${this.center.x}, ${this.center.y}, ${this.center.z}) radius=${this.radius}]`;
+    return `[@pixi/3d/math:Sphere center=(${this.center.x}, ${this.center.y}, ${this.center.z}) radius=${this.radius}]`;
   }
 }

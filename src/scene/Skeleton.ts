@@ -142,10 +142,10 @@ export class Skeleton {
   public static defaultOptions: Partial<SkeletonOptions> = {};
 
   /** Number of nodes: the joints plus the nodes above them */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   public readonly nodeCount: number = 0;
   /** Number of joints, the nodes that deform the mesh */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only state
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only state
   public readonly jointCount: number = 0;
 
   /**
@@ -516,7 +516,7 @@ export class Skeleton {
     if (this._destroyed) return;
     this._destroyed = true;
 
-    // oxlint-disable-next-line pixi3d/destroy-release -- skinned meshes kept from a destroyed Model3D still draw, and updateWorld reads this list every frame
+    // oxlint-disable-next-line pixijs-3d/destroy-release -- skinned meshes kept from a destroyed Model3D still draw, and updateWorld reads this list every frame
     this._containerBones.length = 0;
 
     this._bonePitIndex = -1;

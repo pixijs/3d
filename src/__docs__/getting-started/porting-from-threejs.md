@@ -6,53 +6,53 @@ category: getting-started
 
 # Porting from Three.js
 
-Most of a Three.js port is renaming. What takes care is the code that compiles and runs after the rename, then draws a darker scene, a sideways light or a floor that casts a shadow. This page lists those differences first, then ports a small scene line by line. The API reference covers every name; the `pixijs-3d` agent skill that ships in the npm package also has full Three.js name tables.
+Most of a Three.js port is renaming. The hard part is code that still compiles and runs after the rename but draws a darker scene, a sideways light or a floor that casts a shadow. This page lists those differences first, then ports a small scene line by line. The API reference covers every name. The `pixijs-3d` agent skill that ships in the npm package also has full tables of Three.js names.
 
-## How the pieces map
+## API mapping
 
-- **The scene is one display object in a PixiJS app.** There's no renderer to own: create an `Application`, add a {@link View3D} to its stage, and build the scene under {@link View3D#root | view3d.root}. 2D sprites, text and UI share the canvas, as [View3D and the 2D/3D bridge](../concepts/view3d.md) explains.
+- **The scene is one display object in a PixiJS app.** There's no renderer to own. Create an `Application`, add a {@link View3D} to its stage, and build the scene under {@link View3D#root | view3d.root}. 2D sprites, text and UI share the canvas, as [View3D and 2D content](../concepts/view3d.md) explains.
 - **The view holds the scene-wide settings** that Three.js splits between the renderer and the scene: {@link View3D#toneMapping | toneMapping}, {@link View3D#exposure | exposure}, {@link View3D#shadowQuality | shadowQuality}, {@link View3D#fog | fog}, {@link View3D#background | background}, {@link View3D#environment | environment} and the post-processing {@link View3D#passes | passes}.
-- **Constructors take one options object**, such as `new CubeGeometry({ width, height, depth })`, and the same values are properties afterwards.
-- **The frame loop is `app.ticker`.** Its callback gets the ticker, and {@link OrbitCamera}, a model's {@link Model3D#player | player} and {@link ParticleSystem3D} advance on `Ticker.shared` unless you step them yourself.
-- **A loaded glTF is a template.** `Assets.load` returns a {@link Scene3DSource}, and each {@link Model3D} built from it shares its geometry, materials and textures; see [Loading models](../../assets/__docs__/models.md).
+- **Constructors take one options object**, such as `new CubeGeometry({ width, height, depth })`. The same values are properties on the object afterwards.
+- **The frame loop is `app.ticker`.** Its callback gets the ticker. {@link OrbitCamera}, a model's {@link Model3D#player | player} and {@link ParticleSystem3D} advance on `Ticker.shared` unless you step them yourself.
+- **A loaded glTF is a template.** `Assets.load` returns a {@link Scene3DSource}, and each {@link Model3D} built from it shares its geometry, materials and textures. See [Loading models](../../assets/__docs__/models.md).
 
-## Differences that change the picture
+## Behaviour differences
 
-Each line compiles after a plain rename and still changes what you see. The first group catches nearly every port.
+Each line compiles after a plain rename and still changes what you see. The first group affects nearly every port.
 
 **Light and shadow**
 
-- A HemisphereLight becomes the view's environment, a {@link Hemisphere}, and Three.js divides its intensity by π where the view doesn't: pass `intensity: i / Math.PI`. Directional, point, spot and ambient intensities port unchanged.
-- Lights have no target. Directional and spot lights shine down their local -Z, so call {@link Container3D#lookAt | lookAt} after placing one, and again after every move ([Lights](../../scene/__docs__/lights.md#aiming-lights-and-making-them-follow)). An unrotated {@link DirectionalLight} shines sideways, not down.
+- A HemisphereLight becomes the view's environment, a {@link Hemisphere}. Three.js divides its intensity by π and the view doesn't, so pass `intensity: i / Math.PI`. Directional, point, spot and ambient intensities port unchanged.
+- Lights have no target. Directional and spot lights shine along their local -Z axis, so call {@link Container3D#lookAt | lookAt} after placing one, and again after every move ([Lights](../../scene/__docs__/lights.md#aiming-lights-and-making-them-follow)). An unrotated {@link DirectionalLight} shines sideways, not down.
 - Meshes and models cast and receive shadows {@link Mesh3D#castShadow | by default}. Set `castShadow: false` on floors and terrain, which otherwise also stretch the sun's shadow box.
-- {@link LightShadow#bias | shadow.bias} has the opposite sign, so negate a Three.js value or keep the default. `shadow.mapSize` is the view's `shadowQuality`, and the shadow camera's box is {@link LightShadow#bounds | shadow.bounds}, a box in world space.
+- {@link LightShadow#bias | shadow.bias} has the opposite sign, so negate a Three.js value or keep the default. `shadow.mapSize` becomes the view's `shadowQuality`, and the shadow camera's box becomes {@link LightShadow#bounds | shadow.bounds}, which is in world space.
 
 **Time**
 
-- `ticker.deltaTime` counts 60 fps frames. For getDelta() seconds use `ticker.deltaMS / 1000`, which is capped at 100 ms, so below 10 fps motion slows down.
-- Where Three.js called `controls.update()` or `mixer.update(dt)` in the loop, build the controller or model with `autoUpdate: false` and call its `update(ticker)` from `app.ticker`, so it steps in the same frame as your code.
-- The camera defaults to a field of view of 60 and a far plane of 1000 ({@link Camera3D#fov}, {@link Camera3D#far}), where Three.js apps usually pass 50 and 2000: set both.
+- `ticker.deltaTime` measures time in 60 fps frames, not seconds. For the seconds that Three.js's getDelta() returns, use `ticker.deltaMS / 1000`. The ticker caps `deltaMS` at 100 ms, so below 10 fps motion slows down.
+- Where Three.js called `controls.update()` or `mixer.update(dt)` in the loop, build the controller or model with `autoUpdate: false`. Then call its `update(ticker)` from `app.ticker`, so it steps in the same frame as your code.
+- The camera defaults to a field of view of 60 and a far plane of 1000 ({@link Camera3D#fov}, {@link Camera3D#far}). Three.js apps usually pass 50 and 2000, so set both.
 
 **Colour and output**
 
-- Tone mapping is off by default in both. {@link View3D#exposure | exposure} scales the light even under `'none'`, where Three.js ignores it, so port a NoToneMapping app with exposure 1.
-- `scene.background` becomes the view's {@link View3D#background | background}, which post effects and fog cover as they do in Three.js. Under a curve such as `'aces'` that background goes through the curve too; for an exact colour, pass `backgroundColor` to `app.init` instead.
+- Tone mapping is off by default in both engines. {@link View3D#exposure | exposure} scales the light even under `'none'`, where Three.js ignores it, so port a NoToneMapping app with exposure 1.
+- `scene.background` becomes the view's {@link View3D#background | background}, which post effects and fog cover as they do in Three.js. Under a tone mapping curve such as `'aces'`, the background goes through the curve too. For an exact colour, pass `backgroundColor` to `app.init` instead.
 - An emissive colour is an opt-in group, `emissive: { color, strength }`, and its colour defaults to white. Pass the group only where the Three.js emissive isn't black.
 
 **Surfaces**
 
-- {@link BaseMaterial3D#alphaMode | alphaMode} defaults to `'opaque'`, which ignores `alpha` and texture alpha: `transparent: true` becomes `'blend'`, and alphaTest becomes `'mask'` with `alphaCutoff`.
+- {@link BaseMaterial3D#alphaMode | alphaMode} defaults to `'opaque'`, which ignores `alpha` and texture alpha. `transparent: true` becomes `'blend'`, and alphaTest becomes `'mask'` with `alphaCutoff`.
 - Images upload without Three.js's `flipY`, so a picture on a {@link PlaneGeometry} needs `flipV: true` ([Textures on the built-in shapes](../../geometry/__docs__/geometry.md#textures-on-the-built-in-shapes)).
 - Mipmaps are off by default. Load a tiled or distant texture with `Assets.load({ src, data: { autoGenerateMipmaps: true } })`, or it shimmers.
 - Texture `repeat` and `offset` become the material's {@link Material3D#uvTransform | uvTransform}, a PixiJS `Matrix` that applies to all its textures. Base colour and emissive textures always decode as sRGB, so `colorSpace` has nothing to port to.
 
 **Scene graph**
 
-- `rotation` and `quaternion` aren't kept in sync. Nodes from a glTF file, and nodes after `lookAt`, keep their turn in the quaternion, so `rotation.y += a` throws it away ([Rotation and quaternion](../concepts/scene-graph.md#rotation-and-quaternion)).
+- `rotation` and `quaternion` don't stay in sync. Nodes from a glTF file, and nodes you've called `lookAt` on, store their orientation in the quaternion, so `rotation.y += a` throws it away ([Rotation and quaternion](../concepts/scene-graph.md#rotation-and-quaternion)).
 - {@link Container3D#getLocalBounds | getLocalBounds} measures in the node's own space, without its own transform, where Box3.setFromObject measures in world space.
-- An animation crossFadeTo is two playing states whose {@link AnimationState#weight | weights} you ramp, and `play()` stops nothing ([Blending and crossfades](../../animation/__docs__/animation.md#blending-and-crossfades)).
+- A Three.js crossFadeTo becomes two playing states whose {@link AnimationState#weight | weights} you ramp, and `play()` doesn't stop any other state ([Blending and crossfades](../../animation/__docs__/animation.md#blending-and-crossfades)).
 
-## A scene, side by side
+## Side-by-side example
 
 A Three.js scene with a hemisphere light, a shadowed sun, a ground, a spinning box and orbit controls:
 
@@ -100,7 +100,7 @@ renderer.setAnimationLoop((time) => {
 });
 ```
 
-The same scene in PixiJS 3D. The comments mark each line that's more than a rename.
+Here's the same scene in PixiJS 3D. Comments mark each line that's more than a rename.
 
 ```ts
 import { CubeGeometry, DirectionalLight, Material3D, Mesh3D, PlaneGeometry, View3D } from '@pixi/3d';
@@ -117,7 +117,7 @@ await app.init({
 document.body.appendChild(app.canvas);
 
 const view3d = new View3D({
-  autoResize: true, // follows the app's size, so no resize listener
+  autoResize: true, // follows the app's size, so you need no resize listener
   background: 0x9cc7ea,
   environment: { skyColor: 0xdfeeff, groundColor: 0x5a5040, intensity: 1.5 / Math.PI }, // divide by π
 });
@@ -130,13 +130,13 @@ const orbit = new OrbitCamera({ view: view3d, autoUpdate: false });
 
 const sun = new DirectionalLight({ color: 0xfff4e0, intensity: 2.5, castShadow: true, position: { x: 4, y: 8, z: 5 } });
 view3d.root.addChild(sun);
-sun.lookAt({ x: 0, y: 0, z: 0 }); // no target: aim it
+sun.lookAt({ x: 0, y: 0, z: 0 }); // lights have no target, so aim it
 
 const ground = new Mesh3D({
   geometry: new PlaneGeometry({ width: 20, height: 20 }),
   material: new Material3D({ baseColor: 0x7a9a5a }),
   rotation: { x: -Math.PI / 2, y: 0, z: 0 }, // lies in XY like Three.js's, so lay it flat
-  castShadow: false, // meshes cast by default
+  castShadow: false, // meshes cast shadows by default
 });
 view3d.root.addChild(ground);
 

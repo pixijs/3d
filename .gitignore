@@ -27,7 +27,7 @@ tests/scenes/**/*.test.ts
 # (auto-run on vitest start) and cached in CI.
 examples/assets/mirror
 
-# Read-only source of the libraries pixi-3d builds on, checked out by `npm run sync:repos`
+# Read-only source of the libraries PixiJS 3D builds on, checked out by `npm run sync:repos`
 # (scripts/repos/manifest.mts).
 /.repos
 

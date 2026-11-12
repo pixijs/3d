@@ -69,7 +69,7 @@ export class PointLight extends Light {
   };
 
   /** Always `'point'` */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type = 'point';
 
   /**

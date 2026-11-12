@@ -89,12 +89,12 @@ const cases: Case[] = [
 ];
 
 const aliasPlugin: Plugin = {
-  name: 'pixi3d-dist-alias',
+  name: 'pixijs-3d-dist-alias',
   resolveId: (id) => alias[id] ?? null,
 };
 
 const esbuildAliasPlugin: esbuild.Plugin = {
-  name: 'pixi3d-dist-alias',
+  name: 'pixijs-3d-dist-alias',
   setup(build) {
     build.onResolve({ filter: /^@pixi\/3d(\/webgl|\/webgpu)?$/ }, (args) => ({ path: alias[args.path] }));
   },
@@ -181,7 +181,7 @@ function upfrontChunks(entry: Chunk, chunks: Chunk[]): Set<Chunk> {
 }
 
 // esbuild reports real paths, and macOS's temp dir sits behind a symlink.
-const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pixi3d-check-split-')));
+const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pixijs-3d-check-split-')));
 const failures: string[] = [];
 
 try {

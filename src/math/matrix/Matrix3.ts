@@ -263,7 +263,7 @@ export class Matrix3 {
   public toString(): string {
     const e = this.elements;
 
-    return `[pixi-3d/math:Matrix3 [${e[0]}, ${e[3]}, ${e[6]} | ${e[1]}, ${e[4]}, ${e[7]} | ${e[2]}, ${e[5]}, ${e[8]}]]`;
+    return `[@pixi/3d/math:Matrix3 [${e[0]}, ${e[3]}, ${e[6]} | ${e[1]}, ${e[4]}, ${e[7]} | ${e[2]}, ${e[5]}, ${e[8]}]]`;
   }
 
   /**

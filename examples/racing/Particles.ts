@@ -6,7 +6,7 @@ import type { Texture, Ticker } from 'pixi.js';
 import type { Vehicle } from './Vehicle';
 
 // Sizes are matched to the racer this demo was ported from, whose point
-// sprites had a pixel size decoupled from the field of view. Pixi3D particles
+// sprites had a pixel size decoupled from the field of view. PixiJS 3D particles
 // are world-space diameters, so the base size is tan(fov/2) at the racing
 // camera's 40°: the same pixel footprint, with proper FOV behaviour on top.
 const BASE_SIZE = Math.tan((40 * Math.PI) / 180 / 2); // ≈ 0.364

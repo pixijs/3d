@@ -6,14 +6,14 @@ category: core-concepts
 
 # Resources and cleanup
 
-Meshes, lights and cameras are nodes, the 3D counterpart of 2D containers. What a mesh draws with takes GPU memory: its geometry (its shape), its material (how its surface looks) and the material's textures. You free them in two ways, and PixiJS's garbage collector frees some for you:
+Meshes, lights and cameras are nodes, the 3D counterpart of 2D containers. A mesh draws with a geometry, which holds its shape, and a material, which sets how its surface looks. The geometry, the material and the material's textures all take GPU memory. You free them in two ways, and PixiJS's garbage collector frees some for you:
 
 - `destroy()` takes a node or resource down for good.
-- `unload()` frees its GPU memory, or for most geometry its space in a shared buffer, and keeps everything needed to draw it again, like `unload()` on a 2D texture's source.
+- `unload()` frees its GPU memory and keeps everything needed to draw it again, like `unload()` on a 2D texture's source. For most geometry, it frees the geometry's space in a shared buffer instead.
 
 ## Sharing geometry and materials
 
-Every {@link Geometry3D} takes its own space in GPU memory the first time it draws, so build each shape once and give it to every mesh of that shape. Sharing a geometry also lets meshes draw together, as [Performance](./performance.md#what-makes-a-draw-call) explains. A material can be shared the same way, and a change to it then shows on every mesh that uses it.
+Every {@link Geometry3D} takes its own space in GPU memory the first time it draws, so build each shape once and give it to every mesh of that shape. Sharing a geometry also lets meshes draw together, as [Performance](./performance.md#draw-calls) explains. You can share a material the same way, and a change to it then shows on every mesh that uses it.
 
 ```ts
 import { IcosahedronGeometry, Material3D, Mesh3D } from '@pixi/3d';
@@ -35,24 +35,26 @@ for (const [x, z] of [
 
 ## Destroying
 
-As in PixiJS 2D, `destroy()` takes a node out of its parent and detaches its children, which survive. It destroys nothing you gave it, such as a mesh's geometry and material, unless you pass {@link Destroy3DOptions} flags. `true` sets every flag, so it destroys shared resources too; pass a flag only for resources nothing else uses.
+As in PixiJS 2D, `destroy()` takes a node out of its parent and detaches its children, which survive. It destroys nothing you gave it, such as a mesh's geometry and material, unless you pass {@link Destroy3DOptions} flags. Passing `true` sets every flag, so it destroys shared resources too. Pass a flag only for resources nothing else uses.
 
-One 2D habit doesn't carry over. On a {@link Mesh3D#destroy | Mesh3D}, `texture` reaches textures only through a material the same call destroys, so `mesh.destroy({ texture: true })` frees none of the textures of a material you gave it; add `material: true`, and `textureSource` to free the sources as well. A {@link Sprite3D#destroy | Sprite3D} works like a 2D sprite: `texture: true` frees its texture.
+One 2D habit doesn't carry over. On a {@link Mesh3D#destroy | Mesh3D}, the `texture` flag destroys only the textures of a material that the same call destroys. So `mesh.destroy({ texture: true })` frees none of the textures of a material you gave it. Add `material: true` to free them, and `textureSource` to free their sources as well. A {@link Sprite3D#destroy | Sprite3D} works like a 2D sprite, and `texture: true` frees its texture.
 
 ```ts
-// A tree made of meshes that share geometry and materials with the other trees:
-// its meshes go, and the geometry and materials stay
+// A tree whose meshes share geometry and materials with the other trees.
+// This destroys its meshes and keeps the geometry and materials.
 tree.destroy({ children: true });
 
-// A view whose scene owns every geometry and material in it, and the
+// A view with geometry and materials that only its scene uses, and the
 // orbit controller that turns its camera
 orbit.destroy();
 view3d.destroy({ children: true, geometry: true, material: true });
 ```
 
-Don't let these flags reach what you loaded with `Assets.load`: `texture` on a material whose textures you loaded, or `geometry` and `material` on a model, whose geometry and materials belong to its file. Free loaded files with `Assets.unload` instead, as in PixiJS 2D; [Loading models](../../assets/__docs__/models.md#cleaning-up) shows how for a model.
+Keep these flags away from what you loaded with `Assets.load`. Don't use `texture` on a material whose textures you loaded, or `geometry` and `material` on a model, since a model's geometry and materials belong to its file. Free loaded files with `Assets.unload` instead, as in PixiJS 2D. [Loading models](../../assets/__docs__/models.md#cleaning-up) shows how for a model.
 
-Destroying a {@link View3D#destroy | View3D} with `children` destroys the whole scene, camera included; without it, the view empties its root and the nodes survive for you to reuse. It never destroys a cube map, an image of the surroundings, that it uses as its {@link View3D#environment | environment} or background; [Environment and IBL](../../scene/__docs__/environment.md#loading-cube-maps) shows how to free one. No flag reaches camera controllers or the passes in {@link View3D#passes | passes}, drawing steps such as bloom, which aren't part of the scene, so destroy an {@link OrbitCamera#destroy | OrbitCamera} or {@link FPSCamera#destroy | FPSCamera} yourself, as [Camera controls](../../extras/__docs__/camera-controls.md#switching-controllers) shows, and each pass you retire, as [Post-processing](../../post-processing/__docs__/post-processing.md#the-passes-list) says.
+Destroying a {@link View3D#destroy | View3D} with `children` destroys the whole scene, camera included. Without it, the view empties its root, and the nodes survive for you to reuse. The view never destroys the cube map it uses as its {@link View3D#environment | environment} or background. A cube map is an image of the surroundings. [Environment and IBL](../../scene/__docs__/environment.md#loading-cube-maps) shows how to free one.
+
+Camera controllers and the passes in {@link View3D#passes | passes}, which are drawing steps such as bloom, aren't part of the scene, so no flag destroys them. Destroy an {@link OrbitCamera#destroy | OrbitCamera} or {@link FPSCamera#destroy | FPSCamera} yourself, as [Camera controls](../../extras/__docs__/camera-controls.md#switching-controllers) shows, and destroy each pass you retire, as [Post-processing](../../post-processing/__docs__/post-processing.md#the-passes-list) says.
 
 If you destroy a view's camera, give the view a new one before it next renders, or that render throws, as [Cameras](../../scene/__docs__/cameras.md#switching-cameras) explains.
 
@@ -60,7 +62,7 @@ If you destroy a view's camera, give the view a new one before it next renders, 
 
 `unload()` keeps the data on the CPU, so the next frame that draws the object uploads it again. Use it for content you'll show again later, such as a level the player has left.
 
-Take the content out of the scene first; hiding it isn't enough. The next frame uploads the geometry of the scene's meshes again, hidden or off screen, so unloading content you only hid frees none of its geometry. Unloading a geometry your content shares with a mesh that stays, or a texture it shares with one that's drawn, gains nothing for the same reason.
+Take the content out of the scene first, because hiding it isn't enough. The next frame uploads the geometry of every mesh in the scene again, even hidden or off-screen ones, so unloading content you only hid frees none of its geometry. For the same reason, unloading a geometry your content shares with a mesh that stays frees nothing, and neither does unloading a texture it shares with a mesh that's drawn.
 
 ```ts
 view3d.root.removeChild(level);
@@ -74,16 +76,16 @@ Each class unloads a different part:
 
 - {@link Mesh3D#unload | Mesh3D} and {@link Container3D#unload | Container3D} unload the geometry of every mesh under them. Materials stay, since they're usually shared, except under a {@link Model3D#unload | Model3D}, which unloads its materials too.
 - {@link BaseMaterial3D#unload | BaseMaterial3D} unloads its textures, except render textures, whose pixels exist only on the GPU.
-- {@link BatchedMesh3D#unload | BatchedMesh3D} unloads its buffers and the geometry of its slots, the meshes it draws, and leaves their materials.
+- {@link BatchedMesh3D#unload | BatchedMesh3D} unloads its buffers and the geometry of its slots, which are the meshes it draws. Their materials stay.
 - {@link View3D#unload | View3D} unloads what the view keeps to draw the scene, such as its shadow textures, but not the scene's geometry or textures.
 
-Geometry that isn't {@link Geometry3DOptions#dynamic | dynamic} shares a GPU buffer with geometry that has the same {@link Geometry3D#attributeKey | vertex attributes}, the per-vertex data such as positions and UVs. {@link Geometry3D#unload | Unloading} or destroying such a geometry frees its space there, but the buffer never shrinks, so unloading even a whole level of it gives no GPU memory back. Removing, hiding or destroying a mesh without `geometry: true` keeps that space. So free the old level's geometry before you add the next, and new geometry with the same attributes reuses that space before the buffer grows.
+Geometry that isn't {@link Geometry3DOptions#dynamic | dynamic} shares a GPU buffer with other geometry that has the same {@link Geometry3D#attributeKey | vertex attributes}, the per-vertex data such as positions and UVs. {@link Geometry3D#unload | Unloading} or destroying such a geometry frees its space in that buffer. The buffer never shrinks, though, so unloading even a whole level of geometry gives no GPU memory back. Removing, hiding or destroying a mesh without `geometry: true` keeps that space. So free the old level's geometry before you add the next one. New geometry with the same attributes then reuses that space before the buffer grows.
 
 ## The renderer's garbage collector
 
-PixiJS's renderer has a garbage collector that unloads GPU resources nothing has used for longer than its `gcMaxUnusedTime` option, 60 seconds by default; [GCSystemOptions](https://pixijs.download/release/docs/rendering.GCSystemOptions.html) lists its options.
+PixiJS's renderer has a garbage collector that unloads GPU resources nothing has used for longer than its `gcMaxUnusedTime` option, 60 seconds by default. [GCSystemOptions](https://pixijs.download/release/docs/rendering.GCSystemOptions.html) lists its options.
 
-In PixiJS 3D, the collector also calls `unload` on a {@link View3D} that has been out of the stage that long, and the view rebuilds on its next render. A view still in the stage is never collected, even when hidden; {@link View3D#unload | unload} lists the other cases it skips. Set a view's `autoGarbageCollect` to `false` to keep it loaded while it's off the stage.
+In PixiJS 3D, the collector also calls `unload` on a {@link View3D} that has been out of the stage that long, and the view rebuilds on its next render. The collector never unloads a view that's still in the stage, even a hidden one; {@link View3D#unload | unload} lists the other cases it skips. Set a view's `autoGarbageCollect` to `false` to keep it loaded while it's out of the stage.
 
 The collector never frees a geometry's space in the shared buffer, so unload or destroy the geometry to free it.
 

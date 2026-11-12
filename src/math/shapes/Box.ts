@@ -46,7 +46,7 @@ export class Box {
    * @readonly
    * @default 'box'
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'box';
 
   /**
@@ -543,11 +543,11 @@ export class Box {
 
   /**
    * Returns a string representation of this box
-   * @returns A string in the form `[pixi-3d/math:Box min=(0, 0, 0) max=(1, 1, 1)]`
+   * @returns A string in the form `[@pixi/3d/math:Box min=(0, 0, 0) max=(1, 1, 1)]`
    * @advanced
    */
   public toString(): string {
-    return `[pixi-3d/math:Box min=(${this.min.x}, ${this.min.y}, ${this.min.z}) max=(${this.max.x}, ${this.max.y}, ${this.max.z})]`;
+    return `[@pixi/3d/math:Box min=(${this.min.x}, ${this.min.y}, ${this.min.z}) max=(${this.max.x}, ${this.max.y}, ${this.max.z})]`;
   }
 }
 

@@ -50,7 +50,7 @@ export class Cylindrical {
    * @readonly
    * @default 'cylindrical'
    */
-  // oxlint-disable-next-line pixi3d/require-standard-example -- read-only discriminant
+  // oxlint-disable-next-line pixijs-3d/require-standard-example -- read-only discriminant
   public readonly type: SHAPE_PRIMITIVE_3D = 'cylindrical';
 
   /**
@@ -177,10 +177,10 @@ export class Cylindrical {
 
   /**
    * Returns a string representation of these coordinates
-   * @returns A string in the form `[pixi-3d/math:Cylindrical radius=1 theta=0 y=0]`
+   * @returns A string in the form `[@pixi/3d/math:Cylindrical radius=1 theta=0 y=0]`
    * @advanced
    */
   public toString(): string {
-    return `[pixi-3d/math:Cylindrical radius=${this.radius} theta=${this.theta} y=${this.y}]`;
+    return `[@pixi/3d/math:Cylindrical radius=${this.radius} theta=${this.theta} y=${this.y}]`;
   }
 }

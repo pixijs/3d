@@ -21,7 +21,7 @@ export interface CameraSpec {
 }
 
 export interface PbrSpec {
-  /** Linear colour; `displayColor` encodes it for pixi-3d on the way in. */
+  /** Linear colour; `displayColor` encodes it for PixiJS 3D on the way in. */
   color: Vec3;
   roughness: number;
   metalness: number;

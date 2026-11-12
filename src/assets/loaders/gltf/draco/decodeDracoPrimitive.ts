@@ -47,7 +47,7 @@ export async function decodeDracoPrimitive(
           ? widenColorToRgba(data, gltfRaw.accessors![primitiveRaw.attributes[semantic]].type === 'VEC3' ? 3 : 4)
           : data;
     } else {
-      warnOnce(`pixi3d-custom-attribute-${semantic}`, `[pixi-3d] custom attribute ${semantic} skipped`);
+      warnOnce(`pixijs-3d-custom-attribute-${semantic}`, `[@pixi/3d] custom attribute ${semantic} skipped`);
     }
   }
 

@@ -30,8 +30,8 @@ const ROOT = join(import.meta.dirname, '../../..');
  */
 const PREVIEW_IMPORTS = {
   'pixi.js': './pixi.min.mjs',
-  '@pixi/3d': '../pixi-3d.min.mjs',
-  '@pixi/3d/extras': '../pixi-3d-extras.min.mjs',
+  '@pixi/3d': '../pixijs-3d.min.mjs',
+  '@pixi/3d/extras': '../pixijs-3d-extras.min.mjs',
 };
 const PIXI_FILES = ['pixi.min.mjs', 'pixi.min.mjs.map'];
 
@@ -186,7 +186,7 @@ function buildProjectData(name, files, dependencies) {
 
   projectFiles['package.json'] = JSON.stringify(
     {
-      name: `pixi-3d-example-${name}`,
+      name: `pixijs-3d-example-${name}`,
       private: true,
       version: '0.0.0',
       type: 'module',

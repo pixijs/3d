@@ -81,7 +81,7 @@ function padContainerBuffers(declared: NonNullable<GltfFormat['buffers']>, buffe
 
     if (!isMeshoptFallback) {
       warn(
-        `[pixi-3d] GLB buffer ${i} ("${declared[i].uri ?? 'no uri'}") lives outside the container; ` +
+        `[@pixi/3d] GLB buffer ${i} ("${declared[i].uri ?? 'no uri'}") lives outside the container; ` +
           `external GLB buffers are not loaded, so anything reading it will come back empty.`,
       );
     }

@@ -444,7 +444,7 @@ describe('Sprite3D texture shorthand', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
-      const sprite = Sprite3D.from('pixi3d-never-loaded.png');
+      const sprite = Sprite3D.from('pixijs-3d-never-loaded.png');
 
       expect(sprite.texture).toBe(Texture.EMPTY);
       expect(sprite.material.textures.baseColor).toBe(Texture.EMPTY);

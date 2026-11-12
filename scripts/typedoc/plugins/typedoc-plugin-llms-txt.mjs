@@ -22,7 +22,7 @@ function isAdvanced(reflection) {
 
 /**
  * Extracts a single-sentence description from a reflection: the first sentence of the summary's
- * first paragraph. pixi-3d summary lines carry no trailing period, so the paragraph break is what
+ * first paragraph. PixiJS 3D summary lines carry no trailing period, so the paragraph break is what
  * ends them. Inline tags render as their text, so `{@link View3D}` becomes `View3D`.
  * @param reflection
  */

@@ -46,7 +46,7 @@ export default defineConfig({
     reportUnusedDisableDirectives: 'error',
   },
   plugins: ['eslint', 'typescript', 'import', 'jsdoc', 'unicorn', 'vitest'],
-  jsPlugins: ['./scripts/lint/pixi3d-plugin.ts'],
+  jsPlugins: ['./scripts/lint/pixijs-3d-plugin.ts'],
   settings: {
     jsdoc: {
       tagNamePreference: {
@@ -80,8 +80,8 @@ export default defineConfig({
     'jsdoc/require-property-name': 'warn',
     'jsdoc/require-property-type': 'warn',
     'jsdoc/require-returns-description': 'warn',
-    'pixi3d/jsdoc-format': 'error',
-    'pixi3d/jsdoc-params': 'error',
+    'pixijs-3d/jsdoc-format': 'error',
+    'pixijs-3d/jsdoc-params': 'error',
   },
   overrides: [
     {
@@ -102,7 +102,7 @@ export default defineConfig({
             },
           },
         ],
-        'pixi3d/private-member-naming': 'error',
+        'pixijs-3d/private-member-naming': 'error',
         'typescript/no-unsafe-declaration-merging': 'off',
         'typescript/no-duplicate-enum-values': 'off',
       },
@@ -111,14 +111,14 @@ export default defineConfig({
       files: ['src/**/*.ts'],
       excludeFiles: [DOCS, 'src/index.docs.ts'],
       rules: {
-        'pixi3d/no-comments': 'error',
-        'pixi3d/shader-reserved-words': 'error',
+        'pixijs-3d/no-comments': 'error',
+        'pixijs-3d/shader-reserved-words': 'error',
       },
     },
     {
       files: ['tests/**/*.scene.ts', 'tests/**/*.test.ts'],
       rules: {
-        'pixi3d/no-comments': 'error',
+        'pixijs-3d/no-comments': 'error',
       },
     },
     {
@@ -131,12 +131,12 @@ export default defineConfig({
       files: ['src/**/*.ts'],
       excludeFiles: ['src/**/*.test.ts', 'src/**/__tests__/**', DOCS],
       rules: {
-        'pixi3d/require-export-jsdoc': 'error',
-        'pixi3d/require-member-api-doc': 'error',
-        'pixi3d/require-standard-example': 'error',
-        'pixi3d/jsdoc-style': 'error',
-        'pixi3d/number-field-initializer': 'error',
-        'pixi3d/destroy-release': 'error',
+        'pixijs-3d/require-export-jsdoc': 'error',
+        'pixijs-3d/require-member-api-doc': 'error',
+        'pixijs-3d/require-standard-example': 'error',
+        'pixijs-3d/jsdoc-style': 'error',
+        'pixijs-3d/number-field-initializer': 'error',
+        'pixijs-3d/destroy-release': 'error',
         'eslint/max-classes-per-file': ['error', { ignoreExpressions: true }],
         'typescript/no-deprecated': 'error',
         'typescript/no-explicit-any': 'error',
@@ -212,7 +212,7 @@ export default defineConfig({
     {
       files: ['**/*.test.ts', '**/*.scene.ts'],
       rules: {
-        'pixi3d/require-tilde-imports': 'error',
+        'pixijs-3d/require-tilde-imports': 'error',
       },
     },
     {

@@ -2,15 +2,15 @@
   "name": "@pixi/3d",
   "version": "0.1.0-beta.3",
   "description": "A 3D extension for PixiJS",
-  "homepage": "https://github.com/pixijs/pixi-3d#readme",
+  "homepage": "https://github.com/pixijs/3d#readme",
   "bugs": {
-    "url": "https://github.com/pixijs/pixi-3d/issues"
+    "url": "https://github.com/pixijs/3d/issues"
   },
   "license": "MIT",
   "author": "PixiJS",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pixijs/pixi-3d.git"
+    "url": "git+https://github.com/pixijs/3d.git"
   },
   "workspaces": [
     "playground",
@@ -105,7 +105,6 @@
     "test:dts": "node scripts/build/check-dts.mts",
     "lint": "oxlint --fix && oxfmt --write",
     "release": "node scripts/release.mts",
-    "sync:beta": "node scripts/beta/sync.mts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

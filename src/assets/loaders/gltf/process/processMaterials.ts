@@ -50,7 +50,6 @@ function extractUvTransform(rawMaterial: GltfFormat.Material): GltfFormat.KHRTex
   return undefined;
 }
 
-const TEXCOORD_ISSUE_URL = 'https://github.com/pixijs/pixi-3d/issues/57';
 const warnedTexCoords = new Set<string>();
 
 interface TextureBindingLike {
@@ -71,9 +70,9 @@ function warnUnsupportedTexCoord(
     if (!warnedTexCoords.has(key)) {
       warnedTexCoords.add(key);
       warn(
-        `[pixi-3d] ${bindingName} on material "${materialName}" uses texCoord=${bindingTexCoord}; ` +
+        `[@pixi/3d] ${bindingName} on material "${materialName}" uses texCoord=${bindingTexCoord}; ` +
           `multi-UV-set support is not yet implemented and the texture will sample from UV0 ` +
-          `(may apply to other materials in this asset). See ${TEXCOORD_ISSUE_URL}.`,
+          `(may apply to other materials in this asset).`,
       );
     }
   }
@@ -84,10 +83,9 @@ function warnUnsupportedTexCoord(
     if (!warnedTexCoords.has(key)) {
       warnedTexCoords.add(key);
       warn(
-        `[pixi-3d] KHR_texture_transform on ${bindingName} (material "${materialName}") overrides ` +
+        `[@pixi/3d] KHR_texture_transform on ${bindingName} (material "${materialName}") overrides ` +
           `texCoord (binding=${bindingTexCoord}, transform=${transformTexCoord}); per-binding ` +
-          `texCoord overrides are not supported and the binding's texCoord will be used instead. ` +
-          `See ${TEXCOORD_ISSUE_URL}.`,
+          `texCoord overrides are not supported and the binding's texCoord will be used instead.`,
       );
     }
   }
@@ -277,7 +275,7 @@ function processPbrMaterial(rawMaterial: GltfFormat.Material, source: Scene3DSou
     const hasTransmission = (transmission.factor ?? 0) > 0 || transmission.texture !== undefined;
     if (hasTransmission && options.alphaMode !== 'opaque') {
       warn(
-        `[pixi-3d] Material "${rawMaterial.name ?? '<unnamed>'}" combines KHR_materials_transmission ` +
+        `[@pixi/3d] Material "${rawMaterial.name ?? '<unnamed>'}" combines KHR_materials_transmission ` +
           `with alphaMode="${rawMaterial.alphaMode ?? 'OPAQUE'}"; the glTF spec leaves this undefined. ` +
           `Coercing alphaMode to OPAQUE so the transmission pass handles transparency.`,
       );
@@ -305,9 +303,9 @@ function processPbrMaterial(rawMaterial: GltfFormat.Material, source: Scene3DSou
     options.iridescence = irid;
     if (factorIdx !== undefined && thickIdx !== undefined && factorIdx !== thickIdx) {
       warn(
-        `[pixi-3d] KHR_materials_iridescence on material "${rawMaterial.name ?? '<unnamed>'}" references ` +
+        `[@pixi/3d] KHR_materials_iridescence on material "${rawMaterial.name ?? '<unnamed>'}" references ` +
           `two different textures for iridescenceTexture (R=factor) and iridescenceThicknessTexture ` +
-          `(G=thickness); pixi-3d packs both into one slot (R+G). The factor texture will be used and ` +
+          `(G=thickness); PixiJS 3D packs both into one slot (R+G). The factor texture will be used and ` +
           `iridescence thickness will be sampled from its G channel. Repack into a single image with ` +
           `factor in R and thickness in G for the intended look.`,
       );
@@ -348,8 +346,8 @@ function processPbrMaterial(rawMaterial: GltfFormat.Material, source: Scene3DSou
     options.sheen = sh;
     if (colorIdx !== undefined && roughIdx !== undefined && colorIdx !== roughIdx) {
       warn(
-        `[pixi-3d] KHR_materials_sheen on material "${rawMaterial.name ?? '<unnamed>'}" references two ` +
-          `different textures for sheenColor and sheenRoughness; pixi-3d packs both into one slot (RGB+A). ` +
+        `[@pixi/3d] KHR_materials_sheen on material "${rawMaterial.name ?? '<unnamed>'}" references two ` +
+          `different textures for sheenColor and sheenRoughness; PixiJS 3D packs both into one slot (RGB+A). ` +
           `The colour texture will be used and sheen roughness will be sampled from its alpha channel ` +
           `(usually 1.0 on an sRGB colour texture, effectively giving factor-only roughness). Repack into ` +
           `a single RGBA image with roughness in alpha for the intended look.`,
@@ -370,8 +368,8 @@ function processPbrMaterial(rawMaterial: GltfFormat.Material, source: Scene3DSou
     options.specular = spec;
     if (colorIdx !== undefined && factorIdx !== undefined && colorIdx !== factorIdx) {
       warn(
-        `[pixi-3d] KHR_materials_specular on material "${rawMaterial.name ?? '<unnamed>'}" references two ` +
-          `different textures for specularColor (RGB) and specular (A); pixi-3d packs both into one slot ` +
+        `[@pixi/3d] KHR_materials_specular on material "${rawMaterial.name ?? '<unnamed>'}" references two ` +
+          `different textures for specularColor (RGB) and specular (A); PixiJS 3D packs both into one slot ` +
           `(RGB+A). The colour texture will be used and specular factor will be sampled from its alpha ` +
           `channel (usually 1.0 on an sRGB colour texture, effectively giving factor-only strength). ` +
           `Repack into a single RGBA image with factor in alpha for the intended look.`,
