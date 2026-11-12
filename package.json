@@ -1,6 +1,6 @@
 {
   "name": "@pixi/3d",
-  "version": "0.1.0-beta.3",
+  "version": "0.1.0",
   "description": "A 3D extension for PixiJS",
   "homepage": "https://github.com/pixijs/3d#readme",
   "bugs": {
