@@ -1,0 +1,72 @@
+name: Publish (npm)
+
+# Publishes @pixi/3d with npm trusted publishing: the job proves it is this workflow
+# through GitHub's OIDC token, so no npm token is stored, and npm adds provenance.
+# npm checks this file's name against the package's trusted publisher, so renaming it
+# stops publishing until the publisher is updated (`npm trust list @pixi/3d`).
+#
+# A published GitHub release publishes the version in package.json, which must match the
+# tag: to `latest`, or to `beta` when the release is marked as a pre-release. A push to
+# main publishes `<version>-main.<sha>` under the `main` tag, as pixi.js does.
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }} - ${{ github.ref }}
+  # A publish stopped partway can leave npm and the run disagreeing about what shipped.
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # npm's trusted publishing only accepts GitHub-hosted runners, so this job can't move
+    # to Namespace, and it installs without the Namespace cache in ./.github/actions/setup.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@11
+
+      - name: Install Dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Check the release tag matches package.json
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Release $TAG doesn't match package.json version $version"
+            exit 1
+          fi
+
+      - name: Version the main build
+        if: github.event_name == 'push'
+        run: |
+          version=$(node -p "require('./package.json').version")
+          npm version "$version-main.${GITHUB_SHA::7}" --no-git-tag-version
+
+      - name: Build
+        run: npm run build
+
+      # The build above already ran, so the publish skips `prepublishOnly`, which builds again.
+      - name: Publish
+        env:
+          DIST_TAG: ${{ github.event_name == 'push' && 'main' || (github.event.release.prerelease && 'beta' || 'latest') }}
+        run: npm publish --ignore-scripts --tag "$DIST_TAG"
