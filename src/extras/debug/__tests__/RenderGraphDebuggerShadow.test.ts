@@ -254,13 +254,16 @@ describe('RenderGraphDebugger on the shadow pass', () => {
     });
   });
 
-  it('reads a frustum-culled batch its cascades draw direct as using no bundle', async () => {
+  it('reads a frustum-culled batch its cascades draw direct as reusing their bundles', async () => {
     await withScene('debug-shadow-direct', (app, { view3d }) => {
       cpuSubmission.shadow = Infinity;
       const debug = new RenderGraphDebugger({ view: view3d });
       renderShadowBundle(app, debug);
 
-      expect([renderShadowBundle(app, debug), renderShadowBundle(app, debug)]).toEqual([NOT_USED, NOT_USED]);
+      expect([renderShadowBundle(app, debug).status, renderShadowBundle(app, debug).status]).toEqual([
+        'reused',
+        'reused',
+      ]);
     });
   });
 
@@ -335,7 +338,7 @@ describe('RenderGraphDebugger on direct draws', () => {
     delete cpuSubmission.shadow;
   });
 
-  it('reads a batch the passes draw direct as using no bundle, frame after frame', async () => {
+  it('reads a batch the passes draw direct as reusing its bundles, frame after frame', async () => {
     cpuSubmission.forward = Infinity;
     cpuSubmission.shadow = Infinity;
     await withScene('debug-direct-draws', (app, { view3d }) => {
@@ -354,8 +357,8 @@ describe('RenderGraphDebugger on direct draws', () => {
 
       bundles('opaque');
 
-      expect([bundles('opaque'), bundles('opaque')], 'the opaque pass').toEqual([NOT_USED, NOT_USED]);
-      expect([bundles('shadow'), bundles('shadow')], 'each sun cascade').toEqual([NOT_USED, NOT_USED]);
+      expect([bundles('opaque').status, bundles('opaque').status], 'the opaque pass').toEqual(['reused', 'reused']);
+      expect([bundles('shadow').status, bundles('shadow').status], 'each sun cascade').toEqual(['reused', 'reused']);
     });
   });
 });

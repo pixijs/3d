@@ -162,27 +162,26 @@ describe('CPU submission on WebGPU', () => {
     delete cpuSubmission.shadow;
   });
 
-  it('within the cap: culls on the CPU, draws direct, records no bundle, skips the empty command', async () => {
+  it('within the cap: culls on the CPU, replays its direct draws from a bundle, and re-records when a count changes', async () => {
     cpuSubmission.forward = Infinity;
     const { app, material, result, counts, spies } = await sceneWithAnEmptyCommand('cpu-submission-on');
     try {
       expect(result.direct).toBe(true);
-      expect(result.bundle, 'nothing was recorded').toBeNull();
-      expect(recordings(spies, 'view3d pass'), 'a frustum walk never records its direct draws').toHaveLength(0);
+      expect(result.bundle, 'the direct draws were recorded').not.toBeNull();
+      expect(recordings(spies, 'view3d pass'), 'an unchanged walk keeps the bundle').toHaveLength(0);
       expect(spies.drawIndirect, 'no indirect draw').not.toHaveBeenCalled();
-      expect(spies.executeBundle, 'no bundle executed').not.toHaveBeenCalled();
+      expect(spies.executeBundle, 'the bundle replays').toHaveBeenCalled();
       expect(counts, 'one command holds the six visible cubes, the other is empty').toEqual(
         expect.arrayContaining([6, 0]),
       );
+
+      const bundle = result.bundle;
+      result.countsDirtyId++;
+      app.render();
+      expect(result.bundle, 'a changed count re-records').not.toBe(bundle);
+      expect(recordings(spies, 'view3d pass')).toHaveLength(1);
       expect(directDraws(spies), 'one direct draw per non-empty command').toHaveLength(
         counts.filter((c) => c > 0).length,
-      );
-
-      app.render();
-      expect(result.bundle, 'nor on a later frame').toBeNull();
-      expect(recordings(spies, 'view3d pass')).toHaveLength(0);
-      expect(directDraws(spies), 'the direct draws go out again every frame').toHaveLength(
-        2 * counts.filter((c) => c > 0).length,
       );
     } finally {
       material.destroy();
@@ -446,7 +445,7 @@ describe('CPU submission on WebGPU', () => {
     const { app, material, result, spies } = await sceneWithAnEmptyCommand('cpu-submission-at-cap');
     try {
       expect(result.direct, 'twelve instances fit a cap of twelve').toBe(true);
-      expect(spies.executeBundle, 'no bundle executed').not.toHaveBeenCalled();
+      expect(spies.drawIndirect, 'no indirect draw').not.toHaveBeenCalled();
     } finally {
       material.destroy();
       app.destroy();
@@ -468,8 +467,9 @@ describe('CPU submission on WebGPU', () => {
       transparent: true,
       shadow: true,
     });
-    expect(direct.drew.indirect + direct.drew.bundles, 'nothing drew indirect').toBe(0);
-    expect(direct.drew.direct, 'each geometry, the ground and the blended sphere drew').toBeGreaterThanOrEqual(5);
+    expect(direct.drew.indirect, 'nothing drew indirect').toBe(0);
+    expect(direct.drew.bundles, 'the opaque pass and the shadow replay their direct-draw bundles').toBeGreaterThan(0);
+    expect(direct.drew.direct, 'the back-to-front pass draws the blended sphere direct').toBeGreaterThanOrEqual(1);
 
     const a = indirect.pixels;
     const b = direct.pixels;
