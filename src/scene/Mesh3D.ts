@@ -616,6 +616,7 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    * ```
    */
   public invalidate(): void {
+    for (const bit in this._passCache) this._passCache[bit].markStale();
     this._markBatchDirty();
   }
 

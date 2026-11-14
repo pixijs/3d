@@ -1,3 +1,4 @@
+import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
@@ -8,7 +9,8 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 export const phongMaterialBit: ShaderBit = {
   name: 'phongMaterial',
 
-  textures: ['baseColor', 'normal'],
+  textures: ['normal'],
+  requires: [baseColorTextureBit],
 
   bindings: {
     material: {
@@ -29,13 +31,10 @@ export const phongMaterialBit: ShaderBit = {
 
   var baseColor = material.baseColor;
 
-  var baseTex = sampleBaseColor(input.vUV);
   let baseTexLinear = baseTex.rgb / max(baseTex.a, 0.001);
-  baseTex = vec4<f32>(pow(baseTexLinear, vec3<f32>(2.2)), baseTex.a);
-  baseColor *= baseTex;
+  baseColor *= vec4<f32>(pow(baseTexLinear, vec3<f32>(2.2)), baseTex.a);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 
   let viewDir = normalize(camera.uCameraPosition.xyz - input.vPosition);
   let specularColor = material.specularColor;
@@ -52,13 +51,10 @@ export const phongMaterialBit: ShaderBit = {
 
   vec4 baseColor = material.baseColor;
 
-  vec4 baseTex = sampleBaseColor(vUV);
   vec3 baseTexLinear = baseTex.rgb / max(baseTex.a, 0.001);
-  baseTex.rgb = pow(baseTexLinear, vec3(2.2));
-  baseColor *= baseTex;
+  baseColor *= vec4(pow(baseTexLinear, vec3(2.2)), baseTex.a);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 
   vec3 viewDir = normalize(uCameraPosition.xyz - vPosition);
   vec3 specularColor = material.specularColor;

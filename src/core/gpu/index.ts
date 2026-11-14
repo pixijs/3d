@@ -21,7 +21,6 @@ export * from './MipChainSystemGpu';
 export * from './renderForwardBatchesGpu';
 export * from './shader/globalBitGpu';
 export * from './shader/MaterialSystemGpu';
-export * from './shader/shadowGlobalBitGpu';
 export * from './shader/texturesPluginGpu';
 export * from './ShadowRenderPassGpu';
 export * from './View3DPipeGpu';

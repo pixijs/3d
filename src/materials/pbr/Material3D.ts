@@ -4,6 +4,8 @@ import type { ColorSource, Texture, TextureDestroyOptions, TypeOrBool } from 'pi
 import { RenderPassBit } from '../../core/render-passes/RenderPass';
 import { alphaMaskBit } from '../../core/shader/bits/alphaMaskBit';
 import { anisotropyBit, anisotropyTextureBit } from '../../core/shader/bits/anisotropyBit';
+import { baseAlphaBit } from '../../core/shader/bits/baseAlphaBit';
+import { baseColorTextureBit } from '../../core/shader/bits/baseColorTextureBit';
 import { emissiveBit } from '../../core/shader/bits/emissiveBit';
 import { uvTransformBit } from '../../core/shader/bits/uvTransformBit';
 import type { ShaderBit } from '../../core/shader/ShaderBit';
@@ -1214,7 +1216,10 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
       }
     }
 
-    this._deriveLayoutFromBits([pbrMaterialBit, uvTransformBit, ...this._featureBits, ...this.extraBits], textures);
+    this._deriveLayoutFromBits(
+      [uvTransformBit, baseColorTextureBit, baseAlphaBit, pbrMaterialBit, ...this._featureBits, ...this.extraBits],
+      textures,
+    );
 
     const data = this.data;
 
@@ -1300,8 +1305,8 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     let descriptor = this._descriptorByEnvKey[envKey];
     if (descriptor) return descriptor;
 
-    const bitsGpu = [pbrMaterialBit, envBit];
-    const bitsGl = [pbrMaterialBit, envBit];
+    const bitsGpu = [uvTransformBit, baseColorTextureBit, baseAlphaBit, pbrMaterialBit, envBit];
+    const bitsGl = [uvTransformBit, baseColorTextureBit, baseAlphaBit, pbrMaterialBit, envBit];
 
     if (view.environment !== null) {
       bitsGpu.push(iblBit);
@@ -1311,8 +1316,6 @@ export class Material3D extends BaseMaterial3D<Material3DData, Material3DTexture
     bitsGpu.push(pbrLightingBit);
     bitsGl.push(pbrLightingBit);
 
-    bitsGpu.push(uvTransformBit);
-    bitsGl.push(uvTransformBit);
     bitsGpu.push(...this._featureBits);
     bitsGl.push(...this._featureBits);
     bitsGpu.push(...this.extraBits);

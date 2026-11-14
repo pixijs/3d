@@ -13,7 +13,12 @@ type SortBatchFnGl = (renderables: SortedMesh3DView<Mesh3DData>, batch: Mesh3DBa
 interface RenderForwardBatchesGlOptions {
   pipe: View3DPipeGl;
   bit: number;
-  bindsMaterial: boolean;
+  /**
+   * Camera to cull and draw from, or `null` for the view's own camera
+   *
+   * Supplies the frustum, the bind group bound at group 1, and the eye the distance sort
+   * measures from. Culling reads {@link Camera3D#cullFrustum}.
+   */
   camera: Camera3D | null;
   session: RenderSession;
   alwaysRebuild: boolean;
@@ -25,7 +30,7 @@ interface RenderForwardBatchesGlOptions {
  * @internal
  */
 export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): void {
-  const { pipe, bit, bindsMaterial, session, alwaysRebuild, sortBatch } = options;
+  const { pipe, bit, session, alwaysRebuild, sortBatch } = options;
   const { view3d } = session;
   const batcher = pipe.renderer.material3d.batcher;
   const camera = options.camera ?? view3d.camera;
@@ -56,7 +61,6 @@ export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): 
         list: list,
         globalBindGroup: session.globalBindGroup,
         passBit: bit,
-        bindsMaterial,
       });
     }
 

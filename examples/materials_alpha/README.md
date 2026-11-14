@@ -33,8 +33,8 @@ since blended meshes draw back to front.
   shows its wordmark mirrored. It's fixed once a material is built, so the pane's toggle builds a new `Material3D`,
   gives it to both cards and calls `destroy()` on the old one; the other three are setters.
 - `Mesh3D` and `PlaneGeometry` (`flipV`): the two cards, sharing one geometry and one material. They're built with
-  `castShadow: false`, as the materials guide advises for masked cards: the shadow pass doesn't read `alphaMode` or
-  `doubleSided` yet, so a masked card would cast a solid rectangle and a card whose back faces the light none.
+  `castShadow: false`, as the materials guide advises for flat cards: the shadow pass doesn't read `doubleSided`
+  yet, so a card whose back faces the light would cast nothing.
   `scene.ts` types them with `BaseMaterial3D` and `Container3D`, and `CardOptions` picks the four options out of
   `BaseMaterial3DOptions`.
 - `View3D`: the 3D scene inside pixi's stage, and its `camera`, whose position `visuals.ts` takes into each card's

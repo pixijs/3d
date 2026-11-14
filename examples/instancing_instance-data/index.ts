@@ -69,7 +69,7 @@ const view3d = new View3D({ autoResize: true, width: app.screen.width, height: a
 // to a speckle that shimmers as the wave runs.
 const stage = new ThemeStage(view3d, { theme, fog: { near: 14, far: 28 } });
 
-// The shadow pass doesn't run material bits, so a cast shadow would stay at the rest pose under the moving wave: the
+// The shadow pass doesn't read instance data yet, so a cast shadow would stay at the rest pose under the moving wave: the
 // key casts none, and the field draws in the opaque pass only.
 stage.key.castShadow = false;
 app.stage.addChild(view3d);

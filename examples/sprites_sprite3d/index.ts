@@ -72,7 +72,7 @@ app.stage.addChild(view3d);
 const wordmark = createWordmarkTexture(app.renderer);
 
 // Trees and crowd cutouts turn to face you but keep their feet planted. A Sprite3D doesn't cast a shadow by default:
-// the shadow pass doesn't turn billboards, so it would cast the shadow of its unturned quad.
+// in the shadow pass a billboard turns to face the light, so it would cast its whole card whatever you see of it.
 const cutout = new Sprite3D({
   texture: wordmark,
   pixelSize: PIXEL_SIZE,

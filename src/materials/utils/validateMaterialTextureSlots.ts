@@ -3,10 +3,13 @@ import type { ShaderBit } from '../../core/shader/ShaderBit';
 import type { BaseMaterial3D } from '../BaseMaterial3D';
 
 /**
- * Built once per compiled shader and kept beside it, so validating a material on a cache hit stays cheap
- * @internal
+ * The material-facing layout a compiled bit list declares
+ *
+ * What `validateMaterialStruct` and `validateMaterialTextureSlots` hold a material against. The
+ * material systems build it for each shader they compile, check the material against it, and drop
+ * it.
  */
-export interface MaterialLayout {
+interface MaterialLayout {
   structSnapshot: string;
   textureNames: string[];
 }
@@ -23,7 +26,18 @@ export function getMaterialLayout(bits: readonly ShaderBit[]): MaterialLayout {
 }
 
 /**
- * Throws unless the compiled struct matches the one `material.data` was laid out in at construction
+ * Assert that a compiled layout's Material struct matches the material's construction-time struct
+ *
+ * Keeping the two equal is what lets `material.data` have the GPU layout before the material ever
+ * renders, and it holds only while the bits that add struct fields are fixed at construction.
+ *
+ * Throws on a mismatch, which catches a per-mesh or per-view bit (normal mapping, skinning, tone
+ * mapping, fog and so on) adding `bindings.material` fields, or a custom `getPrimaryDescriptor`
+ * adding struct fields the constructor never saw. Runs once for each shader the systems compile.
+ * A material that finds its shader compiled needs no check: the shader's cache key holds the name
+ * of the material's layout bit, which stands for this struct and these texture names.
+ * @param layout - Layout of the final compiled bit list
+ * @param material - Material whose construction-time snapshot to check against
  * @internal
  */
 export function validateMaterialStruct(layout: MaterialLayout, material: BaseMaterial3D): void {
@@ -41,7 +55,13 @@ export function validateMaterialStruct(layout: MaterialLayout, material: BaseMat
 }
 
 /**
- * Texture names across `bits`, in the order the textures plugins number the shader's samplers
+ * Collect the texture names declared across `bits`
+ *
+ * Names come back in the sequential order texturesPluginGpu/Gl assign the compiled shader's
+ * sample indices. A name a later bit declares again is listed once, at its first place, so a
+ * material's layout bit can declare every name ahead of the bits that use them.
+ * @param bits - Bit list to collect from
+ * @returns Declared texture names in sample-index order
  * @internal
  */
 export function collectTextureNames(bits: readonly ShaderBit[]): string[] {
@@ -49,15 +69,29 @@ export function collectTextureNames(bits: readonly ShaderBit[]): string[] {
 
   for (const bit of bits) {
     if (!bit.textures) continue;
-    for (const name of bit.textures) names.push(name);
+    for (const name of bit.textures) {
+      if (!names.includes(name)) names.push(name);
+    }
   }
 
   return names;
 }
 
 /**
- * Throws unless the shader's texture order matches the material's slots, which its bind groups bind
- * by position
+ * Assert that a material's derived texture slots line up with a compiled layout's texture names
+ *
+ * The shader's `sampleX` getter for the i-th declared texture name reads binding `2i` of the
+ * material's group, and the material's bind groups put `material._textures[i]` there, so the two
+ * orders must agree. Runs once for each shader the systems compile, as `validateMaterialStruct`
+ * does.
+ *
+ * Throws on divergence, which catches:
+ *  (a) a bit outside the material's slot derivation (global / pass / future
+ *      infrastructure bits) growing a `textures` declaration, and
+ *  (b) a custom `getPrimaryDescriptor` override whose bit list no longer
+ *      matches the slots the material derived at construction.
+ * @param layout - Layout of the final compiled bit list
+ * @param material - Material whose derived slot layout to check against
  * @internal
  */
 export function validateMaterialTextureSlots(layout: MaterialLayout, material: BaseMaterial3D): void {

@@ -307,7 +307,7 @@ export class FullscreenPass extends RenderPass {
     if (this._reads.depth) bits.push(this._isWebGL ? depthReadBitGl : depthReadBitGpu);
     bits.push(getFragmentBit(this._fragment, this._uniforms), ...this._extraBits);
 
-    this._shader = this.pipe.renderer.material3d.compilePassShader(bits, fullscreenEffectTemplate);
+    this._shader = this.pipe.renderer.material3d.compileViewShader(bits, fullscreenEffectTemplate);
   }
 
   /** Releases the pass's shader and bind groups, leaving the `uniforms` it was given to their owner */

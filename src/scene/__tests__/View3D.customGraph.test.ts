@@ -164,6 +164,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
               bit: RenderPassBit.OPAQUE,
               sort: 'key',
               camera,
+              level: 'shape',
               descriptor: { shaderDescriptor: solidMeshDescriptor({ color: 0xff0000 }) },
             }),
           );
@@ -252,6 +253,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
               bit: RenderPassBit.OPAQUE,
               sort: 'key',
               camera,
+              level: 'shape',
               descriptor: { shaderDescriptor: solidMeshDescriptor({ color: 0xff0000 }) },
             }),
           );

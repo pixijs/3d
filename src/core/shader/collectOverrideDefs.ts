@@ -1,3 +1,4 @@
+import { resolveShaderBits } from './resolveShaderBits';
 import type { ShaderBit, ShaderOverrideDef, ShaderOverrideType } from './ShaderBit';
 
 /** @internal */
@@ -72,6 +73,30 @@ export function collectOverrideDefs(bits: ShaderBit[]): Record<string, Normalize
   }
 
   return defs;
+}
+
+/**
+ * The entries of `overrides` that a bit in `bits`, or a bit one of them requires, declares
+ *
+ * A shader compiled from part of a material's bits declares only those bits' overrides, and
+ * WebGPU rejects a pipeline that sets a constant its shader doesn't declare.
+ * @param overrides - Override values, by name
+ * @param bits - The bits the shader compiles from
+ * @internal
+ */
+export function declaredOverrides(overrides: Record<string, number>, bits: ShaderBit[]): Record<string, number> {
+  const declared: Record<string, number> = {};
+  const resolved = resolveShaderBits(bits);
+
+  for (let i = 0; i < resolved.length; i++) {
+    const defs = resolved[i].overrideDefs;
+    if (!defs) continue;
+    for (const name in defs) {
+      if (name in overrides) declared[name] = overrides[name];
+    }
+  }
+
+  return declared;
 }
 
 function formatWgslLiteral(type: ShaderOverrideType, value: number): string {

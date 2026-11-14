@@ -4,7 +4,9 @@ import type { BufferResource, ColorSource, TextureDestroyOptions, TextureSource,
 import { textureSetId } from '../core/batcher/textureSetId';
 import { passBitRegistry } from '../core/render-passes/passBitRegistry';
 import { RenderPassBit } from '../core/render-passes/RenderPass';
+import { materialLayoutBit } from '../core/shader/bits/materialBindingsBit';
 import { materialStructSnapshot, mergeMaterialStruct } from '../core/shader/codegen/materialStruct';
+import { resolveShaderBits } from '../core/shader/resolveShaderBits';
 import type { ShaderBit } from '../core/shader/ShaderBit';
 import { ShaderDescriptor } from '../core/shader/ShaderDescriptor';
 import type { ShaderDescriptorOptions } from '../core/shader/ShaderDescriptor';
@@ -258,7 +260,9 @@ export interface BaseMaterial3DOptions {
    *
    * - `true`: draw in the pass with the pass's own shader and state.
    * - a {@link PassDescriptorOptions} object: draw in it with your own shader, state or topology.
-   *   {@link PassDescriptor} says how these combine with the pass's own; they can't change later.
+   *   {@link PassDescriptor} explains how these combine with the pass's own, and why they can't
+   *   change later. Its `extraBits` are bits of yours for that pass alone, and the fields and
+   *   textures they declare are laid out with the material's own.
    * - `false`, or left out: don't draw in it. Useful for opting out of a pass that spread options
    *   or a subclass default turned on.
    *
@@ -674,8 +678,18 @@ export class BaseMaterial3D<
   public _materialStructSnapshot = '{}';
 
   /**
-   * The values the material's shader reads, one property per field its bits declare; see
-   * {@link MaterialData} for how they read and write
+   * The bit that declares this material's whole layout and no code, which `compileShader` lists
+   * ahead of the first bit that reads the material; see `materialLayoutBit`
+   * @internal
+   */
+  public _materialLayoutBit: ShaderBit = materialLayoutBit({}, []);
+
+  /**
+   * The values the material's shader reads, laid out exactly as its packed GPU struct
+   *
+   * One field per struct member; assigning a field queues the upload ({@link MaterialData} covers
+   * vector fields). Built from the material's bits during construction; a material with no bits
+   * gets an empty one.
    * @example
    * ```ts
    * const toon = new ToonMaterial({ bands: 3 });
@@ -780,6 +794,18 @@ export class BaseMaterial3D<
     this._uvTransformExplicit = !!options.uvTransform;
     this._initialUvTransform = options.uvTransform;
 
+    if (options.passes) {
+      for (const name in options.passes) {
+        const value = options.passes[name];
+        if (!value) continue;
+        const bit = passBitRegistry.getOrAllocate(name);
+        if (value !== true) {
+          this._passes[bit] = normalizePassEntry(value);
+        }
+        this._passBit |= bit;
+      }
+    }
+
     if (options.descriptor) {
       const descriptor = (this._descriptorOptions = options.descriptor);
       const extra = this.extraBits;
@@ -809,17 +835,6 @@ export class BaseMaterial3D<
       }
     }
 
-    if (options.passes) {
-      for (const name in options.passes) {
-        const value = options.passes[name];
-        if (!value) continue;
-        const bit = passBitRegistry.getOrAllocate(name);
-        if (value !== true) {
-          this._passes[bit] = normalizePassEntry(value);
-        }
-        this._passBit |= bit;
-      }
-    }
     this.topology = options.topology;
 
     this.data ??= new (getOrCreateMaterialDataClass({}, '{}'))(this) as TData;
@@ -871,12 +886,23 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Lays out `data` and `textures` from `bits`; a subclass that builds its own bits calls it once,
-   * from its constructor
+   * Lays out this material's packed data and texture slots from `bits`, once, at construction
+   *
+   * The packed struct merges every bit's `bindings.material` fields; `data` is created in that
+   * layout and `_materialStructSnapshot` records it. The texture slots come from walking the bits'
+   * `textures` declarations in order, which builds `_textures`, `_slotByName` and `textures`; the
+   * `textures` argument fills them by name, and a name it leaves out gets `Texture.WHITE`. The
+   * base colour, alpha and cutoff staged before `data` existed are copied in, and the UV transform
+   * is pointed at its fields. Slots are filled directly rather than through `_setTextureSlot`, so
+   * the UV frame is derived once, at the end.
+   *
+   * A bit brings the bits it `requires`, as it does when a shader compiles, so listing a colour
+   * bit lays out the base colour texture and the UV transform it reads. The `extraBits` of the
+   * material's `passes` entries are laid out after `bits`, so one group holds what every pass
+   * reads. A bit that turns up twice is laid out once.
    *
    * `bits` must declare every material field and texture that
-   * {@link BaseMaterial3D#getPrimaryDescriptor} can compile, such as the fields of
-   * {@link uvTransformBit}, with the textures in the same order, or the shader is rejected when it's
+   * {@link BaseMaterial3D#getPrimaryDescriptor} can compile, or the shader is rejected when it's
    * built. `data` and `textures` are cast to `TData` and `TTextures` unchecked, so the type
    * arguments must match what the bits declare. A raw `descriptor` is laid out for you.
    * @param bits - The bits that declare the material's fields and textures
@@ -892,7 +918,14 @@ export class BaseMaterial3D<
 
     this._slotByName = Object.create(null);
 
-    const structDef = mergeMaterialStruct(bits);
+    const listed = [...bits];
+    for (const pass in this._passes) {
+      const extraBits = this._passes[pass].extraBits;
+      if (extraBits) listed.push(...extraBits);
+    }
+    const layoutBits = resolveShaderBits(listed);
+
+    const structDef = mergeMaterialStruct(layoutBits);
     this._materialStructSnapshot = materialStructSnapshot(structDef);
     this.data = new (getOrCreateMaterialDataClass(structDef, this._materialStructSnapshot))(this) as TData;
 
@@ -918,7 +951,7 @@ export class BaseMaterial3D<
     }
 
     const slotNames: string[] = [];
-    for (const bit of bits) {
+    for (const bit of layoutBits) {
       if (!bit.textures) continue;
       for (const name of bit.textures) {
         if (this._slotByName[name] !== undefined) {
@@ -934,6 +967,7 @@ export class BaseMaterial3D<
     }
 
     this.textures = new (getOrCreateMaterialTexturesClass(slotNames))(this) as TTextures;
+    this._materialLayoutBit = materialLayoutBit(structDef, slotNames);
     this._textureSetId = textureSetId(_textures);
 
     this._deriveUvFrame();

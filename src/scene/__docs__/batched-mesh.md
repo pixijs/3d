@@ -157,7 +157,7 @@ grass.setGeometryAt(i, PlaneGeometry.spriteQuad);
 grass.setMaterialAt(i, bladeMaterial);
 // 0.4 wide and 0.8 tall, standing on the ground
 grass.setMatrixAt(i, card.makeScale(0.4, 0.8, 1).setPosition({ x, y: 0.4, z }));
-grass.setPassesAt(i, RenderPassBit.OPAQUE); // no SHADOW, since a light draws a card's shadow from the unturned card
+grass.setPassesAt(i, RenderPassBit.OPAQUE); // no SHADOW, since a card turns to face the light in the shadow pass
 grass.items[i].billboardMode = 'cylindrical'; // turns about its upright axis only, so it stays standing
 grass.invalidate(i);
 ```
