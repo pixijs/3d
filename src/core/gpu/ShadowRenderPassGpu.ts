@@ -243,14 +243,6 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           const result = results.get(batch, c);
           if (!result) continue;
 
-          if (result.direct && batch.cull !== 'off') {
-            result.bundle = null;
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
-            list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
-            continue;
-          }
-
           const recorded = result.bundle;
 
           if (!recorded || result.isBundleStale(list, cameraBindGroup) || !encoder.isBundleValid(recorded)) {

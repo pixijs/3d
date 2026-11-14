@@ -126,7 +126,7 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
 
 /**
  * Replays the valid bundles in one `executeBundle` after the walk, since WebGPU resets the pass state
- * after each call. Only an `'off'` batch bundles its direct draws; a culled one's counts change every frame.
+ * after each call. A bundle of direct draws bakes the counts, so it re-records when the cull changes one.
  * An immediate pass binds each batch's storage every frame, rebuilt or not.
  * @internal
  */
@@ -166,14 +166,6 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
     }
 
     const result = cullResults.ensure(batch);
-
-    if (useBundles && result.direct && batch.cull !== 'off') {
-      result.bundle = null;
-      bindBatchStorage(session, batch, result);
-      list.claimDrawBuilt();
-      list.commandList.replayDirect(encoder, result.indirectDrawData, cameraData);
-      continue;
-    }
 
     if (useBundles) {
       const recorded = result.bundle;

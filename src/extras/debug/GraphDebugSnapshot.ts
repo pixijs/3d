@@ -320,8 +320,7 @@ export interface GraphDebugBundleSnapshot {
    *   has drawn again.
    * - `'first-capture'`: no previous capture to compare with.
    * - `'not-used'`: the pass keeps no bundle for the batch: on WebGL, with `cache: 'never'` (the
-   *   default for a distance sort), for a frustum-culled batch drawn with direct draws, and in a
-   *   shadow pass where no visible shadow-casting light holds one.
+   *   default for a distance sort), and in a shadow pass where no visible shadow-casting light holds one.
    */
   status: 'first-capture' | 'invalidated' | 'not-used' | 'recorded' | 'reused';
   /** Bundle cache revision requested by the renderer; null when the status is `'not-used'` */
@@ -780,7 +779,7 @@ function captureBatchPass(
     lastBundleDirtyId = shadowBundleWatermark(view.lights, batch, passData, true);
     scheduledBundleDirtyId = shadowBundleWatermark(view.lights, batch, passData, false);
     lastBundleCountsDirtyId = shadowBundleCountsDirtyId(view.lights, batch);
-  } else if (webGpu && forward && cachesDrawWork(forward) && !(result?.direct && batch.cull !== 'off')) {
+  } else if (webGpu && forward && cachesDrawWork(forward)) {
     lastBundleDirtyId = result?.lastBundleDirtyId ?? -1;
     scheduledBundleDirtyId = lastBundleDirtyId;
     if (result?.direct) lastBundleCountsDirtyId = result.lastBundleCountsDirtyId;
@@ -868,7 +867,7 @@ function shadowBundleWatermark(
     const cascadeCount = cascadeCountFor(light);
     for (let c = 0; c < cascadeCount; c++) {
       const result = data.cullResults.get(batch, c);
-      if (!result || (result.direct && batch.cull !== 'off')) continue;
+      if (!result) continue;
       if (!includeWaiting && !data.cascades?.[c]?.needsRender && updateRateFor(light.shadow.update, c) === 0) {
         continue;
       }
@@ -884,7 +883,6 @@ function shadowBundleWatermark(
  * or not, so hiding or showing a light leaves the sum alone
  */
 function shadowBundleCountsDirtyId(lights: readonly Light[], batch: Mesh3DBatch): number | null {
-  if (batch.cull !== 'off') return null;
   let sum: number | null = null;
   for (let i = 0; i < lights.length; i++) {
     const light = lights[i];
