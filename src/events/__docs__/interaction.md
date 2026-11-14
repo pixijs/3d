@@ -44,7 +44,7 @@ mesh.hitVolume = new CapsuleGeometry(); // a simpler stand-in mesh, tested per t
 ```
 
 - The bounding box is cheap, but around a round object its empty corners count as hits.
-- `'geometry'` is exact, but its cost grows with the triangle count.
+- `'geometry'` is exact, but its cost grows with the triangle count. A mesh of 2,048 triangles or more builds a {@link Geometry3D#bvh | bvh} on its first pick, which keeps later picks fast. A {@link Geometry3DOptions#dynamic | dynamic} geometry never builds one, and tests every triangle on each pick.
 - A {@link Box} or {@link Sphere} you make can fit the object better, and is as cheap to test as the bounding box.
 
 [Hit volumes](/3d/examples?example=interaction_hit-volumes) outlines each shape's volume and lets you switch it.

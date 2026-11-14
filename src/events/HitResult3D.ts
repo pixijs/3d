@@ -113,8 +113,9 @@ export interface IHitVolume3D {
  *
  * - `'box'`: the node's bounding box.
  * - `'geometry'`: every triangle of the node's own geometry, as stored: skinning and morph targets
- *   don't move it. Hits carry a normal and UV, but every triangle is tested once the ray reaches
- *   the bounding box.
+ *   don't move it. Hits carry a normal and UV. A geometry of 2,048 triangles or more walks its
+ *   {@link Geometry3D#bvh | bvh}; a smaller or dynamic one tests every triangle once the ray
+ *   reaches the bounding box.
  *
  * An instance gives a shape the node can't work out, in the node's local space:
  *
