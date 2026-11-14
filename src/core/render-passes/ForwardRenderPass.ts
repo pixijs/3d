@@ -1,7 +1,7 @@
 import type { PassBuilder } from '../render-graph/PassBuilder';
 import { CullResults } from './CullResults';
 import type { RenderForwardDescriptor } from './RenderForwardDescriptor';
-import { RenderPass, RenderPassBit } from './RenderPass';
+import { RenderPass } from './RenderPass';
 import type { RenderPassOptions } from './RenderPass';
 import type { RenderSession } from './RenderSession';
 
@@ -54,7 +54,6 @@ export class ForwardRenderPass extends RenderPass {
     super(options);
     this._forward = {
       bit: this.bit,
-      bindsMaterial: !this.descriptor?.shaderDescriptor && (this.bit & RenderPassBit.MATERIAL_PASS_MASK) !== 0,
       cullResults: this.cullResults,
       camera: this.camera,
       sort: options.sort,

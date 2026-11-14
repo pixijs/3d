@@ -143,6 +143,7 @@ export function getMeshBillboardBit(mode: BillboardMode, lit: boolean): ShaderBi
   const spherical = mode === 'spherical';
   const bit: ShaderBit = {
     name: `meshBillboard${spherical ? 'Spherical' : 'Cylindrical'}${lit ? 'Lit' : ''}`,
+    level: 'shape',
     gpu: { vertex: { afterTransform: spherical ? sphericalGpu(lit) : cylindricalGpu(lit) } },
     gl: { vertex: { afterTransform: spherical ? sphericalGl(lit) : cylindricalGl(lit) } },
   };

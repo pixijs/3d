@@ -1,3 +1,4 @@
+import { collectTextureNames } from '../../../materials/utils/validateMaterialTextureSlots';
 import { materialBindingsBit } from '../../shader/bits/materialBindingsBit';
 import type { MaterialShaderForm } from '../../shader/bits/materialBindingsBit';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
@@ -33,16 +34,11 @@ export function createTexturesPluginGpu(form: MaterialShaderForm): ShaderCompile
     },
 
     injectCode(context) {
-      let nextIndex = 0;
+      const names = collectTextureNames(context.bits);
       const lines: string[] = [];
 
-      for (const bit of context.bits) {
-        if (!bit.textures) continue;
-        for (const name of bit.textures) {
-          const funcName = `sample${name[0].toUpperCase()}${name.slice(1)}`;
-          lines.push(...textureGetters(funcName, nextIndex));
-          nextIndex++;
-        }
+      for (let i = 0; i < names.length; i++) {
+        lines.push(...textureGetters(`sample${names[i][0].toUpperCase()}${names[i].slice(1)}`, i));
       }
 
       return { textureGetters: lines.join('\n') };

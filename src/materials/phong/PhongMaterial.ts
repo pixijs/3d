@@ -2,6 +2,8 @@ import { Color } from 'pixi.js';
 import type { ColorSource, Texture, TextureDestroyOptions, TypeOrBool } from 'pixi.js';
 
 import { alphaMaskBit } from '../../core/shader/bits/alphaMaskBit';
+import { baseAlphaBit } from '../../core/shader/bits/baseAlphaBit';
+import { baseColorTextureBit } from '../../core/shader/bits/baseColorTextureBit';
 import { emissiveBit } from '../../core/shader/bits/emissiveBit';
 import { uvTransformBit } from '../../core/shader/bits/uvTransformBit';
 import type { ShaderBit } from '../../core/shader/ShaderBit';
@@ -234,7 +236,10 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
       this._featureBits.push(emissiveBit);
     }
 
-    this._deriveLayoutFromBits([phongMaterialBit, uvTransformBit, ...this._featureBits, ...this.extraBits], textures);
+    this._deriveLayoutFromBits(
+      [uvTransformBit, baseColorTextureBit, baseAlphaBit, phongMaterialBit, ...this._featureBits, ...this.extraBits],
+      textures,
+    );
 
     this.shininess = options.shininess ?? 30;
     this.specularStrength = options.specularStrength ?? 1;
@@ -265,7 +270,7 @@ export class PhongMaterial extends BaseMaterial3D<PhongData, PhongMaterialTextur
     let descriptor = this._descriptorByEnvKey[envBit.name];
     if (descriptor) return descriptor;
 
-    const bits: ShaderBit[] = [phongMaterialBit, envBit, uvTransformBit];
+    const bits: ShaderBit[] = [uvTransformBit, baseColorTextureBit, baseAlphaBit, phongMaterialBit, envBit];
     for (let i = 0; i < this._featureBits.length; i++) bits.push(this._featureBits[i]);
     for (let i = 0; i < this.extraBits.length; i++) bits.push(this.extraBits[i]);
     bits.push(phongLightingBit);

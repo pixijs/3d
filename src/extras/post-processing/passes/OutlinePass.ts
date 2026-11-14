@@ -41,9 +41,10 @@ export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'desc
 /**
  * Draws an ink outline around opted-in meshes, for a toon look
  *
- * Each mesh is redrawn as a slightly larger shell showing only its back faces, which the mesh
- * hides except for a rim around its silhouette. Add the pass to `View3D.passes`, and opt a mesh in
- * with `passes: { outline: true }` on its material. Skinned and morphed meshes outline correctly.
+ * The view half of a toon look: add it to `View3D.passes`, and meshes join by opting into the
+ * `outline` pass on their material (`passes: { outline: true }`). The shell is drawn at the
+ * `'shape'` level, so it follows skinning, morph targets, the mesh's billboard mode and the
+ * material's own vertex bits.
  * @example
  * ```ts
  * new View3D({ passes: [new OutlinePass({ width: 0.05 })] });
@@ -79,6 +80,7 @@ export class OutlinePass extends MeshPass {
     super({
       ...rest,
       name: 'outline',
+      level: 'shape',
       descriptor: {
         shaderDescriptor: solidMeshDescriptor({ color, extrude: width }),
         state,

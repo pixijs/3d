@@ -65,6 +65,7 @@ const xrayBuild: { stage: MeshPass['stage']; color: number } = { stage: 'afterOp
 function createXRayPass({ stage, color }: typeof xrayBuild): MeshPass {
   return new MeshPass({
     name: 'xray',
+    level: 'shape',
     stage,
     description: 'Draws its members in one flat colour, through whatever is in front.',
     // The colour is baked into the shader, so a new colour means a new pass.

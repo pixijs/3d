@@ -66,11 +66,46 @@ function refillBonePit(view3d: View3D): void {
 }
 
 /**
- * Drains the mesh update queue, keeping meshes queued during the drain for next frame. A geometry is packed before its
- * row is staged, since the row bakes the atlas `baseVertex`
+ * Drains the view's mesh update queue: syncs each queued mesh's pass membership, rebuilds what a
+ * dirty one needs, and re-emits its store row
+ *
+ * Only queued meshes are visited, so a static scene does no work here however many meshes it
+ * holds. Every change that needs this pass queues the mesh when it happens: the mesh's own
+ * setters, `View3D._attach`, the transform walk for a mesh with no store row yet, the bone pit and
+ * morph store when a row's offset moves, and the geometry's and material's mesh lists for changes
+ * made on the shared resource. A mesh queued twice before the drain sits in the queue once, and
+ * one queued during the drain waits for the next frame.
+ *
+ * Membership is which passes a mesh belongs to, never whether it's visible. Both backends skip
+ * hidden meshes when they compact the draw data, so hiding or showing a mesh never changes
+ * membership and rebuilds no draw commands or render bundles. `removeChild` is the only way out
+ * of the lists.
+ *
+ * A texture swap or shader-variant change on the material sends the mesh down the full rebuild
+ * path, so the shader recompiles this frame. Each mesh watermarks the material's
+ * `_descriptorDirtyId` itself: a flag on the shared material would be consumed by the first mesh
+ * the walk reaches, leaving the others with a stale `_passCache` entry, or none at all when the
+ * pass bit moved too. Recording the version before `ensurePassShader` is safe because
+ * `_batchDirty` is sticky: a mesh in no pass skips the rebuild but still rebuilds on the frame it
+ * joins one.
+ *
+ * A non-dynamic geometry with no atlas allocation is new, or was unloaded while a mesh still draws
+ * it; `Geometry3D.unload` repacks nothing itself, but it queues the meshes drawing it. Either way
+ * the mesh takes the rebuild path: pack, re-stage the geometry row, re-key. An unloaded geometry's
+ * recorded draw arguments bake the vacated range and its store row the old atlas base, so its mesh
+ * also rebuilds its draw lists (`Geometry3D._atlasVacated`); a new one is in no command yet, and
+ * its mesh joins its lists as any other does. That costs one null check per queued mesh.
+ *
+ * The rebuild packs the geometry through the pool, which knows whether it is already packed,
+ * before staging its geometry row, because the row bakes the atlas `baseVertex` the packing
+ * decides. Then, for each pass the mesh is in, the material system resolves the mesh's shader
+ * (`ensurePassShader`) and the pass re-keys the mesh in `onRenderableDirty`.
+ * @param view3d - the View whose scene batch is walked
+ * @param pipe - backend View3D pipe supplying the stores, the atlas pool and the material system
  */
 function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): void {
   const geomStore = pipe.geometryDataStoreBuffer;
+  const material3d = pipe.renderer.material3d;
   const queue = view3d._renderablesToUpdate;
   const queued = queue.list;
   const queuedCount = queue.index;
@@ -101,7 +136,7 @@ function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): v
       renderable._batchDirty = false;
       rebuildsLists ||= unpacked && geometry._atlasVacated;
 
-      pipe.renderer.material3d.ensureMaterial(renderable, view3d._sceneBatch, view3d);
+      pipe.materialStoreBuffer.register(material);
 
       if (!geometry.dynamic) {
         geometry._geometryAtlasAllocation = pipe.atlasPool.allocate(geometry);
@@ -111,7 +146,9 @@ function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): v
       let bits = renderable.renderPassMask & view3d._dirtyHookBits;
       while (bits) {
         const bit = bits & -bits;
-        view3d.passByBit[bit].onRenderableDirty(renderable, view3d._sceneBatch, rebuildsLists);
+        const pass = view3d.passByBit[bit];
+        material3d.ensurePassShader(renderable, view3d._sceneBatch, pass, view3d);
+        pass.onRenderableDirty(renderable, view3d._sceneBatch, rebuildsLists);
         bits ^= bit;
       }
     }
@@ -136,6 +173,7 @@ function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): v
  */
 function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): void {
   const geomStore = pipe.geometryDataStoreBuffer;
+  const material3d = pipe.renderer.material3d;
   for (let b = 1; b < view3d._meshBatches.length; b++) {
     const batch = view3d._meshBatches[b];
     const dirtyIndices = batch._dirtyIndices!;
@@ -155,7 +193,7 @@ function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): 
         item._lastDescriptorDirtyId = material._descriptorDirtyId;
       }
 
-      pipe.renderer.material3d.ensureMaterial(item, batch, view3d);
+      pipe.materialStoreBuffer.register(material);
 
       if (!item.geometry.dynamic) {
         item.geometry._geometryAtlasAllocation = pipe.atlasPool.allocate(item.geometry);
@@ -171,7 +209,9 @@ function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): 
       let bits = passes & view3d._dirtyHookBits;
       while (bits) {
         const bit = bits & -bits;
-        view3d.passByBit[bit].onRenderableDirty(item, batch, rebuildsLists);
+        const pass = view3d.passByBit[bit];
+        material3d.ensurePassShader(item, batch, pass, view3d);
+        pass.onRenderableDirty(item, batch, rebuildsLists);
         bits ^= bit;
       }
     }

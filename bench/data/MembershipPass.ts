@@ -23,6 +23,7 @@ export class MembershipPass extends Pass3D {
         name: this._name,
         sort: 'key',
         cache: this._cache,
+        level: 'shape',
         descriptor: { shaderDescriptor: solidMeshDescriptor({ color: 0x62b9dc }) },
       }),
     );

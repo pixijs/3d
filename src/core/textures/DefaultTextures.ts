@@ -53,8 +53,14 @@ export const UINT_EMPTY = new Texture({
 });
 
 /**
- * Placeholder shadow map, with no pixels since WebGPU can't copy into `depth32float`, and comparison
- * on, since WebGL fails a draw whose `sampler2DArrayShadow` reads a depth texture with it off
+ * Empty depth texture array (depth32float, 4 layers)
+ *
+ * Seeds the global bind group's `uShadowMap` binding (`View3DGlobalData.globalTextureBindings.shadowMap`) and
+ * takes it back whenever the shadow pass releases its map, and on WebGPU while the pass draws into
+ * the map. It is a bare `TextureSource` with no pixel data, because WebGPU can't copy data into a
+ * `depth32float` texture. Its comparison mode matches the real shadow map's: a WebGL program that
+ * declares the shadow sampler still samples this placeholder after a release, and a WebGL draw
+ * fails when a `sampler2DArrayShadow` reads a depth texture with comparison off.
  * @internal
  */
 export const DEPTH_EMPTY = new Texture({

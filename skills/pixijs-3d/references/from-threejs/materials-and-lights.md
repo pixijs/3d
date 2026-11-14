@@ -131,7 +131,7 @@ Pass a group at construction for it to exist; give it `factor: 0` if it turns on
 - LightProbe, `lightMap`: bake into `baseColorTexture` or an emissive map.
 - Per-material envMap, envMapIntensity, scene.environmentIntensity for cube maps: only `view.environment`, and `intensity` for a hemisphere.
 - EXRLoader, UltraHDRLoader, HDRCubeTextureLoader, an equirect background: `.hdr` and `.cubemap` only, both as cubes.
-- bumpMap: convert to a normal map. displacementMap: a vertex shader bit (the shadow pass ignores it). alphaMap: bake into base colour alpha.
+- bumpMap: convert to a normal map. displacementMap: a vertex shader bit (give it `level: 'shape'` so shadows and outlines follow it). alphaMap: bake into base colour alpha.
 - alphaHash, alphaToCoverage, `premultipliedAlpha`, `dithering`, toneMapped: false, `stencil*`, depthFunc, colorWrite, clippingPlanes: none.
 - `transparent` and alphaTest together: pick `'blend'` or `'mask'`, or add a discard bit.
 - MeshNormalMaterial, MeshDepthMaterial, MeshMatcapMaterial, LineDashedMaterial, ShadowMaterial: a custom bit.

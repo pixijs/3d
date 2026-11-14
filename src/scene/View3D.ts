@@ -142,6 +142,9 @@ const FOG_BITS: Record<FogType, ShaderBit> = {
 /** Depth of the near plane after projection: camera projections run from -1 at `near` to 1 at `far` */
 const NEAR_PLANE_NDC_Z = -1;
 
+/** The last value a view took for its `_shaderVersion`; one counter for every view, so no two share one */
+let lastShaderVersion = 0;
+
 const _screenMatrix2D = new Matrix();
 const _screenPoint = new Point();
 const _projMatrix = new Matrix4();
@@ -782,7 +785,20 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * @internal
    */
   public _hasShadows = false;
-  /** @internal */
+  /**
+   * Changes whenever a setting of this view that picks a shader bit does: tone mapping, fog, the
+   * environment's kind, the shadow filter, shadows first being cast, and its passes
+   *
+   * A mesh's pass entry records it (`MeshPassCache.isStaleFor`), so a shader resolved under other
+   * settings is resolved again, also for a mesh that was out of the view when they changed. No two
+   * views share a value, so a mesh moved to another view resolves there.
+   * @internal
+   */
+  public _shaderVersion = ++lastShaderVersion;
+  /**
+   * Scene-wide bone-matrix arena for skinned meshes
+   * @internal
+   */
   public _bonePit = new BonePit();
 
   /** @internal */
@@ -1562,8 +1578,19 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     }
   }
 
-  /** Refills each user batch's `_dirtyIndices` from the start, since appending every index could run past its end */
+  /**
+   * Marks every mesh and batch item in this view to look up its shader again on the next frame
+   *
+   * For a view setting that is part of the shader cache key, such as `toneMapping`. It takes a new
+   * `_shaderVersion`, which makes every mesh's pass entry stale, and queues every scene mesh so
+   * the next scene update runs `ensurePassShader` again. Material data doesn't change, since a
+   * material's struct is fixed at construction, so nothing is uploaded again.
+   *
+   * User batches only process the indices in `_dirtyIndices`, so that list is refilled from the
+   * start with every index, replacing any partial list rather than appending past its end.
+   */
   private _invalidateMaterialShaders(): void {
+    this._shaderVersion = ++lastShaderVersion;
     const meshes = this.meshes.items;
     for (let i = 0; i < meshes.length; i++) meshes[i]._markBatchDirty();
 

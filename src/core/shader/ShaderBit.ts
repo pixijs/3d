@@ -207,6 +207,36 @@ export type ShaderOverrideDef<T extends ShaderOverrideType = ShaderOverrideType>
     };
 
 /**
+ * What a shader bit does to the mesh it draws: which of three questions about the surface it
+ * helps answer
+ *
+ * - `'shape'`: where is the surface? The bit moves vertices, as a wobble or a billboard does, or
+ *   decodes a vertex attribute they read.
+ * - `'cutout'`: which of its pixels exist? The bit discards pixels, as an alpha mask does.
+ * - `'color'`: what colour are they? Everything else.
+ *
+ * Each question needs the one before it answered, so the levels are ordered. A render pass names
+ * the last question it asks, as its {@link RenderPassOptions#level}, and draws each material with
+ * its bits up to that level. An outline asks where a surface is and never what colour it is.
+ * @category rendering
+ * @advanced
+ */
+export type ShaderBitLevel = 'shape' | 'cutout' | 'color';
+
+/** Each {@link ShaderBitLevel}'s place in the order, lowest first */
+const BIT_LEVEL_ORDER: Record<ShaderBitLevel, number> = { shape: 0, cutout: 1, color: 2 };
+
+/**
+ * Whether a shader compiled at `level` keeps `bit`: the bit's own level is `level` or one before it
+ * @param bit - The bit to place
+ * @param level - The level the shader is compiled at
+ * @internal
+ */
+export function isBitInLevel(bit: ShaderBit, level: ShaderBitLevel): boolean {
+  return BIT_LEVEL_ORDER[bit.level ?? 'color'] <= BIT_LEVEL_ORDER[level];
+}
+
+/**
  * One piece of a shader: the attributes, varyings, bindings and code it adds to a template
  *
  * A {@link ShaderDescriptor} lists the bits, and the compiler merges them into one program per
@@ -338,9 +368,9 @@ export type ShaderBit<
    * The compiler adds each required bit once, just ahead of the first bit that requires it, so two
    * bits can share a helper without declaring it twice. A material need not list them.
    *
-   * A required bit should hold only shader code, such as helpers and constants: one the material
-   * doesn't list can't add texture slots, `material` fields or `instance` fields. Declare those on
-   * a listed bit, and list it ahead of any bit that requires it.
+   * A material lays out a required bit's texture slots and `material` fields with its own, so a
+   * bit can require the one that declares the texture it samples. A required bit's `instance`
+   * fields are not read: declare those on a listed bit.
    * @example
    * ```ts
    * const luminanceBit: ShaderBit = {
@@ -359,7 +389,19 @@ export type ShaderBit<
    */
   requires?: ShaderBit[];
   /**
-   * The WGSL code for WebGPU; {@link ShaderBitTemplate} says which slot each key fills
+   * What this bit does to the mesh, `'color'` when left out
+   *
+   * A bit that does more than one job takes the earliest level it is needed at, and is kept or
+   * dropped whole: one that moves vertices and also tints them is `'shape'`. The level only
+   * matters to a pass that draws a material with part of its shader. A material's own pass
+   * compiles every bit.
+   */
+  level?: ShaderBitLevel;
+  /**
+   * The WGSL code for the WebGPU backend
+   *
+   * The template names each stage slot with the stage prefix, so `vertex.input` fills
+   * `{{vertexInput}}` and `fragment.end` fills `{{fragmentEnd}}`.
    *
    * The compiler doesn't check that a `textureSample`, `dpdx` or `dpdy` sits in uniform control
    * flow, so keep it there yourself. A branch on a `material` value is uniform. Under a branch on a
@@ -387,4 +429,10 @@ export type ShaderBit<
   _identityChecked?: boolean;
   /** @internal */
   _contentSnapshot?: string;
+  /**
+   * Whether this bit reads the material, itself or through a bit it requires; worked out by
+   * `firstBitReadingMaterial` on first ask, so each later check is one read
+   * @internal
+   */
+  _readsMaterial?: boolean;
 };

@@ -1,6 +1,9 @@
 import { definedProps } from 'pixi.js';
 
 import { alphaMaskBit } from '../../../core/shader/bits/alphaMaskBit';
+import { baseAlphaBit } from '../../../core/shader/bits/baseAlphaBit';
+import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
+import { uvTransformBit } from '../../../core/shader/bits/uvTransformBit';
 import { BaseMaterial3D } from '../../../materials/BaseMaterial3D';
 import type { BaseMaterial3DOptions } from '../../../materials/BaseMaterial3D';
 import type { MaterialData } from '../../../materials/utils/createMaterialDataClass';
@@ -127,8 +130,8 @@ export class ToonMaterial extends BaseMaterial3D<ToonData, MaterialTextures, Too
       ...definedProps(options),
     };
 
-    const bitsGpu = [toonMaterialBit, toonLightingBit];
-    const bitsGl = [toonMaterialBit, toonLightingBit];
+    const bitsGpu = [uvTransformBit, baseColorTextureBit, baseAlphaBit, toonMaterialBit, toonLightingBit];
+    const bitsGl = [uvTransformBit, baseColorTextureBit, baseAlphaBit, toonMaterialBit, toonLightingBit];
     if (rest.alphaMode === 'mask') {
       bitsGpu.push(alphaMaskBit);
       bitsGl.push(alphaMaskBit);

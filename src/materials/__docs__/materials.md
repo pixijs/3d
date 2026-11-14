@@ -53,7 +53,7 @@ const leaves = new Material3D({ baseColorTexture: leafTexture, alphaMode: 'mask'
 const ghost = new Material3D({ baseColor: 0x99ccff, alpha: 0.4, alphaMode: 'blend' });
 ```
 
-A masked material draws with the opaque meshes, so it hides what's behind it and needs no sorting. A masked mesh's shadow doesn't show its holes yet, so turn off `castShadow` on one whose solid shadow would look wrong.
+A masked material draws with the opaque meshes, so it hides what's behind it and needs no sorting. A masked mesh's shadow has the same holes. The shadow pass draws only the faces that front the light, even on a `doubleSided` material, so a flat card casts from one side: turn off `castShadow` on one whose missing shadow would look wrong.
 
 Blended meshes draw after the opaque ones. Every frame the renderer sorts them from back to front by the distance from the camera to each mesh's origin, not by child order. It sorts each mesh as a whole, so a large blended mesh, or two that pass through each other, can draw in the wrong order where they overlap. A blended `Mesh3D` casts no shadow, as [Shadows](../../scene/__docs__/shadows.md#which-meshes-cast-and-receive) explains.
 

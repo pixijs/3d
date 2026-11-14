@@ -7,9 +7,6 @@ import { RenderPassBit } from '../render-passes/RenderPass';
 import type { RenderSession } from '../render-passes/RenderSession';
 import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/shadowPassUtils';
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
-import { instanceFetchBitGl } from '../shader/bits/instanceFetchBitGl';
-import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
-import { shadowGlobalBitGl } from './shader/shadowGlobalBitGl';
 import type { View3DPipeGl } from './View3DPipeGl';
 
 interface ShadowRenderPassGlOptions {
@@ -17,46 +14,19 @@ interface ShadowRenderPassGlOptions {
   shadowMapHandle: DepthHandle;
 }
 
-/** Declares `normal` and `tangent`, which depth doesn't need, because the skinning and morph bits write them */
-const shadowGlVertexTemplate = `#version 300 es
-
-{{header}}
-
-void main() {
-  mat4 modelMatrix;
-
-  vec4 position;
-  vec3 normal = vec3(0.0);
-  vec3 tangent = vec3(0.0);
-
-  {{input}}
-
-  vec4 worldPosition = modelMatrix * position;
-  gl_Position = uViewProjectionMatrix * worldPosition;
-
-  {{end}}
-}`;
-
-const shadowGlFragmentTemplate = `#version 300 es
-out vec4 fragColor;
-
-{{header}}
-
-void main() {
-    fragColor = vec4(0.);
-}`;
-
-const shadowTemplateGl: ShaderBitTemplate = {
-  bindGroups: [{ name: 'global', ubo: true }, 'camera'],
-  gl: {
-    vertex: shadowGlVertexTemplate,
-    fragment: shadowGlFragmentTemplate,
-  },
-};
-
 /**
- * The descriptor turns off the `globalBitGl` that `compileShader` adds, whose bindings would clash with
- * `shadowGlobalBitGl`
+ * Renders shadows for 3D scenes in WebGL, generating shadow maps from light perspectives
+ *
+ * Uses a cached DrawCommandList per batch, and `DrawList.nextBuild` decides when it rebuilds. On
+ * clean frames, redraws the cached commands.
+ *
+ * Draw state lives in each batch's DrawList, so View3D instances never share an index texture
+ * or command list.
+ *
+ * The shadow shader gets `globalBitGl` and the camera bit from `compileShader`, like every mesh
+ * pass, so a shader drawn here can read any global uniform. It declares `uShadowMap` too, but the
+ * GLSL compiler drops a sampler the program never reads, and pixi binds a texture only for an
+ * active uniform, so the live map is never bound for sampling while the pass renders into it.
  * @internal
  */
 export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, ShadowData> {
@@ -73,12 +43,8 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
       description: 'Renders shadow-casting scene geometry into each light shadow map.',
       bit: RenderPassBit.SHADOW,
       shadowMapHandle: options.shadowMapHandle,
+      level: 'cutout',
       descriptor: {
-        shaderDescriptor: {
-          bitsGl: [shadowGlobalBitGl, instanceFetchBitGl],
-          template: shadowTemplateGl,
-          includeGlobal: false,
-        },
         state: shadowState,
       },
     });
@@ -122,7 +88,6 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
           list: list,
           globalBindGroup: bindGroup,
           passBit: this.bit,
-          bindsMaterial: false,
         });
       }
     }
