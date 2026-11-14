@@ -8,6 +8,7 @@ import { Sphere } from '../math/shapes/Sphere';
 import type { Mesh3D } from '../scene/Mesh3D';
 import { UnstableList } from '../utils/UnstableList';
 import type { GeometryAllocation } from './GeometryAtlas';
+import { TriangleBvh } from './TriangleBvh';
 import {
   computeBoundsFromPositions,
   createIndexBuffer,
@@ -494,6 +495,8 @@ export class Geometry3D extends Geometry {
   public _morphTargets: { positions: Float32Array; normals?: Float32Array }[] | null = null;
 
   private _attributeKey: string | null = null;
+  /** `null` until `bvh` is read, and again after a buffer update or `unload` */
+  private _bvh: TriangleBvh | null = null;
   /**
    * Set before pixi's `destroy` runs `unload`, so this class's `unload` can't free buffers that
    * `destroy(false)` leaves to the geometries sharing them
@@ -525,6 +528,34 @@ export class Geometry3D extends Geometry {
 
     this._attributeKey = key;
     return key;
+  }
+
+  /**
+   * A bounding volume hierarchy over the triangles, which lets a ray skip the ones far from it
+   *
+   * It covers the positions as stored: skinning and morph targets move the vertices on the GPU, so an animated
+   * mesh's hierarchy stays in its rest pose. Built on first read, at roughly 20 ms per 100,000 triangles on a laptop, and built again on the first read
+   * after the positions or indices change or the geometry {@link Geometry3D#unload | unloads}, so reading it every
+   * frame on a geometry you rewrite every frame rebuilds it every frame. Per-triangle picking reads it only for a
+   * geometry of 2,048 triangles or more that isn't {@link Geometry3DOptions#dynamic | dynamic}; read it while
+   * loading to keep the build off the first pick. `null` unless the geometry is a triangle list with `Float32Array`
+   * positions.
+   * @example
+   * ```ts
+   * const terrain = new Geometry3D({ positions, indices });
+   * terrain.bvh; // build it now, not on the first pick
+   * ```
+   * @advanced
+   */
+  get bvh(): TriangleBvh | null {
+    if (this._bvh) return this._bvh;
+    if (this.topology !== 'triangle-list') return null;
+
+    const positions = this.attributes.aPosition?.buffer.data;
+    if (!(positions instanceof Float32Array)) return null;
+
+    const indices = this.indexBuffer ? (this.indexBuffer.data as Uint16Array | Uint32Array) : null;
+    return (this._bvh = new TriangleBvh(positions, indices));
   }
 
   /**
@@ -593,6 +624,12 @@ export class Geometry3D extends Geometry {
     this.morphTargetCount = options.morphTargets?.length ?? 0;
     this.hasMorphNormals = this.morphTargetCount > 0 && options.morphTargets!.every((target) => !!target.normals);
     this.dynamic = options.dynamic ?? false;
+    if (this.dynamic && this.indexBuffer) {
+      // oxlint-disable-next-line typescript/unbound-method -- the emitter calls it with this context, and pixi's destroy removes it by both
+      this.indexBuffer.on('update', this.onBufferUpdate, this);
+      // oxlint-disable-next-line typescript/unbound-method -- the emitter calls it with this context, and pixi's destroy removes it by both
+      this.indexBuffer.on('change', this.onBufferUpdate, this);
+    }
 
     if (options.bounds3D) {
       this.bounds3D = options.bounds3D;
@@ -607,6 +644,16 @@ export class Geometry3D extends Geometry {
     }
 
     this.boundsSphere = new Sphere().setFromBox(this.bounds3D);
+  }
+
+  /**
+   * Drops the cached `bvh`; pixi listens to the attribute buffers only, so the constructor adds a dynamic geometry's
+   * index buffer, and any other geometry's edits reach `bvh` through `unload`
+   * @internal
+   */
+  protected override onBufferUpdate(): void {
+    this._bvh = null;
+    super.onBufferUpdate();
   }
 
   /**
@@ -632,6 +679,7 @@ export class Geometry3D extends Geometry {
     this._morphStore?.freeDeltas(this);
 
     super.unload();
+    this._bvh = null;
     // oxlint-disable-next-line pixijs-3d/destroy-release -- a mesh still using the destroyed geometry removes itself from this list when it detaches or swaps geometry, and clear() resets its index so that remove is a no-op
     this._meshes.clear();
     this._destroyed = true;
@@ -665,6 +713,7 @@ export class Geometry3D extends Geometry {
     for (let i = 0; i < buffers.length; i++) buffers[i].unload();
 
     super.unload();
+    this._bvh = null;
 
     if (allocation === null && !this.dynamic) return;
 

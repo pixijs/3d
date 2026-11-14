@@ -107,6 +107,8 @@ mesh.hitVolume = lowPolyGeometry; // any Geometry3D as a per-triangle stand-in f
 group.interactiveChildren = false; // on a static group with a hitVolume: one test for the subtree
 ```
 
+Per-triangle picking on a geometry of 2,048 triangles or more builds `geometry.bvh`, a bounding volume hierarchy, on the first pick (about 20 ms per 100,000 triangles on a laptop) and reuses it until the positions or indices change. A `dynamic: true` geometry never builds one and tests every triangle on every pick, so give a large deforming mesh a `Box`, `Sphere` or low-poly stand-in. Read `geometry.bvh` while loading to move the build off the first click, but never every frame on a geometry you rewrite every frame: each read after a write builds it again.
+
 A class with `boundingRadiusSq` and `raycast(localRay, out)` (`IHitVolume3D`) plugs in a shape of your own, such as a physics collider. A volume set on an ancestor clips its descendants' hits.
 
 ### Raycast without an event, and clicks on empty space
