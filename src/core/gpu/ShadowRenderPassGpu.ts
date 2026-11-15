@@ -12,6 +12,7 @@ import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/s
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import { DEPTH_EMPTY } from '../textures/DefaultTextures';
 import { produceCpuCompaction, produceVisibilityCompaction } from './cull';
+import { bindBatchStorage } from './renderForwardBatchesGpu';
 import type { View3DPipeGpu } from './View3DPipeGpu';
 
 interface ShadowRenderPassGpuOptions {
@@ -171,10 +172,8 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
    * cached on that result until the list rebuilds or the map is recreated. An indirect bundle holds
    * the body's commands only; the tail's, after `commandList.bodyCount`, draw straight into the
    * cascade's pass every frame, so a tail command added or emptied records nothing.
-   * When the batch's cull is `'off'`, a result the cascade draws direct (`CullResult.direct`) has its direct draws recorded
-   * into that bundle, which also re-records when `CullResult.countsDirtyId` moves. Otherwise the
-   * cascade issues those draws straight into its pass every frame, with no bundle, and binding
-   * their groups stamps what they use for pixi's GC. A light or batch with no result was skipped
+   * A result the cascade draws direct (`CullResult.direct`) has its direct draws recorded into that
+   * bundle, which also re-records when `CullResult.countsDirtyId` moves. A light or batch with no result was skipped
    * by `prepare` this frame and draws nothing. `isBundleValid` vets the state a bundle baked
    * (attachment formats, sample count, winding), which the shadow target keeps fixed; a replaced
    * map isn't part of that stamp, and `_bindShadowSource` re-records for it.
@@ -244,10 +243,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           const recorded = result.bundle;
 
           if (!recorded || result.isBundleStale(list, cameraBindGroup) || !encoder.isBundleValid(recorded)) {
-            const { globalBindGroup } = session;
-
-            globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
 
             encoder.beginBundle(`shadow cascade ${c} batch ${batch.uid}`);
             if (result.direct) list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
@@ -269,8 +265,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           commandList.touch(renderer.gc.now);
           this._bundleRun.push(result.bundle!);
           if (!result.direct && commandList.count > commandList.bodyCount) {
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
             commandList.replay(
               encoder,
               renderer.buffer,

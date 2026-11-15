@@ -24,7 +24,7 @@ arrow its lift whenever the lift is long enough to draw one.
   `gpu` and GLSL under `gl`.
 - `extraBits`, passed through the kit's `clayMaterial`: the bit joins the white clay's shader and adds `wavePhase`
   to `material.data`, which the ticker writes each frame.
-- `stage.key.castShadow = false`: the shadow pass doesn't read instance data yet, so a cast shadow would stay at rest.
+- `stage.key.castShadow = false`: the wave bit has no `level`, so a cast shadow would stay at rest.
 - `srgbToLinear`, and `Color` from `pixi.js`, in `scene.ts`: the colour ramp in linear light, as `albedo` is.
   `PointData3D` types a slot's position.
 - `Mesh3D` with `castShadow: false`, `Vector3` and `view3d.worldToScreen` in `visuals.ts`: the probe's ghost, its
