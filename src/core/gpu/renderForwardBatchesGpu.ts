@@ -266,8 +266,15 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
   }
 }
 
-/** Binds the empty buffer for a batch with no instance store, so no draw reads another batch's store */
-function bindBatchStorage(session: RenderSession, batch: Mesh3DBatch, result: CullResult): void {
+/**
+ * Binds a batch's stores for its draws: its mesh store, the survivors of its cull, and its
+ * instance store, or the empty buffer for a batch with none, so no draw reads another batch's
+ * @param session - The frame's session, whose global group the draws bind
+ * @param batch - The batch about to draw
+ * @param result - The batch's cull result for this pass
+ * @internal
+ */
+export function bindBatchStorage(session: RenderSession, batch: Mesh3DBatch, result: CullResult): void {
   session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
   session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
   session.globalBindGroup.setResource(

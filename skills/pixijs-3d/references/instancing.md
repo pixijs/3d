@@ -103,7 +103,7 @@ const boxes = new BatchedMesh3D({
 boxes.setInstanceDataAt(i, 'tint', 1, 0.2, 0.2, 1); // always four numbers; uploads on next render
 ```
 
-For every slot each frame, write into the shared array and call `update()` once. Always read `stride`, `offset` and `fields`; never hard-code them. `boxes.instanceData` throws if the batch was built without the `instanceData` option. The shadow pass doesn't read a batch's instance data yet, so leave a bit that reads `instance.*` without a `level`: shadows then ignore what it does to the shape.
+For every slot each frame, write into the shared array and call `update()` once. Always read `stride`, `offset` and `fields`; never hard-code them. `boxes.instanceData` throws if the batch was built without the `instanceData` option. Shadows follow what a bit does to the shape only when the bit sets `level: 'shape'`; without it they stay at the rest pose.
 
 ```ts
 const { data, stride, offset, fields } = boxes.instanceData;

@@ -12,6 +12,7 @@ import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/s
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
 import { DEPTH_EMPTY } from '../textures/DefaultTextures';
 import { produceCpuCompaction, produceVisibilityCompaction } from './cull';
+import { bindBatchStorage } from './renderForwardBatchesGpu';
 import type { View3DPipeGpu } from './View3DPipeGpu';
 
 interface ShadowRenderPassGpuOptions {
@@ -243,8 +244,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
 
           if (result.direct && batch.cull !== 'off') {
             result.bundle = null;
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
             list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
             continue;
           }
@@ -252,10 +252,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           const recorded = result.bundle;
 
           if (!recorded || result.isBundleStale(list, cameraBindGroup) || !encoder.isBundleValid(recorded)) {
-            const { globalBindGroup } = session;
-
-            globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
 
             encoder.beginBundle(`shadow cascade ${c} batch ${batch.uid}`);
             if (result.direct) list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
@@ -277,8 +274,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           commandList.touch(renderer.gc.now);
           this._bundleRun.push(result.bundle!);
           if (!result.direct && commandList.count > commandList.bodyCount) {
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
             commandList.replay(
               encoder,
               renderer.buffer,

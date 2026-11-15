@@ -8,6 +8,8 @@ import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { Material3D } from '~/materials/pbr/Material3D';
+import { Matrix4 } from '~/math/matrix/Matrix4';
+import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
@@ -35,6 +37,27 @@ function discardBit(name: string, level?: 'cutout'): ShaderBit {
   };
 }
 
+const instanceShiftBit: ShaderBit = {
+  name: 'shadowLevelInstanceShift',
+  level: 'shape',
+  bindings: { instance: { shift: 'vec4<f32>' } },
+  gpu: { vertex: { beforeTransform: 'position.x += instance.shift.x;' } },
+  gl: { vertex: { beforeTransform: 'position.x += instance.shift.x;' } },
+};
+
+const SHIFT_DATA = { shift: { value: [0, 0, 0, 0], type: 'vec4<f32>' } } as const;
+
+function oneCubeBatch(material: Material3D, geometry: CubeGeometry, x: number, z: number): BatchedMesh3D {
+  const batched = new BatchedMesh3D({ size: 1, instanceData: SHIFT_DATA });
+
+  batched.setGeometryAt(0, geometry);
+  batched.setMaterialAt(0, material);
+  batched.setMatrixAt(0, new Matrix4().makeTranslation(x, 1.5, z));
+  batched.setPassesAt(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+
+  return batched;
+}
+
 const tintBit: ShaderBit = {
   name: 'shadowLevelTint',
   overrideDefs: { SHADOW_LEVEL_TINT: { type: 'f32', default: 1 } },
@@ -44,6 +67,20 @@ const tintBit: ShaderBit = {
 
 const cutoutDiscardBit = discardBit('shadowLevelCutoutDiscard', 'cutout');
 const colorDiscardBit = discardBit('shadowLevelColorDiscard');
+
+function meanXOfDifferingPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
+  let sum = 0;
+  let count = 0;
+
+  for (let i = 0; i < a.length; i += 4) {
+    if (Math.abs(a[i] - b[i]) > 8 || Math.abs(a[i + 1] - b[i + 1]) > 8 || Math.abs(a[i + 2] - b[i + 2]) > 8) {
+      sum += (i / 4) % SIZE;
+      count++;
+    }
+  }
+
+  return sum / count;
+}
 
 function differingPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   let n = 0;
@@ -185,6 +222,43 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         const notCasting = await renderFrame(app);
 
         expect(differingPixels(casting, notCasting), 'the mesh casts').toBeGreaterThan(100);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it("moves a batch slot's shadow with a shape bit that reads the slot's own instance data", async () => {
+      const { app, view3d } = await shadowView(preference, 'instance');
+
+      try {
+        const material = new Material3D({ baseColor: 0x808080, extraBits: [instanceShiftBit] });
+        const geometry = new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 });
+        const shifted = oneCubeBatch(material, geometry, -2, 0);
+        const still = oneCubeBatch(material, geometry, 0, 4);
+        view3d.root.addChild(shifted, still);
+
+        const shadowX = async (x: number, shift: number): Promise<number> => {
+          shifted.setMatrixAt(0, new Matrix4().makeTranslation(x, 1.5, 0));
+          shifted.setInstanceDataAt(0, 'shift', shift, 0, 0, 0);
+          shifted.setPassesAt(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+          await renderFrame(app);
+          const casting = await renderFrame(app);
+          shifted.setPassesAt(0, RenderPassBit.OPAQUE);
+          await renderFrame(app);
+
+          return meanXOfDifferingPixels(casting, await renderFrame(app));
+        };
+
+        const shiftedByBit = await shadowX(-2, 4);
+        const placedThere = await shadowX(2, 0);
+        const unshifted = await shadowX(-2, 0);
+
+        expect(Math.abs(shiftedByBit - placedThere), 'the shadow lies where a cube placed there casts it').toBeLessThan(
+          3,
+        );
+        expect(Math.abs(shiftedByBit - unshifted), 'and not where the slot stands before the bit runs').toBeGreaterThan(
+          8,
+        );
       } finally {
         app.destroy();
       }
