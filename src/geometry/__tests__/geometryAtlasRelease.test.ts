@@ -54,5 +54,25 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.destroy(true, { children: true });
       }
     });
+
+    it('frees a buffer growth replaced when the renderer is destroyed before another render', async () => {
+      const app = await getApp<Renderer>({
+        id: `geometry-atlas-release-destroy-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE, autoStart: false },
+      });
+      const material = new Material3D({ baseColor: 0x3388cc, metallic: 0, roughness: 0.5 });
+      const view3d = addView(app.stage, 0);
+      const first = cubeMesh(material);
+      view3d.root.addChild(first);
+      await expectCleanRender(app);
+
+      const outgrown = atlasVertexBuffer(first.geometry);
+      for (let i = 0; i < CUBES_PAST_ATLAS_CAPACITY; i++) view3d.root.addChild(cubeMesh(material));
+      await expectCleanRender(app);
+      expect(outgrown.destroyed).toBe(false);
+
+      app.destroy(true, { children: true });
+      expect(outgrown.destroyed).toBe(true);
+    });
   });
 }

@@ -1,5 +1,6 @@
 import { GlobalResourceRegistry, warn } from 'pixi.js';
 
+import type { View3DPipe } from '../core/View3DPipe';
 import type { Geometry3D } from './Geometry3D';
 import { GeometryAtlas } from './GeometryAtlas';
 import type { GeometryAllocation } from './GeometryAtlas';
@@ -98,17 +99,17 @@ export class GeometryAtlasPool {
     return allocation;
   }
 
-  /** Uploads what this frame's `allocate` calls wrote, so call it after them and before drawing */
-  public update(): void {
+  /** Brings the renderer's copy of every atlas up to date, so call it after this frame's `allocate` calls and before drawing */
+  public update(pipe: View3DPipe): void {
     for (const key in this._atlases) {
-      for (const atlas of this._atlases[key]) atlas.update();
+      for (const atlas of this._atlases[key]) atlas.update(pipe);
     }
   }
 
-  /** Call it at the start of a render, when the renders that drew from the retired buffers have been submitted */
-  public releaseRetired(): void {
+  /** Call it when a renderer's context is lost or the renderer goes, since the pool outlives both */
+  public invalidateUploads(rendererUid: number): void {
     for (const key in this._atlases) {
-      for (const atlas of this._atlases[key]) atlas.releaseRetired();
+      for (const atlas of this._atlases[key]) atlas.invalidateUploads(rendererUid);
     }
   }
 

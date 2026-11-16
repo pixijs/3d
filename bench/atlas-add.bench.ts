@@ -4,12 +4,14 @@
  * `Geometry3D` options, as the glTF loader and the primitives build theirs, so its attributes copy into the atlas's
  * interleaved layout one by one.
  *
- * A sample is one add. The atlas is sized to hold exactly the geometry, so each sample removes it first and the add
- * compacts an atlas with nothing live, which costs a few field writes. The snapshot hashes the atlas's whole vertex
- * and index data, so a copy that moves one byte changes it.
+ * A sample is one add and the upload that follows it, which interleaves the vertices: the atlas keeps no CPU copy of
+ * them. The atlas is sized to hold exactly the geometry, so each sample removes it first and the add compacts an atlas
+ * with nothing live, which costs a few field writes. The snapshot hashes the uploaded vertex bytes and the atlas's
+ * index data, so a copy that moves one byte changes it.
  */
 
 import { Geometry3D, GeometryAtlas, PlaneGeometry, SphereGeometry } from '@pixi/3d';
+import type { View3DPipe } from '@pixi/3d';
 import { cpu } from 'benchy';
 
 import { mulberry32 } from './data/rng.ts';
@@ -34,14 +36,24 @@ function addRepeatedly(geometry: Geometry3D) {
     initialVertexCapacity: geometry.vertexCount,
     initialIndexCapacity: indexCount,
   });
+  let uploaded: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+  const pipe = {
+    renderer: { uid: 1, retire3d: { retire: () => {} } },
+    writeBuffer: (_buffer: unknown, data: Uint8Array) => {
+      uploaded = data;
+    },
+    copyBuffer: () => {},
+  } as unknown as View3DPipe;
   return {
     atlas,
     bench: () => {
       atlas.remove(geometry);
-      return atlas.add(geometry).vertexCount;
+      const vertexCount = atlas.add(geometry).vertexCount;
+      atlas.update(pipe);
+      return vertexCount;
     },
     snapshot: () => {
-      const vertexData = atlas.geometry.attributes.aPosition.buffer.data;
+      const vertexData = uploaded;
       const vertexWords = new Uint32Array(vertexData.buffer, vertexData.byteOffset, vertexData.byteLength >> 2);
       const indexData = atlas.geometry.indexBuffer.data as Uint32Array;
       return hashWords(indexData, indexCount, hashWords(vertexWords, vertexWords.length, 0x811c_9dc5));

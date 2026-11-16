@@ -1,5 +1,6 @@
 import { Color, CubeTexture, ExtensionType, Rectangle, Shader, State } from 'pixi.js';
 import type {
+  Buffer,
   Geometry,
   GPU,
   InstructionPipe,
@@ -35,6 +36,7 @@ import { calculateTransparentDistances } from '../render-passes/transparent/tran
 import { CUBETEXTURE_EMPTY } from '../textures/DefaultTextures';
 import { View3DGCRegistry } from '../View3DGCRegistry';
 import type { View3DPipe } from '../View3DPipe';
+import { copyBufferGpu, writeBufferGpu } from './bufferWritesGpu';
 import { computeForwardBatchesGpu, prepareForwardBatchesGpu, renderForwardBatchesGpu } from './renderForwardBatchesGpu';
 import { getGlobalGpuData } from './shader/globalBitGpu';
 import { ShadowRenderPassGpu } from './ShadowRenderPassGpu';
@@ -109,16 +111,19 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
   private _destroyed = false;
   private _colorOutputDraw: ColorOutputDraw | null = null;
 
-  /** Joins the `contextChange` and `prerender` runners itself, since pixi joins only systems to them */
+  /** Joins the `contextChange` runner itself, since pixi joins only systems to it */
   constructor(renderer: WebGLRenderer | WebGPURenderer) {
     this.renderer = renderer as WebGPURenderer;
     this._managedViews = new View3DGCRegistry(this.renderer);
     this.renderer.runners.contextChange.add(this);
-    this.renderer.runners.prerender.add(this);
   }
 
-  public prerender(): void {
-    this.atlasPool.releaseRetired();
+  public writeBuffer(buffer: Buffer, data: ArrayBufferView, offset: number): void {
+    writeBufferGpu(this.renderer, buffer, data, offset);
+  }
+
+  public copyBuffer(from: Buffer, to: Buffer, size: number, fromOffset: number, toOffset: number): void {
+    copyBufferGpu(this.renderer, from, to, size, fromOffset, toOffset);
   }
 
   /**
@@ -133,6 +138,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     }
 
     this.atlasPool.maxBufferBytes = gpu.device.limits.maxBufferSize;
+    this.atlasPool.invalidateUploads(this.renderer.uid);
 
     this.materialStoreBuffer ??= new MaterialDataStoreBuffer({
       alignment: this.renderer.limits.minUniformBufferOffsetAlignment,
@@ -362,7 +368,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     gpuData.globalBindGroup.setResource(this.geometryDataStoreBuffer.bufferResource, 'uGeometryStorage');
     this.materialStoreBuffer.update();
     this.geometryDataStoreBuffer.update();
-    this.atlasPool.update();
+    this.atlasPool.update(this);
 
     if (
       detectSharedCacheInvalidation(
@@ -402,7 +408,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     (this._iblEnvironmentMap as Map<TextureSource, CubeTexture> | null) = null;
 
     this.renderer.runners.contextChange.remove(this);
-    this.renderer.runners.prerender.remove(this);
+    this.atlasPool.invalidateUploads(this.renderer.uid);
     this.materialStoreBuffer.destroy();
     (this.materialStoreBuffer as MaterialDataStoreBuffer | null) = null;
     this._morphStoreBuffer.destroy();

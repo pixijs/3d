@@ -4,7 +4,6 @@ import type { Buffer, WebGPURenderer } from 'pixi.js';
  * Stands in for pixi's coming `renderer.buffer.write`. Leaves `buffer.data` alone; offset and length are multiples of 4
  * @internal
  */
-// unused-internal-disable-next-line -- the atlas's no-CPU-copy change uses it next
 export function writeBufferGpu(renderer: WebGPURenderer, buffer: Buffer, data: ArrayBufferView, offset = 0): void {
   renderer.gpu.device.queue.writeBuffer(
     renderer.buffer.getGPUBuffer(buffer),
@@ -20,7 +19,6 @@ export function writeBufferGpu(renderer: WebGPURenderer, buffer: Buffer, data: A
  * frame's render pass; every value is a multiple of 4
  * @internal
  */
-// unused-internal-disable-next-line -- the atlas's no-CPU-copy change uses it next
 export function copyBufferGpu(
   renderer: WebGPURenderer,
   from: Buffer,

@@ -1,4 +1,4 @@
-import type { Geometry, Shader, State, Texture, WebGLRenderer, WebGPURenderer } from 'pixi.js';
+import type { Buffer, Geometry, Shader, State, Texture, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
 import type { ToneMapping } from '../scene/View3D';
 import type { DrawTarget } from './render-graph/RenderGraph';
@@ -12,6 +12,12 @@ import type { ReadonlyRect, RenderSession } from './render-passes/RenderSession'
  */
 export interface View3DPipe {
   readonly renderer: WebGLRenderer | WebGPURenderer;
+
+  /** Writes into a buffer's GPU storage without touching `buffer.data`; stands in for pixi's coming `renderer.buffer.write` */
+  writeBuffer(buffer: Buffer, data: ArrayBufferView, offset: number): void;
+
+  /** Copies between two buffers on the GPU; stands in for pixi's coming `renderer.buffer.copy` */
+  copyBuffer(from: Buffer, to: Buffer, size: number, fromOffset: number, toOffset: number): void;
 
   /**
    * Uploads a pass's forward draw data and runs its cull compute before any render pass opens; WebGPU only, and

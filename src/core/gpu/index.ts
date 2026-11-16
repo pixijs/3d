@@ -2,6 +2,7 @@
 export * from './bits/morphTargetBitGpu';
 export * from './bits/shadowBitGpu';
 export * from './bits/skinningBitGpu';
+export * from './bufferWritesGpu';
 export * from './codegen/compileWgslSource';
 export * from './codegen/instanceAccessPlugin';
 export * from './codegen/materialTextureAccessPlugin';

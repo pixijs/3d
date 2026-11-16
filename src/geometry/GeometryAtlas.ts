@@ -2,6 +2,7 @@ import { BufferUsage, getAttributeInfoFromFormat, Geometry, uid } from 'pixi.js'
 import type { VertexFormat } from 'pixi.js';
 
 import { Buffer3D } from '../core/buffers/Buffer3D';
+import type { View3DPipe } from '../core/View3DPipe';
 import type { Geometry3D } from './Geometry3D';
 import { alignTo4Bytes } from './utils/Geometry3DUtils';
 
@@ -12,6 +13,12 @@ export interface GeometryAllocation {
   firstIndex: number;
   indexCount: number;
   vertexCount: number;
+  /** The one CPU copy of its vertices, which every upload interleaves afresh */
+  geometry: Geometry3D;
+  /** Counts `add` calls, so a renderer knows which allocations the buffer it filled already holds */
+  seq: number;
+  /** Its `baseVertex` in the atlas's copy source, or -1 if it was added after that buffer was replaced */
+  copyFrom: number;
 }
 
 const DEFAULT_VERTEX_CAPACITY = 1024;
@@ -34,11 +41,17 @@ export class GeometryAtlas {
   public readonly vertexStride: number = 0;
 
   private _vertexBuffer: Buffer3D;
+  private _vertexCapacity = 0;
+  /** Whether a renderer has written to `_vertexBuffer`, so a replacement can copy from it */
+  private _vertexBufferFilled = false;
+  /** The newest replaced vertex buffer a renderer filled, which that renderer copies from; null once handed to `retire3d` */
+  private _copySource: Buffer3D | null = null;
+  private _seq = 0;
+  /** Per renderer uid, the vertex buffer it last filled and the newest allocation `seq` in it */
+  private readonly _filled: Record<number, { bufferUid: number; seq: number }> = Object.create(null);
   private _indexBuffer: Buffer3D;
-  /** Buffers growth replaced, kept until `releaseRetired` because draws recorded earlier in the render may read them */
-  private readonly _retiredBuffers: Buffer3D[] = [];
-  /** Kept until `releaseRetired`, like `_retiredBuffers` */
-  private readonly _retiredGeometries: Geometry[] = [];
+  /** What growth and compaction replaced since the last `update`, which hands it to its renderer's `retire3d` */
+  private readonly _replaced: { destroy(): void }[] = [];
   private _vertexCount = 0;
   private _indexCount = 0;
   private _deadVertexCount = 0;
@@ -47,8 +60,6 @@ export class GeometryAtlas {
   /** In offset order, which `defragment`'s in-place slide relies on */
   private readonly _liveAllocations: GeometryAllocation[] = [];
 
-  private _vertexDirtyMin = Infinity;
-  private _vertexDirtyMax = -Infinity;
   private _indexDirtyMin = Infinity;
   private _indexDirtyMax = -Infinity;
 
@@ -111,12 +122,7 @@ export class GeometryAtlas {
 
     this.vertexStride = alignTo4Bytes(computedStride);
 
-    this._vertexBuffer = new Buffer3D({
-      data: new Uint8Array(initialVertexCapacity * this.vertexStride),
-      usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
-      label: 'GeometryAtlas-vertex',
-      shrinkToFit: false,
-    });
+    this._vertexBuffer = this._createVertexBuffer(initialVertexCapacity);
 
     this._indexBuffer = new Buffer3D({
       data: new Uint32Array(initialIndexCapacity),
@@ -128,10 +134,6 @@ export class GeometryAtlas {
     this.geometry = this._buildMergedGeometry();
   }
 
-  /**
-   * Copies through `Uint32Array` views, as a float copy alters quantized normals that read as NaN. The
-   * word copy is unrolled to four words, the largest vertex format, because that beats an inner loop
-   */
   public add(geometry: Geometry3D): GeometryAllocation {
     const existing = geometry._geometryAtlasAllocation;
     if (existing && existing.atlas === this) return existing;
@@ -155,7 +157,7 @@ export class GeometryAtlas {
     const srcIndices = geometry.indexBuffer.data;
     const indexCount = srcIndices.length;
 
-    const vertexCapacity = this._vertexBuffer.data.byteLength / this.vertexStride;
+    const vertexCapacity = this._vertexCapacity;
     const indexCapacity = this._indexBuffer.data.length;
 
     const needsVertexRoom = this._vertexCount + vertexCount > vertexCapacity;
@@ -183,54 +185,7 @@ export class GeometryAtlas {
     this._vertexCount += vertexCount;
     this._indexCount += indexCount;
 
-    const vertexData = this._vertexBuffer.data;
     const indexData = this._indexBuffer.data;
-    const vertexStride = this.vertexStride;
-    const dstByteOffset = baseVertex * vertexStride;
-    const byteLength = vertexCount * vertexStride;
-
-    if (this._matchesAtlasLayout(geometry)) {
-      const src = geometry.attributes[this._attributeInfo[0].name].buffer.data;
-      vertexData.set(new Uint8Array(src.buffer, src.byteOffset, byteLength), dstByteOffset);
-    } else {
-      const vertexWords = new Uint32Array(vertexData.buffer);
-
-      for (const { name, offset, byteSize } of this._attributeInfo) {
-        const attr = geometry.attributes[name];
-        const data = attr.buffer.data;
-        const srcStride = attr.stride ?? byteSize;
-        const srcOffset = attr.offset ?? 0;
-
-        if (((data.byteOffset | srcOffset | srcStride | byteSize) & 3) === 0) {
-          const srcWords = new Uint32Array(data.buffer, data.byteOffset, data.byteLength >> 2);
-          const srcStep = srcStride >> 2;
-          const dstStep = vertexStride >> 2;
-          let src = srcOffset >> 2;
-          let dst = (dstByteOffset + offset) >> 2;
-
-          for (let i = 0; i < vertexCount; i++) {
-            vertexWords[dst] = srcWords[src];
-            if (byteSize > 4) vertexWords[dst + 1] = srcWords[src + 1];
-            if (byteSize > 8) vertexWords[dst + 2] = srcWords[src + 2];
-            if (byteSize > 12) vertexWords[dst + 3] = srcWords[src + 3];
-            src += srcStep;
-            dst += dstStep;
-          }
-        } else {
-          const srcBytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-          let src = srcOffset;
-          let dst = dstByteOffset + offset;
-
-          for (let i = 0; i < vertexCount; i++) {
-            for (let b = 0; b < byteSize; b++) vertexData[dst + b] = srcBytes[src + b];
-            src += srcStride;
-            dst += vertexStride;
-          }
-        }
-      }
-    }
-
-    this._markVertexDirty(dstByteOffset, dstByteOffset + byteLength);
 
     if (this.rebaseIndices) {
       for (let i = 0; i < indexCount; i++) {
@@ -248,6 +203,9 @@ export class GeometryAtlas {
       firstIndex,
       indexCount,
       vertexCount,
+      geometry,
+      seq: ++this._seq,
+      copyFrom: -1,
     };
 
     geometry._geometryAtlasAllocation = allocation;
@@ -275,21 +233,19 @@ export class GeometryAtlas {
     if (idx !== -1) this._liveAllocations.splice(idx, 1);
   }
 
-  /** Call it only between renders, once the render that drew from the retired buffers has been submitted */
-  public releaseRetired(): void {
-    for (let i = 0; i < this._retiredGeometries.length; i++) this._retiredGeometries[i].destroy(false);
-    this._retiredGeometries.length = 0;
-
-    for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
-    this._retiredBuffers.length = 0;
+  /** Makes the next `update` for that renderer write everything, since its buffers came back empty or went with it */
+  public invalidateUploads(rendererUid: number): void {
+    delete this._filled[rendererUid];
   }
 
-  public update(): void {
-    if (this._vertexDirtyMin < this._vertexDirtyMax) {
-      const size = this._vertexDirtyMax - this._vertexDirtyMin;
-      this._vertexBuffer.update(size, this._vertexDirtyMin);
-      this._vertexDirtyMin = Infinity;
-      this._vertexDirtyMax = -Infinity;
+  /** Brings the pipe's renderer's copy of the vertex buffer up to date, then uploads the indices this frame's `add` calls wrote */
+  public update(pipe: View3DPipe): void {
+    this._uploadVertices(pipe);
+
+    if (this._replaced.length > 0) {
+      for (const resource of this._replaced) pipe.renderer.retire3d.retire(resource);
+      this._replaced.length = 0;
+      this._copySource = null;
     }
 
     if (this._indexDirtyMin < this._indexDirtyMax) {
@@ -299,6 +255,127 @@ export class GeometryAtlas {
       this._indexDirtyMin = Infinity;
       this._indexDirtyMax = -Infinity;
     }
+  }
+
+  /**
+   * Copies what the renderer's filled buffer already holds when the atlas replaced it, and writes every allocation
+   * newer than that; one it never filled, or one already freed, gets every allocation written
+   */
+  private _uploadVertices(pipe: View3DPipe): void {
+    const buffer = this._vertexBuffer;
+    const filled = this._filled[pipe.renderer.uid];
+    if (filled && filled.bufferUid === buffer.uid && filled.seq === this._seq) return;
+
+    let held = 0;
+
+    if (filled?.bufferUid === buffer.uid) {
+      held = filled.seq;
+    } else if (filled && filled.bufferUid === this._copySource?.uid) {
+      this._copyHeld(pipe, filled.seq);
+      held = filled.seq;
+    }
+
+    for (const alloc of this._liveAllocations) {
+      if (alloc.seq > held)
+        pipe.writeBuffer(buffer, this._vertexBytes(alloc.geometry), alloc.baseVertex * this.vertexStride);
+    }
+
+    if (filled) {
+      filled.bufferUid = buffer.uid;
+      filled.seq = this._seq;
+    } else {
+      this._filled[pipe.renderer.uid] = { bufferUid: buffer.uid, seq: this._seq };
+    }
+
+    this._vertexBufferFilled = true;
+  }
+
+  /**
+   * One copy per run of allocations that moved by the same amount, the dead space between them included. Writes
+   * after it land on whatever such a copy put where newer allocations sit
+   */
+  private _copyHeld(pipe: View3DPipe, held: number): void {
+    const from = this._copySource!;
+    const stride = this.vertexStride;
+    let start = -1;
+    let end = 0;
+    let shift = 0;
+
+    for (const alloc of this._liveAllocations) {
+      if (alloc.seq > held) continue;
+
+      const allocShift = alloc.baseVertex - alloc.copyFrom;
+
+      if (start >= 0 && allocShift === shift) {
+        end = alloc.copyFrom + alloc.vertexCount;
+        continue;
+      }
+
+      if (start >= 0)
+        pipe.copyBuffer(from, this._vertexBuffer, (end - start) * stride, start * stride, (start + shift) * stride);
+
+      start = alloc.copyFrom;
+      end = start + alloc.vertexCount;
+      shift = allocShift;
+    }
+
+    if (start >= 0)
+      pipe.copyBuffer(from, this._vertexBuffer, (end - start) * stride, start * stride, (start + shift) * stride);
+  }
+
+  /**
+   * A geometry's vertices in the atlas layout: its own buffer when that already is, else interleaved through
+   * `Uint32Array` views, as a float copy alters quantized normals that read as NaN. The word copy is unrolled to four
+   * words, the largest vertex format, because that beats an inner loop
+   */
+  private _vertexBytes(geometry: Geometry3D): Uint8Array {
+    const vertexCount = geometry.vertexCount;
+    const vertexStride = this.vertexStride;
+    const byteLength = vertexCount * vertexStride;
+
+    if (this._matchesAtlasLayout(geometry)) {
+      const src = geometry.attributes[this._attributeInfo[0].name].buffer.data;
+      return new Uint8Array(src.buffer, src.byteOffset, byteLength);
+    }
+
+    const vertexData = new Uint8Array(byteLength);
+    const vertexWords = new Uint32Array(vertexData.buffer);
+
+    for (const { name, offset, byteSize } of this._attributeInfo) {
+      const attr = geometry.attributes[name];
+      const data = attr.buffer.data;
+      const srcStride = attr.stride ?? byteSize;
+      const srcOffset = attr.offset ?? 0;
+
+      if (((data.byteOffset | srcOffset | srcStride | byteSize) & 3) === 0) {
+        const srcWords = new Uint32Array(data.buffer, data.byteOffset, data.byteLength >> 2);
+        const srcStep = srcStride >> 2;
+        const dstStep = vertexStride >> 2;
+        let src = srcOffset >> 2;
+        let dst = offset >> 2;
+
+        for (let i = 0; i < vertexCount; i++) {
+          vertexWords[dst] = srcWords[src];
+          if (byteSize > 4) vertexWords[dst + 1] = srcWords[src + 1];
+          if (byteSize > 8) vertexWords[dst + 2] = srcWords[src + 2];
+          if (byteSize > 12) vertexWords[dst + 3] = srcWords[src + 3];
+          src += srcStep;
+          dst += dstStep;
+        }
+      } else {
+        const srcBytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        let src = srcOffset;
+        let dst = offset;
+
+        for (let i = 0; i < vertexCount; i++) {
+          for (let b = 0; b < byteSize; b++) vertexData[dst + b] = srcBytes[src + b];
+          src += srcStride;
+          dst += vertexStride;
+        }
+      }
+    }
+
+    return vertexData;
   }
 
   private _matchesAtlasLayout(geometry: Geometry3D): boolean {
@@ -316,21 +393,26 @@ export class GeometryAtlas {
     return true;
   }
 
+  /**
+   * Sets every attribute's `instance`, since pixi fills it in only for the attributes the first program to draw the
+   * geometry reads, which would key a rebuilt merged geometry's pipelines differently when a depth-only program drew it first
+   */
   private _buildMergedGeometry(): Geometry {
     const geo = new Geometry();
 
     for (const { name, format, offset } of this._attributeInfo) {
-      geo.addAttribute(name, { buffer: this._vertexBuffer, format, stride: this.vertexStride, offset });
+      geo.addAttribute(name, {
+        buffer: this._vertexBuffer,
+        format,
+        stride: this.vertexStride,
+        offset,
+        instance: false,
+      });
     }
 
     geo.addIndex(this._indexBuffer);
 
     return geo;
-  }
-
-  private _markVertexDirty(startByte: number, endByte: number): void {
-    if (startByte < this._vertexDirtyMin) this._vertexDirtyMin = startByte;
-    if (endByte > this._vertexDirtyMax) this._vertexDirtyMax = endByte;
   }
 
   private _markIndexDirty(startIndex: number, endIndex: number): void {
@@ -341,7 +423,7 @@ export class GeometryAtlas {
   private _retireCurrentGeometry(): void {
     if (this.geometry) {
       this.geometry.indexBuffer = null!;
-      this._retiredGeometries.push(this.geometry);
+      this._replaced.push(this.geometry);
     }
   }
 
@@ -354,26 +436,39 @@ export class GeometryAtlas {
   }
 
   private _ensureVertexCapacity(requiredVertices: number): void {
-    const oldData = this._vertexBuffer.data;
-    let capacity = oldData.byteLength / this.vertexStride;
+    let capacity = this._vertexCapacity;
     if (requiredVertices <= capacity) return;
 
     while (capacity < requiredVertices) capacity *= 2;
     capacity = Math.max(requiredVertices, Math.min(capacity, Math.floor(this.maxBufferBytes / this.vertexStride)));
 
-    const newData = new Uint8Array(capacity * this.vertexStride);
-    newData.set(oldData);
+    this._replaceVertexBuffer(capacity);
+  }
 
-    this._retiredBuffers.push(this._vertexBuffer);
+  private _createVertexBuffer(capacity: number): Buffer3D {
+    this._vertexCapacity = capacity;
 
-    this._vertexBuffer = new Buffer3D({
-      data: newData,
-      usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+    return new Buffer3D({
+      size: capacity * this.vertexStride,
+      usage: BufferUsage.VERTEX | BufferUsage.COPY_DST | BufferUsage.COPY_SRC,
       label: 'GeometryAtlas-vertex',
       shrinkToFit: false,
     });
+  }
 
-    this._markVertexDirty(0, this._vertexCount * this.vertexStride);
+  /**
+   * Call it before moving any allocation, so `copyFrom` records where each one sits in the buffer being replaced. A
+   * buffer no renderer filled keeps the older copy source and its `copyFrom` values, which still describe that one
+   */
+  private _replaceVertexBuffer(capacity: number): void {
+    if (this._vertexBufferFilled) {
+      this._copySource = this._vertexBuffer;
+      for (const alloc of this._liveAllocations) alloc.copyFrom = alloc.baseVertex;
+    }
+
+    this._replaced.push(this._vertexBuffer);
+    this._vertexBuffer = this._createVertexBuffer(capacity);
+    this._vertexBufferFilled = false;
 
     this._retireCurrentGeometry();
     this.geometry = this._buildMergedGeometry();
@@ -391,7 +486,7 @@ export class GeometryAtlas {
     const newData = new Uint32Array(capacity);
     newData.set(oldData);
 
-    this._retiredBuffers.push(this._indexBuffer);
+    this._replaced.push(this._indexBuffer);
 
     this._indexBuffer = new Buffer3D({
       data: newData,
@@ -421,41 +516,44 @@ export class GeometryAtlas {
     this._vertexBuffer.destroy();
     this._indexBuffer.destroy();
 
-    this.releaseRetired();
-    (this._retiredGeometries as Geometry[] | null) = null;
-    (this._retiredBuffers as Buffer3D[] | null) = null;
+    for (const resource of this._replaced) resource.destroy();
+    (this._replaced as { destroy(): void }[] | null) = null;
 
     this._vertexBuffer = null!;
     this._indexBuffer = null!;
+    this._copySource = null;
 
     (this._liveAllocations as GeometryAllocation[] | null) = null;
   }
 
   /**
    * Updates live allocations in place, and bumps `_bufferVersion` even for dead space only at the tail, which
-   * the next `add` overwrites while recorded commands may still read it
+   * the next `add` overwrites while recorded commands may still read it. Moved vertices go to a fresh buffer, which
+   * renderers fill with GPU copies, since neither API copies within one buffer over overlapping ranges
    */
   public defragment(): void {
     if (this._deadVertexCount === 0 && this._deadIndexCount === 0) return;
 
-    const stride = this.vertexStride;
-    const vertexData = this._vertexBuffer.data;
-    const indexData = this._indexBuffer.data;
     let writeVertex = 0;
+
+    for (const alloc of this._liveAllocations) {
+      if (alloc.baseVertex !== writeVertex) {
+        this._replaceVertexBuffer(this._vertexCapacity);
+        break;
+      }
+      writeVertex += alloc.vertexCount;
+    }
+
+    const indexData = this._indexBuffer.data;
     let writeIndex = 0;
+    writeVertex = 0;
 
     const rebase = this.rebaseIndices;
 
     for (const alloc of this._liveAllocations) {
       const oldBaseVertex = alloc.baseVertex;
 
-      if (oldBaseVertex !== writeVertex) {
-        const srcByte = oldBaseVertex * stride;
-        const dstByte = writeVertex * stride;
-        const byteLen = alloc.vertexCount * stride;
-        vertexData.copyWithin(dstByte, srcByte, srcByte + byteLen);
-        alloc.baseVertex = writeVertex;
-      }
+      alloc.baseVertex = writeVertex;
       writeVertex += alloc.vertexCount;
 
       if (alloc.firstIndex !== writeIndex) {
@@ -473,7 +571,6 @@ export class GeometryAtlas {
       writeIndex += alloc.indexCount;
     }
 
-    this._markVertexDirty(0, writeVertex * stride);
     this._markIndexDirty(0, writeIndex);
 
     this._vertexCount = writeVertex;

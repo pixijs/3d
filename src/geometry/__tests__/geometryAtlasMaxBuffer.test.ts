@@ -29,7 +29,7 @@ describe('GeometryAtlas maxBufferBytes', () => {
     atlas.add(makeGeometry(400));
 
     const vertexBuffer = Object.values(atlas.geometry.attributes)[0].buffer;
-    expect(vertexBuffer.data.byteLength, 'doubling would make 2048 vertices').toBe(1500 * POSITION_ONLY_STRIDE);
+    expect(vertexBuffer.descriptor.size, 'doubling would make 2048 vertices').toBe(1500 * POSITION_ONLY_STRIDE);
     expect(atlas.geometry.indexBuffer.data.byteLength).toBeLessThanOrEqual(1500 * POSITION_ONLY_STRIDE);
   });
 
@@ -61,7 +61,7 @@ describe('GeometryAtlasPool maxBufferBytes', () => {
     expect(third.atlas, 'a geometry that fits goes back to the first atlas').toBe(first.atlas);
 
     for (const atlas of [first.atlas, second.atlas]) {
-      expect(Object.values(atlas.geometry.attributes)[0].buffer.data.byteLength).toBeLessThanOrEqual(
+      expect(Object.values(atlas.geometry.attributes)[0].buffer.descriptor.size).toBeLessThanOrEqual(
         1500 * POSITION_ONLY_STRIDE,
       );
       expect(atlas.geometry.indexBuffer.data.byteLength).toBeLessThanOrEqual(1500 * POSITION_ONLY_STRIDE);

@@ -2,6 +2,7 @@
 export * from './bits/morphTargetBitGl';
 export * from './bits/shadowBitGl';
 export * from './bits/skinningBitGl';
+export * from './bufferWritesGl';
 export * from './codegen/compileGlslSource';
 export * from './codegen/glslAttributesPlugin';
 export * from './codegen/glslBindingsPlugin';

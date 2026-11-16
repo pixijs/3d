@@ -205,8 +205,7 @@ interface MorphStoreProbe {
 
 interface AtlasProbe {
   _liveAllocations: unknown[];
-  _retiredBuffers: unknown[];
-  _retiredGeometries: unknown[];
+  _replaced: unknown[];
   _deadVertexCount: number;
   _vertexCount: number;
   _bufferVersion: number;
@@ -237,6 +236,7 @@ interface RendererProbe {
   bindGroup?: { _hash: Record<string, unknown> };
   pipeline?: { _pipeCache: Map<string, unknown> };
   mipChain3d?: { _cache: Record<number, unknown> };
+  retire3d: { _retired: unknown[] };
 }
 
 interface Sample {
@@ -305,8 +305,8 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   const atlases = Object.values(pipe.atlasPool._atlases).flat();
   flat['atlas.count'] = atlases.length;
   flat['atlas.liveAllocations'] = sumOver(atlases, (atlas) => atlas._liveAllocations.length);
-  flat['atlas.retiredBuffers'] = sumOver(atlases, (atlas) => atlas._retiredBuffers.length);
-  flat['atlas.retiredGeometries'] = sumOver(atlases, (atlas) => atlas._retiredGeometries.length);
+  flat['atlas.replaced'] = sumOver(atlases, (atlas) => atlas._replaced.length);
+  flat['retire3d.retired'] = renderer.retire3d._retired.length;
   info['atlas.vertexHighWater'] = sumOver(atlases, (atlas) => atlas._vertexCount);
   info['atlas.deadVertices'] = sumOver(atlases, (atlas) => atlas._deadVertexCount);
   info['atlas.bufferVersion'] = sumOver(atlases, (atlas) => atlas._bufferVersion);

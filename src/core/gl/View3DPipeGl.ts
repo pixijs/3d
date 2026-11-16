@@ -1,5 +1,14 @@
 import { CLEAR, Color, CubeTexture, ExtensionType, Rectangle, State } from 'pixi.js';
-import type { Geometry, InstructionPipe, InstructionSet, Shader, Texture, TextureSource, WebGLRenderer } from 'pixi.js';
+import type {
+  Buffer,
+  Geometry,
+  InstructionPipe,
+  InstructionSet,
+  Shader,
+  Texture,
+  TextureSource,
+  WebGLRenderer,
+} from 'pixi.js';
 
 import { GeometryAtlasPool } from '../../geometry/GeometryAtlasPool';
 import { writeLinearRgb } from '../../materials/BaseMaterial3D';
@@ -28,6 +37,7 @@ import {
 import { CUBETEXTURE_EMPTY } from '../textures/DefaultTextures';
 import { View3DGCRegistry } from '../View3DGCRegistry';
 import type { View3DPipe } from '../View3DPipe';
+import { copyBufferGl, writeBufferGl } from './bufferWritesGl';
 import { renderForwardBatchesGl } from './renderForwardBatchesGl';
 import { getGlobalGlData } from './shader/globalBitGl';
 import { ShadowRenderPassGl } from './ShadowRenderPassGl';
@@ -98,20 +108,24 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
 
   private readonly _managedViews: View3DGCRegistry;
 
-  /** Joins the `contextChange` and `prerender` runners itself, since pixi joins only systems to them */
+  /** Joins the `contextChange` runner itself, since pixi joins only systems to it */
   constructor(renderer: WebGLRenderer) {
     this.renderer = renderer;
     this._managedViews = new View3DGCRegistry(renderer);
     renderer.runners.contextChange.add(this);
-    renderer.runners.prerender.add(this);
   }
 
-  public prerender(): void {
-    this.atlasPool.releaseRetired();
+  public writeBuffer(buffer: Buffer, data: ArrayBufferView, offset: number): void {
+    writeBufferGl(this.renderer, buffer, data, offset);
+  }
+
+  public copyBuffer(from: Buffer, to: Buffer, size: number, fromOffset: number, toOffset: number): void {
+    copyBufferGl(this.renderer, from, to, size, fromOffset, toOffset);
   }
 
   /** Keeps an existing store across a context restore, since materials hold places in it */
   public contextChange(): void {
+    this.atlasPool.invalidateUploads(this.renderer.uid);
     this.materialStoreBuffer ??= new MaterialDataStoreBuffer({
       alignment: this.renderer.limits.minUniformBufferOffsetAlignment,
       rendererType: this.renderer.type,
@@ -280,7 +294,7 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
     glData.globalBindGroup.setResource(this._morphStoreBuffer.texture.source, 'uMorphTexture');
     glData.globalBindGroup.setResource(this.geometryDataStoreBuffer.texture.source, 'uGeometryTexture');
 
-    this.atlasPool.update();
+    this.atlasPool.update(this);
     this.materialStoreBuffer.update();
     this.geometryDataStoreBuffer.update();
 
@@ -316,7 +330,7 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
     (this._iblEnvironmentMap as Map<TextureSource, CubeTexture> | null) = null;
 
     this.renderer.runners.contextChange.remove(this);
-    this.renderer.runners.prerender.remove(this);
+    this.atlasPool.invalidateUploads(this.renderer.uid);
     this.materialStoreBuffer.destroy();
     (this.materialStoreBuffer as MaterialDataStoreBuffer | null) = null;
     this._morphStoreBuffer.destroy();

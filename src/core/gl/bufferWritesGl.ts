@@ -5,7 +5,6 @@ import type { Buffer, WebGLRenderer } from 'pixi.js';
  * `getGlBuffer` doesn't; `COPY_WRITE_BUFFER` is read by no vertex array, so an index buffer write leaves them alone
  * @internal
  */
-// unused-internal-disable-next-line -- the atlas's no-CPU-copy change uses it next
 export function writeBufferGl(renderer: WebGLRenderer, buffer: Buffer, data: ArrayBufferView, offset = 0): void {
   const gl = renderer.gl;
 
@@ -17,7 +16,6 @@ export function writeBufferGl(renderer: WebGLRenderer, buffer: Buffer, data: Arr
  * Stands in for pixi's coming `renderer.buffer.copy`, through the copy targets for the reason `writeBufferGl` gives
  * @internal
  */
-// unused-internal-disable-next-line -- the atlas's no-CPU-copy change uses it next
 export function copyBufferGl(
   renderer: WebGLRenderer,
   from: Buffer,
