@@ -3,7 +3,7 @@ import { CanvasSource, Texture } from 'pixi.js';
 import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
-import { cpuSubmission } from '~/core/cull';
+import { cpuSubmission, gpuCull } from '~/core/cull';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
@@ -85,6 +85,7 @@ for (const { preference, cull, direct } of TAIL_CASES) {
         appOptions: { preference, width: SIZE * 2, height: SIZE, backgroundColor: 0x000000 },
       });
       cpuSubmission.forward = cpuSubmission.shadow = direct ? Infinity : 0;
+      gpuCull.minInstances = 0;
 
       try {
         const edited = makeView(app, 0, cull, true);
@@ -277,6 +278,7 @@ for (const { preference, cull, direct } of TAIL_CASES) {
       } finally {
         delete cpuSubmission.forward;
         delete cpuSubmission.shadow;
+        delete gpuCull.minInstances;
         app.destroy();
       }
     });

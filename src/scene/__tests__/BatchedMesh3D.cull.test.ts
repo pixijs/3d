@@ -1,8 +1,9 @@
 import { getApp } from '@test-utils';
 import type { Buffer, Renderer, WebGPURenderer } from 'pixi.js';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Mesh3DBatch } from '~/core/batcher/Mesh3DBatch';
+import { gpuCull } from '~/core/cull';
 import type { CullResults } from '~/core/render-passes/CullResults';
 import type { ForwardRenderPass } from '~/core/render-passes/ForwardRenderPass';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
@@ -95,6 +96,14 @@ async function drawn(
 
 for (const preference of ['webgl', 'webgpu'] as const) {
   describe(`BatchedMesh3D.cull (${preference})`, () => {
+    beforeEach(() => {
+      gpuCull.minInstances = 0;
+    });
+
+    afterEach(() => {
+      delete gpuCull.minInstances;
+    });
+
     it("is off by default, whatever the view's mode; the view's mode covers its plain meshes", async () => {
       const app = await getApp<Renderer>({
         id: `batched-cull-default-${preference}`,

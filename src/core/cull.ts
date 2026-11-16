@@ -1,13 +1,34 @@
 import { isMobile, isSafari } from 'pixi.js';
 
 import type { CullMode } from '../scene/View3D';
+import type { Mesh3DBatch } from './batcher/Mesh3DBatch';
 
 /**
- * A batch's cull mode in one pass: `'gpu'` falls back to `'cpu'` where the pass can't compact on the GPU
+ * The fewest instances in a batch's largest draw list that `'gpu'` culls on the GPU; a smaller batch walks on the CPU,
+ * cheaper there than the compute passes and their submit, and still draws indirect. An unset entry takes the default
  * @internal
  */
-export function resolveCullProducer(mode: CullMode, gpuCompaction: boolean): CullMode {
-  return mode === 'gpu' && !gpuCompaction ? 'cpu' : mode;
+export const gpuCull: { minInstances?: number } = {};
+
+/** Set from measurements on an M3 Max in Chrome */
+const GPU_CULL_MIN = 128;
+
+/**
+ * {@link gpuCull}'s minimum, read by `Mesh3DBatch.applyEdits`, so an override takes effect at the batch's next edit
+ * @internal
+ */
+export function gpuCullMin(): number {
+  return gpuCull.minInstances ?? GPU_CULL_MIN;
+}
+
+/**
+ * A batch's cull mode in one pass: `'gpu'` falls back to `'cpu'` where the pass can't compact on the GPU, or the batch
+ * is under {@link gpuCull}'s minimum
+ * @internal
+ */
+export function resolveCullProducer(batch: Mesh3DBatch, gpuCompaction: boolean): CullMode {
+  const mode = batch.cull;
+  return mode === 'gpu' && !(gpuCompaction && batch._gpuCullSized) ? 'cpu' : mode;
 }
 
 /**

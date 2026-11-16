@@ -1,5 +1,6 @@
 import type { TestScene } from '@test-utils';
 
+import { gpuCull } from '~/core/cull';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import type { Mesh3D } from '~/scene/Mesh3D';
 import type { CullMode } from '~/scene/View3D';
@@ -27,7 +28,8 @@ interface VisibilitySceneOptions {
  * draw counts — so the hide exercises whichever producer the variant selects, with no
  * draw-command / render-bundle rebuild:
  *
- * - `cull: 'gpu'` — the compaction compute kernel (visibility-lane gate; CPU walk on WebGL);
+ * - `cull: 'gpu'` — the compaction compute kernel (visibility-lane gate; CPU walk on WebGL), with
+ *   `gpuCull.minInstances` at 0 since the grid is under it;
  * - `cull: 'cpu'` — the CPU frustum compaction;
  * - `cull: 'off'` — the visibility-only walk (dirty-gated on WebGPU);
  * - `alphaMode: 'blend'` — the transparent pass, which runs the same compaction after its
@@ -41,7 +43,14 @@ interface VisibilitySceneOptions {
 export function visibilityScene(options: VisibilitySceneOptions): TestScene {
   return {
     app: { backgroundColor: 0x101018 },
-    create: async (app) => {
+    create: async (app, context) => {
+      if (options.cull === 'gpu') {
+        gpuCull.minInstances = 0;
+        context.onTestFinished(() => {
+          delete gpuCull.minInstances;
+        });
+      }
+
       const view3d = new View3D({ width: app.screen.width, height: app.screen.height, cull: options.cull });
       app.stage.addChild(view3d);
 

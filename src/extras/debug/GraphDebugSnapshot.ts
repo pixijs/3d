@@ -805,7 +805,7 @@ function captureBatchPass(
   const previousState = previous.get(key);
   const drawBuild = compareDrawBuildState(previousState, state);
   const bundle = compareBundleState(previousState, state, drawBuild);
-  const producer = resolveCullProducer(batch.cull, webGpu && forward?.sort !== 'distance' && !result?.direct);
+  const producer = resolveCullProducer(batch, webGpu && forward?.sort !== 'distance' && !result?.direct);
   let mirroredDrawCounts: Uint32Array | null = null;
   if (producer === 'gpu' && forward) {
     mirroredDrawCounts = mirrorCullDrawCounts(passData, batch, drawn, view.camera.cullFrustum.planesData);

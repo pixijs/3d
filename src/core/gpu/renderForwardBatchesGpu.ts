@@ -100,7 +100,7 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
     const result = cullResults.ensure(batch);
     result.sync(list, direct);
 
-    const producer = resolveCullProducer(batch.cull, !direct);
+    const producer = resolveCullProducer(batch, !direct);
     if (producer === 'off') {
       produceVisibilityCompaction(pipe.renderer.compute3d, list, batch, boundsBuffer, result);
       continue;
@@ -227,7 +227,7 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
 
       bindBatchStorage(session, batch, result);
 
-      const producer = resolveCullProducer(batch.cull, !sortBatch && !direct);
+      const producer = resolveCullProducer(batch, !sortBatch && !direct);
       if (producer === 'gpu') {
         const batchPlanes = transformFrustumToBatch(planes, batch.storeBuffer.data);
         pipe.renderer.compute3d.dispatch(
