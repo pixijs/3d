@@ -102,7 +102,7 @@ const BUNDLE_STATUS_LABELS: Record<GraphDebugBundleSnapshot['status'], string> =
 
 const BUNDLE_CAUSE_DETAILS: Record<GraphDebugBundleCauseCode, string> = {
   'bundle-only-change': 'Draw data was reused; bundle-only GPU state changed.',
-  'counts-changed': 'A visibility change moved the instance counts baked into the direct draws.',
+  'counts-changed': 'A visibility or culling change moved the instance counts baked into the direct draws.',
   'draws-rebuilt': 'The draw rebuild required a fresh bundle recording.',
   'first-capture': 'Baseline captured; prior bundle activity is unknown.',
 };

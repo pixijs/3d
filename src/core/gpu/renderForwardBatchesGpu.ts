@@ -125,9 +125,8 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
 }
 
 /**
- * Replays the valid bundles in one `executeBundle` after the walk, since WebGPU resets the pass state
- * after each call. A bundle of direct draws bakes the counts, so it re-records when the cull changes one.
- * An immediate pass binds each batch's storage every frame, rebuilt or not.
+ * Replays the valid bundles in one `executeBundle` after the walk, since WebGPU resets the pass state after each
+ * call. An immediate pass binds each batch's storage every frame, rebuilt or not.
  * @internal
  */
 export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions): void {

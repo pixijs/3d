@@ -287,8 +287,8 @@ export interface GraphDebugDrawBuildSnapshot {
  * - `'draws-rebuilt'`: the pass rebuilt its draw commands.
  * - `'bundle-only-change'`: the draws weren't rebuilt, but a resource the bundle baked changed, such as
  *   the environment map, the shadow map or a texture the pass samples.
- * - `'counts-changed'`: hiding or showing a mesh changed an instance count the bundle baked in. Only
- *   a batch with `cull: 'off'` drawn with direct draws, as on Safari and iOS, bakes its counts.
+ * - `'counts-changed'`: an instance count the bundle baked in changed, from hiding or showing a mesh or
+ *   from the frustum cull. Only a batch drawn with direct draws, as on Safari and iOS, bakes its counts.
  * @category extras:debug
  * @advanced
  */

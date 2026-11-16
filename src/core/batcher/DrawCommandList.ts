@@ -100,7 +100,10 @@ export class DrawCommandList {
   public commands: DrawCommand[] = [];
   public count = 0;
 
-  /** Commands the last build recorded; those from here to `count` are tail commands, which no bundle holds */
+  /**
+   * Commands the last build recorded; those from here to `count` are tail commands, which an indirect bundle leaves
+   * out, so the pass draws them itself every frame
+   */
   public bodyCount = 0;
 
   /** Bumped once per rebuild, by `clear`; a draw list's edits leave it alone (`DrawList.rangesDirtyId`) */
