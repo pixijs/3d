@@ -98,10 +98,16 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
 
   private readonly _managedViews: View3DGCRegistry;
 
+  /** Joins the `contextChange` and `prerender` runners itself, since pixi joins only systems to them */
   constructor(renderer: WebGLRenderer) {
     this.renderer = renderer;
     this._managedViews = new View3DGCRegistry(renderer);
     renderer.runners.contextChange.add(this);
+    renderer.runners.prerender.add(this);
+  }
+
+  public prerender(): void {
+    this.atlasPool.releaseRetired();
   }
 
   /** Keeps an existing store across a context restore, since materials hold places in it */
@@ -310,6 +316,7 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
     (this._iblEnvironmentMap as Map<TextureSource, CubeTexture> | null) = null;
 
     this.renderer.runners.contextChange.remove(this);
+    this.renderer.runners.prerender.remove(this);
     this.materialStoreBuffer.destroy();
     (this.materialStoreBuffer as MaterialDataStoreBuffer | null) = null;
     this._morphStoreBuffer.destroy();

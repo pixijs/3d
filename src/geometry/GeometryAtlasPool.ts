@@ -1,4 +1,4 @@
-import { GlobalResourceRegistry } from 'pixi.js';
+import { GlobalResourceRegistry, warn } from 'pixi.js';
 
 import type { Geometry3D } from './Geometry3D';
 import { GeometryAtlas } from './GeometryAtlas';
@@ -15,9 +15,11 @@ const sharedPools: Record<string, GeometryAtlasPool> = Object.create(null);
  * @internal
  */
 export class GeometryAtlasPool {
-  private _atlases: Record<string, GeometryAtlas> = Object.create(null);
+  /** Per attribute layout; a layout opens another atlas only when the others would pass `maxBufferBytes` */
+  private _atlases: Record<string, GeometryAtlas[]> = Object.create(null);
   private readonly _rebaseIndices: boolean;
   private _bufferVersion = 0;
+  private _maxBufferBytes = Infinity;
 
   constructor(options: GeometryAtlasPoolOptions) {
     this._rebaseIndices = options.rebaseIndices;
@@ -42,6 +44,18 @@ export class GeometryAtlasPool {
     return pool;
   }
 
+  /** Only ever lowers, since renderers sharing the pool may have different devices */
+  get maxBufferBytes(): number {
+    return this._maxBufferBytes;
+  }
+
+  set maxBufferBytes(bytes: number) {
+    this._maxBufferBytes = Math.min(this._maxBufferBytes, bytes);
+    for (const key in this._atlases) {
+      for (const atlas of this._atlases[key]) atlas.maxBufferBytes = this._maxBufferBytes;
+    }
+  }
+
   /** Bumped when an `allocate` grows or compacts an atlas; a removal never bumps it */
   get bufferVersion(): number {
     return this._bufferVersion;
@@ -53,14 +67,28 @@ export class GeometryAtlasPool {
    */
   public allocate(geometry: Geometry3D): GeometryAllocation {
     const key = geometry.attributeKey;
-    let atlas = this._atlases[key];
+    const atlases = (this._atlases[key] ??= []);
 
     const existing = geometry._geometryAtlasAllocation;
-    if (existing && existing.atlas === atlas) return existing;
+    if (existing && atlases.includes(existing.atlas)) return existing;
+
+    let atlas = atlases.find((a) => a.fits(geometry));
 
     if (!atlas) {
-      atlas = new GeometryAtlas({ referenceGeometry: geometry, rebaseIndices: this._rebaseIndices });
-      this._atlases[key] = atlas;
+      atlas = new GeometryAtlas({
+        referenceGeometry: geometry,
+        rebaseIndices: this._rebaseIndices,
+        maxBufferBytes: this._maxBufferBytes,
+      });
+      atlases.push(atlas);
+
+      if (!atlas.fits(geometry)) {
+        warn(
+          `GeometryAtlasPool: a geometry of ${geometry.vertexCount} vertices passes the device's maxBufferSize ` +
+            `(${this._maxBufferBytes} bytes) once interleaved, so every frame that draws it fails. ` +
+            `Make it dynamic to draw it from its own buffers.`,
+        );
+      }
     }
 
     const atlasVersion = atlas._bufferVersion;
@@ -72,12 +100,23 @@ export class GeometryAtlasPool {
 
   /** Uploads what this frame's `allocate` calls wrote, so call it after them and before drawing */
   public update(): void {
-    for (const key in this._atlases) this._atlases[key].update();
+    for (const key in this._atlases) {
+      for (const atlas of this._atlases[key]) atlas.update();
+    }
+  }
+
+  /** Call it at the start of a render, when the renders that drew from the retired buffers have been submitted */
+  public releaseRetired(): void {
+    for (const key in this._atlases) {
+      for (const atlas of this._atlases[key]) atlas.releaseRetired();
+    }
   }
 
   /** Destroys every atlas, leaving the pool usable; named for pixi's `Cleanable`, which the registry calls */
   public clear(): void {
-    for (const key in this._atlases) this._atlases[key].destroy();
+    for (const key in this._atlases) {
+      for (const atlas of this._atlases[key]) atlas.destroy();
+    }
     this._atlases = Object.create(null);
   }
 }

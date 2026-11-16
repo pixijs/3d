@@ -216,7 +216,7 @@ interface PipeProbe {
   materialStoreBuffer: MaterialStoreProbe;
   geometryDataStoreBuffer: StoreProbe;
   _morphStoreBuffer: MorphStoreProbe;
-  atlasPool: { _atlases: Record<string, AtlasProbe> };
+  atlasPool: { _atlases: Record<string, AtlasProbe[]> };
   _managedViews: { _managedViews: { items: Record<number, unknown> } };
 }
 
@@ -302,7 +302,7 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   flat['store._morph.retired'] = morph._retiredBuffers.length;
   info['store._morph.bufferVersion'] = morph.bufferVersion;
 
-  const atlases = Object.values(pipe.atlasPool._atlases);
+  const atlases = Object.values(pipe.atlasPool._atlases).flat();
   flat['atlas.count'] = atlases.length;
   flat['atlas.liveAllocations'] = sumOver(atlases, (atlas) => atlas._liveAllocations.length);
   flat['atlas.retiredBuffers'] = sumOver(atlases, (atlas) => atlas._retiredBuffers.length);

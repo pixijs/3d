@@ -22,6 +22,7 @@ interface GeometryAtlasOptions {
   initialVertexCapacity?: number;
   initialIndexCapacity?: number;
   rebaseIndices?: boolean;
+  maxBufferBytes?: number;
 }
 
 /** @internal */
@@ -34,9 +35,9 @@ export class GeometryAtlas {
 
   private _vertexBuffer: Buffer3D;
   private _indexBuffer: Buffer3D;
-  /** Buffers growth replaced, kept until `destroy` because draws recorded earlier in the frame may still read them */
+  /** Buffers growth replaced, kept until `releaseRetired` because draws recorded earlier in the render may read them */
   private readonly _retiredBuffers: Buffer3D[] = [];
-  /** Kept until `destroy`, like `_retiredBuffers` */
+  /** Kept until `releaseRetired`, like `_retiredBuffers` */
   private readonly _retiredGeometries: Geometry[] = [];
   private _vertexCount = 0;
   private _indexCount = 0;
@@ -64,15 +65,20 @@ export class GeometryAtlas {
   /** Whether `add` bakes `baseVertex` into the index values, for WebGL 2, which has no `baseVertex` draw parameter */
   public readonly rebaseIndices: boolean;
 
+  /** WebGPU's `maxBufferSize`: a bigger buffer is invalid, and so is every command buffer that draws from it */
+  public maxBufferBytes = Infinity;
+
   constructor(options: GeometryAtlasOptions) {
     const {
       referenceGeometry,
       initialVertexCapacity = DEFAULT_VERTEX_CAPACITY,
       initialIndexCapacity = DEFAULT_INDEX_CAPACITY,
       rebaseIndices = false,
+      maxBufferBytes = Infinity,
     } = options;
 
     this.rebaseIndices = rebaseIndices;
+    this.maxBufferBytes = maxBufferBytes;
 
     this.attributeKey = referenceGeometry.attributeKey;
 
@@ -269,6 +275,15 @@ export class GeometryAtlas {
     if (idx !== -1) this._liveAllocations.splice(idx, 1);
   }
 
+  /** Call it only between renders, once the render that drew from the retired buffers has been submitted */
+  public releaseRetired(): void {
+    for (let i = 0; i < this._retiredGeometries.length; i++) this._retiredGeometries[i].destroy(false);
+    this._retiredGeometries.length = 0;
+
+    for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
+    this._retiredBuffers.length = 0;
+  }
+
   public update(): void {
     if (this._vertexDirtyMin < this._vertexDirtyMax) {
       const size = this._vertexDirtyMax - this._vertexDirtyMin;
@@ -330,12 +345,21 @@ export class GeometryAtlas {
     }
   }
 
+  /** Counts dead ranges as room, since `add` compacts them before it grows */
+  public fits(geometry: Geometry3D): boolean {
+    const vertices = this._vertexCount - this._deadVertexCount + geometry.vertexCount;
+    const indices = this._indexCount - this._deadIndexCount + geometry.indexBuffer.data.length;
+
+    return vertices * this.vertexStride <= this.maxBufferBytes && indices * 4 <= this.maxBufferBytes;
+  }
+
   private _ensureVertexCapacity(requiredVertices: number): void {
     const oldData = this._vertexBuffer.data;
     let capacity = oldData.byteLength / this.vertexStride;
     if (requiredVertices <= capacity) return;
 
     while (capacity < requiredVertices) capacity *= 2;
+    capacity = Math.max(requiredVertices, Math.min(capacity, Math.floor(this.maxBufferBytes / this.vertexStride)));
 
     const newData = new Uint8Array(capacity * this.vertexStride);
     newData.set(oldData);
@@ -362,6 +386,7 @@ export class GeometryAtlas {
     if (requiredIndices <= capacity) return;
 
     while (capacity < requiredIndices) capacity *= 2;
+    capacity = Math.max(requiredIndices, Math.min(capacity, Math.floor(this.maxBufferBytes / 4)));
 
     const newData = new Uint32Array(capacity);
     newData.set(oldData);
@@ -396,14 +421,8 @@ export class GeometryAtlas {
     this._vertexBuffer.destroy();
     this._indexBuffer.destroy();
 
-    for (let i = 0; i < this._retiredGeometries.length; i++) {
-      this._retiredGeometries[i].destroy(false);
-    }
+    this.releaseRetired();
     (this._retiredGeometries as Geometry[] | null) = null;
-
-    for (let i = 0; i < this._retiredBuffers.length; i++) {
-      this._retiredBuffers[i].destroy();
-    }
     (this._retiredBuffers as Buffer3D[] | null) = null;
 
     this._vertexBuffer = null!;

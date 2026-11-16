@@ -109,11 +109,16 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
   private _destroyed = false;
   private _colorOutputDraw: ColorOutputDraw | null = null;
 
-  /** Joins the `contextChange` runner itself, since pixi joins only systems to it */
+  /** Joins the `contextChange` and `prerender` runners itself, since pixi joins only systems to them */
   constructor(renderer: WebGLRenderer | WebGPURenderer) {
     this.renderer = renderer as WebGPURenderer;
     this._managedViews = new View3DGCRegistry(this.renderer);
     this.renderer.runners.contextChange.add(this);
+    this.renderer.runners.prerender.add(this);
+  }
+
+  public prerender(): void {
+    this.atlasPool.releaseRetired();
   }
 
   /**
@@ -126,6 +131,8 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
         "@pixi/3d requires the WebGPU 'indirect-first-instance' feature (used by the batched indirect draw path).",
       );
     }
+
+    this.atlasPool.maxBufferBytes = gpu.device.limits.maxBufferSize;
 
     this.materialStoreBuffer ??= new MaterialDataStoreBuffer({
       alignment: this.renderer.limits.minUniformBufferOffsetAlignment,
@@ -395,6 +402,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     (this._iblEnvironmentMap as Map<TextureSource, CubeTexture> | null) = null;
 
     this.renderer.runners.contextChange.remove(this);
+    this.renderer.runners.prerender.remove(this);
     this.materialStoreBuffer.destroy();
     (this.materialStoreBuffer as MaterialDataStoreBuffer | null) = null;
     this._morphStoreBuffer.destroy();
