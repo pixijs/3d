@@ -46,7 +46,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(alloc!.firstIndex, 'it sits after the triangle in the same atlas').toBe(
           triangle.indexBuffer.data.length,
         );
-        const atlasIndices = alloc!.atlas.geometry.indexBuffer.data.length;
+        const atlasIndices = alloc!.atlas.geometry.indexBuffer.descriptor.size / 4;
 
         let commands = 0;
         let emptyCounts = 0;

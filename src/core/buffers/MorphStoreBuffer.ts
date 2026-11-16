@@ -3,6 +3,7 @@ import { BufferImageSource, BufferResource, BufferUsage, Texture, warn } from 'p
 import type { Geometry3D } from '../../geometry/Geometry3D';
 import type { Mesh3D } from '../../scene/Mesh3D';
 import type { Morph } from '../../scene/Morph';
+import { retire } from '../RetireSystem';
 import { Buffer3D } from './Buffer3D';
 import { alignToDataTextureRows, dataTextureSize, uploadFloatRange } from './dataTextureLayout';
 
@@ -36,7 +37,6 @@ export class MorphStoreBuffer {
   private readonly _freeDeltaBlocks = new Map<number, number[]>();
   private _minDirty = Infinity;
   private _maxDirty = -Infinity;
-  private readonly _retiredBuffers: Buffer3D[] = [];
 
   private _texture: Texture | null = null;
   private _textureSource: BufferImageSource | null = null;
@@ -247,18 +247,11 @@ export class MorphStoreBuffer {
     this._maxDirty = -Infinity;
   }
 
-  private _freeRetired(): void {
-    for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
-    this._retiredBuffers.length = 0;
-  }
-
   public destroy(): void {
     if (!this.data) return;
 
     this._bufferResource?.destroy(false);
     this._buffer?.destroy();
-
-    this._freeRetired();
 
     this._texture?.destroy(true);
     this._texture = null;
@@ -286,7 +279,7 @@ export class MorphStoreBuffer {
     this._reallocate(this._deltaCapacity, capacity);
   }
 
-  /** Retires the buffer rather than destroying it, since draws recorded earlier still bind it; `destroy` frees it */
+  /** Retires the buffer rather than destroying it, since draws recorded earlier still bind it */
   private _reallocate(newDeltaCapacity: number, newWeightCapacity: number): void {
     newWeightCapacity = alignWeightCapacity(newDeltaCapacity, newWeightCapacity);
     const newData = new Float32Array(newDeltaCapacity + newWeightCapacity);
@@ -298,7 +291,7 @@ export class MorphStoreBuffer {
     this._deltaCapacity = newDeltaCapacity;
 
     if (this._buffer) {
-      this._retiredBuffers.push(this._buffer);
+      retire(this._buffer);
       this._buffer = null;
       this._bufferResource = null;
     }

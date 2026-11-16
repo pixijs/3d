@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DataStoreBuffer } from '~/core/buffers/DataStoreBuffer';
 import { MaterialDataStoreBuffer } from '~/core/buffers/MaterialDataStoreBuffer';
+import { RetireSystem } from '~/core/RetireSystem';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 
 function createStore(): DataStoreBuffer {
@@ -16,7 +17,7 @@ function createStore(): DataStoreBuffer {
 }
 
 describe('DataStoreBuffer.destroy', () => {
-  it('frees the GPU buffers orphaned by growth', () => {
+  it('frees the GPU buffers orphaned by growth once the retire list empties', () => {
     const buf = createStore();
 
     const initial: Buffer = buf.buffer;
@@ -26,12 +27,13 @@ describe('DataStoreBuffer.destroy', () => {
     expect(initial.destroyed, 'growth retires the old buffer so bundles recorded with it stay valid').toBe(false);
 
     buf.destroy();
+    new RetireSystem().prerender();
 
-    expect(initial.destroyed, 'the GC never frees a retired buffer, so destroy has to').toBe(true);
+    expect(initial.destroyed, 'the GC never frees a retired buffer, so the retire list has to').toBe(true);
     expect((buf as unknown as { _buffer: unknown })._buffer).toBe(null);
   });
 
-  it('frees the data textures orphaned by growth', () => {
+  it('frees the data textures orphaned by growth once the retire list empties', () => {
     const buf = createStore();
     const initial = buf.texture;
     const initialSource = initial.source;
@@ -40,11 +42,11 @@ describe('DataStoreBuffer.destroy', () => {
     const grown = buf.texture;
     const grownSource = grown.source;
     expect(grown).not.toBe(initial);
-    expect(initial.destroyed).toBe(false);
+    expect(initialSource.destroyed).toBe(false);
 
     buf.destroy();
+    new RetireSystem().prerender();
 
-    expect(initial.destroyed).toBe(true);
     expect(initialSource.destroyed).toBe(true);
     expect(grown.destroyed).toBe(true);
     expect(grownSource.destroyed).toBe(true);
@@ -66,7 +68,7 @@ describe('DataStoreBuffer.destroy', () => {
 });
 
 describe('MaterialDataStoreBuffer.destroy', () => {
-  it('frees its data texture and every texture growth retired, and a second call does nothing', () => {
+  it('frees its data texture, and every texture growth retired once the retire list empties, and a second call does nothing', () => {
     const store = new MaterialDataStoreBuffer({ alignment: 256, rendererType: RendererType.WEBGPU });
     const initial = store.texture;
     const initialSource = initial.source;
@@ -80,11 +82,11 @@ describe('MaterialDataStoreBuffer.destroy', () => {
     const grown = store.texture;
     const grownSource = grown.source;
     expect(grown).not.toBe(initial);
-    expect(initial.destroyed, 'a view that drew earlier in the frame still holds the old texture').toBe(false);
+    expect(initialSource.destroyed, 'a view that drew earlier in the frame still holds the old texture').toBe(false);
 
     store.destroy();
+    new RetireSystem().prerender();
 
-    expect(initial.destroyed).toBe(true);
     expect(initialSource.destroyed).toBe(true);
     expect(grown.destroyed).toBe(true);
     expect(grownSource.destroyed).toBe(true);
@@ -104,8 +106,8 @@ describe('DataStoreBuffer.unload', () => {
     const grown = buf.texture;
 
     buf.unload();
+    new RetireSystem().prerender();
 
-    expect(initial.destroyed).toBe(true);
     expect(initialSource.destroyed).toBe(true);
     expect(buf.texture).toBe(grown);
     expect(grown.destroyed).toBe(false);

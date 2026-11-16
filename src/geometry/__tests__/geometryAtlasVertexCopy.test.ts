@@ -1,8 +1,7 @@
 import { Buffer, BufferUsage, getAttributeInfoFromFormat } from 'pixi.js';
-import type { Attribute, TypedArray, VertexFormat } from 'pixi.js';
+import type { Attribute, TypedArray, VertexFormat, WebGLRenderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
-import type { View3DPipe } from '~/core/View3DPipe';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { GeometryAtlas } from '~/geometry/GeometryAtlas';
 import type { GeometryAllocation } from '~/geometry/GeometryAtlas';
@@ -14,10 +13,21 @@ type ViewConstructor = new (buffer: ArrayBufferLike, byteOffset: number, length:
 let nextRendererUid = 1;
 
 class FakeGpu {
-  public readonly renderer = { uid: nextRendererUid++, retire3d: { retire: () => {} } };
-  public writes = 0;
+  public readonly uid = nextRendererUid++;
+  public vertexWrites = 0;
   public copies = 0;
   private readonly _memory = new Map<Buffer, Uint8Array>();
+
+  public readonly buffer = {
+    write: (buffer: Buffer, data: ArrayBufferView, offset: number): void => {
+      if (buffer.descriptor.usage & BufferUsage.VERTEX) this.vertexWrites++;
+      this.bytes(buffer).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), offset);
+    },
+    copy: (from: Buffer, to: Buffer, size: number, fromOffset: number, toOffset: number): void => {
+      this.copies++;
+      this.bytes(to).set(this.bytes(from).subarray(fromOffset, fromOffset + size), toOffset);
+    },
+  };
 
   public bytes(buffer: Buffer): Uint8Array {
     let memory = this._memory.get(buffer);
@@ -25,22 +35,12 @@ class FakeGpu {
     return memory;
   }
 
-  public get pipe(): View3DPipe {
-    return this as unknown as View3DPipe;
-  }
-
-  public writeBuffer(buffer: Buffer, data: ArrayBufferView, offset: number): void {
-    this.writes++;
-    this.bytes(buffer).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), offset);
-  }
-
-  public copyBuffer(from: Buffer, to: Buffer, size: number, fromOffset: number, toOffset: number): void {
-    this.copies++;
-    this.bytes(to).set(this.bytes(from).subarray(fromOffset, fromOffset + size), toOffset);
+  public get renderer(): WebGLRenderer {
+    return this as unknown as WebGLRenderer;
   }
 
   public loseContext(atlas: GeometryAtlas): void {
-    atlas.invalidateUploads(this.renderer.uid);
+    atlas.invalidateUploads(this.uid);
     this._memory.clear();
   }
 }
@@ -63,6 +63,15 @@ function readAttribute(
   }
 
   return values;
+}
+
+function readIndices(
+  gpu: FakeGpu,
+  alloc: GeometryAllocation,
+  indexBuffer = alloc.atlas.geometry.indexBuffer,
+): number[] {
+  const data = gpu.bytes(indexBuffer);
+  return Array.from(new Uint32Array(data.buffer, data.byteOffset + alloc.firstIndex * 4, alloc.indexCount));
 }
 
 function makePositionsOnly(vertexCount: number, seed: number, byteOffset = 0): Geometry3D {
@@ -130,9 +139,9 @@ describe('GeometryAtlas vertex copy', () => {
     const atlas = new GeometryAtlas({ referenceGeometry: make(3, 0), initialVertexCapacity: 4 });
     const geometries = [make(3, 1), make(6, 2)];
     const allocations = [atlas.add(geometries[0])];
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
     allocations.push(atlas.add(geometries[1]));
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
 
     expect(atlas.geometry.attributes.aPosition.buffer.descriptor.size).toBeGreaterThan(4 * atlas.vertexStride);
 
@@ -155,7 +164,7 @@ describe('GeometryAtlas vertex copy', () => {
     const firstAlloc = atlas.add(first);
     const secondAlloc = atlas.add(second);
     const gpu = new FakeGpu();
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
 
     expect(readAttribute(gpu, firstAlloc, 'aPosition', 3)).toEqual(Array.from(first.positions));
     expect(readAttribute(gpu, secondAlloc, 'aPosition', 3)).toEqual(Array.from(second.positions));
@@ -171,7 +180,7 @@ describe('GeometryAtlas vertex copy', () => {
 
     const alloc = atlas.add(geometry);
     const gpu = new FakeGpu();
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
 
     expect(readAttribute(gpu, alloc, 'aPosition', 3)).toEqual(Array.from(positions));
     expect(readAttribute(gpu, alloc, 'aColor', 4)).toEqual(Array.from(colors));
@@ -183,13 +192,13 @@ describe('GeometryAtlas vertex copy', () => {
 
     atlas.add(makePositionsOnly(4, 0));
     atlas.add(makePositionsOnly(5, 100));
-    atlas.update(gpu.pipe);
-    expect(gpu.writes).toBe(2);
+    atlas.update(gpu.renderer);
+    expect(gpu.vertexWrites).toBe(2);
 
     atlas.add(makePositionsOnly(2, 200));
-    atlas.update(gpu.pipe);
-    atlas.update(gpu.pipe);
-    expect(gpu.writes).toBe(3);
+    atlas.update(gpu.renderer);
+    atlas.update(gpu.renderer);
+    expect(gpu.vertexWrites).toBe(3);
     expect(atlas.geometry.attributes.aPosition.buffer.data).toBeFalsy();
   });
 
@@ -201,13 +210,13 @@ describe('GeometryAtlas vertex copy', () => {
     const third = makePositionsOnly(6, 100);
     const firstAlloc = atlas.add(first);
     const secondAlloc = atlas.add(second);
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
 
     const thirdAlloc = atlas.add(third);
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
 
     expect(gpu.copies).toBe(1);
-    expect(gpu.writes).toBe(3);
+    expect(gpu.vertexWrites).toBe(3);
     expect(readAttribute(gpu, firstAlloc, 'aPosition', 3)).toEqual(Array.from(first.positions));
     expect(readAttribute(gpu, secondAlloc, 'aPosition', 3)).toEqual(Array.from(second.positions));
     expect(readAttribute(gpu, thirdAlloc, 'aPosition', 3)).toEqual(Array.from(third.positions));
@@ -218,16 +227,56 @@ describe('GeometryAtlas vertex copy', () => {
     const atlas = new GeometryAtlas({ referenceGeometry: makePositionsOnly(3, 0), initialVertexCapacity: 16 });
     const geometries = [0, 1, 2, 3].map((g) => makePositionsOnly(4, g * 50));
     const allocations = geometries.map((geometry) => atlas.add(geometry));
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
 
     atlas.remove(geometries[1]);
     atlas.defragment();
-    atlas.update(gpu.pipe);
+    atlas.update(gpu.renderer);
 
     expect(gpu.copies, 'the first stays put and the last two move together').toBe(2);
-    expect(gpu.writes).toBe(4);
+    expect(gpu.vertexWrites).toBe(4);
     for (const g of [0, 2, 3]) {
       expect(readAttribute(gpu, allocations[g], 'aPosition', 3)).toEqual(Array.from(geometries[g].positions));
+      expect(readIndices(gpu, allocations[g])).toEqual(Array.from(geometries[g].indexBuffer.data));
+    }
+  });
+
+  it('leaves the index buffer that draws recorded before a compaction read as it was', () => {
+    const gpu = new FakeGpu();
+    const atlas = new GeometryAtlas({ referenceGeometry: makePositionsOnly(3, 0), initialVertexCapacity: 16 });
+    const geometries = [0, 1, 2].map((g) => makePositionsOnly(4, g * 50));
+    const allocations = geometries.map((geometry) => atlas.add(geometry));
+    atlas.update(gpu.renderer);
+    const recordedIndexBuffer = atlas.geometry.indexBuffer;
+    const recordedAlloc = { ...allocations[2] };
+    const recorded = readIndices(gpu, recordedAlloc);
+
+    atlas.remove(geometries[1]);
+    atlas.defragment();
+    atlas.update(gpu.renderer);
+
+    expect(allocations[2].firstIndex, 'the compaction moved it').toBeLessThan(recordedAlloc.firstIndex);
+    expect(readIndices(gpu, recordedAlloc, recordedIndexBuffer)).toEqual(recorded);
+    expect(recordedIndexBuffer.destroyed, 'freed only once the frame that may draw from it is submitted').toBe(false);
+  });
+
+  it('gives a second renderer every index the first one already holds, and each one added after', () => {
+    const first = new FakeGpu();
+    const second = new FakeGpu();
+    const atlas = new GeometryAtlas({ referenceGeometry: makePositionsOnly(3, 0) });
+    const geometries = [makePositionsOnly(4, 0), makePositionsOnly(5, 50)];
+    const allocations = [atlas.add(geometries[0])];
+    atlas.update(first.renderer);
+    atlas.update(second.renderer);
+
+    allocations.push(atlas.add(geometries[1]));
+    atlas.update(first.renderer);
+    atlas.update(second.renderer);
+
+    for (const gpu of [first, second]) {
+      allocations.forEach((alloc, g) => {
+        expect(readIndices(gpu, alloc)).toEqual(Array.from(geometries[g].indexBuffer.data));
+      });
     }
   });
 
@@ -237,14 +286,14 @@ describe('GeometryAtlas vertex copy', () => {
     const atlas = new GeometryAtlas({ referenceGeometry: makePositionsOnly(3, 0), initialVertexCapacity: 8 });
     const geometries = [makePositionsOnly(4, 0), makePositionsOnly(4, 50)];
     const allocations = [atlas.add(geometries[0])];
-    atlas.update(first.pipe);
-    atlas.update(second.pipe);
+    atlas.update(first.renderer);
+    atlas.update(second.renderer);
 
     allocations.push(atlas.add(geometries[1]));
-    atlas.update(first.pipe);
-    atlas.update(second.pipe);
+    atlas.update(first.renderer);
+    atlas.update(second.renderer);
     second.loseContext(atlas);
-    atlas.update(second.pipe);
+    atlas.update(second.renderer);
 
     for (const gpu of [first, second]) {
       allocations.forEach((alloc, g) => {

@@ -1,5 +1,5 @@
 import { getApp } from '@test-utils';
-import { BufferImageSource, CubeTexture, Geometry, Texture } from 'pixi.js';
+import { BufferImageSource, CubeTexture, Texture } from 'pixi.js';
 import type { Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
@@ -21,7 +21,6 @@ interface AtlasProbe {
 
 interface RendererProbe {
   geometry: { _managedGeometries: { items: Record<string, unknown> } };
-  retire3d: { _retired: unknown[] };
   renderPipes: { view3d: { atlasPool: { _atlases: Record<string, AtlasProbe[]> } } };
 }
 
@@ -104,15 +103,17 @@ describe('pass- and atlas-owned geometries leave the WebGL geometry hash when de
       app.render();
       app.render();
 
+      const atlases = Object.values(renderer.renderPipes.view3d.atlasPool._atlases).flat();
+      const retired = atlases.map((atlas) => atlas.geometry!.uid);
+
       for (let i = 0; i < CUBES_PAST_ATLAS_CAPACITY; i++) view3d.root.addChild(cubeMesh(material));
       app.render();
 
-      const atlases = Object.values(renderer.renderPipes.view3d.atlasPool._atlases).flat();
-      const retired = renderer.retire3d._retired
-        .filter((resource) => resource instanceof Geometry)
-        .map((wrapper) => wrapper.uid);
-      expect(retired.length).toBeGreaterThan(0);
-      expect(managedCount(renderer, retired)).toBeGreaterThan(0);
+      expect(
+        atlases.map((atlas) => atlas.geometry!.uid),
+        'growth replaced each wrapper',
+      ).not.toEqual(retired);
+      expect(managedCount(renderer, retired)).toBe(retired.length);
 
       app.render();
       expect(managedCount(renderer, retired)).toBe(0);

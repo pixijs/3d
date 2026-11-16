@@ -2,6 +2,7 @@ import { BufferUsage, RendererType, Texture } from 'pixi.js';
 import type { BufferImageSource, BufferResource } from 'pixi.js';
 
 import type { BaseMaterial3D, MaterialUploadQueue } from '../../materials/BaseMaterial3D';
+import { retire } from '../RetireSystem';
 import { Buffer3D } from './Buffer3D';
 import {
   alignToDataTextureRows,
@@ -35,7 +36,6 @@ interface MaterialDataStoreBufferOptions {
  */
 export class MaterialDataStoreBuffer implements MaterialUploadQueue {
   public data: Float32Array;
-  private readonly _retiredTextures: Texture[] = [];
 
   /** Growth replaces it, so read it each frame rather than holding it */
   public texture: Texture<BufferImageSource>;
@@ -43,7 +43,6 @@ export class MaterialDataStoreBuffer implements MaterialUploadQueue {
   /** The uniform view, `null` until a {@link uniformResource} call and again after growth retires it */
   private _buffer: Buffer3D | null = null;
 
-  private readonly _retiredBuffers: Buffer3D[] = [];
   private readonly _alignment: number = 0;
   private readonly _texelsPerUnit: number = 0;
   private _end = 0;
@@ -214,16 +213,11 @@ export class MaterialDataStoreBuffer implements MaterialUploadQueue {
     if (!this.data) return;
 
     this._buffer?.destroy();
-    for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
-
-    for (let i = 0; i < this._retiredTextures.length; i++) this._retiredTextures[i].destroy(true);
 
     this.texture.destroy(true);
 
     (this.data as Float32Array | null) = null;
     this._buffer = null;
-    (this._retiredBuffers as Buffer3D[] | null) = null;
-    (this._retiredTextures as Texture[] | null) = null;
     (this.texture as Texture<BufferImageSource> | null) = null;
 
     (this._freePlaces as Map<number, number[]> | null) = null;
@@ -267,11 +261,11 @@ export class MaterialDataStoreBuffer implements MaterialUploadQueue {
     newData.set(this.data);
     this.data = newData;
 
-    this._retiredTextures.push(this.texture);
+    retire(this.texture.source);
     this.texture = new Texture({ source: createDataTextureSource(this.data) });
 
     if (this._buffer) {
-      this._retiredBuffers.push(this._buffer);
+      retire(this._buffer);
       this._buffer = null;
     }
 

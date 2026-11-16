@@ -1,6 +1,7 @@
 import type { Buffer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { RetireSystem } from '~/core/RetireSystem';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { GeometryAtlas } from '~/geometry/GeometryAtlas';
 
@@ -10,7 +11,7 @@ interface AtlasBuffers {
 }
 
 describe('GeometryAtlas.destroy', () => {
-  it('frees the vertex/index buffers and merged geometry orphaned by capacity growth', () => {
+  it('frees the vertex/index buffers and merged geometry orphaned by capacity growth once the retire list empties', () => {
     const reference = new Geometry3D({
       positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
       indices: new Uint32Array([0, 1, 2]),
@@ -39,6 +40,7 @@ describe('GeometryAtlas.destroy', () => {
     expect(initialVertexBuffer.destroyed).toBe(false);
 
     atlas.destroy();
+    new RetireSystem().prerender();
 
     expect(initialVertexBuffer.destroyed).toBe(true);
     expect(initialIndexBuffer.destroyed).toBe(true);

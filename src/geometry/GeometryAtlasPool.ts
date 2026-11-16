@@ -1,6 +1,6 @@
 import { GlobalResourceRegistry, warn } from 'pixi.js';
+import type { WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
-import type { View3DPipe } from '../core/View3DPipe';
 import type { Geometry3D } from './Geometry3D';
 import { GeometryAtlas } from './GeometryAtlas';
 import type { GeometryAllocation } from './GeometryAtlas';
@@ -100,9 +100,9 @@ export class GeometryAtlasPool {
   }
 
   /** Brings the renderer's copy of every atlas up to date, so call it after this frame's `allocate` calls and before drawing */
-  public update(pipe: View3DPipe): void {
+  public update(renderer: WebGLRenderer | WebGPURenderer): void {
     for (const key in this._atlases) {
-      for (const atlas of this._atlases[key]) atlas.update(pipe);
+      for (const atlas of this._atlases[key]) atlas.update(renderer);
     }
   }
 

@@ -30,7 +30,7 @@ describe('GeometryAtlas maxBufferBytes', () => {
 
     const vertexBuffer = Object.values(atlas.geometry.attributes)[0].buffer;
     expect(vertexBuffer.descriptor.size, 'doubling would make 2048 vertices').toBe(1500 * POSITION_ONLY_STRIDE);
-    expect(atlas.geometry.indexBuffer.data.byteLength).toBeLessThanOrEqual(1500 * POSITION_ONLY_STRIDE);
+    expect(atlas.geometry.indexBuffer.descriptor.size).toBeLessThanOrEqual(1500 * POSITION_ONLY_STRIDE);
   });
 
   it('counts dead ranges as room, since add compacts them first', () => {
@@ -64,7 +64,7 @@ describe('GeometryAtlasPool maxBufferBytes', () => {
       expect(Object.values(atlas.geometry.attributes)[0].buffer.descriptor.size).toBeLessThanOrEqual(
         1500 * POSITION_ONLY_STRIDE,
       );
-      expect(atlas.geometry.indexBuffer.data.byteLength).toBeLessThanOrEqual(1500 * POSITION_ONLY_STRIDE);
+      expect(atlas.geometry.indexBuffer.descriptor.size).toBeLessThanOrEqual(1500 * POSITION_ONLY_STRIDE);
     }
   });
 

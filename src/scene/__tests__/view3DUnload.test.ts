@@ -359,25 +359,24 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('frees the buffers and textures growth retired', async () => {
+    it('frees the buffer and texture growth replaced on the next render', async () => {
       await withApp('view-unload-retired', (app) => {
         const { view3d } = buildScene(app);
+        app.render();
 
-        const bonePit = view3d._bonePit as unknown as { _retiredBuffers: unknown[] };
         const store = view3d._sceneBatch.storeBuffer as unknown as {
-          _retiredBuffers: unknown[];
-          _retiredTextures: unknown[];
+          _buffer: { destroyed: boolean } | null;
+          _texture: { source: { destroyed: boolean } } | null;
         };
+        const replaced = [store._buffer, store._texture?.source].filter((view) => view != null);
+        expect(replaced.length).toBeGreaterThan(0);
+
         growStores(view3d);
         app.render();
-        const retired = bonePit._retiredBuffers.length + store._retiredBuffers.length + store._retiredTextures.length;
-        expect(retired).toBeGreaterThan(0);
+        expect(replaced.some((view) => view.destroyed)).toBe(false);
 
-        view3d.unload();
-
-        expect(bonePit._retiredBuffers.length).toBe(0);
-        expect(store._retiredBuffers.length).toBe(0);
-        expect(store._retiredTextures.length).toBe(0);
+        app.render();
+        expect(replaced.every((view) => view.destroyed)).toBe(true);
       });
     });
 

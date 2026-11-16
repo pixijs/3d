@@ -3,6 +3,7 @@ import type { Buffer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { MaterialDataStoreBuffer } from '~/core/buffers/MaterialDataStoreBuffer';
+import { RetireSystem } from '~/core/RetireSystem';
 import type { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
@@ -12,7 +13,6 @@ const BYTES_PER_TEXEL = 16;
 interface StoreProbe {
   _alignment: number;
   _buffer: Buffer | null;
-  _retiredBuffers: Buffer[] | null;
 }
 
 const probe = (store: MaterialDataStoreBuffer): StoreProbe => store as unknown as StoreProbe;
@@ -101,7 +101,7 @@ for (const alignment of [256, 32]) {
       c.destroy();
     });
 
-    it('destroy() frees the buffer and the retired buffers, a second call does nothing, and the material lets its resource go', () => {
+    it('destroy() frees the buffer, the retire list the retired ones, a second call does nothing, and the material lets its resource go', () => {
       const store = new MaterialDataStoreBuffer({ alignment, rendererType: RendererType.WEBGPU });
       const material = new Material3D();
       store.register(material);
@@ -112,13 +112,13 @@ for (const alignment of [256, 32]) {
       const live = resource.buffer;
 
       store.destroy();
+      new RetireSystem().prerender();
 
-      expect(retired.destroyed, 'the GC never frees a retired buffer, so destroy has to').toBe(true);
+      expect(retired.destroyed, 'the GC never frees a retired buffer, so the retire list has to').toBe(true);
       expect(live.destroyed).toBe(true);
       expect(resource.destroyed, 'the store owns no resource; the buffer under it is gone').toBe(false);
       expect(other.destroyed).toBe(false);
       expect(probe(store)._buffer).toBeNull();
-      expect(probe(store)._retiredBuffers).toBeNull();
       expect(store.data).toBeNull();
       expect(() => store.destroy()).not.toThrow();
 
