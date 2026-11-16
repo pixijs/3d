@@ -2,7 +2,7 @@ import { BufferUsage, RendererType, Texture } from 'pixi.js';
 import type { BufferImageSource, BufferResource } from 'pixi.js';
 
 import type { BaseMaterial3D, MaterialUploadQueue } from '../../materials/BaseMaterial3D';
-import { retire } from '../RetireSystem';
+import { retire } from '../retire';
 import { Buffer3D } from './Buffer3D';
 import {
   alignToDataTextureRows,

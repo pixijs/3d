@@ -88,7 +88,7 @@ describe('pass- and atlas-owned geometries leave the WebGL geometry hash when de
     }
   });
 
-  it('drops each retired atlas wrapper on the next render, and the live one when the GeometryAtlas is destroyed', async () => {
+  it('drops each retired atlas wrapper after the microtask, and the live one when the GeometryAtlas is destroyed', async () => {
     const app = await getApp<Renderer>({
       id: 'gl-geometry-release-atlas',
       appOptions: { preference: 'webgl', width: SIZE, height: SIZE },
@@ -115,7 +115,7 @@ describe('pass- and atlas-owned geometries leave the WebGL geometry hash when de
       ).not.toEqual(retired);
       expect(managedCount(renderer, retired)).toBe(retired.length);
 
-      app.render();
+      await Promise.resolve();
       expect(managedCount(renderer, retired)).toBe(0);
 
       const live = atlases.map((atlas) => atlas.geometry?.uid).filter((uid): uid is number => uid != null);

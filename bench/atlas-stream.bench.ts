@@ -5,8 +5,9 @@
  * `copyBufferToBuffer` cost the CPU. The snapshot hashes the final vertex buffer as that fake GPU holds it.
  */
 
-import { Geometry3D, GeometryAtlas, RetireSystem } from '@pixi/3d';
+import { Geometry3D, GeometryAtlas } from '@pixi/3d';
 import { cpu } from 'benchy';
+import type { CpuGenerator } from 'benchy';
 import type { Buffer } from 'pixi.js';
 
 import { mulberry32 } from './data/rng.ts';
@@ -15,10 +16,33 @@ import { mulberry32 } from './data/rng.ts';
 const GEOMETRIES = 200;
 const VERTICES = 2_000;
 
+const microtasks: VoidFunction[] = [];
+
+function flushMicrotasks(): void {
+  for (let i = 0; i < microtasks.length; i++) microtasks[i]();
+  microtasks.length = 0;
+}
+
+/**
+ * CPU samples are synchronous, so fake frames drain retirement without measuring the host's microtask scheduling.
+ * @yields The timed sample and its snapshot
+ */
+function* withMicrotasks(bench: CpuGenerator) {
+  const queue = globalThis.queueMicrotask;
+  globalThis.queueMicrotask = (callback) => {
+    microtasks.push(callback);
+  };
+  try {
+    return yield* bench();
+  } finally {
+    globalThis.queueMicrotask = queue;
+    flushMicrotasks();
+  }
+}
+
 class FakeGpu {
   public readonly uid = 1;
   private readonly _memory = new Map<Buffer, Uint8Array>();
-  private readonly _retireSystem = new RetireSystem();
 
   public bytes(buffer: Buffer): Uint8Array {
     let memory = this._memory.get(buffer);
@@ -36,9 +60,9 @@ class FakeGpu {
     },
   };
 
-  /** What the next render's `RetireSystem` does, and the GPU memory that frees */
+  /** Ends the fake frame and releases its retired GPU memory. */
   public releaseRetired(): void {
-    this._retireSystem.prerender();
+    flushMicrotasks();
     for (const buffer of this._memory.keys()) if (buffer.destroyed) this._memory.delete(buffer);
   }
 }
@@ -128,6 +152,6 @@ function* swapHalf() {
   for (const geometry of geometries) geometry.destroy();
 }
 
-cpu('stream 200 geometries of 2k vertices into an atlas, one a frame', () => streamIn());
+cpu('stream 200 geometries of 2k vertices into an atlas, one a frame', () => withMicrotasks(streamIn));
 
-cpu('swap half of 200 geometries out and stream them back, one a frame', () => swapHalf());
+cpu('swap half of 200 geometries out and stream them back, one a frame', () => withMicrotasks(swapHalf));

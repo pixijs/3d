@@ -1,4 +1,5 @@
 import { expectCleanRender, getApp } from '@test-utils';
+import { RenderContainer } from 'pixi.js';
 import type { Buffer, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
@@ -29,13 +30,19 @@ function addView(stage: { addChild(child: View3D): unknown }, x: number): View3D
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`geometry atlas release (${preference})`, () => {
-    it('keeps a buffer growth replaced through that render, for a View that already drew from it, and frees it on the next', async () => {
+    it('keeps replaced buffers through nested renders and renderer destruction, then frees them in a microtask', async () => {
       const app = await getApp<Renderer>({
         id: `geometry-atlas-release-growth-${preference}`,
         appOptions: { preference, width: SIZE * 2, height: SIZE, autoStart: false },
       });
+      const nested = await getApp<Renderer>({
+        id: `geometry-atlas-release-nested-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE, autoStart: false },
+      });
 
       try {
+        expect(app.renderer.name).toBe(preference);
+        expect(nested.renderer.name).toBe(preference);
         const material = new Material3D({ baseColor: 0x3388cc, metallic: 0, roughness: 0.5 });
         const first = cubeMesh(material);
         addView(app.stage, 0).root.addChild(first);
@@ -44,13 +51,26 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
         const outgrown = atlasVertexBuffer(first.geometry);
         for (let i = 0; i < CUBES_PAST_ATLAS_CAPACITY; i++) second.root.addChild(cubeMesh(material));
-        await expectCleanRender(app);
+        let nestedRenders = 0;
+        const nestedRender = new RenderContainer(() => {
+          expect(atlasVertexBuffer(first.geometry)).not.toBe(outgrown);
+          nested.render();
+          expect(outgrown.destroyed).toBe(false);
+          nested.destroy({ removeView: true }, { children: true });
+          expect(outgrown.destroyed).toBe(false);
+          nestedRenders++;
+        });
+        app.stage.addChild(nestedRender);
+        const rendered = expectCleanRender(app);
         expect(atlasVertexBuffer(first.geometry), 'the second View grew the atlas').not.toBe(outgrown);
         expect(outgrown.destroyed).toBe(false);
-
-        await expectCleanRender(app);
+        expect(nestedRenders).toBe(1);
+        await rendered;
         expect(outgrown.destroyed).toBe(true);
+        nestedRender.destroy();
+        await expectCleanRender(app);
       } finally {
+        if (nested.renderer) nested.destroy({ removeView: true }, { children: true });
         app.destroy(true, { children: true });
       }
     });
@@ -68,10 +88,11 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
       const outgrown = atlasVertexBuffer(first.geometry);
       for (let i = 0; i < CUBES_PAST_ATLAS_CAPACITY; i++) view3d.root.addChild(cubeMesh(material));
-      await expectCleanRender(app);
+      const rendered = expectCleanRender(app);
       expect(outgrown.destroyed).toBe(false);
 
       app.destroy(true, { children: true });
+      await rendered;
       expect(outgrown.destroyed).toBe(true);
     });
   });

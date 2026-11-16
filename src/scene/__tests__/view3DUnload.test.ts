@@ -359,8 +359,8 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
     });
 
-    it('frees the buffer and texture growth replaced on the next render', async () => {
-      await withApp('view-unload-retired', (app) => {
+    it('frees the buffer and texture growth replaced after the microtask', async () => {
+      await withApp('view-unload-retired', async (app) => {
         const { view3d } = buildScene(app);
         app.render();
 
@@ -375,7 +375,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         app.render();
         expect(replaced.some((view) => view.destroyed)).toBe(false);
 
-        app.render();
+        await Promise.resolve();
         expect(replaced.every((view) => view.destroyed)).toBe(true);
       });
     });

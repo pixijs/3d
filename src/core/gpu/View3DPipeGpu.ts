@@ -127,7 +127,6 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
       );
     }
 
-    this.atlasPool.maxBufferBytes = gpu.device.limits.maxBufferSize;
     this.atlasPool.invalidateUploads(this.renderer.uid);
 
     this.materialStoreBuffer ??= new MaterialDataStoreBuffer({

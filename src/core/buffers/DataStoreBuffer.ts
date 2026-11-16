@@ -1,7 +1,7 @@
 import { Texture, BufferResource, BufferUsage, warn } from 'pixi.js';
 import type { BufferImageSource } from 'pixi.js';
 
-import { retire } from '../RetireSystem';
+import { retire } from '../retire';
 import { Buffer3D } from './Buffer3D';
 import { alignToDataTextureRows, createDataTextureSource, uploadFloatRange } from './dataTextureLayout';
 import { BUFFER_CALL_BYTES, BUFFER_SPAN_FLOOR_BYTES, DirtySlots, TEXTURE_CALL_BYTES } from './DirtySlots';

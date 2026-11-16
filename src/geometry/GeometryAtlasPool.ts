@@ -2,7 +2,7 @@ import { GlobalResourceRegistry, warn } from 'pixi.js';
 import type { WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
 import type { Geometry3D } from './Geometry3D';
-import { GeometryAtlas } from './GeometryAtlas';
+import { GeometryAtlas, MAX_ATLAS_BUFFER_BYTES } from './GeometryAtlas';
 import type { GeometryAllocation } from './GeometryAtlas';
 
 interface GeometryAtlasPoolOptions {
@@ -16,11 +16,10 @@ const sharedPools: Record<string, GeometryAtlasPool> = Object.create(null);
  * @internal
  */
 export class GeometryAtlasPool {
-  /** Per attribute layout; a layout opens another atlas only when the others would pass `maxBufferBytes` */
+  /** Per attribute layout; a layout opens another atlas only when the others would pass the buffer cap */
   private _atlases: Record<string, GeometryAtlas[]> = Object.create(null);
   private readonly _rebaseIndices: boolean;
   private _bufferVersion = 0;
-  private _maxBufferBytes = Infinity;
 
   constructor(options: GeometryAtlasPoolOptions) {
     this._rebaseIndices = options.rebaseIndices;
@@ -45,18 +44,6 @@ export class GeometryAtlasPool {
     return pool;
   }
 
-  /** Only ever lowers, since renderers sharing the pool may have different devices */
-  get maxBufferBytes(): number {
-    return this._maxBufferBytes;
-  }
-
-  set maxBufferBytes(bytes: number) {
-    this._maxBufferBytes = Math.min(this._maxBufferBytes, bytes);
-    for (const key in this._atlases) {
-      for (const atlas of this._atlases[key]) atlas.maxBufferBytes = this._maxBufferBytes;
-    }
-  }
-
   /** Bumped when an `allocate` grows or compacts an atlas; a removal never bumps it */
   get bufferVersion(): number {
     return this._bufferVersion;
@@ -79,14 +66,13 @@ export class GeometryAtlasPool {
       atlas = new GeometryAtlas({
         referenceGeometry: geometry,
         rebaseIndices: this._rebaseIndices,
-        maxBufferBytes: this._maxBufferBytes,
       });
       atlases.push(atlas);
 
       if (!atlas.fits(geometry)) {
         warn(
-          `GeometryAtlasPool: a geometry of ${geometry.vertexCount} vertices passes the device's maxBufferSize ` +
-            `(${this._maxBufferBytes} bytes) once interleaved, so every frame that draws it fails. ` +
+          `GeometryAtlasPool: a geometry of ${geometry.vertexCount} vertices exceeds the atlas buffer cap ` +
+            `(${MAX_ATLAS_BUFFER_BYTES} bytes) once interleaved. ` +
             `Make it dynamic to draw it from its own buffers.`,
         );
       }

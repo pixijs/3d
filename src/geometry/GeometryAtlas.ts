@@ -2,7 +2,7 @@ import { BufferUsage, getAttributeInfoFromFormat, Geometry, uid } from 'pixi.js'
 import type { VertexFormat, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
 import { Buffer3D } from '../core/buffers/Buffer3D';
-import { retire } from '../core/RetireSystem';
+import { retire } from '../core/retire';
 import type { Geometry3D } from './Geometry3D';
 import { alignTo4Bytes } from './utils/Geometry3DUtils';
 
@@ -24,12 +24,17 @@ export interface GeometryAllocation {
 const DEFAULT_VERTEX_CAPACITY = 1024;
 const DEFAULT_INDEX_CAPACITY = 2048;
 
+/**
+ * WebGPU's default maxBufferSize, shared by every renderer using the pool
+ * @internal
+ */
+export const MAX_ATLAS_BUFFER_BYTES = 256 * 1024 * 1024;
+
 interface GeometryAtlasOptions {
   referenceGeometry: Geometry3D;
   initialVertexCapacity?: number;
   initialIndexCapacity?: number;
   rebaseIndices?: boolean;
-  maxBufferBytes?: number;
 }
 
 /** @internal */
@@ -73,20 +78,15 @@ export class GeometryAtlas {
   /** Whether `add` bakes `baseVertex` into the index values, for WebGL 2, which has no `baseVertex` draw parameter */
   public readonly rebaseIndices: boolean;
 
-  /** WebGPU's `maxBufferSize`: a bigger buffer is invalid, and so is every command buffer that draws from it */
-  public maxBufferBytes = Infinity;
-
   constructor(options: GeometryAtlasOptions) {
     const {
       referenceGeometry,
       initialVertexCapacity = DEFAULT_VERTEX_CAPACITY,
       initialIndexCapacity = DEFAULT_INDEX_CAPACITY,
       rebaseIndices = false,
-      maxBufferBytes = Infinity,
     } = options;
 
     this.rebaseIndices = rebaseIndices;
-    this.maxBufferBytes = maxBufferBytes;
 
     this.attributeKey = referenceGeometry.attributeKey;
 
@@ -167,6 +167,7 @@ export class GeometryAtlas {
         }
         this._ensureVertexCapacity(this._vertexCount + vertexCount);
         this._ensureIndexCapacity(this._indexCount + indexCount);
+        this._rebuildGeometry();
       }
     }
 
@@ -441,11 +442,9 @@ export class GeometryAtlas {
     return geo;
   }
 
-  private _retireCurrentGeometry(): void {
-    if (this.geometry) {
-      this.geometry.indexBuffer = null!;
-      retire(this.geometry);
-    }
+  private _rebuildGeometry(): void {
+    retire(this.geometry);
+    this.geometry = this._buildMergedGeometry();
   }
 
   /** Counts dead ranges as room, since `add` compacts them before it grows */
@@ -453,7 +452,7 @@ export class GeometryAtlas {
     const vertices = this._vertexCount - this._deadVertexCount + geometry.vertexCount;
     const indices = this._indexCount - this._deadIndexCount + geometry.indexBuffer.data.length;
 
-    return vertices * this.vertexStride <= this.maxBufferBytes && indices * 4 <= this.maxBufferBytes;
+    return vertices * this.vertexStride <= MAX_ATLAS_BUFFER_BYTES && indices * 4 <= MAX_ATLAS_BUFFER_BYTES;
   }
 
   private _ensureVertexCapacity(requiredVertices: number): void {
@@ -461,7 +460,7 @@ export class GeometryAtlas {
     if (requiredVertices <= capacity) return;
 
     while (capacity < requiredVertices) capacity *= 2;
-    capacity = Math.max(requiredVertices, Math.min(capacity, Math.floor(this.maxBufferBytes / this.vertexStride)));
+    capacity = Math.max(requiredVertices, Math.min(capacity, Math.floor(MAX_ATLAS_BUFFER_BYTES / this.vertexStride)));
 
     this._replaceVertexBuffer(capacity);
   }
@@ -491,8 +490,6 @@ export class GeometryAtlas {
     this._vertexBuffer = this._createVertexBuffer(capacity);
     this._vertexBufferFilled = false;
 
-    this._retireCurrentGeometry();
-    this.geometry = this._buildMergedGeometry();
     this._bufferVersion++;
   }
 
@@ -501,7 +498,7 @@ export class GeometryAtlas {
     if (requiredIndices <= capacity) return;
 
     while (capacity < requiredIndices) capacity *= 2;
-    capacity = Math.max(requiredIndices, Math.min(capacity, Math.floor(this.maxBufferBytes / 4)));
+    capacity = Math.max(requiredIndices, Math.min(capacity, Math.floor(MAX_ATLAS_BUFFER_BYTES / 4)));
 
     this._replaceIndexBuffer(capacity);
   }
@@ -527,8 +524,6 @@ export class GeometryAtlas {
     retire(this._indexBuffer);
     this._indexBuffer = this._createIndexBuffer(capacity);
 
-    this._retireCurrentGeometry();
-    this.geometry = this._buildMergedGeometry();
     this._bufferVersion++;
   }
 
@@ -540,7 +535,6 @@ export class GeometryAtlas {
   public destroy(): void {
     if (this._vertexBuffer === null) return;
 
-    if (this.geometry) this.geometry.indexBuffer = null!;
     this.geometry?.destroy(false);
     this.geometry = null!;
 
@@ -577,6 +571,7 @@ export class GeometryAtlas {
 
     if (verticesMove) this._replaceVertexBuffer(this._vertexCapacity);
     if (indicesMove || (this.rebaseIndices && verticesMove)) this._replaceIndexBuffer(this._indexCapacity);
+    if (verticesMove || indicesMove) this._rebuildGeometry();
 
     writeVertex = 0;
     writeIndex = 0;

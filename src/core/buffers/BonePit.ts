@@ -1,7 +1,7 @@
 import { BufferImageSource, BufferResource, BufferUsage, Texture } from 'pixi.js';
 
 import type { Skeleton } from '../../scene/Skeleton';
-import { retire } from '../RetireSystem';
+import { retire } from '../retire';
 import { Buffer3D } from './Buffer3D';
 import { alignToDataTextureRows, dataTextureSize, uploadFloatRange } from './dataTextureLayout';
 

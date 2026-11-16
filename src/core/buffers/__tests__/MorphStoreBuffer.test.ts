@@ -2,7 +2,6 @@ import { captureWarnings } from '@test-utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import { MorphStoreBuffer } from '~/core/buffers/MorphStoreBuffer';
-import { RetireSystem } from '~/core/RetireSystem';
 import type { Geometry3D } from '~/geometry/Geometry3D';
 import type { Mesh3D } from '~/scene/Mesh3D';
 import { Morph } from '~/scene/Morph';
@@ -51,7 +50,7 @@ const syncable = (weights: number[]): Mesh3D =>
   }) as unknown as Mesh3D;
 
 describe('MorphStoreBuffer', () => {
-  it('keeps grown-away buffers alive for in-flight bundles and frees them once the retire list empties', () => {
+  it('keeps grown-away buffers alive for in-flight bundles and frees them once the retire list empties', async () => {
     const store = new MorphStoreBuffer({ deltaCapacity: 64, weightCapacity: 8 });
     const first = store.buffer;
 
@@ -60,7 +59,7 @@ describe('MorphStoreBuffer', () => {
     expect(store.buffer, '512 floats of deltas outgrow the 64-float arena').not.toBe(first);
     expect(first.destroyed, 'replaced, not destroyed: bundles recorded with it may still be in flight').toBe(false);
 
-    new RetireSystem().prerender();
+    await Promise.resolve();
     expect(first.destroyed, 'the GC never frees a retired buffer, so the retire list has to').toBe(true);
     store.destroy();
   });

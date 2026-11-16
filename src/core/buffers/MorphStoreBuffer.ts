@@ -3,7 +3,7 @@ import { BufferImageSource, BufferResource, BufferUsage, Texture, warn } from 'p
 import type { Geometry3D } from '../../geometry/Geometry3D';
 import type { Mesh3D } from '../../scene/Mesh3D';
 import type { Morph } from '../../scene/Morph';
-import { retire } from '../RetireSystem';
+import { retire } from '../retire';
 import { Buffer3D } from './Buffer3D';
 import { alignToDataTextureRows, dataTextureSize, uploadFloatRange } from './dataTextureLayout';
 
