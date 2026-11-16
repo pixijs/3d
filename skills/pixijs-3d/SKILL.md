@@ -1,6 +1,6 @@
 ---
 name: pixijs-3d
-description: 'Use this skill whenever writing or editing code that uses PixiJS 3D (@pixi/3d): scenes, View3D, Mesh3D, Model3D, lights, shadows, cameras, OrbitCamera, FPSCamera, materials, Material3D, textures, glTF models and animation, BatchedMesh3D instancing, picking and pointer events, post-processing (bloom, SSAO), particles, render to texture, ContainerTexture, custom shader bits, 2D HUD over 3D, Sprite3D billboards, tone mapping and HDR environments, scene graph and transforms (local and world space, reparenting, bounds), vector and quaternion math (Vector3, Quaternion, Matrix4, slerp, Box, Ray, Plane, Frustum), porting a Three.js app. Read it before writing any @pixi/3d code: the API is new and differs from Three.js and from pixi3d, an older, unrelated npm package. Triggers on: @pixi/3d, pixi 3d, PixiJS 3D, View3D, Mesh3D, Model3D, Camera3D, Container3D, 3D scene in pixi, port or convert from Three.js.'
+description: 'Use this skill whenever writing or editing code that uses PixiJS 3D (@pixi/3d): scenes, View3D, Mesh3D, Model3D, lights, shadows, cameras, OrbitCamera, FPSCamera, materials, Material3D, textures, glTF models and animation, BatchedMesh3D instancing, picking and pointer events, raycasts and collision against mesh triangles (BVH, three-mesh-bvh), post-processing (bloom, SSAO), particles, render to texture, ContainerTexture, custom shader bits, 2D HUD over 3D, Sprite3D billboards, tone mapping and HDR environments, scene graph and transforms (local and world space, reparenting, bounds), vector and quaternion math (Vector3, Quaternion, Matrix4, slerp, Box, Ray, Plane, Frustum), porting a Three.js app. Read it before writing any @pixi/3d code: the API is new and differs from Three.js and from pixi3d, an older, unrelated npm package. Triggers on: @pixi/3d, pixi 3d, PixiJS 3D, View3D, Mesh3D, Model3D, Camera3D, Container3D, 3D scene in pixi, port or convert from Three.js.'
 license: MIT
 ---
 
@@ -140,13 +140,14 @@ Each line is the fix; its link owns the rule. These run without errors and draw 
 - Most bones aren't scene nodes, so `getChildByLabel('Hand', true)` returns null: use `model.skeletons[0]`. [models-and-animation](references/models-and-animation.md)
 - Write into `mesh.weights`; assigning a new array disconnects it from the clips that animate it. [models-and-animation](references/models-and-animation.md)
 - A `Mesh3D` with no geometry or material draws nothing and raises no error. [geometry](references/geometry.md)
+- Edits to a geometry's arrays show only after `geometry.unload()`, or `update()` on the edited buffer of a `dynamic: true` geometry; the same call makes `geometry.bvh` refit. Culling and picking keep testing the box the geometry was built with, so build one you'll edit with a `bounds3D` option big enough for every shape. [geometry](references/geometry.md)
 
 **Input and cameras**
 
 - `OrbitCamera`, `FPSCamera`, `ParticleSystem3D` and a model's animation `player` update themselves on `Ticker.shared`, not `app.ticker`, so their step can land after your frame's code or a frame late: pass `autoUpdate: false` and call `update(ticker)` from your `app.ticker` callback when order matters (`orbit.update()` returns `true` when the camera moved). [cameras](references/cameras.md)
 
 - 3D nodes default to `eventMode: 'passive'`: set `'static'` (also a `Mesh3D` option) or nothing picks. `pointertap` fires for every mouse button, so check `e.button`. [picking-and-input](references/picking-and-input.md)
-- Reading `geometry.bvh` builds a bounding volume hierarchy (about 20 ms per 100,000 triangles) and builds it again on the first read after any vertex write: never read it every frame on a geometry you rewrite every frame. Picking reads it for you, and only on non-dynamic geometry. [picking-and-input](references/picking-and-input.md)
+- `geometry.bvh` queries work in the mesh's local space: move a world ray in with `applyMatrix4` and the inverse of `mesh.getGlobalTransform()`, and a hit back out with the transform itself; distances come back in local units. It's `null` on quantized or `interleave: true` positions, so `bvh?.` reads as a miss there, and it ignores skinning and morph targets. [picking-and-input](references/picking-and-input.md)
 - A full-screen view hit-tests its whole rectangle, so it blocks clicks to 2D objects behind it: put interactive 2D above the view or set `view.hitArea`. [2d-and-3d-together](references/2d-and-3d-together.md)
 - `OrbitCamera.enabled = false` only stops input; `update()` keeps re-aiming the camera, so also set `autoUpdate = false` (or `destroy()`) before moving the camera yourself. [cameras](references/cameras.md)
 - `FPSCamera` walking follows the pitch, so looking down sinks the camera: re-pin `position.y` after `update()` for a ground walker. [cameras](references/cameras.md)
@@ -178,7 +179,7 @@ Each line is the fix; its link owns the rule. These run without errors and draw 
 | PBR, unlit, toon, emissive, transparency, textures                                                                                                                            | `references/materials.md`            |
 | built-in geometries, custom vertex data, terrain, lines and points                                                                                                            | `references/geometry.md`             |
 | thousands of instances, per-instance data, batching, LOD                                                                                                                      | `references/instancing.md`           |
-| click, hover, drag, raycast, screen-to-world, keyboard                                                                                                                        | `references/picking-and-input.md`    |
+| click, hover, drag, raycast, screen-to-world, keyboard, triangle BVH: ground height, line of sight, closest point, collision                                                  | `references/picking-and-input.md`    |
 | camera control, orbit, first-person, orthographic, clipping, follow                                                                                                           | `references/cameras.md`              |
 | skybox, cubemaps, HDR (.hdr), image-based lighting, fog, tone mapping                                                                                                         | `references/environment-and-sky.md`  |
 | bloom, SSAO, tilt-shift, motion blur, FXAA, effect order, scene resolution                                                                                                    | `references/post-processing.md`      |
@@ -206,6 +207,7 @@ Each line is the fix; its link owns the rule. These run without errors and draw 
 | AnimationMixer                                           | `model.player`                                                     |
 | InstancedMesh                                            | `BatchedMesh3D`                                                    |
 | Raycaster                                                | pointer events on meshes, or `view.raycast`                        |
+| three-mesh-bvh                                           | `geometry.bvh`, built in                                           |
 | Box3                                                     | `node.getLocalBounds()`                                            |
 | EffectComposer                                           | `view.passes` with effects from extras                             |
 | CSS2DRenderer                                            | Pixi `Text` on the stage + `worldToScreen`                         |

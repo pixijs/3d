@@ -16,8 +16,8 @@ pointer events, `raycast` picks whatever point you hand it, whenever you call it
 - `createRaycastHit3D()`: the one `RaycastHit3D` passed as `out` every frame. The pane shows its `target`, `point`,
   `localPoint` (in the shape's own space), `distance`, `normal`, `uv` and `triangleIndex`.
 - `Mesh3D` `eventMode = 'static'` puts the shapes in the pick; the floor keeps `'passive'` and is never hit.
-  `hitVolume` `'geometry'` tests every triangle, so a hit carries a `normal`, `uv` and `triangleIndex`; `'box'` tests
-  the bounds alone, so they stay zero and -1.
+  `hitVolume` `'geometry'` tests the triangles themselves, so a hit carries a `normal`, `uv` and `triangleIndex`;
+  `'box'` tests the bounds alone, so they stay zero and -1.
 - `View3D` `screenToRay(position, out, true)`: the ray the pick cast, for the side view, which meets the floor's
   `Plane` with `Ray` `intersectPlane` on a miss. `Matrix4` `extractBasis` reads the camera's axes for it.
 - `Container3D`: the turntable, turned by `rotation.y`. `Vector3` and `Vector2` hold the hit's values.

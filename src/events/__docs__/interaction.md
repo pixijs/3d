@@ -44,7 +44,7 @@ mesh.hitVolume = new CapsuleGeometry(); // a simpler stand-in mesh, tested per t
 ```
 
 - The bounding box is cheap, but around a round object its empty corners count as hits.
-- `'geometry'` is exact, but its cost grows with the triangle count. A mesh of 2,048 triangles or more builds a {@link Geometry3D#bvh | bvh} on its first pick, which keeps later picks fast. A {@link Geometry3DOptions#dynamic | dynamic} geometry never builds one, and tests every triangle on each pick.
+- `'geometry'` is exact, but it's the most work per pick. On a mesh of 64 triangles or more, as {@link HitVolume3DInput} says, the first ray to reach it builds a {@link Geometry3D#bvh | bvh}, a tree of boxes around its triangles, so later picks stay fast. Call {@link Geometry3D#buildBvh | buildBvh} while loading to keep that build out of the first click. After you edit the arrays in place, call {@link Geometry3D#unload | unload} so picking sees the edit, as [Unloading geometry](../../geometry/__docs__/geometry.md#unloading-geometry) explains. Picking skips the tree on a {@link Geometry3DOptions#dynamic | dynamic} geometry and tests every triangle on each pick. [Querying a mesh's triangles](../../geometry/__docs__/geometry.md#querying-a-meshs-triangles) gives the build's cost and shows how to run your own queries on the tree.
 - A {@link Box} or {@link Sphere} you make can fit the object better, and is as cheap to test as the bounding box.
 
 [Hit volumes](/3d/examples?example=interaction_hit-volumes) outlines each shape's volume and lets you switch it.
@@ -173,7 +173,7 @@ app.ticker.add(() => {
 });
 ```
 
-On a hit, {@link RaycastHit3D#target | aim.target} is the node an event would go to, the same node as `target3D`. A raycast tests the same nodes that events do, so in a scene with nothing interactive it always misses.
+On a hit, {@link RaycastHit3D#target | aim.target} is the node an event would go to, the same node as `target3D`. A raycast tests the same nodes that events do, so in a scene with nothing interactive it always misses. `raycast` always casts from the camera. For a ray from anywhere else, such as straight down to find the ground under a character, use {@link TriangleBvh#raycast} on one mesh's {@link Geometry3D#bvh | geometry.bvh}. [Querying a mesh's triangles](../../geometry/__docs__/geometry.md#querying-a-meshs-triangles) shows how, moving the ray into the mesh's own space and the hit back out.
 
 ## 2D content and the view
 

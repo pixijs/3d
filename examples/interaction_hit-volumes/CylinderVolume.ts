@@ -2,7 +2,7 @@
  * A hit shape of your own: an upright cylinder round the node's local y axis, as an `IHitVolume3D`
  *
  * The picker moves the ray into the node's space before it calls `raycast`, so the maths never sees the node's
- * position, turn or scale. One analytic test fits a round mesh exactly, where `'geometry'` would test every triangle.
+ * position, turn or scale. One analytic test fits a round mesh exactly, where `'geometry'` would search the triangles.
  */
 
 import type { HitResult3D, IHitVolume3D, Ray, Vector3 } from '@pixi/3d';

@@ -146,6 +146,13 @@ grows across the scene. Scene: a pink path tracing over the floor, a point cloud
 `morphTargets` on a `Geometry3D` and `weights` on its `Mesh3D` blend between shapes. Scene: a clay blob that morphs
 between a sphere, a cube and a star. Pane: one weight per target.
 
+### geometry_mesh-queries: Mesh queries
+
+`geometry.bvh` from your own code: `raycast`, `closestPointToPoint`, `intersectsSphere` and `traverse` on a
+`TriangleBvh`, with the ray or point moved into the mesh's local space first. Scene: a ball the reader drags over a
+clay terrain, riding its hills and pushed out of a rock. Show: every triangle's edges, with the few the queries test
+filled in. Pane: ball radius, the triangles, the visited boxes, triangles in all and tested, and build time.
+
 ## Materials
 
 ### materials_pbr: Metal and roughness

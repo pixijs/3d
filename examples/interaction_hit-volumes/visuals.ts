@@ -25,7 +25,7 @@ const ANSWER_FILL = 0.14;
 /** Line widths in the shape's own units: thin enough that the torus's 1,024 triangles still read as a net */
 const OUTLINE_THICKNESS = 0.02;
 const NET_THICKNESS = 0.008;
-/** A net at rest, faint so the step reads, and while the ray is in its bounding box and every triangle is tested */
+/** A net at rest, faint so the step reads, and while the ray is in its bounding box and its triangles are searched */
 const NET_OPACITY = 0.15;
 const NET_TESTED_OPACITY = 1;
 

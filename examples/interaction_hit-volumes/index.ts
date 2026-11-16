@@ -5,7 +5,7 @@
  * `hitVolume`: `'box'` (the bounding box, and what `null` falls back to), a `Sphere`, `'geometry'` (every triangle),
  * a low-poly `Geometry3D`, or a class of your own that implements `IHitVolume3D`. Only a mesh that listens
  * (`eventMode = 'static'`) is ever the target. A one-test shape is cheap but answers in the empty space round the clay;
- * triangles are exact, but every one is tested whenever the ray enters their bounding box, hit or miss, unless a
+ * triangles are exact, but the engine searches them whenever the ray enters their bounding box, hit or miss, unless a
  * nearer hit already lies in front of that box. `view3d.raycast` runs the same pick from your own code; `visuals.ts`
  * outlines each volume, turns the one that answers pink, and darkens a faint triangle net while the ray is in its box.
  *
@@ -96,8 +96,8 @@ function setHitVolume(name: ShapeName, kind: VolumeKind): void {
       mesh.hitVolume = new Sphere(new Vector3(), enclosingRadius(mesh.geometry));
       break;
     case 'geometry':
-      // Exact. Once the ray enters the geometry's bounding box, every triangle is tested, hit or miss, unless a nearer
-      // hit already lies in front of the box. The torus has 1,024.
+      // Exact. Once the ray enters the geometry's bounding box, the triangles are searched, hit or miss, unless a
+      // nearer hit already lies in front of the box. The torus has 1,024.
       mesh.hitVolume = 'geometry';
       break;
     case 'stand-in':

@@ -87,6 +87,45 @@ describe('intersectRayGeometry', () => {
     expect(intersectRayGeometry(ray, geom, hit)).toBe(-1);
   });
 
+  test('a triangle with a NaN vertex never hits, and the triangle behind it does', () => {
+    const geom = new Geometry3D({
+      positions: new Float32Array([0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 1, NaN, NaN, NaN, 0, 4, 1]),
+      indices: new Uint16Array([0, 1, 2, 3, 4, 5]),
+    });
+    const ray = new Ray(new Vector3(1, 2, 5), new Vector3(0, 0, -1));
+    const hit = createHitResult3D();
+
+    expect(intersectRayGeometry(ray, geom, hit)).toBe(5);
+    expect(hit.triangleIndex).toBe(0);
+  });
+
+  test('vertices past the last whole triangle are ignored', () => {
+    const geom = new Geometry3D({ positions: new Float32Array([0, 0, 0, 4, 0, 0, 0, 4, 0, 9, 9, 0]) });
+    const hit = createHitResult3D();
+
+    expect(intersectRayGeometry(new Ray(new Vector3(1, 2, 5), new Vector3(0, 0, -1)), geom, hit)).toBe(5);
+    expect(hit.triangleIndex).toBe(0);
+    expect(intersectRayGeometry(new Ray(new Vector3(8, 1, 5), new Vector3(0, 0, -1)), geom, hit)).toBe(-1);
+  });
+
+  test('a non-dynamic mesh is picked through its hierarchy from 64 triangles, and triangle by triangle below', () => {
+    const strip = (count: number) => {
+      const positions = new Float32Array(count * 9);
+      for (let i = 0; i < count; i++) positions.set([i, 0, 0, i + 1, 0, 0, i, 1, 0], i * 9);
+      return new Geometry3D({ positions });
+    };
+    const ray = new Ray(new Vector3(0.2, 0.2, 5), new Vector3(0, 0, -1));
+    const small = strip(63);
+    const large = strip(64);
+    const smallRead = vi.spyOn(small, 'bvh', 'get');
+    const largeRead = vi.spyOn(large, 'bvh', 'get');
+
+    expect(intersectRayGeometry(ray, small, createHitResult3D())).toBe(5);
+    expect(intersectRayGeometry(ray, large, createHitResult3D())).toBe(5);
+    expect(smallRead).not.toHaveBeenCalled();
+    expect(largeRead).toHaveBeenCalled();
+  });
+
   describe('large meshes', () => {
     const makeKnot = () => new TorusKnotGeometry({ tubularSegments: 128, radialSegments: 32 });
 
@@ -108,11 +147,13 @@ describe('intersectRayGeometry', () => {
       const geom = makeKnot();
       const positions = new Float32Array(geom.attributes.aPosition.buffer.data);
       const indices = new Uint32Array(geom.indexBuffer.data);
+      const uvs = new Float32Array(geom.uvs!);
       const all = rays(300);
       const expected = all.map((ray) => {
         const hit = createHitResult3D();
-        const t = intersectRayGeometry(ray, new Geometry3D({ positions, indices, dynamic: true }), hit);
-        return { t, triangle: hit.triangleIndex, nz: hit.normal.z };
+        const t = intersectRayGeometry(ray, new Geometry3D({ positions, indices, uvs, dynamic: true }), hit);
+        const { normal, uv } = hit;
+        return { t, triangle: hit.triangleIndex, nx: normal.x, ny: normal.y, nz: normal.z, u: uv.x, v: uv.y };
       });
 
       expect(expected.filter((r) => r.t >= 0).length).toBeGreaterThan(100);
@@ -121,8 +162,12 @@ describe('intersectRayGeometry', () => {
         const t = intersectRayGeometry(all[i], geom, hit);
         expect(t).toBeCloseTo(expected[i].t, 5);
         if (t < 0) continue;
-        if (hit.triangleIndex !== expected[i].triangle) continue;
+        expect(hit.triangleIndex).toBe(expected[i].triangle);
+        expect(hit.normal.x).toBeCloseTo(expected[i].nx, 5);
+        expect(hit.normal.y).toBeCloseTo(expected[i].ny, 5);
         expect(hit.normal.z).toBeCloseTo(expected[i].nz, 5);
+        expect(hit.uv.x).toBeCloseTo(expected[i].u, 5);
+        expect(hit.uv.y).toBeCloseTo(expected[i].v, 5);
       }
     });
 
@@ -146,6 +191,49 @@ describe('intersectRayGeometry', () => {
           intersectRayGeometry(ray, fresh, createHitResult3D()),
           5,
         );
+      }
+    });
+
+    test('a large mesh edited in place and unloaded picks its new triangles', () => {
+      const geom = makeKnot();
+      const all = rays(50);
+      for (const ray of all) intersectRayGeometry(ray, geom, createHitResult3D());
+
+      const positions = geom.attributes.aPosition.buffer.data;
+      for (let i = 0; i < positions.length; i++) positions[i] *= 0.5;
+      geom.unload();
+      const fresh = new Geometry3D({
+        positions: new Float32Array(positions),
+        indices: new Uint32Array(geom.indexBuffer.data),
+        dynamic: true,
+      });
+
+      for (const ray of all) {
+        expect(intersectRayGeometry(ray, geom, createHitResult3D())).toBeCloseTo(
+          intersectRayGeometry(ray, fresh, createHitResult3D()),
+          5,
+        );
+      }
+    });
+
+    test('a large mesh given fewer indices picks only the triangles they list', () => {
+      const geom = makeKnot();
+      const all = rays(50);
+      for (const ray of all) intersectRayGeometry(ray, geom, createHitResult3D());
+
+      geom.indices = geom.indices.slice(0, geom.indices.length / 2);
+      const fresh = new Geometry3D({
+        positions: new Float32Array(geom.positions),
+        indices: new Uint32Array(geom.indices),
+        dynamic: true,
+      });
+
+      for (const ray of all) {
+        const hit = createHitResult3D();
+        const expected = createHitResult3D();
+        const t = intersectRayGeometry(ray, fresh, expected);
+        expect(intersectRayGeometry(ray, geom, hit)).toBeCloseTo(t, 5);
+        expect(hit.triangleIndex).toBe(expected.triangleIndex);
       }
     });
 

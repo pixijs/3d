@@ -15,6 +15,7 @@ Most of a Three.js port is renaming. The hard part is code that still compiles a
 - **Constructors take one options object**, such as `new CubeGeometry({ width, height, depth })`. The same values are properties on the object afterwards.
 - **The frame loop is `app.ticker`.** Its callback gets the ticker. {@link OrbitCamera}, a model's {@link Model3D#player | player} and {@link ParticleSystem3D} advance on `Ticker.shared` unless you step them yourself.
 - **A loaded glTF is a template.** `Assets.load` returns a {@link Scene3DSource}, and each {@link Model3D} built from it shares its geometry, materials and textures. See [Loading models](../../assets/__docs__/models.md).
+- **Picking replaces the Raycaster.** Listen for pointer events on the meshes, or call {@link View3D#raycast | view3d.raycast}. A mesh is hit-tested against its bounding box until you set its {@link Container3D#hitVolume | hitVolume} to `'geometry'` ([Hit volumes](../../events/__docs__/interaction.md#hit-volumes)). The tree three-mesh-bvh adds is built in as {@link Geometry3D#bvh | geometry.bvh}: per-triangle picking uses it, and you can cast your own rays at it from anywhere ([Querying a mesh's triangles](../../geometry/__docs__/geometry.md#querying-a-meshs-triangles)).
 
 ## Behaviour differences
 

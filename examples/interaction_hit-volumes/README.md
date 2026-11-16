@@ -4,15 +4,17 @@ A pointer never touches a mesh's surface: the view casts a ray and tests it agai
 `hitVolume`, which needn't be the mesh you see. Four clay shapes float in a row, each with a different volume drawn
 round it: a box frame round the orange octahedron, a sphere's outline round the purple sphere, a faint triangle net
 over the sky torus, and a cylinder of the example's own round the lilac puck. A one-test shape is cheap but answers in
-the empty space round the clay; triangles are exact, but every one is tested once the ray enters their bounding box.
+the empty space round the clay; triangles are exact, but the engine searches them once the ray enters their bounding
+box.
 
 ![Four clay shapes floating in a row over the light checker floor: an orange octahedron in a dark box frame, a purple sphere in a sphere outline, a sky torus on its rim under a faint triangle net, and a lilac puck in a cylinder outline; the pane in the top right shows a hitVolume folder with octahedron 'box', sphere Sphere, torus 'geometry' and puck CylinderVolume (yours), and a picked folder whose target reads null](reference.png)
 
 ## API
 
 - `Mesh3D` `hitVolume`, a `HitVolume3DInput`: `null` falls back to the bounding box, which `'box'` names; a `Sphere`
-  through the farthest vertex is one test, exact for a ball; `'geometry'` tests every triangle, 1,024 on the torus;
-  any `Geometry3D`, here the kit's low-detail clay, is tested triangle by triangle; and an `IHitVolume3D` of your own.
+  through the farthest vertex is one test, exact for a ball; `'geometry'` searches the mesh's own triangles, 1,024 on
+  the torus, through a tree of boxes built on the first pick; any `Geometry3D`, here the kit's low-detail clay, is
+  searched the same way; and an `IHitVolume3D` of your own.
 - `IHitVolume3D`: `CylinderVolume` gives `boundingRadiusSq`, the sphere the picker checks first, and
   `raycast(localRay, out)`, which gets the ray in the node's own space, fills the `HitResult3D` (`point`, `distance`,
   zero `normal` and `uv`, `triangleIndex` -1) and returns the distance, or -1 for a miss.
@@ -21,7 +23,7 @@ the empty space round the clay; triangles are exact, but every one is tested onc
 - `View3D` `raycast(position, out)` with `createRaycastHit3D()`: the pick pointer events make, every frame at the
   pointer, filling one `RaycastHit3D` or returning `null`. A one-test volume's `triangleIndex` is -1.
 - `View3D` `screenToRay`, `Ray` `applyMatrix4` with a `Matrix4` `getInverse`, and `intersectsBox` with `bounds3D`:
-  whether the ray is inside a per-triangle volume's bounding box, where the engine tests every triangle.
+  whether the ray is inside a per-triangle volume's bounding box, where the engine searches the triangles.
 - `Geometry3D` `positions` size the `Sphere`. `CylinderGeometry` is the cylinder outline's fill, `Camera3D` the camera
   the round outlines face, and `Destroy3DOptions` its `destroy`'s. `Vector3` and `PointData3D` place the shapes.
 - `OrbitCamera` from `@pixi/3d/extras`: drag to orbit.

@@ -1,5 +1,8 @@
+import { Box } from '../math/shapes/Box';
 import type { Ray } from '../math/shapes/Ray';
-import { triangleHit } from './utils/rayTriangle';
+import type { Sphere } from '../math/shapes/Sphere';
+import type { PointData3D } from '../math/vector/PointData3D';
+import type { Vector3 } from '../math/vector/Vector3';
 
 /** Most triangles a leaf holds */
 const LEAF_SIZE = 4;
@@ -9,7 +12,10 @@ const LEAF_SIZE = 4;
  */
 const SAH_MIN_TRIANGLES = 128;
 const BINS = 16;
+/** `raycast` inlines its triangle test for speed, as does `intersectRayGeometry`; keep the two copies in step */
 const EPSILON = 1e-7;
+/** Widens a box's exit distance by its rounding error, so a ray along the edge of a zero-thickness box still enters */
+const EXIT_SCALE = 1.0000000000000007;
 
 const buckets = new Uint32Array(1024);
 const binCounts = new Uint32Array(BINS);
@@ -19,6 +25,23 @@ const leftAreas = new Float64Array(BINS);
 let stack = new Int32Array(64);
 /** The entry distance of each node on `stack`, so a pop compares it with the closest hit instead of testing again */
 let stackEntries = new Float64Array(64);
+/** The slot in `_tris` of the point `_nearest` found last */
+let nearestSlot = 0;
+/** That point's u and v weights, then its x, y and z */
+const nearest = new Float64Array(5);
+/** A stack and a box per `traverse` nesting depth, since its callbacks may start another walk */
+const walkStacks: Int32Array[] = [];
+const walkBoxes: Box[] = [];
+let walkDepth = 0;
+
+function growStack(): void {
+  const grown = new Int32Array(stack.length * 2);
+  grown.set(stack);
+  stack = grown;
+  const grownEntries = new Float64Array(stackEntries.length * 2);
+  grownEntries.set(stackEntries);
+  stackEntries = grownEntries;
+}
 
 function spreadBits(v: number): number {
   v = (v | (v << 16)) & 0x030000ff;
@@ -31,29 +54,46 @@ function spreadBits(v: number): number {
  * A bounding volume hierarchy (BVH) over a triangle list: nested boxes around groups of triangles, so a
  * ray tests the few dozen triangles near it instead of all of them
  *
- * Read one from {@link Geometry3D#bvh | geometry.bvh} rather than constructing it, so it is built once and
- * rebuilt when the geometry changes. It holds the arrays it was built from and never notices edits to them.
+ * Read one from {@link Geometry3D#bvh | geometry.bvh} rather than constructing it: the geometry builds it once,
+ * then refits or replaces it on the calls that getter lists. A hierarchy holds the arrays it was built from and
+ * doesn't notice edits to them until {@link TriangleBvh#update | update}.
  * @example
  * ```ts
- * const bvh = geometry.bvh;
- * const distance = bvh ? bvh.raycast(localRay) : -1;
- * if (distance >= 0) console.log('hit triangle', bvh!.triangle, 'at', distance);
+ * const localToWorld = terrain.getGlobalTransform();
+ * const localRay = worldRay.applyMatrix4(new Matrix4().getInverse(localToWorld), new Ray());
+ * const distance = terrain.geometry.bvh?.raycast(localRay) ?? -1;
+ *
+ * if (distance >= 0) marker.position.copyFrom(localRay.at(distance).applyAffineMatrix4(localToWorld));
  * ```
  * @category geometry
  * @advanced
  */
 export class TriangleBvh {
-  /** The vertex positions the hierarchy was built over, three numbers per vertex */
-  public readonly positions: Float32Array;
-  /** The vertex numbers, three per triangle; `null` when every three vertices in order make a triangle */
-  public readonly indices: Uint16Array | Uint32Array | null;
-  /** The triangle the last hit from {@link TriangleBvh#raycast} landed on; `-1` after a miss */
+  /**
+   * The triangle the last {@link TriangleBvh#raycast} or {@link TriangleBvh#closestPointToPoint} found; `-1` after
+   * a miss
+   *
+   * Triangle `n` is the three vertices the index array lists at `3 * n` to `3 * n + 2`, or, without indices,
+   * vertices `3 * n` to `3 * n + 2`.
+   */
   public triangle = -1;
+  /**
+   * Weight of the hit triangle's second vertex at the last hit; the first vertex's is `1 - u - v`
+   *
+   * To get a UV or normal at the hit, add up the three vertices' values, each times its weight.
+   */
+  public u = 0;
+  /** Weight of the hit triangle's third vertex at the last hit */
+  public v = 0;
+
+  /** @internal */
+  public readonly _positions: Float32Array;
+  /** @internal */
+  public readonly _indices: Uint16Array | Uint32Array | null;
 
   /**
    * A 32-byte record per node: min xyz and max xyz, then `first` and `count` read through `_links`. A leaf holds
-   * `count` triangles from `_tris[first]`; an inner node has `count` 0 and its children at `first` and `first + 1`,
-   * after itself, so a pass from the last node back meets children before parents.
+   * `count` triangles from `_tris[first]`; an inner node has `count` 0 and its children at `first` and `first + 1`.
    */
   private _bounds: Float32Array;
   /** `_bounds`'s buffer read as integers */
@@ -68,9 +108,9 @@ export class TriangleBvh {
    * @param indices - Vertex numbers, three per triangle, or `null` when every three vertices in order make a triangle
    */
   constructor(positions: Float32Array, indices: Uint16Array | Uint32Array | null) {
-    this.positions = positions;
-    this.indices = indices;
-    const count = indices ? indices.length / 3 : positions.length / 9;
+    this._positions = positions;
+    this._indices = indices;
+    const count = Math.floor(indices ? indices.length / 3 : positions.length / 9);
     const boxes = new Float32Array(count * 6);
     const centroids = new Float32Array(count * 3);
 
@@ -136,17 +176,40 @@ export class TriangleBvh {
     this._bounds = new Float32Array(Math.max(1, Math.ceil(count / LEAF_SIZE) * 2) * 8);
     this._links = new Uint32Array(this._bounds.buffer);
     this._split(boxes, centroids, codes, spareCodes, spareTris);
-    this._fitBounds(boxes, count);
+    if (this._nodeCount * 8 < this._bounds.length) {
+      this._bounds = this._bounds.slice(0, this._nodeCount * 8);
+      this._links = new Uint32Array(this._bounds.buffer);
+    }
+    this._fitBounds(boxes);
   }
 
   /**
-   * Finds the closest triangle the ray hits before `maxT`, front or back face, and stores it in
-   * {@link TriangleBvh#triangle}
-   * @param ray - The ray, in the same space as the positions, such as a geometry's own axes
-   * @param maxT - Ignore hits this far along the ray or farther
-   * @returns The distance along the ray to the hit, or `-1` for a miss.
+   * Refits every box to the arrays as they are now, without rebuilding the hierarchy
+   *
+   * Call it after editing the arrays of a hierarchy you built yourself; {@link Geometry3D#bvh | geometry.bvh} calls it
+   * for you after the edits that getter lists. The triangles stay grouped as they were, so after a large deformation
+   * queries stay correct but slow down, and {@link Geometry3D#buildBvh | buildBvh} restores their speed.
    */
-  public raycast(ray: Ray, maxT = Infinity): number {
+  public update(): void {
+    this._fitBounds(null);
+  }
+
+  /**
+   * Finds the closest triangle the ray hits, on its front or its back face
+   *
+   * A hit sets {@link TriangleBvh#triangle}, {@link TriangleBvh#u} and {@link TriangleBvh#v}; a miss sets
+   * `triangle` to `-1` and leaves `u` and `v` as they were. The ray goes in the positions' space, which for
+   * {@link Geometry3D#bvh | geometry.bvh} is the local space of the mesh that draws the geometry;
+   * {@link Ray#applyMatrix4} moves a world ray there.
+   * @param ray - The ray, with a unit-length direction
+   * @param maxDistance - Ignore hits this far along the ray or farther
+   * @returns The distance from the ray's origin to the hit, in the positions' units, or `-1` for a miss.
+   */
+  public raycast(ray: Ray, maxDistance = Infinity): number {
+    if (this._tris.length === 0) {
+      this.triangle = -1;
+      return -1;
+    }
     const ox = ray.origin.x,
       oy = ray.origin.y,
       oz = ray.origin.z;
@@ -156,12 +219,12 @@ export class TriangleBvh {
     const ix = 1 / dx,
       iy = 1 / dy,
       iz = 1 / dz;
-    const positions = this.positions;
-    const indices = this.indices;
+    const positions = this._positions;
+    const indices = this._indices;
     const tris = this._tris;
     const bounds = this._bounds;
     const links = this._links;
-    let best = maxT;
+    let best = maxDistance;
     let bestSlot = -1;
     let bestU = 0;
     let bestV = 0;
@@ -200,14 +263,14 @@ export class TriangleBvh {
             sy = oy - ay,
             sz = oz - az;
           const u = f * (sx * hx + sy * hy + sz * hz);
-          if (u < 0 || u > 1) continue;
+          if (!(u >= 0 && u <= 1)) continue;
           const qx = sy * e1z - sz * e1y,
             qy = sz * e1x - sx * e1z,
             qz = sx * e1y - sy * e1x;
           const v = f * (dx * qx + dy * qy + dz * qz);
-          if (v < 0 || u + v > 1) continue;
+          if (!(v >= 0 && u + v <= 1)) continue;
           const t = f * (e2x * qx + e2y * qy + e2z * qz);
-          if (t < EPSILON || t >= best) continue;
+          if (!(t >= EPSILON && t < best)) continue;
           best = t;
           bestSlot = slot;
           bestU = u;
@@ -216,14 +279,7 @@ export class TriangleBvh {
         continue;
       }
 
-      if (top + 2 > stack.length) {
-        const grown = new Int32Array(stack.length * 2);
-        grown.set(stack);
-        stack = grown;
-        const grownEntries = new Float64Array(stackEntries.length * 2);
-        grownEntries.set(stackEntries);
-        stackEntries = grownEntries;
-      }
+      if (top + 2 > stack.length) growStack();
       let o = first * 8;
       let x0 = (bounds[o] - ox) * ix,
         x1 = (bounds[o + 3] - ox) * ix;
@@ -233,7 +289,7 @@ export class TriangleBvh {
         z1 = (bounds[o + 5] - oz) * iz;
       let enter = Math.max(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1), 0);
       let exit = Math.min(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
-      const near = exit >= enter ? enter : exit < enter ? Infinity : 0;
+      const near = exit * EXIT_SCALE >= enter ? enter : exit < enter ? Infinity : 0;
       o += 8;
       x0 = (bounds[o] - ox) * ix;
       x1 = (bounds[o + 3] - ox) * ix;
@@ -243,7 +299,7 @@ export class TriangleBvh {
       z1 = (bounds[o + 5] - oz) * iz;
       enter = Math.max(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1), 0);
       exit = Math.min(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
-      const far = exit >= enter ? enter : exit < enter ? Infinity : 0;
+      const far = exit * EXIT_SCALE >= enter ? enter : exit < enter ? Infinity : 0;
 
       if (near <= far) {
         if (far < best) {
@@ -271,23 +327,242 @@ export class TriangleBvh {
       return -1;
     }
 
-    const tri = tris[bestSlot] * 3;
-    const a = (indices ? indices[tri] : tri) * 3;
-    const b = (indices ? indices[tri + 1] : tri + 1) * 3;
-    const c = (indices ? indices[tri + 2] : tri + 2) * 3;
-    const e1x = positions[b] - positions[a],
-      e1y = positions[b + 1] - positions[a + 1],
-      e1z = positions[b + 2] - positions[a + 2];
-    const e2x = positions[c] - positions[a],
-      e2y = positions[c + 1] - positions[a + 1],
-      e2z = positions[c + 2] - positions[a + 2];
-    triangleHit.u = bestU;
-    triangleHit.v = bestV;
-    triangleHit.nx = e1y * e2z - e1z * e2y;
-    triangleHit.ny = e1z * e2x - e1x * e2z;
-    triangleHit.nz = e1x * e2y - e1y * e2x;
     this.triangle = tris[bestSlot];
+    this.u = bestU;
+    this.v = bestV;
     return best;
+  }
+
+  /**
+   * Finds the point on the triangles closest to `point`, within `maxDistance`
+   *
+   * A hit sets {@link TriangleBvh#triangle}, {@link TriangleBvh#u} and {@link TriangleBvh#v} as
+   * {@link TriangleBvh#raycast} does; a miss sets `triangle` to `-1` and leaves `out`, `u` and `v` as they were.
+   * `point` and `out` are in the positions' space.
+   * @param point - The point to measure from
+   * @param out - Receives the closest point
+   * @param maxDistance - Ignore triangles farther than this
+   * @returns The distance to the closest point, in the positions' units, or `-1` when no triangle is within
+   * `maxDistance`.
+   */
+  public closestPointToPoint(point: PointData3D, out: Vector3, maxDistance = Infinity): number {
+    const squared = this._nearest(point, maxDistance, false);
+    if (squared < 0) {
+      this.triangle = -1;
+      return -1;
+    }
+
+    this.triangle = this._tris[nearestSlot];
+    this.u = nearest[0];
+    this.v = nearest[1];
+    out.set(nearest[2], nearest[3], nearest[4]);
+    return Math.sqrt(squared);
+  }
+
+  /**
+   * Whether any triangle touches or lies inside the sphere
+   *
+   * A sphere wholly inside a closed mesh touches no triangle, so it doesn't count. The sphere is in the positions'
+   * space.
+   * @param sphere - The sphere to test
+   * @returns Whether a triangle lies within `sphere.radius` of its centre.
+   */
+  public intersectsSphere(sphere: Sphere): boolean {
+    return this._nearest(sphere.center, sphere.radius, true) >= 0;
+  }
+
+  /**
+   * Returns the squared distance to the nearest triangle point within `maxDistance`, or `-1`, and writes that point to
+   * the `nearest` scratch; with `anyHit` it stops at the first triangle in range
+   */
+  private _nearest(point: PointData3D, maxDistance: number, anyHit: boolean): number {
+    if (this._tris.length === 0 || maxDistance < 0) return -1;
+    const px = point.x,
+      py = point.y,
+      pz = point.z;
+    const positions = this._positions;
+    const indices = this._indices;
+    const tris = this._tris;
+    const bounds = this._bounds;
+    const links = this._links;
+    let best = maxDistance * maxDistance;
+    let bestSlot = -1;
+    let bestU = 0,
+      bestV = 0,
+      bestX = 0,
+      bestY = 0,
+      bestZ = 0;
+
+    let top = 0;
+    stack[top] = 0;
+    stackEntries[top++] = 0;
+    while (top > 0) {
+      const node = stack[--top];
+      if (stackEntries[top] > best) continue;
+
+      const first = links[node * 8 + 6];
+      const count = links[node * 8 + 7];
+      if (count > 0) {
+        for (let slot = first; slot < first + count; slot++) {
+          const tri = tris[slot] * 3;
+          const a = (indices ? indices[tri] : tri) * 3;
+          const b = (indices ? indices[tri + 1] : tri + 1) * 3;
+          const c = (indices ? indices[tri + 2] : tri + 2) * 3;
+          const ax = positions[a],
+            ay = positions[a + 1],
+            az = positions[a + 2];
+          const abx = positions[b] - ax,
+            aby = positions[b + 1] - ay,
+            abz = positions[b + 2] - az;
+          const acx = positions[c] - ax,
+            acy = positions[c + 1] - ay,
+            acz = positions[c + 2] - az;
+          const apx = px - ax,
+            apy = py - ay,
+            apz = pz - az;
+          const d1 = abx * apx + aby * apy + abz * apz;
+          const d2 = acx * apx + acy * apy + acz * apz;
+          const d3 = d1 - (abx * abx + aby * aby + abz * abz);
+          const d4 = d2 - (acx * abx + acy * aby + acz * abz);
+          const d5 = d1 - (abx * acx + aby * acy + abz * acz);
+          const d6 = d2 - (acx * acx + acy * acy + acz * acz);
+          const vc = d1 * d4 - d3 * d2;
+          const vb = d5 * d2 - d1 * d6;
+          const va = d3 * d6 - d5 * d4;
+          let u = 0;
+          let v = 0;
+          if (d1 <= 0 && d2 <= 0) {
+            u = 0;
+          } else if (d3 >= 0 && d4 <= d3) {
+            u = 1;
+          } else if (vc <= 0 && d1 >= 0 && d3 <= 0 && d1 > d3) {
+            u = d1 / (d1 - d3);
+          } else if (d6 >= 0 && d5 <= d6) {
+            v = 1;
+          } else if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+            v = d2 / (d2 - d6);
+          } else if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+            v = (d4 - d3) / (d4 - d3 + (d5 - d6));
+            u = 1 - v;
+          } else {
+            const scale = 1 / (va + vb + vc);
+            u = vb * scale;
+            v = vc * scale;
+          }
+          const qx = ax + abx * u + acx * v,
+            qy = ay + aby * u + acy * v,
+            qz = az + abz * u + acz * v;
+          const distance = (px - qx) * (px - qx) + (py - qy) * (py - qy) + (pz - qz) * (pz - qz);
+          if (!(distance <= best)) continue;
+          best = distance;
+          bestSlot = slot;
+          bestU = u;
+          bestV = v;
+          bestX = qx;
+          bestY = qy;
+          bestZ = qz;
+          if (anyHit) {
+            top = 0;
+            break;
+          }
+        }
+        continue;
+      }
+
+      if (top + 2 > stack.length) growStack();
+      let o = first * 8;
+      let gx = Math.max(bounds[o] - px, 0, px - bounds[o + 3]),
+        gy = Math.max(bounds[o + 1] - py, 0, py - bounds[o + 4]),
+        gz = Math.max(bounds[o + 2] - pz, 0, pz - bounds[o + 5]);
+      const near = gx * gx + gy * gy + gz * gz;
+      o += 8;
+      gx = Math.max(bounds[o] - px, 0, px - bounds[o + 3]);
+      gy = Math.max(bounds[o + 1] - py, 0, py - bounds[o + 4]);
+      gz = Math.max(bounds[o + 2] - pz, 0, pz - bounds[o + 5]);
+      const far = gx * gx + gy * gy + gz * gz;
+
+      if (near <= far) {
+        if (!(far > best)) {
+          stack[top] = first + 1;
+          stackEntries[top++] = far;
+        }
+        if (!(near > best)) {
+          stack[top] = first;
+          stackEntries[top++] = near;
+        }
+      } else {
+        if (!(near > best)) {
+          stack[top] = first;
+          stackEntries[top++] = near;
+        }
+        if (!(far > best)) {
+          stack[top] = first + 1;
+          stackEntries[top++] = far;
+        }
+      }
+    }
+
+    if (bestSlot < 0) return -1;
+
+    nearestSlot = bestSlot;
+    nearest[0] = bestU;
+    nearest[1] = bestV;
+    nearest[2] = bestX;
+    nearest[3] = bestY;
+    nearest[4] = bestZ;
+    return best;
+  }
+
+  /**
+   * Walks the hierarchy, entering the boxes `intersectsBox` accepts and handing each triangle in them to
+   * `visitTriangle`
+   *
+   * Use it for a query the others don't cover, such as every triangle in a region. `intersectsBox` gets one reused
+   * box in the positions' space, so read it rather than keep it. Both callbacks may run any query on this or another
+   * hierarchy, `traverse` included.
+   * @param intersectsBox - Whether to enter a box; `false` skips every triangle inside it
+   * @param visitTriangle - Sees each triangle's number, counted as {@link TriangleBvh#triangle} is; `true` stops the
+   * walk
+   * @returns `true` when `visitTriangle` stopped the walk.
+   */
+  public traverse(intersectsBox: (box: Box) => boolean, visitTriangle: (triangle: number) => boolean | void): boolean {
+    if (this._tris.length === 0) return false;
+    const depth = walkDepth++;
+    let walk = (walkStacks[depth] ??= new Int32Array(64));
+    const box = (walkBoxes[depth] ??= new Box());
+    const tris = this._tris;
+    const bounds = this._bounds;
+    const links = this._links;
+
+    try {
+      let top = 0;
+      walk[top++] = 0;
+      while (top > 0) {
+        const o = walk[--top] * 8;
+        box.min.set(bounds[o], bounds[o + 1], bounds[o + 2]);
+        box.max.set(bounds[o + 3], bounds[o + 4], bounds[o + 5]);
+        if (!intersectsBox(box)) continue;
+
+        const first = links[o + 6];
+        const count = links[o + 7];
+        if (count > 0) {
+          for (let slot = first; slot < first + count; slot++) {
+            if (visitTriangle(tris[slot]) === true) return true;
+          }
+          continue;
+        }
+        if (top + 2 > walk.length) {
+          const grown = new Int32Array(walk.length * 2);
+          grown.set(walk);
+          walk = walkStacks[depth] = grown;
+        }
+        walk[top++] = first + 1;
+        walk[top++] = first;
+      }
+      return false;
+    } finally {
+      walkDepth--;
+    }
   }
 
   /**
@@ -342,7 +617,7 @@ export class TriangleBvh {
           ez = maxZ - minZ;
         const axis = ex >= ey && ex >= ez ? 0 : ey >= ez ? 1 : 2;
         const extent = axis === 0 ? ex : axis === 1 ? ey : ez;
-        if (extent > 0) {
+        if (extent > 0 && extent < Infinity) {
           const low = axis === 0 ? minX : axis === 1 ? minY : minZ;
           const splitBin = this._bin(boxes, centroids, binOf, start, end, axis, low, extent);
           let left = start;
@@ -399,11 +674,7 @@ export class TriangleBvh {
     }
   }
 
-  /**
-   * Sorts `tris[start..end)` into bins by centroid along `axis` and picks the split between bins where rays cost least,
-   * assuming a ray meets a box in proportion to its surface area
-   * @returns The first bin of the far side; `binOf` holds each triangle's bin.
-   */
+  /** Returns the first bin on the far side of the cheapest split; writes each triangle's bin into `binOf` */
   private _bin(
     boxes: Float32Array,
     centroids: Float32Array,
@@ -479,12 +750,14 @@ export class TriangleBvh {
     return splitBin;
   }
 
-  /** Fills each node's bounds from the last node back, so children are done before their parent */
-  private _fitBounds(boxes: Float32Array, count: number): void {
-    if (this._nodeCount * 8 < this._bounds.length) {
-      this._bounds = this._bounds.slice(0, this._nodeCount * 8);
-      this._links = new Uint32Array(this._bounds.buffer);
-    }
+  /**
+   * Fills bounds from the last node back, so children come before parents; a leaf reads `boxes`, or the vertices when
+   * it's `null`. An empty tree returns early: its root leaf would be read as a parent
+   */
+  private _fitBounds(boxes: Float32Array | null): void {
+    if (this._tris.length === 0) return;
+    const positions = this._positions;
+    const indices = this._indices;
     const tris = this._tris;
     const bounds = this._bounds;
     const links = this._links;
@@ -498,7 +771,7 @@ export class TriangleBvh {
         z1 = -Infinity;
       const first = links[node * 8 + 6];
       const size = links[node * 8 + 7];
-      if (size > 0 || count === 0) {
+      if (boxes && size > 0) {
         for (let k = first; k < first + size; k++) {
           const b = tris[k] * 6;
           x0 = Math.min(x0, boxes[b]);
@@ -507,6 +780,19 @@ export class TriangleBvh {
           x1 = Math.max(x1, boxes[b + 3]);
           y1 = Math.max(y1, boxes[b + 4]);
           z1 = Math.max(z1, boxes[b + 5]);
+        }
+      } else if (size > 0) {
+        for (let k = first; k < first + size; k++) {
+          const tri = tris[k] * 3;
+          const a = (indices ? indices[tri] : tri) * 3;
+          const b = (indices ? indices[tri + 1] : tri + 1) * 3;
+          const c = (indices ? indices[tri + 2] : tri + 2) * 3;
+          x0 = Math.min(x0, positions[a], positions[b], positions[c]);
+          y0 = Math.min(y0, positions[a + 1], positions[b + 1], positions[c + 1]);
+          z0 = Math.min(z0, positions[a + 2], positions[b + 2], positions[c + 2]);
+          x1 = Math.max(x1, positions[a], positions[b], positions[c]);
+          y1 = Math.max(y1, positions[a + 1], positions[b + 1], positions[c + 1]);
+          z1 = Math.max(z1, positions[a + 2], positions[b + 2], positions[c + 2]);
         }
       } else {
         const l = first * 8;

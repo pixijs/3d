@@ -1,13 +1,14 @@
 import type { Geometry3D } from '../geometry/Geometry3D';
-import { rayTriangle, triangleHit } from '../geometry/utils/rayTriangle';
 import type { Ray } from '../math/shapes/Ray';
 import type { HitResult3D } from './HitResult3D';
 
 /**
- * Below this, testing every triangle costs less than building and walking a hierarchy; `Geometry3D#bvh` names the
- * same count
+ * Below this, a hierarchy saves too little per pick to repay its build and memory. `HitVolume3DInput`'s
+ * `'geometry'` bullet quotes the count
  */
-const BVH_MIN_TRIANGLES = 2048;
+const BVH_MIN_TRIANGLES = 64;
+/** This file inlines its triangle test for speed, as does `TriangleBvh#raycast`; keep the two copies in step */
+const EPSILON = 1e-7;
 
 /**
  * Back faces hit too, so meshes with inverted winding still pick. A ray starting inside the bounds
@@ -31,7 +32,7 @@ export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitRe
 
   const indexBuffer = geom.indexBuffer;
   const indices = indexBuffer ? (indexBuffer.data as Uint16Array | Uint32Array) : null;
-  const triangleCount = indices ? indices.length / 3 : positions.length / 9;
+  const triangleCount = Math.floor(indices ? indices.length / 3 : positions.length / 9);
 
   const ox = localRay.origin.x;
   const oy = localRay.origin.y;
@@ -42,26 +43,99 @@ export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitRe
 
   let bestT = maxT;
   let bestTri = -1;
+  let bestU = 0;
+  let bestV = 0;
+  let bestNx = 0;
+  let bestNy = 0;
+  let bestNz = 0;
+
   const bvh = !geom.dynamic && triangleCount >= BVH_MIN_TRIANGLES ? geom.bvh : null;
   if (bvh) {
-    const t = bvh.raycast(localRay, maxT);
-    if (t >= 0) {
-      bestT = t;
-      bestTri = bvh.triangle;
-    }
+    bestT = bvh.raycast(localRay, maxT);
+    bestTri = bvh.triangle;
+    bestU = bvh.u;
+    bestV = bvh.v;
   } else {
     for (let i = 0; i < triangleCount; i++) {
-      const t = rayTriangle(positions, indices, i, ox, oy, oz, dx, dy, dz, bestT);
-      if (t >= 0) {
-        bestT = t;
-        bestTri = i;
-      }
+      const i0 = indices ? indices[i * 3] : i * 3;
+      const i1 = indices ? indices[i * 3 + 1] : i * 3 + 1;
+      const i2 = indices ? indices[i * 3 + 2] : i * 3 + 2;
+
+      const ax = positions[i0 * 3];
+      const ay = positions[i0 * 3 + 1];
+      const az = positions[i0 * 3 + 2];
+
+      const bx = positions[i1 * 3];
+      const by = positions[i1 * 3 + 1];
+      const bz = positions[i1 * 3 + 2];
+
+      const cx = positions[i2 * 3];
+      const cy = positions[i2 * 3 + 1];
+      const cz = positions[i2 * 3 + 2];
+
+      const e1x = bx - ax;
+      const e1y = by - ay;
+      const e1z = bz - az;
+      const e2x = cx - ax;
+      const e2y = cy - ay;
+      const e2z = cz - az;
+
+      const hx = dy * e2z - dz * e2y;
+      const hy = dz * e2x - dx * e2z;
+      const hz = dx * e2y - dy * e2x;
+
+      const a = e1x * hx + e1y * hy + e1z * hz;
+      if (a > -EPSILON && a < EPSILON) continue;
+
+      const f = 1 / a;
+      const sx = ox - ax;
+      const sy = oy - ay;
+      const sz = oz - az;
+
+      const u = f * (sx * hx + sy * hy + sz * hz);
+      if (!(u >= 0 && u <= 1)) continue;
+
+      const qx = sy * e1z - sz * e1y;
+      const qy = sz * e1x - sx * e1z;
+      const qz = sx * e1y - sy * e1x;
+
+      const v = f * (dx * qx + dy * qy + dz * qz);
+      if (!(v >= 0 && u + v <= 1)) continue;
+
+      const t = f * (e2x * qx + e2y * qy + e2z * qz);
+      if (!(t >= EPSILON && t < bestT)) continue;
+
+      bestT = t;
+      bestTri = i;
+      bestU = u;
+      bestV = v;
+      bestNx = e1y * e2z - e1z * e2y;
+      bestNy = e1z * e2x - e1x * e2z;
+      bestNz = e1x * e2y - e1y * e2x;
     }
   }
 
   if (bestTri < 0) return -1;
 
-  const { u: bestU, v: bestV, nx: bestNx, ny: bestNy, nz: bestNz } = triangleHit;
+  const i0 = indices ? indices[bestTri * 3] : bestTri * 3;
+  const i1 = indices ? indices[bestTri * 3 + 1] : bestTri * 3 + 1;
+  const i2 = indices ? indices[bestTri * 3 + 2] : bestTri * 3 + 2;
+
+  if (bvh) {
+    const ax = positions[i0 * 3];
+    const ay = positions[i0 * 3 + 1];
+    const az = positions[i0 * 3 + 2];
+    const e1x = positions[i1 * 3] - ax;
+    const e1y = positions[i1 * 3 + 1] - ay;
+    const e1z = positions[i1 * 3 + 2] - az;
+    const e2x = positions[i2 * 3] - ax;
+    const e2y = positions[i2 * 3 + 1] - ay;
+    const e2z = positions[i2 * 3 + 2] - az;
+    bestNx = e1y * e2z - e1z * e2y;
+    bestNy = e1z * e2x - e1x * e2z;
+    bestNz = e1x * e2y - e1y * e2x;
+  }
+
   const nLen = Math.sqrt(bestNx * bestNx + bestNy * bestNy + bestNz * bestNz);
   if (nLen > 0) {
     out.normal.set(bestNx / nLen, bestNy / nLen, bestNz / nLen);
@@ -75,17 +149,7 @@ export function intersectRayGeometry(localRay: Ray, geom: Geometry3D, out: HitRe
 
   const uvAttr = geom.attributes.aUV;
   const uvData = uvAttr?.buffer.data;
-  if (uvData instanceof Float32Array && indices) {
-    const i0 = indices[bestTri * 3];
-    const i1 = indices[bestTri * 3 + 1];
-    const i2 = indices[bestTri * 3 + 2];
-    const w = 1 - bestU - bestV;
-    out.uv.x = uvData[i0 * 2] * w + uvData[i1 * 2] * bestU + uvData[i2 * 2] * bestV;
-    out.uv.y = uvData[i0 * 2 + 1] * w + uvData[i1 * 2 + 1] * bestU + uvData[i2 * 2 + 1] * bestV;
-  } else if (uvData instanceof Float32Array) {
-    const i0 = bestTri * 3;
-    const i1 = bestTri * 3 + 1;
-    const i2 = bestTri * 3 + 2;
+  if (uvData instanceof Float32Array) {
     const w = 1 - bestU - bestV;
     out.uv.x = uvData[i0 * 2] * w + uvData[i1 * 2] * bestU + uvData[i2 * 2] * bestV;
     out.uv.y = uvData[i0 * 2 + 1] * w + uvData[i1 * 2 + 1] * bestU + uvData[i2 * 2 + 1] * bestV;

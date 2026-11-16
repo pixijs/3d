@@ -1,6 +1,6 @@
 ---
 title: Geometry
-description: The nine built-in shapes and how textures map onto them, building a shape from your own vertex arrays, and editing a geometry's vertices.
+description: The nine built-in shapes and how textures map onto them, building a shape from your own vertex arrays, editing a geometry's vertices, and querying its triangles.
 category: geometry
 ---
 
@@ -150,7 +150,7 @@ ground.geometry.unload();
 
 Plan for two things when you build a geometry you'll edit this way:
 
-- **Culling bounds.** Culling skips meshes outside the camera's view. It keeps testing the bounds the geometry was built with, so a mesh can vanish while its edited shape is still on screen. Pass a {@link Geometry3DOptions#bounds3D | bounds3D} box, in the geometry's own axes, big enough for every shape you'll edit it into.
+- **Bounds.** Culling and picking keep testing the bounds the geometry was built with, so a mesh can vanish, or stop picking, while its edited shape is still on screen. Pass a {@link Geometry3DOptions#bounds3D | bounds3D} box, in the geometry's own axes, big enough for every shape you'll edit it into.
 - **Normals.** Moving a vertex changes the slope around it, so you need to rewrite the normals there too. Build the geometry with {@link Geometry3DOptions#quantizeNormals | quantizeNormals} set to `false`, so `geometry.normals` stays an editable `Float32Array` with three numbers per vertex.
 
 ### Dynamic geometry
@@ -172,3 +172,78 @@ app.ticker.add(() => {
   ribbon.attributes.aPosition.buffer.update();
 });
 ```
+
+## Querying a mesh's triangles
+
+Games ask a mesh questions that aren't clicks, such as how high the ground is under a character, or whether a player has walked into a wall. Testing every triangle each frame is slow on a big mesh. {@link Geometry3D#bvh | geometry.bvh} is a {@link TriangleBvh}, a tree of boxes around the triangles, so a query skips the triangles far from it. The first read builds it, and [per-triangle picking](../../events/__docs__/interaction.md#hit-volumes) uses the same tree on most meshes. It's `null` unless the geometry is a triangle list with `Float32Array` positions, so lines, an {@link Geometry3DOptions#interleave | interleaved} geometry and a model whose positions gltfpack [quantized](../../assets/__docs__/compression.md#mesh-quantization) to integers get none. It covers the triangles as stored, so skinning and morph targets don't move it.
+
+Every query works in the mesh's own space, not world space. Move a world ray or point in with the inverse of {@link Container3D#getGlobalTransform | getGlobalTransform}, and move a hit back out with the transform itself. A distance comes back in the mesh's own units too, so on a scaled mesh, turn the hit into a world point before you measure anything with it. [Local and world space](../../__docs__/concepts/scene-graph.md#local-and-world-space) explains the two.
+
+This keeps a character on the ground by casting a ray straight down at the terrain each frame. The terrain never moves, so the code works out its transforms once:
+
+```ts
+import { Matrix4, Ray, Vector3 } from '@pixi/3d';
+
+const toWorld = terrain.getGlobalTransform();
+const toLocal = new Matrix4().getInverse(toWorld);
+const down = new Ray();
+const ground = new Vector3();
+
+app.ticker.add(() => {
+  // hero sits in view3d.root, so its position is a world position
+  down.origin.set(hero.position.x, hero.position.y + 2, hero.position.z); // from above the head, so a rising slope still hits
+  down.direction.set(0, -1, 0);
+  down.applyMatrix4(toLocal);
+
+  const distance = terrain.geometry.bvh?.raycast(down) ?? -1;
+
+  if (distance >= 0) hero.position.y = down.at(distance, ground).applyAffineMatrix4(toWorld).y;
+});
+```
+
+{@link TriangleBvh#raycast | raycast} returns the distance to the closest triangle the ray hits, from either side, or `-1` for a miss. A hit also sets {@link TriangleBvh#triangle | triangle}, plus {@link TriangleBvh#u | u} and {@link TriangleBvh#v | v}, the corner weights you blend the triangle's UVs or normals with to get the value at the hit. Reading `geometry.bvh` in the loop, rather than keeping it, picks up your edits, as the end of this section explains.
+
+{@link TriangleBvh#closestPointToPoint | closestPointToPoint} finds the nearest point on the triangles. With it, a sphere around a player slides along walls instead of passing through them. Here `toLocal` and `toWorld` belong to `walls`, worked out as above. {@link Sphere#applyMatrix4} moves the sphere into the walls' space and scales its radius to match:
+
+```ts
+import { Sphere, Vector3 } from '@pixi/3d';
+
+const body = new Sphere(new Vector3(), 0.4); // in world space
+const local = new Sphere();
+const closest = new Vector3();
+
+app.ticker.add(() => {
+  body.center.copyFrom(player.position);
+  body.applyMatrix4(toLocal, local);
+
+  const distance = walls.geometry.bvh?.closestPointToPoint(local.center, closest, local.radius) ?? -1;
+
+  if (distance > 0) {
+    // move the centre straight out from the wall until it's one radius away
+    local.center.subtract(closest).setLength(local.radius).add(closest).applyAffineMatrix4(toWorld);
+    player.position.copyFrom(local.center);
+  }
+});
+```
+
+For a yes or no, such as whether a spot is clear to drop an item, {@link TriangleBvh#intersectsSphere | intersectsSphere} stops at the first triangle inside the sphere. A sphere wholly inside a closed mesh touches no triangle, so it counts as clear.
+
+{@link TriangleBvh#traverse | traverse} covers any other query. You say which boxes to enter, and it hands you each triangle in them by number. This collects the triangles under a terrain editor's brush:
+
+```ts
+import { Box, Vector3 } from '@pixi/3d';
+
+const brush = new Box(new Vector3(-2, -50, -2), new Vector3(2, 50, 2)); // a column, in the terrain's own space
+const touched: number[] = [];
+
+terrain.geometry.bvh?.traverse(
+  (box) => box.intersectsBox(brush),
+  (triangle) => {
+    touched.push(triangle);
+  },
+);
+```
+
+Each box holds a few triangles, so some of these lie just outside the brush. To keep only the vertices inside the brush, test each triangle's corners against it; {@link TriangleBvh#triangle} says how a triangle's number leads to its corners. Return `true` from the second function to stop the walk early.
+
+Building the tree takes about 20 to 40 ms per 100,000 triangles on a laptop. Call {@link Geometry3D#buildBvh | buildBvh} while loading to keep that pause out of the first query or click. After you edit the arrays and call `unload`, as in [Unloading geometry](#unloading-geometry), the next `bvh` read refits the boxes to the moved vertices, for about a tenth of a build's cost. On a dynamic geometry, updating the position buffer does the same. A refit keeps the triangles grouped as they were, so after a large reshape the answers stay right but come slower; call `buildBvh` again then. New position or index arrays make the next read build a new tree.
