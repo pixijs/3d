@@ -68,6 +68,7 @@ async function initDecoder(jsUrl: string, wasmUrl: string): Promise<DracoModule>
 
   importScripts(absJsUrl);
 
+  // oxlint-disable-next-line no-restricted-globals -- runs in a worker, where the page's DOMAdapter isn't installed
   const wasmBinary = await fetch(absWasmUrl).then((r) => {
     if (!r.ok) throw new Error(`Failed to fetch Draco WASM: ${r.status} ${r.statusText}`);
     return r.arrayBuffer();
