@@ -11,8 +11,9 @@
  *
  * `culling off` is the field spinning in a view that doesn't cull, which pays for keeping bounds it never reads.
  *
- * `default small` is 250 spinning meshes in a view left on its default, `'gpu'`: on WebGPU nothing reads the
- * bounds, on WebGL the pass culls on the CPU and keeps them.
+ * `default small` is spinning meshes in a view left on its default, `'gpu'`. At 250, on WebGPU nothing reads the
+ * bounds, and on WebGL the pass culls on the CPU and keeps them. At 100 and 1, under the batch size that culls on the
+ * GPU, WebGPU culls on the CPU too, sparing the compute passes and their submit.
  *
  * `batched cull` is the field as one `BatchedMesh3D` that culls on the CPU, its container swaying so the planes
  * move into its frame every frame. `still20k` leaves the slots alone, `spin20k` rewrites every slot's matrix every
@@ -96,7 +97,7 @@ frame('culling off', {
 });
 
 frame('default small', {
-  variants: { spin250: { count: 250 } },
+  variants: { spin250: { count: 250 }, spin100: { count: 100 }, spin1: { count: 1 } },
   primary: 'cpu.render',
   create(stage: PixiStage, { count }) {
     const data = fieldScene(count);
