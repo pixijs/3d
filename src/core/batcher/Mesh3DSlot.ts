@@ -34,6 +34,11 @@ export class Mesh3DSlot implements Mesh3DData {
     this._batch = batch;
   }
 
+  // unused-internal-disable-next-line -- users read it through BatchedMesh3DSlot, the public type of `BatchedMesh3D.items`
+  public get meshIndex(): number {
+    return this._storeIndex;
+  }
+
   public get boundingSphere(): Sphere {
     const sphere = (this._boundingSphere ||= new Sphere());
     const store = this._batch.storeBuffer;

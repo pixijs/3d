@@ -120,6 +120,18 @@ export interface BatchedMesh3DSlot {
    * ```
    */
   receiveShadow: boolean;
+  /**
+   * The slot's number among this batch's slots, which a material's vertex code reads as the `u32` `meshIndex`
+   *
+   * It's fixed for the batch's lifetime. Each batch numbers its slots on its own, so a slot's number can match
+   * a slot of another batch or a {@link Mesh3D#meshIndex | mesh's}.
+   * @example
+   * ```ts
+   * const index = trees.items[i].meshIndex;
+   * ```
+   * @advanced
+   */
+  readonly meshIndex: number;
 }
 
 /**

@@ -88,6 +88,7 @@ What each slot can read and write (the local names are the same on both backends
 
 - `vertex.beforeTransform`: `position` (vec4, local), `normal` (local), `uv`, `material`. Displace here.
 - `vertex.afterTransform`: `worldPosition`, `worldNormal`, `clipPosition` (WGSL) / `gl_Position` (GLSL). Moving `worldPosition` here means rebuilding the clip position: `camera.uViewProjectionMatrix * worldPosition` (WGSL), `uViewProjectionMatrix * worldPosition` (GLSL).
+- Every vertex slot of a mesh's material (not `ParticleSystem3D`): `meshIndex` (u32), the mesh's number in its view, the same as `mesh.meshIndex` in JavaScript (`batched.items[i].meshIndex` for a `BatchedMesh3D` slot). It holds until the mesh leaves the view; slots number apart from meshes, so the two can match. Use it to look up per-mesh data without a material per mesh. For the fragment stage, pass it through a `u32` varying your bit declares in `interStage`.
 - `fragment.material`: `albedo` (vec3), `alpha`, `normal` (world). On `Material3D` also `emissive`, `roughness`, `metallic`, `occlusion`; on `PhongMaterial` also `emissive`. This slot runs after the material's own inputs, so `albedo` is already textured.
 - `fragment.lobePostLighting` (lit materials only): `finalColor` after the light loop, `normal`, `viewDir`.
 - `header` holds helper functions: one string per backend, `gpu: { header }` and `gl: { header }`; GLSL puts it in both stages. For `PI`, add `requires: [mathConstantsBit]` (from `@pixi/3d`) instead of defining it.

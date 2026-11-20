@@ -66,6 +66,8 @@ export interface Mesh3DData {
 
   /** The item's row in its batch's store, or -1 while it has none */
   _storeIndex: number;
+  // unused-internal-disable-next-line -- users read it through BatchedMesh3DSlot, the public type of `BatchedMesh3D.items`
+  readonly meshIndex: number;
 
   /** Whether the item's shader, keys and pass data wait for a rebuild; a slot with it set is queued */
   _batchDirty: boolean;
