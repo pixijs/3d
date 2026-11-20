@@ -1,6 +1,7 @@
 import { Texture, BufferResource, BufferUsage, warn } from 'pixi.js';
 import type { BufferImageSource } from 'pixi.js';
 
+import { retire } from '../retire';
 import { Buffer3D } from './Buffer3D';
 import { alignToDataTextureRows, createDataTextureSource, uploadFloatRange } from './dataTextureLayout';
 import { BUFFER_CALL_BYTES, BUFFER_SPAN_FLOOR_BYTES, DirtySlots, TEXTURE_CALL_BYTES } from './DirtySlots';
@@ -30,9 +31,6 @@ export class DataStoreBuffer<T extends object = object> {
 
   private _buffer: Buffer3D | null = null;
   private _bufferResource: BufferResource | null = null;
-
-  private readonly _retiredBuffers: Buffer3D[] = [];
-  private readonly _retiredTextures: Texture[] = [];
 
   private _texture: Texture | null = null;
   private _textureSource: BufferImageSource | null = null;
@@ -240,20 +238,11 @@ export class DataStoreBuffer<T extends object = object> {
     this._dirty.markRange(fromIndex, toIndex);
   }
 
-  private _freeRetired(): void {
-    for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
-    this._retiredBuffers.length = 0;
-
-    for (let i = 0; i < this._retiredTextures.length; i++) this._retiredTextures[i].destroy(true);
-    this._retiredTextures.length = 0;
-  }
-
   public unload(): void {
     if (!this.data) return;
 
     this._buffer?.unload();
     this._textureSource?.unload();
-    this._freeRetired();
   }
 
   public destroy(): void {
@@ -261,8 +250,6 @@ export class DataStoreBuffer<T extends object = object> {
 
     this._bufferResource?.destroy(false);
     this._buffer?.destroy();
-
-    this._freeRetired();
 
     this._texture?.destroy(true);
 
@@ -279,7 +266,7 @@ export class DataStoreBuffer<T extends object = object> {
 
   /**
    * Retires the GPU views rather than destroying them, since a view that drew earlier this frame
-   * still binds them; `_freeRetired` frees them
+   * still binds them; the texture's source is what holds its GPU texture
    */
   protected _expand(minSize?: number): void {
     let newSize = this.data.length * 2;
@@ -302,13 +289,13 @@ export class DataStoreBuffer<T extends object = object> {
     }
 
     if (this._buffer) {
-      this._retiredBuffers.push(this._buffer);
+      retire(this._buffer);
       this._buffer = null;
       this._bufferResource = null;
     }
 
     if (this._texture) {
-      this._retiredTextures.push(this._texture);
+      retire(this._texture.source);
       this._texture = null;
       this._textureSource = null;
     }

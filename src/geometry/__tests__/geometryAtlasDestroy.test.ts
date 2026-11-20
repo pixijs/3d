@@ -1,5 +1,5 @@
-import type { Buffer } from 'pixi.js';
-import { describe, expect, it } from 'vitest';
+import type { Buffer, Geometry } from 'pixi.js';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { GeometryAtlas } from '~/geometry/GeometryAtlas';
@@ -7,10 +7,11 @@ import { GeometryAtlas } from '~/geometry/GeometryAtlas';
 interface AtlasBuffers {
   _vertexBuffer: Buffer;
   _indexBuffer: Buffer;
+  _buildMergedGeometry(): Geometry;
 }
 
 describe('GeometryAtlas.destroy', () => {
-  it('frees the vertex/index buffers and merged geometry orphaned by capacity growth', () => {
+  it('frees the vertex/index buffers and merged geometry orphaned by capacity growth once the retire list empties', async () => {
     const reference = new Geometry3D({
       positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
       indices: new Uint32Array([0, 1, 2]),
@@ -31,7 +32,10 @@ describe('GeometryAtlas.destroy', () => {
     const indices = new Uint32Array(150);
     for (let i = 0; i < indices.length; i++) indices[i] = i % 100;
     const oversized = new Geometry3D({ positions, indices });
+    const build = vi.spyOn(internals, '_buildMergedGeometry');
     atlas.add(oversized);
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(initialMergedGeometry.indexBuffer).toBe(initialIndexBuffer);
 
     expect(internals._vertexBuffer).not.toBe(initialVertexBuffer);
     expect(internals._indexBuffer).not.toBe(initialIndexBuffer);
@@ -39,6 +43,7 @@ describe('GeometryAtlas.destroy', () => {
     expect(initialVertexBuffer.destroyed).toBe(false);
 
     atlas.destroy();
+    await Promise.resolve();
 
     expect(initialVertexBuffer.destroyed).toBe(true);
     expect(initialIndexBuffer.destroyed).toBe(true);

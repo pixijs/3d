@@ -74,6 +74,7 @@ export * from './render-passes/shadow/ShadowRenderPassBase';
 export * from './render-passes/transmission/TransmissionRenderPass';
 export * from './render-passes/transparent/TransparentRenderPass';
 export * from './render-passes/transparent/transparentSortUtils';
+export * from './retire';
 export * from './shader/bitRegistry';
 export * from './shader/bits/alphaMaskBit';
 export * from './shader/bits/alphaOpaqueBit';

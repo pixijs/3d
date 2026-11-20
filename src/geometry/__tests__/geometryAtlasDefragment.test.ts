@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import type { Geometry } from 'pixi.js';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { GeometryAtlas } from '~/geometry/GeometryAtlas';
@@ -28,8 +29,10 @@ describe('GeometryAtlas.defragment', () => {
     expect(secondAlloc.baseVertex).toBe(64);
     const version = atlas._bufferVersion;
 
+    const build = vi.spyOn(atlas as unknown as { _buildMergedGeometry(): Geometry }, '_buildMergedGeometry');
     atlas.remove(first);
     atlas.defragment();
+    expect(build).toHaveBeenCalledTimes(1);
 
     expect(secondAlloc.baseVertex).toBe(0);
     expect(secondAlloc.firstIndex).toBe(0);

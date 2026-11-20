@@ -16,13 +16,12 @@ const CUBES_PAST_ATLAS_CAPACITY = 200;
 
 interface AtlasProbe {
   geometry: { uid: number } | null;
-  _retiredGeometries: { uid: number }[];
   destroy(): void;
 }
 
 interface RendererProbe {
   geometry: { _managedGeometries: { items: Record<string, unknown> } };
-  renderPipes: { view3d: { atlasPool: { _atlases: Record<string, AtlasProbe> } } };
+  renderPipes: { view3d: { atlasPool: { _atlases: Record<string, AtlasProbe[]> } } };
 }
 
 interface PassProbe {
@@ -89,7 +88,7 @@ describe('pass- and atlas-owned geometries leave the WebGL geometry hash when de
     }
   });
 
-  it('drops the live and every retired atlas wrapper when a GeometryAtlas is destroyed', async () => {
+  it('drops each retired atlas wrapper after the microtask, and the live one when the GeometryAtlas is destroyed', async () => {
     const app = await getApp<Renderer>({
       id: 'gl-geometry-release-atlas',
       appOptions: { preference: 'webgl', width: SIZE, height: SIZE },
@@ -104,20 +103,26 @@ describe('pass- and atlas-owned geometries leave the WebGL geometry hash when de
       app.render();
       app.render();
 
+      const atlases = Object.values(renderer.renderPipes.view3d.atlasPool._atlases).flat();
+      const retired = atlases.map((atlas) => atlas.geometry!.uid);
+
       for (let i = 0; i < CUBES_PAST_ATLAS_CAPACITY; i++) view3d.root.addChild(cubeMesh(material));
       app.render();
-      app.render();
 
-      const atlases = Object.values(renderer.renderPipes.view3d.atlasPool._atlases);
+      expect(
+        atlases.map((atlas) => atlas.geometry!.uid),
+        'growth replaced each wrapper',
+      ).not.toEqual(retired);
+      expect(managedCount(renderer, retired)).toBe(retired.length);
+
+      await Promise.resolve();
+      expect(managedCount(renderer, retired)).toBe(0);
+
       const live = atlases.map((atlas) => atlas.geometry?.uid).filter((uid): uid is number => uid != null);
-      const retired = atlases.flatMap((atlas) => atlas._retiredGeometries.map((wrapper) => wrapper.uid));
-      expect(retired.length).toBeGreaterThan(0);
       expect(managedCount(renderer, live)).toBe(live.length);
-      expect(managedCount(renderer, retired)).toBeGreaterThan(0);
 
       for (const atlas of atlases) atlas.destroy();
       expect(managedCount(renderer, live)).toBe(0);
-      expect(managedCount(renderer, retired)).toBe(0);
     } finally {
       app.destroy(true, { children: true });
     }
