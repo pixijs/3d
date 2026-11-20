@@ -8,7 +8,7 @@
  * `@pixi/3d/extras`, `pixi.js` and the file it documents. Context the example assumes rather than
  * shows, such as `app`, `view3d` or `model`, is declared `any`, and so is a stand-in user class named
  * `My…`. Examples on file-private functions can't import what they document, so they aren't checked.
- * Runs on the TypeScript 5.9 that the `scripts/typedoc` workspace installs.
+ * Runs on the TypeScript 6 that the `scripts/typedoc` workspace installs.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';

@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "crashcat": "^0.0.4"
+    "crashcat": "^0.0.5"
   }
 }
