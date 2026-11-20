@@ -254,37 +254,30 @@ describe('RenderGraphDebugger on the shadow pass', () => {
     });
   });
 
-  it('reads a frustum-culled batch its cascades draw direct as using no bundle', async () => {
-    await withScene('debug-shadow-direct', (app, { view3d }) => {
-      cpuSubmission.shadow = Infinity;
-      const debug = new RenderGraphDebugger({ view: view3d });
-      renderShadowBundle(app, debug);
+  it.each(['off', 'gpu'] as const)(
+    "with cull '%s', reads a batch its cascades draw direct as replaying the bundles of its direct draws until a count changes",
+    async (cull) => {
+      await withScene(`debug-shadow-direct-${cull}`, (app, { view3d }) => {
+        cpuSubmission.shadow = Infinity;
+        view3d.cull = cull;
+        const second = createCaster();
+        second.position.set(2, 0, 0);
+        view3d.root.addChild(second);
+        const debug = new RenderGraphDebugger({ view: view3d });
+        renderShadowBundle(app, debug);
+        const steady = [renderShadowBundle(app, debug).status, renderShadowBundle(app, debug).status];
 
-      expect([renderShadowBundle(app, debug), renderShadowBundle(app, debug)]).toEqual([NOT_USED, NOT_USED]);
-    });
-  });
+        second.visible = false;
+        const hidden = [renderShadowBundle(app, debug), renderShadowBundle(app, debug)];
 
-  it("reads an 'off' batch its cascades draw direct as replaying the bundles of its direct draws until a count changes", async () => {
-    await withScene('debug-shadow-direct-off', (app, { view3d }) => {
-      cpuSubmission.shadow = Infinity;
-      view3d.cull = 'off';
-      const second = createCaster();
-      second.position.set(2, 0, 0);
-      view3d.root.addChild(second);
-      const debug = new RenderGraphDebugger({ view: view3d });
-      renderShadowBundle(app, debug);
-      const steady = [renderShadowBundle(app, debug).status, renderShadowBundle(app, debug).status];
-
-      second.visible = false;
-      const hidden = [renderShadowBundle(app, debug), renderShadowBundle(app, debug)];
-
-      expect(steady).toEqual(['reused', 'reused']);
-      expect(hidden.map(readingOf)).toEqual([
-        { status: 'recorded', causes: [{ code: 'counts-changed' }] },
-        { status: 'reused', causes: [] },
-      ]);
-    });
-  });
+        expect(steady).toEqual(['reused', 'reused']);
+        expect(hidden.map(readingOf)).toEqual([
+          { status: 'recorded', causes: [{ code: 'counts-changed' }] },
+          { status: 'reused', causes: [] },
+        ]);
+      });
+    },
+  );
 
   it("reads a second light hidden and shown again as reusing an 'off' batch's bundles of direct draws", async () => {
     await withScene('debug-shadow-direct-off-light-toggle', (app, { view3d }) => {
@@ -335,7 +328,7 @@ describe('RenderGraphDebugger on direct draws', () => {
     delete cpuSubmission.shadow;
   });
 
-  it('reads a batch the passes draw direct as using no bundle, frame after frame', async () => {
+  it('reads a batch the passes draw direct as reusing its bundles, frame after frame', async () => {
     cpuSubmission.forward = Infinity;
     cpuSubmission.shadow = Infinity;
     await withScene('debug-direct-draws', (app, { view3d }) => {
@@ -354,8 +347,8 @@ describe('RenderGraphDebugger on direct draws', () => {
 
       bundles('opaque');
 
-      expect([bundles('opaque'), bundles('opaque')], 'the opaque pass').toEqual([NOT_USED, NOT_USED]);
-      expect([bundles('shadow'), bundles('shadow')], 'each sun cascade').toEqual([NOT_USED, NOT_USED]);
+      expect([bundles('opaque').status, bundles('opaque').status], 'the opaque pass').toEqual(['reused', 'reused']);
+      expect([bundles('shadow').status, bundles('shadow').status], 'each sun cascade').toEqual(['reused', 'reused']);
     });
   });
 });

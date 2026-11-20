@@ -72,6 +72,31 @@ const directDraws = (spies: { draw: ReturnType<typeof vi.spyOn> }) =>
 const recordings = (spies: { beginBundle: ReturnType<typeof vi.spyOn> }, label: string) =>
   spies.beginBundle.mock.calls.filter(([name]: [string]) => name.startsWith(label));
 
+const LEFT_CUBE_COLUMN = 18;
+const RIGHT_CUBE_COLUMN = 46;
+
+function brightnessInMiddleRow(pixels: Uint8ClampedArray, x: number): number {
+  const i = ((SIZE / 2) * SIZE + x) * 4;
+  return Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
+}
+
+async function twoCubes(id: string, cull?: CullMode) {
+  const app = await getApp<Renderer>({
+    id,
+    appOptions: { preference: 'webgpu', width: SIZE, height: SIZE, backgroundColor: 0x000000 },
+  });
+  const view3d = new View3D({ width: SIZE, height: SIZE, cull });
+  view3d.camera.position.set(0, 0, 6);
+  app.stage.addChild(view3d);
+  const geometry = new CubeGeometry({ width: 2, height: 2, depth: 2 });
+  const material = new FlatMaterial({ baseColor: 0xffffff });
+  const left = view3d.root.addChild(new Mesh3D({ geometry, material }));
+  const right = view3d.root.addChild(new Mesh3D({ geometry, material }));
+  const opaqueResult = () =>
+    (view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass).cullResults.get(view3d._sceneBatch)!;
+  return { app, material, left, right, opaqueResult };
+}
+
 async function renderParityScene(id: string, cap: number) {
   cpuSubmission.forward = cap;
   cpuSubmission.shadow = cap;
@@ -162,28 +187,36 @@ describe('CPU submission on WebGPU', () => {
     delete cpuSubmission.shadow;
   });
 
-  it('within the cap: culls on the CPU, draws direct, records no bundle, skips the empty command', async () => {
+  it('within the cap: culls on the CPU, replays its direct draws from a bundle, and re-records only when the frustum changes a count', async () => {
     cpuSubmission.forward = Infinity;
-    const { app, material, result, counts, spies } = await sceneWithAnEmptyCommand('cpu-submission-on');
+    const { app, material, meshes, result, counts, spies } = await sceneWithAnEmptyCommand('cpu-submission-on');
     try {
       expect(result.direct).toBe(true);
-      expect(result.bundle, 'nothing was recorded').toBeNull();
-      expect(recordings(spies, 'view3d pass'), 'a frustum walk never records its direct draws').toHaveLength(0);
+      expect(result.bundle, 'the direct draws were recorded').not.toBeNull();
+      expect(recordings(spies, 'view3d pass'), 'an unchanged walk keeps the bundle').toHaveLength(0);
       expect(spies.drawIndirect, 'no indirect draw').not.toHaveBeenCalled();
-      expect(spies.executeBundle, 'no bundle executed').not.toHaveBeenCalled();
+      expect(spies.executeBundle, 'the bundle replays').toHaveBeenCalled();
+      expect(directDraws(spies), 'the still frame replays the bundle').toHaveLength(0);
       expect(counts, 'one command holds the six visible cubes, the other is empty').toEqual(
         expect.arrayContaining([6, 0]),
       );
-      expect(directDraws(spies), 'one direct draw per non-empty command').toHaveLength(
-        counts.filter((c) => c > 0).length,
-      );
 
+      const bundle = result.bundle;
+      meshes[0].position.set(1000, 0, 0);
       app.render();
-      expect(result.bundle, 'nor on a later frame').toBeNull();
-      expect(recordings(spies, 'view3d pass')).toHaveLength(0);
-      expect(directDraws(spies), 'the direct draws go out again every frame').toHaveLength(
-        2 * counts.filter((c) => c > 0).length,
-      );
+      expect(recordings(spies, 'view3d pass'), 'a cube leaving the frustum re-records once').toHaveLength(1);
+      expect(result.bundle).not.toBe(bundle);
+      expect(directDraws(spies), 'the new bundle holds one direct draw per non-empty command').toHaveLength(1);
+      expect(result.indirectDrawData.drawCalls[1] + result.indirectDrawData.drawCalls[6], 'five cubes left').toBe(5);
+
+      const culled = result.bundle;
+      meshes[0].position.set(-6, 0, 0);
+      meshes[2].position.set(1000, 0, 0);
+      app.render();
+      expect(result.bundle, 'the same counts keep the bundle, which reads the survivors live').toBe(culled);
+      expect(recordings(spies, 'view3d pass'), 'so nothing re-records').toHaveLength(1);
+      expect(directDraws(spies)).toHaveLength(1);
+      expect(spies.drawIndirect).not.toHaveBeenCalled();
     } finally {
       material.destroy();
       app.destroy();
@@ -240,47 +273,65 @@ describe('CPU submission on WebGPU', () => {
 
   it("an 'off' batch within the cap: a swap inside one command keeps the bundle and draws the shown instance", async () => {
     cpuSubmission.forward = Infinity;
-    const app = await getApp<Renderer>({
-      id: 'cpu-submission-off-swap-pixels',
-      appOptions: { preference: 'webgpu', width: SIZE, height: SIZE, backgroundColor: 0x000000 },
-    });
-    const view3d = new View3D({ width: SIZE, height: SIZE, cull: 'off' });
-    view3d.camera.position.set(0, 0, 6);
-    app.stage.addChild(view3d);
-    const geometry = new CubeGeometry({ width: 2, height: 2, depth: 2 });
-    const material = new FlatMaterial({ baseColor: 0xffffff });
-    const left = view3d.root.addChild(new Mesh3D({ geometry, material }));
-    const right = view3d.root.addChild(new Mesh3D({ geometry, material }));
+    const { app, material, left, right, opaqueResult } = await twoCubes('cpu-submission-off-swap-pixels', 'off');
     left.position.set(-1.5, 0, 0);
     right.position.set(1.5, 0, 0);
     right.visible = false;
-    const leftCubeColumn = 18;
-    const rightCubeColumn = 46;
-    const brightnessInMiddleRow = (pixels: Uint8ClampedArray, x: number) => {
-      const i = ((SIZE / 2) * SIZE + x) * 4;
-      return Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
-    };
     try {
       await renderFrame(app);
       let pixels = await renderFrame(app);
-      const result = (view3d.passByBit[RenderPassBit.OPAQUE] as ForwardRenderPass).cullResults.get(view3d._sceneBatch)!;
+      const result = opaqueResult();
       const bundle = result.bundle;
       expect(result.direct).toBe(true);
       expect(bundle).not.toBeNull();
-      expect(brightnessInMiddleRow(pixels, leftCubeColumn), 'the left cube is drawn').toBeGreaterThan(200);
-      expect(brightnessInMiddleRow(pixels, rightCubeColumn), 'the right cube is hidden').toBeLessThan(8);
+      expect(brightnessInMiddleRow(pixels, LEFT_CUBE_COLUMN), 'the left cube is drawn').toBeGreaterThan(200);
+      expect(brightnessInMiddleRow(pixels, RIGHT_CUBE_COLUMN), 'the right cube is hidden').toBeLessThan(8);
 
       left.visible = false;
       right.visible = true;
       pixels = await renderFrame(app);
       expect(result.bundle, 'one instance either way, so the bundle is kept').toBe(bundle);
       expect(
-        brightnessInMiddleRow(pixels, leftCubeColumn),
+        brightnessInMiddleRow(pixels, LEFT_CUBE_COLUMN),
         'the kept bundle no longer draws the left cube',
       ).toBeLessThan(8);
-      expect(brightnessInMiddleRow(pixels, rightCubeColumn), 'it reads the new survivor when it runs').toBeGreaterThan(
-        200,
-      );
+      expect(
+        brightnessInMiddleRow(pixels, RIGHT_CUBE_COLUMN),
+        'it reads the new survivor when it runs',
+      ).toBeGreaterThan(200);
+    } finally {
+      material.destroy();
+      app.destroy();
+    }
+  });
+
+  it('a frustum-culled batch within the cap: a swap inside one command keeps the bundle and draws the instance in view', async () => {
+    cpuSubmission.forward = Infinity;
+    const { app, material, left, right, opaqueResult } = await twoCubes('cpu-submission-frustum-swap-pixels');
+    left.position.set(-1.5, 0, 0);
+    right.position.set(1000, 0, 0);
+    try {
+      await renderFrame(app);
+      let pixels = await renderFrame(app);
+      const result = opaqueResult();
+      const bundle = result.bundle;
+      expect(result.direct).toBe(true);
+      expect(bundle).not.toBeNull();
+      expect(brightnessInMiddleRow(pixels, LEFT_CUBE_COLUMN), 'the left cube is drawn').toBeGreaterThan(200);
+      expect(brightnessInMiddleRow(pixels, RIGHT_CUBE_COLUMN), 'the right cube is out of view').toBeLessThan(8);
+
+      left.position.set(-1000, 0, 0);
+      right.position.set(1.5, 0, 0);
+      pixels = await renderFrame(app);
+      expect(result.bundle, 'one instance either way, so the bundle is kept').toBe(bundle);
+      expect(
+        brightnessInMiddleRow(pixels, LEFT_CUBE_COLUMN),
+        'the kept bundle no longer draws the left cube',
+      ).toBeLessThan(8);
+      expect(
+        brightnessInMiddleRow(pixels, RIGHT_CUBE_COLUMN),
+        'it reads the new survivor when it runs',
+      ).toBeGreaterThan(200);
     } finally {
       material.destroy();
       app.destroy();
@@ -382,37 +433,40 @@ describe('CPU submission on WebGPU', () => {
     }
   });
 
-  it("a shadow cascade within its cap: an 'off' batch records its casters' direct draws into a bundle and reuses it", async () => {
-    cpuSubmission.forward = Infinity;
-    cpuSubmission.shadow = Infinity;
-    const { app, material, meshes, shadowResult, spies } = await sceneWithAnEmptyCommand(
-      'cpu-submission-off-shadow',
-      'off',
-      false,
-      true,
-    );
-    try {
-      expect(shadowResult, 'the spot culled the batch for its cascade').toBeTruthy();
-      expect(shadowResult!.direct, 'the cascade draws the batch direct').toBe(true);
-      expect(shadowResult!.bundle, 'the cascade recorded its direct draws').not.toBeNull();
-      expect(spies.drawIndirect).not.toHaveBeenCalled();
+  it.each(['off', 'cpu'] as const)(
+    "a shadow cascade within its cap: with cull '%s', a batch records its casters' direct draws into a bundle and reuses it",
+    async (cull) => {
+      cpuSubmission.forward = Infinity;
+      cpuSubmission.shadow = Infinity;
+      const { app, material, meshes, shadowResult, spies } = await sceneWithAnEmptyCommand(
+        `cpu-submission-${cull}-shadow`,
+        cull,
+        false,
+        true,
+      );
+      try {
+        expect(shadowResult, 'the spot culled the batch for its cascade').toBeTruthy();
+        expect(shadowResult!.direct, 'the cascade draws the batch direct').toBe(true);
+        expect(shadowResult!.bundle, 'the cascade recorded its direct draws').not.toBeNull();
+        expect(spies.drawIndirect).not.toHaveBeenCalled();
 
-      const bundle = shadowResult!.bundle;
-      spies.beginBundle.mockClear();
-      app.render();
-      expect(shadowResult!.bundle, 'no flip, the same bundle').toBe(bundle);
-      expect(recordings(spies, 'shadow cascade'), 'and no re-record').toHaveLength(0);
+        const bundle = shadowResult!.bundle;
+        spies.beginBundle.mockClear();
+        app.render();
+        expect(shadowResult!.bundle, 'no flip, the same bundle').toBe(bundle);
+        expect(recordings(spies, 'shadow cascade'), 'and no re-record').toHaveLength(0);
 
-      meshes[0].visible = false;
-      app.render();
-      expect(recordings(spies, 'shadow cascade'), 'a flip re-records the cascade').toHaveLength(1);
-      expect(shadowResult!.bundle).not.toBe(bundle);
-      expect(spies.drawIndirect).not.toHaveBeenCalled();
-    } finally {
-      material.destroy();
-      app.destroy();
-    }
-  });
+        meshes[6].visible = false;
+        app.render();
+        expect(recordings(spies, 'shadow cascade'), 'a flip re-records the cascade').toHaveLength(1);
+        expect(shadowResult!.bundle).not.toBe(bundle);
+        expect(spies.drawIndirect).not.toHaveBeenCalled();
+      } finally {
+        material.destroy();
+        app.destroy();
+      }
+    },
+  );
 
   it("a shadow cascade over its cap: a 'cpu' batch keeps its indirect bundle when the walk changes the counts", async () => {
     cpuSubmission.forward = 0;
@@ -446,7 +500,7 @@ describe('CPU submission on WebGPU', () => {
     const { app, material, result, spies } = await sceneWithAnEmptyCommand('cpu-submission-at-cap');
     try {
       expect(result.direct, 'twelve instances fit a cap of twelve').toBe(true);
-      expect(spies.executeBundle, 'no bundle executed').not.toHaveBeenCalled();
+      expect(spies.drawIndirect, 'no indirect draw').not.toHaveBeenCalled();
     } finally {
       material.destroy();
       app.destroy();
@@ -468,8 +522,9 @@ describe('CPU submission on WebGPU', () => {
       transparent: true,
       shadow: true,
     });
-    expect(direct.drew.indirect + direct.drew.bundles, 'nothing drew indirect').toBe(0);
-    expect(direct.drew.direct, 'each geometry, the ground and the blended sphere drew').toBeGreaterThanOrEqual(5);
+    expect(direct.drew.indirect, 'nothing drew indirect').toBe(0);
+    expect(direct.drew.bundles, 'the opaque pass and the shadow replay their direct-draw bundles').toBeGreaterThan(0);
+    expect(direct.drew.direct, 'the back-to-front pass draws the blended sphere direct').toBeGreaterThanOrEqual(1);
 
     const a = indirect.pixels;
     const b = direct.pixels;
