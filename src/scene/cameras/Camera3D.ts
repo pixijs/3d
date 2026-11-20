@@ -390,6 +390,24 @@ export class Camera3D extends Container3D {
    */
   public readonly jitter: Point = new Point();
 
+  /**
+   * When the camera's history moves on, the earlier position that motion effects, such as
+   * `velocityOutput`, measure from
+   *
+   * - `'render'`: every render moves it on, so a camera drawn twice in one frame reads no motion
+   *   the second time.
+   * - `'manual'`: only {@link Camera3D#advanceHistory | advanceHistory()} moves it on. Call that
+   *   once per frame, and every render in the frame measures from the previous frame.
+   * @default 'render'
+   * @example
+   * ```ts
+   * camera.historyMode = 'manual';
+   * app.ticker.add(() => camera.advanceHistory());
+   * ```
+   * @advanced
+   */
+  public historyMode: 'render' | 'manual' = 'render';
+
   /** @internal */
   protected override _lookAtForwardIsPositiveZ: boolean = false;
 
@@ -473,8 +491,8 @@ export class Camera3D extends Container3D {
    *
    * Call it on a cut, such as a teleport, a respawn or a change of shot, so effects that read
    * motion, such as `MotionBlurEffect`, don't smear the first frame after it. A camera's first
-   * render needs no call. Every render moves the history on, so a view drawn twice in one frame
-   * reads no motion on its second draw.
+   * render needs no call. With a {@link Camera3D#historyMode | historyMode} of `'manual'`, the rest
+   * of that frame's renders measure from that render too.
    * @example
    * ```ts
    * camera.position.copyFrom(spawnPoint);
@@ -483,6 +501,26 @@ export class Camera3D extends Container3D {
    */
   public resetHistory(): void {
     if (this._cameraData) this._cameraData._hasHistory = false;
+  }
+
+  /**
+   * Starts a new frame for a camera whose {@link Camera3D#historyMode | historyMode} is `'manual'`:
+   * every render from now on measures motion from the camera's last render before this call
+   *
+   * Call it once per frame, before or after the frame's renders, so each render of the frame,
+   * including a second render of the same camera, reads the motion since the previous frame.
+   * @example
+   * ```ts
+   * camera.historyMode = 'manual';
+   * app.ticker.add(() => {
+   *   camera.advanceHistory();
+   *   camera.position.x += 0.05;
+   *   app.renderer.render({ container: app.stage, target: feed });
+   * });
+   * ```
+   */
+  public advanceHistory(): void {
+    this._cameraData?.advanceHistory();
   }
 
   /**

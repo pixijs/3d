@@ -372,6 +372,29 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       rt.destroy(true);
     });
 
+    it("reads the frame's motion on every render of it, with historyMode 'manual'", async () => {
+      const capture = new VelocityCapture();
+      await setup('manual', [capture]);
+      const rt = RenderTexture.create({ width: SIZE, height: SIZE, resolution: RESOLUTION });
+      view3d.camera.historyMode = 'manual';
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      view3d.root.addChild(plane(400, 400));
+
+      await renderFrame(app);
+      await capture.read();
+
+      view3d.camera.advanceHistory();
+      view3d.camera.position.set(-2 * WORLD_PER_PIXEL, 0, 10);
+      for (const render of ['first', 'second']) {
+        app.renderer.render({ container: view3d, target: rt });
+        const [u, v] = at(await capture.read(), PHYSICAL / 2, PHYSICAL / 2);
+        expect(u, `the ${render} render reads the move since the last frame`).toBeCloseTo(2 / PHYSICAL, 4);
+        expect(v).toBeCloseTo(0, 4);
+      }
+      rt.destroy(true);
+    });
+
     it('clears the velocity alone when a beforeOpaque pass drew the scene colour first', async () => {
       const capture = new VelocityCapture();
       await setup('fill', [new SceneColorFill(), capture]);

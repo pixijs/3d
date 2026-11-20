@@ -175,6 +175,48 @@ describe('CameraData previous view-projection', () => {
     for (const c of [still, plain, camera]) c.destroy();
   });
 
+  it("with historyMode 'manual', measures every render from the last render before advanceHistory()", () => {
+    const plain = cameraAt(new Camera3D(), 0);
+    const plainData = new CameraData().syncFromCamera(plain, true, true, viewport);
+    cameraAt(plain, 2);
+    plainData.syncFromCamera(plain, true, true, viewport);
+    const expected = motion(plainData);
+
+    const perRender = cameraAt(new Camera3D(), 0);
+    const perRenderData = getCameraData(perRender).syncFromCamera(perRender, true, true, viewport);
+    const manual = cameraAt(new Camera3D(), 0);
+    manual.historyMode = 'manual';
+    const manualData = getCameraData(manual).syncFromCamera(manual, true, true, viewport);
+
+    for (const camera of [perRender, manual]) {
+      camera.advanceHistory();
+      cameraAt(camera, 2);
+    }
+    for (const render of ['first', 'second']) {
+      perRenderData.syncFromCamera(perRender, true, true, viewport);
+      manualData.syncFromCamera(manual, true, true, viewport);
+      motion(manualData).forEach(([dx, dy], i) => {
+        expect(dx, `the ${render} render of the frame reads the move`).toBeCloseTo(expected[i][0], 6);
+        expect(dy).toBeCloseTo(expected[i][1], 6);
+      });
+    }
+    expect(Math.abs(motion(perRenderData)[0][0]), "by default the frame's second render reads none").toBeLessThan(1e-6);
+
+    manual.advanceHistory();
+    manualData.syncFromCamera(manual, true, true, viewport);
+    expect(Math.abs(motion(manualData)[0][0]), 'the next frame, with no move, reads none').toBeLessThan(1e-6);
+
+    manual.advanceHistory();
+    cameraAt(manual, 5);
+    manual.resetHistory();
+    for (let i = 0; i < 2; i++) {
+      manualData.syncFromCamera(manual, true, true, viewport);
+      expect(Math.abs(motion(manualData)[0][0]), "a cut's frame reads no motion on any render").toBeLessThan(1e-6);
+    }
+
+    for (const c of [plain, perRender, manual]) c.destroy();
+  });
+
   it('flips the previous view-projection for each render, whatever the previous target was', () => {
     const camera = cameraAt(new Camera3D(), 1);
     const data = new CameraData().syncFromCamera(camera, true, false, viewport);

@@ -87,9 +87,14 @@ export class CameraData {
   /** The session this was last built for; identity is enough, since each frame makes a new session */
   public _currentSession: RenderSession | null = null;
 
-  /** `Camera3D.viewProjection` at the last render, as built, so `syncFromCamera` can give it this render's GPU form */
-  private readonly _lastViewProjection = new Matrix4();
-  /** Whether `_lastViewProjection` holds an earlier render */
+  /** `Camera3D.viewProjection` at the last render, as built */
+  private _lastViewProjection = new Matrix4();
+  /**
+   * The `Camera3D.viewProjection` renders compare with, as built, so `syncFromCamera` can give it each render's GPU
+   * form; swapped with `_lastViewProjection` rather than copied when every render moves the history on, for speed
+   */
+  private _historyViewProjection = new Matrix4();
+  /** Whether `_lastViewProjection` and `_historyViewProjection` hold an earlier render */
   public _hasHistory = false;
 
   constructor(frustum: Frustum = new Frustum()) {
@@ -157,8 +162,7 @@ export class CameraData {
   }
 
   /**
-   * Writes the camera's lanes and rolls `previousViewProjection` forward; a camera drawn twice in one frame reads
-   * no motion the second time
+   * Writes the camera's lanes and, unless the camera's `historyMode` is `'manual'`, moves its history on first
    * @param camera - The camera, with its matrices built for this render.
    * @param flipY - Whether the target's front face is inverted.
    * @param zeroToOneDepth - Whether to remap clip z to `[0, w]`, for WebGPU.
@@ -173,13 +177,25 @@ export class CameraData {
 
     this.set(scratchCameraPosition, camera.view, camera.projection, flipY, zeroToOneDepth, scratchJitter);
 
-    const previous = this.previousViewProjection;
-    previous.copyFrom(this._hasHistory ? this._lastViewProjection : camera.viewProjection);
-    toGpuMatrix(previous, scratchJitter, flipY, zeroToOneDepth);
+    if (!this._hasHistory) {
+      this._historyViewProjection.copyFrom(camera.viewProjection);
+    } else if (camera.historyMode === 'render') {
+      const last = this._lastViewProjection;
+      this._lastViewProjection = this._historyViewProjection;
+      this._historyViewProjection = last;
+    }
     this._lastViewProjection.copyFrom(camera.viewProjection);
     this._hasHistory = true;
 
+    const previous = this.previousViewProjection.copyFrom(this._historyViewProjection);
+    toGpuMatrix(previous, scratchJitter, flipY, zeroToOneDepth);
+
     return this;
+  }
+
+  /** Makes the camera's last render the one later renders compare with */
+  public advanceHistory(): void {
+    if (this._hasHistory) this._historyViewProjection.copyFrom(this._lastViewProjection);
   }
 
   /**
