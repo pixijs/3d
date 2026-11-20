@@ -87,7 +87,6 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
   private readonly _forwardOptions: ForwardOptionsGpu = {
     pipe: this,
     bit: 0,
-    bindsMaterial: false,
     cullResults: null!,
     camera: null,
     session: null!,
@@ -159,7 +158,6 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     const options = this._forwardOptions;
     options.useBundles = cachesDrawWork(desc);
     options.bit = desc.bit;
-    options.bindsMaterial = desc.bindsMaterial;
     options.cullResults = desc.cullResults;
     options.camera = desc.camera;
     options.session = session;

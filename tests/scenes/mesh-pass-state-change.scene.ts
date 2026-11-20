@@ -34,7 +34,7 @@ export function stateChangeScene(shaderDescriptor: ShaderDescriptorOptions): Tes
         anchor: 0.5,
         toneMapping: 'none',
         environment: { skyColor: 0xffffff, groundColor: 0x334455 },
-        passes: [new MeshPass({ name: 'state-change-xray', descriptor: { shaderDescriptor, state } })],
+        passes: [new MeshPass({ name: 'state-change-xray', level: 'shape', descriptor: { shaderDescriptor, state } })],
       });
       view.camera.fov = 40;
       view.camera.position.set(0, 1.4, 5.4);

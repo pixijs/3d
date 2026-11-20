@@ -10,9 +10,9 @@ import type { RenderSession } from '../render-passes/RenderSession';
 import { MAX_CASCADES } from '../render-passes/shadow/csmUtils';
 import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/shadowPassUtils';
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
-import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
+import { DEPTH_EMPTY } from '../textures/DefaultTextures';
 import { produceCpuCompaction, produceVisibilityCompaction } from './cull';
-import { shadowGlobalBitGpu } from './shader/shadowGlobalBitGpu';
+import { bindBatchStorage } from './renderForwardBatchesGpu';
 import type { View3DPipeGpu } from './View3DPipeGpu';
 
 interface ShadowRenderPassGpuOptions {
@@ -20,51 +20,13 @@ interface ShadowRenderPassGpuOptions {
   shadowMapHandle: DepthHandle;
 }
 
-/** Declares `normal` and `tangent` with the material template's types, for the morph and skinning bits to write */
-const shadowGpuTemplate = /*wgsl*/ `
-
-{{header}}
-{{vertexHeader}}
-
-@vertex
-fn mainVertex(
-  input: VertexInput,
-  @builtin(instance_index) ii: u32,
-  @builtin(vertex_index) vid: u32
-) -> VertexOutput {
-  var output: VertexOutput;
-
-  var position: vec4<f32>;
-
-  let renderable = uRenderableStorage[uRenderableInstanceStorage[ii].id];
-  let batchWorldMatrix = uRenderableStorage[0].transform;
-
-  var normal = vec3<f32>(0.0);
-  var tangent = vec3<f32>(0.0);
-
-  {{vertexInput}}
-
-  let worldPosition = batchWorldMatrix * renderable.transform * position;
-  let clipPosition = camera.uViewProjectionMatrix * worldPosition;
-
-  output.position = clipPosition;
-
-  {{vertexEnd}}
-
-  return output;
-}
-
-@fragment
-fn mainFragment(input: FragmentInput){
-}
-`;
-
-const shadowTemplate: ShaderBitTemplate = {
-  bindGroups: [{ name: 'global', ubo: true }, 'camera', 'local'],
-  gpu: shadowGpuTemplate,
-};
-
-/** @internal */
+/**
+ * WebGPU's `ShadowData`: the shared cascade slots plus this light's cull results
+ *
+ * Code can read a light's `_gpuShadowData` into a `ShadowDataGpu` variable without a cast, since
+ * `cullResults`, the one field this type adds, is optional.
+ * @internal
+ */
 export interface ShadowDataGpu extends ShadowData {
   /** One per batch per cascade, owned by the light and released with it by `releaseShadowCascades` */
   cullResults?: CullResults;
@@ -89,12 +51,8 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
       description: 'Renders shadow-casting scene geometry into each light shadow map.',
       bit: RenderPassBit.SHADOW,
       shadowMapHandle: options.shadowMapHandle,
+      level: 'cutout',
       descriptor: {
-        shaderDescriptor: {
-          bitsGpu: [shadowGlobalBitGpu],
-          template: shadowTemplate,
-          includeGlobal: false,
-        },
         state: shadowState,
       },
     });
@@ -137,7 +95,6 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           commandList: list.commandList,
           drawData: list.drawData,
           passBit: this.bit,
-          bindsMaterial: false,
           batch,
           view3d,
         });
@@ -200,9 +157,48 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
   }
 
   /**
-   * Binds each layer rather than pushing it, and resets `activeTarget`, as the next pass binds its own;
-   * cascade camera buffers opt out of pixi's GC, which can't see bundles use them, and
-   * `releaseShadowCascades` frees them
+   * Main render loop
+   *
+   * For each shadow-casting light, iterates its cascades (or its single layer) and renders the
+   * casters' depth into the matching layer of the shadow-map array. A cascade the update cadence
+   * skipped this frame keeps its depth layer and frozen matrix. Colour writes are masked off for
+   * the whole pass, so every bundle records under that mask.
+   *
+   * Draw data was built in `prepare`. Here each cascade binds its layer, a pass of its own, with
+   * `bind` rather than `push`: the graph re-establishes the default target after this pass, so
+   * there is nothing to pop back to. Every light draws through its cascades' camera groups; spot
+   * lights and fixed boxes use slot 0, like a lone directional. Each cascade binds its own cull
+   * result, the survivors and args `prepare` filled for it, and records or replays its bundle,
+   * cached on that result until the list rebuilds or the map is recreated. An indirect bundle holds
+   * the body's commands only; the tail's, after `commandList.bodyCount`, draw straight into the
+   * cascade's pass every frame, so a tail command added or emptied records nothing.
+   * When the batch's cull is `'off'`, a result the cascade draws direct (`CullResult.direct`) has its direct draws recorded
+   * into that bundle, which also re-records when `CullResult.countsDirtyId` moves. Otherwise the
+   * cascade issues those draws straight into its pass every frame, with no bundle, and binding
+   * their groups stamps what they use for pixi's GC. A light or batch with no result was skipped
+   * by `prepare` this frame and draws nothing. `isBundleValid` vets the state a bundle baked
+   * (attachment formats, sample count, winding), which the shadow target keeps fixed; a replaced
+   * map isn't part of that stamp, and `_bindShadowSource` re-records for it.
+   *
+   * The cascade's recorded bundles bake its camera group's buffer and replay it without touching
+   * it, and a throttled cascade never re-uploads, so pixi's GC would see an idle buffer and free it
+   * under a live bundle. The buffer opts out of the GC; `releaseShadowCascades` frees it instead.
+   *
+   * Every shader drawn here is compiled with the full global bit, so its layout holds `uShadowMap`,
+   * and WebGPU rejects a texture bound for sampling in a render pass that also has it as the depth
+   * attachment. So the slot holds `DEPTH_EMPTY` while the cascades draw, and the live map goes back
+   * once they have. The swap re-records nothing, unlike `_bindShadowSource`: the bundles recorded
+   * here bake the placeholder, every other pass draws and records while the slot holds the live
+   * map, and the next `prepare` finds the live map already bound. Both halves use
+   * `setResourceUnwatched`, so the swap moves no `change` listener: the live map keeps the one
+   * `_bindShadowSource` gave it, and the placeholder is never destroyed.
+   *
+   * A cascade's valid bundles replay in one `executeBundle` call, and the scratch run is emptied
+   * right after, so it holds no bundle, and so no GPU resource, past the cascade. Once a light's
+   * due cascades are drawn, its layers belong to the live map and its one-shot refresh is spent.
+   * The last bind leaves the shadow map as the live target, so `activeTarget` is reset for the
+   * next pass to bind its own, as `CopyOpaquePass` does.
+   * @param session - The current frame's render session
    */
   public override render(session: RenderSession): void {
     const { view3d, lights } = session;
@@ -210,7 +206,10 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
     const renderer = this.pipe.renderer;
     const encoder = renderer.encoder;
     const pipeline = renderer.pipeline;
+    const { group, slot } = view3d._graph.globalTextureBindings.shadowMap;
+    const shadowMapIndex = group.layout![slot];
 
+    group.setResourceUnwatched(DEPTH_EMPTY.source, shadowMapIndex);
     pipeline.setColorMask(0b0000);
 
     for (const light of lights) {
@@ -245,8 +244,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
 
           if (result.direct && batch.cull !== 'off') {
             result.bundle = null;
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
             list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
             continue;
           }
@@ -254,10 +252,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           const recorded = result.bundle;
 
           if (!recorded || result.isBundleStale(list, cameraBindGroup) || !encoder.isBundleValid(recorded)) {
-            const { globalBindGroup } = session;
-
-            globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
 
             encoder.beginBundle(`shadow cascade ${c} batch ${batch.uid}`);
             if (result.direct) list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
@@ -279,8 +274,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           commandList.touch(renderer.gc.now);
           this._bundleRun.push(result.bundle!);
           if (!result.direct && commandList.count > commandList.bodyCount) {
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
             commandList.replay(
               encoder,
               renderer.buffer,
@@ -301,6 +295,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
     }
 
     pipeline.setColorMask(0b1111);
+    group.setResourceUnwatched(this.renderTarget.depthStencilTexture!, shadowMapIndex);
 
     session.activeTarget = null;
   }

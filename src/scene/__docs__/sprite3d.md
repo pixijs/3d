@@ -75,7 +75,7 @@ A sprite blends by {@link Sprite3DOptions#alphaMode | default}, which suits soft
 
 ## Shadows
 
-A light draws a billboard's shadow from the card before the GPU turns it to face the camera, so the shadow can thin to a sliver. That's why a sprite casts no shadow by {@link Sprite3DOptions#castShadow | default}. With `castShadow: true`, a sprite in `'none'` mode casts a shadow when it's masked or opaque and its front faces the light. A masked sprite's shadow doesn't show its holes yet, as [Shadows](./shadows.md#which-meshes-cast-and-receive) says.
+A billboard turns to face whichever camera draws it, and a light draws shadows from its own view. So a billboarded sprite's shadow is the whole card as the light sees it, whatever the camera sees of it. A sprite casts no shadow by {@link Sprite3DOptions#castShadow | default}. With `castShadow: true` it casts when it's masked or opaque, and a masked sprite's shadow has its holes. In `'none'` mode it casts only while its front faces the light, as [Shadows](./shadows.md#which-meshes-cast-and-receive) says.
 
 ## Sharing a material
 

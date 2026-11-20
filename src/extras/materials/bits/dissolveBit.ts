@@ -70,7 +70,7 @@ float dissolveNoise(vec3 p) {
  * node.
  *
  * Shadows and outlines don't dissolve. The shadow pass and an {@link OutlinePass} draw a mesh with
- * their own shaders, which leave out the material's extra bits. So a half-dissolved mesh still
+ * only the bits at their {@link RenderPassOptions#level | level}, and this bit has none. So a half-dissolved mesh still
  * casts a whole shadow, and its outline shows through the holes and stays as a solid silhouette
  * at `dissolve` 1. To drop the outline while a copy dissolves, take the copy out of that pass with
  * {@link BaseMaterial3D#disablePass}: `copy.disablePass('outline')`.

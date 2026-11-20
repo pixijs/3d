@@ -141,7 +141,7 @@ const leaves = new Material3D({
 });
 ```
 
-The default `alphaMode` is `'opaque'`, which ignores `alpha` and the alpha of textures and vertex colours: `alpha: 0.5` alone does nothing, and a PNG's transparent texels draw black, because pixi premultiplies images on upload. Set `'mask'` for a texture with holes and `'blend'` for see-through. `'blend'` surfaces write no depth, so they can show sorting artefacts where they overlap themselves. A `'mask'` surface casts a solid shadow with no holes in it, since the shadow pass doesn't read textures. Glass that refracts is `transmission: {}`, not `'blend'`.
+The default `alphaMode` is `'opaque'`, which ignores `alpha` and the alpha of textures and vertex colours: `alpha: 0.5` alone does nothing, and a PNG's transparent texels draw black, because pixi premultiplies images on upload. Set `'mask'` for a texture with holes and `'blend'` for see-through. `'blend'` surfaces write no depth, so they can show sorting artefacts where they overlap themselves. A `'mask'` surface's shadow has the same holes. Glass that refracts is `transmission: {}`, not `'blend'`.
 
 ## Textures
 

@@ -68,6 +68,7 @@ export class WireframePass extends MeshPass {
     super({
       ...rest,
       name: 'wireframe',
+      level: 'shape',
       descriptor: {
         shaderDescriptor: solidMeshDescriptor({ color }),
         state,

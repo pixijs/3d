@@ -179,10 +179,10 @@ export interface Sprite3DOptions extends Omit<Mesh3DOptions, 'geometry' | 'mater
   /**
    * Whether the sprite casts shadows
    *
-   * Off by default because a billboarded sprite casts the shadow of its unturned quad, which
-   * doesn't turn with the camera and can thin to a sliver. In `'none'` mode a sprite casts once it's
-   * `'opaque'` or `'mask'` and its front faces the light, though a masked one's shadow doesn't show
-   * its holes yet. A blended one, the default, casts nothing.
+   * Off by default because a billboarded sprite turns to face the light in the shadow pass, so it
+   * casts the whole quad however it looks from the camera. A sprite casts once it's `'opaque'` or
+   * `'mask'`, a masked one with its holes, and in `'none'` mode only while its front faces the
+   * light. A blended one, the default, casts nothing.
    * @default false
    * @example
    * ```ts

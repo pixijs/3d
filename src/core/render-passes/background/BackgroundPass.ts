@@ -40,7 +40,16 @@ fn mainVertex(input: VertexInput) -> VertexOutput {
 }
 `;
 
-/** The cube sky's template; `backgroundGlTemplate` in `backgroundPassUtils.ts` is its GLSL half */
+/**
+ * The cube sky's shader template, in WGSL here and GLSL in {@link backgroundGlTemplate}
+ *
+ * Each backend's `compileViewShader` reads its own half and puts the global and camera bits first,
+ * so `render` adds the background bit, the cube's decode bit and the view's tone-mapping bit after
+ * them, and fills the groups `bindGroups` lists: 0 global, 1 camera, 2 background. The fragment
+ * decodes the cubemap to linear with the `decodeToLinear` its format calls for, the same decode
+ * the environment prefilter uses, and scales it by the view's exposure; the tone-mapping bit then
+ * applies the display encode.
+ */
 const backgroundTemplate: ShaderBitTemplate = {
   bindGroups: [{ name: 'global', ubo: true }, 'camera', 'background'],
   gpu: /* wgsl */ `
@@ -206,7 +215,7 @@ export class BackgroundPass extends RenderPass {
       const bits: ShaderBit[] = [bit];
       if (decodeBit) bits.push(decodeBit);
       if (toneBit) bits.push(toneBit);
-      this._shader = this.pipe.renderer.material3d.compilePassShader(bits, template);
+      this._shader = this.pipe.renderer.material3d.compileViewShader(bits, template);
       this._cachedToneBit = toneBit;
       this._cachedBackgroundBit = bit;
       this._cachedDecodeBit = decodeBit;

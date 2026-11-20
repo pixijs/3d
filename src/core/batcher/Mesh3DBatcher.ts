@@ -16,7 +16,7 @@ interface BatcherRenderOptions {
   commandList: DrawCommandList;
   drawData: DrawArgs;
   passBit: number;
-  bindsMaterial: boolean;
+  /** The batch the renderables belong to, which a merged run's shader is compiled against */
   batch: Mesh3DBatch;
   view3d: View3D;
 }
@@ -49,11 +49,15 @@ export class Mesh3DBatcher {
   /**
    * Rebuilds `commandList` from the sorted renderables
    *
-   * Each later material of a direct run refreshes its own bind group, since the capture at a run's
-   * start refreshes only the first material's.
+   * At a change of material inside a run, the merge test counts the commands the run would then
+   * hold: the ones it has recorded, the one the change closes and one for the new material. The
+   * texture set is compared only where the material changes. A pass that draws with a shader of
+   * its own, which doesn't read the material (`MeshPassCache.bindsMaterial` false), binds none and
+   * never merges.
+   * @param options - Sources and destinations for the walk.
    */
   public render(options: BatcherRenderOptions): void {
-    const { renderables, globalBindGroup, commandList, drawData, passBit, bindsMaterial, batch, view3d } = options;
+    const { renderables, globalBindGroup, commandList, drawData, passBit, batch, view3d } = options;
     const len = renderables.count;
     if (len === 0) return;
 
@@ -72,6 +76,7 @@ export class Mesh3DBatcher {
     let currentState = pipelineState(currentBatchKey, cache.state);
     let currentTopology = cache.topology;
     let currentMaterial = r.material;
+    let bindsMaterial = cache.bindsMaterial;
 
     let batchStart = 0;
     let runStart = 0;
@@ -102,7 +107,12 @@ export class Mesh3DBatcher {
           commandList.count = runCommandStart;
           batchStart = runStart;
           merged = true;
-          currentShader = materialSystem.ensureMergedShader(items[indices[runStart]], batch, view3d);
+          currentShader = materialSystem.ensureMergedShader(
+            items[indices[runStart]],
+            batch,
+            view3d.passByBit[passBit],
+            view3d,
+          );
           currentMaterial = m;
           continue;
         }
@@ -143,6 +153,7 @@ export class Mesh3DBatcher {
           currentGeometry = currentAlloc.atlas ? currentAlloc.atlas.geometry : r.geometry;
           currentState = pipelineState(rBatchKey, cache.state);
           currentTopology = cache.topology;
+          bindsMaterial = cache.bindsMaterial;
         }
         currentShader = cache.shader;
         runStart = i;
@@ -151,7 +162,7 @@ export class Mesh3DBatcher {
         merged = false;
       }
 
-      if (bindsMaterial && materialChanged) {
+      if (bindsMaterial && (materialChanged || keyChanged)) {
         if (sameRun) commandList.refreshMaterialBindings(m);
         else commandList.captureMaterialTextures(m);
       }

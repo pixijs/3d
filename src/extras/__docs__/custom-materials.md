@@ -62,7 +62,7 @@ The first hover can stall a frame while the outline's shader compiles, as [When 
 
 - {@link OutlinePassOptions#width | width} is in each mesh's own units, so a model scaled down to fit gets a thinner outline.
 - A shape with hard edges, such as a cube, has separate normals on each side of an edge, so its outline has gaps there.
-- Keep a mesh whose geometry has no normals, such as the fox from the [Quick start](../../__docs__/getting-started/quick-start.md#load-a-model), out of the pass. If it joins, rendering throws and the app stops drawing.
+- Keep a mesh whose geometry has no normals, such as the fox from the [Quick start](../../__docs__/getting-started/quick-start.md#load-a-model), out of the pass. With no normals to push along, every vertex moves the same way, so its outline is the mesh shifted to one side and not a rim.
 - You set the pass's width and colour when you create it, and can't change them later. To give one material its own width and colour, pass a {@link solidMeshDescriptor} when you create the material: `passes: { outline: { shaderDescriptor: solidMeshDescriptor({ color: 0x241a33, extrude: 0.1 }) } }`.
 - Setting the pass's {@link Pass3D#enabled | enabled} to `false` hides every outline.
 
@@ -130,7 +130,7 @@ When {@link BaseMaterial3D#alphaMode | alphaMode} is `'opaque'`, the default, th
 
 Fragment code can also read the world position and the texture coordinates: `input.vPosition` and `input.vUV` in WGSL, `vPosition` and `vUV` in GLSL. Every material's shader also has `global.uTime`, the seconds since the page loaded, and `camera.uCameraPosition`, the camera's position. In GLSL they're `uTime` and `uCameraPosition`.
 
-Shadows and outlines don't run your vertex code. If a bit moves vertices, their shadow and outline stay where the vertices were.
+Shadows and outlines run a bit's vertex code only when the bit sets `level: 'shape'`. Without it, the shadow and outline stay where the vertices were.
 
 A bit can also sample its own textures. For each one, {@link ShaderBit#textures} names the functions the shader gets, and says how to undo the alpha that PixiJS multiplies into images by default. Set the textures with the {@link BaseMaterial3DOptions#textures | textures} option, or later through {@link BaseMaterial3D#textures | material.textures}. After dividing out the alpha, pass a colour image through `decodeColor` to convert it to the colour space the shader works in, as {@link BaseMaterial3D#colorSpace} explains.
 

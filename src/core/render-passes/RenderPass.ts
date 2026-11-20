@@ -4,14 +4,13 @@ import { normalizePassEntry } from '../../materials/PassDescriptor';
 import type { PassDescriptor, PassDescriptorOptions } from '../../materials/PassDescriptor';
 import type { Camera3D } from '../../scene/cameras/Camera3D';
 import type { Mesh3DBatch } from '../batcher/Mesh3DBatch';
-import { MeshPassCache } from '../batcher/Mesh3DData';
 import type { Mesh3DData } from '../batcher/Mesh3DData';
 import { updateMesh3DKeys } from '../batcher/updateMesh3DKeys';
 import type { PassBuilder } from '../render-graph/PassBuilder';
 import type { SceneOutput } from '../render-graph/SceneOutput';
 import { materialBitsFor } from '../render-graph/sceneOutputs';
 import { DEFAULT_OUTPUT_LOCATIONS } from '../shader/codegen/collectFragmentOutputs';
-import type { ShaderBit } from '../shader/ShaderBit';
+import type { ShaderBit, ShaderBitLevel } from '../shader/ShaderBit';
 import type { View3DPipe } from '../View3DPipe';
 import { passBitRegistry } from './passBitRegistry';
 import type { RenderSession } from './RenderSession';
@@ -66,7 +65,13 @@ export const RenderPassBit = {
    */
   BLENDED_REFRACTION: 1 << 5,
 
-  /** @internal */
+  /**
+   * `OPAQUE`, `TRANSPARENT`, `TRANSMISSION` and `BLENDED_REFRACTION` together: the bits of a
+   * material's main pass, one of which each material belongs to
+   *
+   * The material systems mask a material's `_passBit` with it to find that pass.
+   * @internal
+   */
   MATERIAL_PASS_MASK: (1 << 1) | (1 << 2) | (1 << 4) | (1 << 5),
 } as const;
 
@@ -104,6 +109,27 @@ export interface RenderPassOptions {
    * only pass with that name, or the others can throw on WebGL.
    */
   descriptor?: PassDescriptorOptions;
+  /**
+   * How much of a material's shader this pass draws it with: the material's bits at this
+   * {@link ShaderBitLevel} and the levels before it, on the material's template
+   *
+   * The bits of the pass's `shaderDescriptor`, or of the material's entry for the pass, are added
+   * after them, then the `extraBits` of the material's entry. So a pass at `'shape'` can give one
+   * bit that colours the fragment, and each material's own vertex bits still run. On WebGL, leave
+   * `instanceFetchBitGl` out of those bits, since the material's list already fetches.
+   *
+   * A `shaderDescriptor` that brings a template of its own is a whole shader, and is drawn as it
+   * is: it takes nothing from the material, at any level.
+   *
+   * Any of those bits can read the material's values and textures, as long as the material
+   * declares them, in its own bits or in the `extraBits` of its entry. A draw whose shader reads
+   * them binds the material, and one whose shader doesn't binds nothing.
+   *
+   * Left out, a material's main pass (opaque, transparent, transmission or blended refraction)
+   * draws with the whole shader, and any other pass draws only with a `shaderDescriptor` of its
+   * own.
+   */
+  level?: ShaderBitLevel;
   /**
    * Camera this pass draws from
    *
@@ -165,6 +191,9 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
   /** Shader, state and topology this pass uses for every mesh, from {@link RenderPassOptions#descriptor} */
   public descriptor?: PassDescriptor;
 
+  /** How much of a material's shader this pass draws it with; see {@link RenderPassOptions#level} */
+  public readonly level: ShaderBitLevel | undefined;
+
   /**
    * Camera this pass draws from, or `null` to draw from the view's own camera
    *
@@ -194,6 +223,7 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
     this.description = options.description;
     this.bit = passBitRegistry.getOrAllocate(options.name, options.bit);
     this.descriptor = options.descriptor ? normalizePassEntry(options.descriptor) : undefined;
+    this.level = options.level;
     this.camera = options.camera ?? null;
     this.attachedOutputs = options.attachedOutputs ?? [];
     this.materialBits = materialBitsFor(this.attachedOutputs, this.name);
@@ -251,42 +281,36 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
 
   /**
    * Re-keys a mesh of this pass whose shader, material or geometry changed
+   *
+   * The scene update has just resolved the mesh's shader, state and topology for this pass into
+   * its pass cache entry (`ensurePassShader` on the material system). A mesh with no entry here
+   * has no shader for this pass and gets no key.
+   * A re-keyed mesh recomputes its batch key on every pass, even when its entry is current, so a
+   * changed field of its state reaches a new pipeline id and that pipeline's own copy of the state.
+   * It writes the pass's sort key back with it: the sort key is one field on the mesh, which each
+   * pass overwrites.
+   *
+   * A re-keyed mesh's sort key goes into the pass's sorted view when `_updatesViewKey` is on, for
+   * the list's next rebuild to sort by. The mesh itself is taken out of the command that draws it
+   * (`DrawList.move`), and the list's edit at the end of the scene update (`DrawList.applyEdits`)
+   * gives it the command that draws what it has become, whether or not its key changed. The list
+   * rebuilds instead when `rebuildsLists` is set, or when the pass sorts by distance and keeps no
+   * commands to edit.
+   * @param item - The dirty mesh to (re)key
+   * @param batch - The batch the mesh belongs to
+   * @param rebuildsLists - Whether the mesh's lists must rebuild rather than edit: its material
+   *   changed in place, or its geometry moved in the atlas, under commands that bind or bake them
    * @internal
    */
   public onRenderableDirty(item: Mesh3DData, batch: Mesh3DBatch, rebuildsLists: boolean): void {
     const bit = this.bit;
     const pd = batch.drawLists[bit];
-    const material = item.material;
 
     if (rebuildsLists || !this._updatesViewKey) {
       pd.drawDirtyId++;
     } else {
       pd.move(item);
       batch._editsPending = true;
-    }
-
-    const matPd = material._passes[bit];
-    const passPd = this.descriptor;
-    const descriptor = (matPd && matPd.shaderDescriptor) || (passPd && passPd.shaderDescriptor);
-
-    if (descriptor) {
-      const cached = item._passCache[bit];
-      if (!cached || cached.isStaleFor(item)) {
-        const shader = this.pipe.renderer.material3d.compileShader(descriptor, item, batch);
-        const state = (matPd && matPd.state) || (passPd && passPd.state) || material.state;
-        const topology =
-          (matPd && matPd.topology) || (passPd && passPd.topology) || material.topology || item.geometry.topology;
-
-        if (cached) {
-          cached.shader = shader;
-          cached.mergedShader = null;
-          cached.state = state;
-          cached.topology = topology;
-          cached.claimBuiltFrom(item);
-        } else {
-          (item._passCache[bit] = new MeshPassCache(shader, state, topology)).claimBuiltFrom(item);
-        }
-      }
     }
 
     const cache = item._passCache[bit];

@@ -92,7 +92,7 @@ What each slot can read and write (the local names are the same on both backends
 - `fragment.lobePostLighting` (lit materials only): `finalColor` after the light loop, `normal`, `viewDir`.
 - `header` holds helper functions: one string per backend, `gpu: { header }` and `gl: { header }`; GLSL puts it in both stages. For `PI`, add `requires: [mathConstantsBit]` (from `@pixi/3d`) instead of defining it.
 
-Shadows and outlines draw with shaders of their own, which bits never reach: a displaced or discarded surface still casts its undisplaced, whole shadow. Give such a mesh `castShadow: false`.
+Shadows and outlines draw each mesh with part of its material's shader, and a bit reaches them through its `level`. Give a bit that moves vertices `level: 'shape'` and both follow it. Give one that discards pixels `level: 'cutout'` and the shadow has its holes. A bit with no `level` reaches neither: its surface still casts its undisplaced, whole shadow, so label the bit or give the mesh `castShadow: false`.
 
 ## Write it twice
 

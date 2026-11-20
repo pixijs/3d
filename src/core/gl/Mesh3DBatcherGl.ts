@@ -20,7 +20,6 @@ interface GlBatcherBuildOptions {
   list: DrawList;
   globalBindGroup: BindGroup;
   passBit: number;
-  bindsMaterial: boolean;
 }
 
 const noAlloc: {
@@ -36,7 +35,7 @@ const noAlloc: {
 const _noPlanes = new Float32Array(24);
 
 /**
- * Every run that binds a material draws merged, the form `MaterialSystemGl.ensureMaterial` compiles. Commands draw
+ * Every run that binds a material draws merged, the form `MaterialSystemGl.ensurePassShader` compiles. Commands draw
  * with a base vertex of 0, since the WebGL atlas bakes it into the indices (`GeometryAtlas.rebaseIndices`).
  * @internal
  */
@@ -51,11 +50,27 @@ export class Mesh3DBatcherGl {
   );
 
   /**
-   * Parks `lastVisibilityDirtyId` at -1, which no dirty id matches, so the next draw compacts the new index
-   * @returns The number of instances written
+   * Build phase: walks the sorted renderables, writes each mesh's index texel, and records draw
+   * commands
+   *
+   * After build, the mesh at sorted position `i` has its index texel at `i` in the pass's staging
+   * array. The draw compacts that into the texture.
+   *
+   * A run is a stretch of meshes with one `batchKey`, which carries shader, state, topology and
+   * geometry exactly, and one texture set. A run whose shader reads the material (`MeshPassCache.bindsMaterial`) draws
+   * merged and records one command where it ends, however long it gets. That command draws with
+   * the pass entry's shader, which on WebGL is the merged form (`MaterialSystemGl.ensurePassShader`),
+   * and the first material's merged group (`BaseMaterial3D._getMergedBindGroup`). The index
+   * texture grows to fit. Every other pass binds no material at group 2, and its runs break on the
+   * batch key alone. The list captures a run's texture set where the run begins.
+   *
+   * Parks `lastVisibilityDirtyId` at -1, which no real dirty id matches, so the next draw
+   * compacts the new index rather than trusting last frame's survivors.
+   * @param options - What to batch and the draw list it lands in
+   * @returns The total number of instances written
    */
   public build(options: GlBatcherBuildOptions): number {
-    const { renderables, list, globalBindGroup, passBit, bindsMaterial } = options;
+    const { renderables, list, globalBindGroup, passBit } = options;
     const len = renderables.count;
     const commandList = list.commandList;
 
@@ -77,6 +92,7 @@ export class Mesh3DBatcherGl {
     let currentState = pipelineState(currentBatchKey, cache.state);
     let currentTopology = cache.topology;
     let currentMaterial = r.material;
+    let bindsMaterial = cache.bindsMaterial;
 
     let currentAlloc = currentGeometry._geometryAtlasAllocation || noAlloc;
     let geometry: Geometry = currentAlloc.atlas ? currentAlloc.atlas.geometry : currentGeometry;
@@ -131,6 +147,7 @@ export class Mesh3DBatcherGl {
         currentBatchKey = cache.batchKey;
         currentGeometry = r.geometry;
         currentShader = cache.shader;
+        bindsMaterial = cache.bindsMaterial;
         currentState = pipelineState(currentBatchKey, cache.state);
         currentTopology = cache.topology;
 
@@ -141,7 +158,7 @@ export class Mesh3DBatcherGl {
       }
       runFirstMaterial = m;
 
-      if (bindsMaterial && materialChanged) commandList.captureMaterialTextures(m);
+      if (bindsMaterial && (materialChanged || keyChanged)) commandList.captureMaterialTextures(m);
     }
 
     this._recordCommand(

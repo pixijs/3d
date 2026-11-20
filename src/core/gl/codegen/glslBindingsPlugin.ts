@@ -53,20 +53,32 @@ const RESOURCE_TYPES = new Set([
 ]);
 
 /**
- * The block takes the binding's name, which pixi binds by, and GLSL rejects an instance named like its block, so
- * the instance is `u` plus the capitalised name
- * @internal
+ * The instance name of the `std140` block a `uniform<Struct>` binding becomes: `u` plus the
+ * binding's capitalised name, `uMaterial` for `material`
+ *
+ * The block itself takes the binding's name, which pixi binds the `BufferResource` to through the
+ * shader's group map, and GLSL rejects an instance named like its block. Code reads a member as
+ * `uMaterial.<field>`.
+ * @param bindingName - The uniform buffer binding's name
+ * @returns The block's instance name
  */
-export function uniformBlockInstanceName(bindingName: string): string {
+function uniformBlockInstanceName(bindingName: string): string {
   return `u${capitalize(bindingName)}`;
 }
 
 /**
- * A `mat2x2<f32>` block member is split into two `vec2` columns, since `std140` pads a `mat2` to 32 bytes where
- * WGSL packs 16
- * @internal
+ * The name of one column of a `mat2x2<f32>` field declared in a `std140` block: `<field>_0` and
+ * `<field>_1`
+ *
+ * `std140` pads each matrix column to 16 bytes, so a `mat2` member would take 32 bytes where WGSL,
+ * and the material store, pack a `mat2x2<f32>` into 16. Declared as two `vec2` members, the
+ * columns land at +0 and +8 under both sets of rules, and the reader rebuilds the matrix as
+ * `mat2(<field>_0, <field>_1)`.
+ * @param name - The field's name
+ * @param column - The column, 0 or 1
+ * @returns The member's name
  */
-export function mat2ColumnMember(name: string, column: 0 | 1): string {
+function mat2ColumnMember(name: string, column: 0 | 1): string {
   return `${name}_${column}`;
 }
 

@@ -1,19 +1,21 @@
+import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
 import { createLightingBit } from '../../../core/shader/createLightingBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
  * Sets up the inputs {@link toonLightingBit} reads
  *
- * Declares the `baseColor` texture slot and the fields {@link ToonData} lists, tints `albedo` and
- * `alpha` by the base colour and its texture, and declares `viewDir` and the toon values for the
- * lighting bit. The texture is sampled only on geometry with UVs.
+ * Tints `albedo` by the base colour and its texture, then declares `viewDir` (normalised) and the
+ * `bands`, `specularSize`, `rimPower` and `rimIntensity` scalars from the material buffer. The
+ * texture sample is `baseTex`, which `baseColorTextureBit` took. It is premultiplied, so it is
+ * divided by its alpha first. `baseAlphaBit` sets `alpha`.
  * @category extras:materials
  * @advanced
  */
 export const toonMaterialBit: ShaderBit = {
   name: 'toonMaterial',
 
-  textures: ['baseColor'],
+  requires: [baseColorTextureBit],
 
   bindings: {
     material: {
@@ -31,14 +33,9 @@ export const toonMaterialBit: ShaderBit = {
       material: /*wgsl*/ `
   var baseColor = material.baseColor;
 
-  if (HAS_UVS == 1) {
-    var baseTex = sampleBaseColor(input.vUV);
-    baseTex = vec4<f32>(baseTex.rgb / max(baseTex.a, 0.001), baseTex.a);
-    baseColor *= baseTex;
-  }
+  baseColor *= vec4<f32>(baseTex.rgb / max(baseTex.a, 0.001), baseTex.a);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 
   var viewDir = normalize(camera.uCameraPosition.xyz - input.vPosition);
   let bands = max(material.bands, 1.0);
@@ -54,14 +51,9 @@ export const toonMaterialBit: ShaderBit = {
       material: /*glsl*/ `
   vec4 baseColor = material.baseColor;
 
-  if (HAS_UVS == 1) {
-    vec4 baseTex = sampleBaseColor(vUV);
-    baseTex.rgb /= max(baseTex.a, 0.001);
-    baseColor *= baseTex;
-  }
+  baseColor *= vec4(baseTex.rgb / max(baseTex.a, 0.001), baseTex.a);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 
   vec3 viewDir = normalize(uCameraPosition.xyz - vPosition);
   float bands = max(material.bands, 1.0);

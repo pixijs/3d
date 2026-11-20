@@ -36,8 +36,11 @@ describe('material data from the data texture in both stages, never a storage bu
         'a scene that never merges compiles no merged shader',
       ).toBe(false);
 
-      const merged = material3d.ensureMergedShader(mesh, view3d._sceneBatch, view3d);
-      expect(material3d.ensureMergedShader(mesh, view3d._sceneBatch, view3d), 'cached on the pass entry').toBe(merged);
+      const pass = view3d.passByBit[mesh.material._passBit];
+      const merged = material3d.ensureMergedShader(mesh, view3d._sceneBatch, pass, view3d);
+      expect(material3d.ensureMergedShader(mesh, view3d._sceneBatch, pass, view3d), 'cached on the pass entry').toBe(
+        merged,
+      );
       expect(mesh._passCache[mesh.material._passBit].mergedShader).toBe(merged);
       expect(material3d._shaderCache.size).toBe(direct.length + 1);
 
