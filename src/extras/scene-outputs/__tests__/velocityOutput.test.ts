@@ -3,21 +3,27 @@ import { RenderTexture } from 'pixi.js';
 import type { Application, Renderer, Shader, Texture, WebGLRenderer, WebGPURenderer } from 'pixi.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { MERGE_THRESHOLD } from '~/core/batcher/batchConstants';
+import type { DataStoreBuffer } from '~/core/buffers/DataStoreBuffer';
 import type { PassBuilder } from '~/core/render-graph/PassBuilder';
 import type { RenderGraph } from '~/core/render-graph/RenderGraph';
 import type { ColorHandle } from '~/core/render-graph/ResourceHandle';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
 import { velocityOutput } from '~/extras/scene-outputs/velocityOutput';
+import { Geometry3D } from '~/geometry/Geometry3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
+import { Matrix4 } from '~/math/matrix/Matrix4';
 import { FullscreenPass } from '~/post-processing/effects/FullscreenPass';
 import { Pass3D } from '~/post-processing/Pass3D';
 import type { PassContext } from '~/post-processing/Pass3D';
 import { MeshPass } from '~/post-processing/passes/MeshPass';
+import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Mesh3D } from '~/scene/Mesh3D';
+import { Skeleton } from '~/scene/Skeleton';
 import { View3D } from '~/scene/View3D';
 
 const SIZE = 32;
@@ -214,10 +220,62 @@ function largest(frame: Frame): number {
   return max;
 }
 
+function expectCoveredReads(frame: Frame, u: number, v: number): void {
+  const wrong: string[] = [];
+  let covered = 0;
+  for (let y = 0; y < frame.height; y++) {
+    for (let x = 0; x < frame.width; x++) {
+      const [ru, rv] = at(frame, x, y);
+      if (!frame.covered[y * frame.width + x]) {
+        if (ru !== 0 || rv !== 0) wrong.push(`nothing drawn at ${x}, ${y}, but it reads ${ru}, ${rv}`);
+        continue;
+      }
+      covered++;
+      if (Math.abs(ru - u) > 1e-4 || Math.abs(Math.abs(rv) - v) > 1e-4) wrong.push(`${x}, ${y} reads ${ru}, ${rv}`);
+    }
+  }
+  expect(wrong.slice(0, 8), 'each covered texel reads the move, in size for v, and the rest read zero').toEqual([]);
+  expect(covered, 'the mesh is in view').toBeGreaterThan(0);
+}
+
+function gpuCopies(app: Application<Renderer>, store: DataStoreBuffer<Mesh3D>): number {
+  const { _buffer, _textureSource } = store as unknown as Record<string, { _gpuData: Record<number, unknown> } | null>;
+  return [_buffer, _textureSource].filter((view) => view?._gpuData[app.renderer.uid]).length;
+}
+
 function plane(width: number, height: number, alphaMode: 'opaque' | 'blend' = 'opaque'): Mesh3D {
   return new Mesh3D({
     geometry: new PlaneGeometry({ width, height }),
     material: new FlatMaterial({ doubleSided: true, alphaMode, alpha: alphaMode === 'blend' ? 0.5 : 1 }),
+  });
+}
+
+const QUAD_8X8 = new Float32Array([-4, -4, 0, 4, -4, 0, 4, 4, 0, -4, 4, 0]);
+
+function deformedQuad(options: { skinned?: boolean; wholeQuadMorphs?: number[][] }): Mesh3D {
+  const morphs = options.wholeQuadMorphs ?? [];
+  const geometry = new Geometry3D({
+    positions: QUAD_8X8,
+    indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+    ...(options.skinned && {
+      joints: new Uint16Array(16),
+      weights: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
+    }),
+    ...(morphs.length > 0 && {
+      morphTargets: morphs.map((move) => ({ positions: new Float32Array(QUAD_8X8.map((_, i) => move[i % 3])) })),
+    }),
+  });
+
+  return new Mesh3D({
+    geometry,
+    material: new FlatMaterial({ doubleSided: true }),
+    ...(options.skinned && {
+      skeleton: new Skeleton({
+        parent: new Int16Array([-1]),
+        joints: new Int16Array([0]),
+        inverseBindMatrices: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+      }),
+    }),
   });
 }
 
@@ -305,6 +363,270 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
       expect(wrong).toEqual([]);
       expect(traced, 'texels the pan uncovered, traced back onto the wall').toBeGreaterThan((4 * PHYSICAL) / 2);
+    });
+
+    it("reads a mesh's own move in front of a still camera", async () => {
+      const capture = new VelocityCapture();
+      await setup('object', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const square = plane(8, 8);
+      view3d.root.addChild(square);
+
+      await renderFrame(app);
+      await capture.read();
+      square.position.set(2 * WORLD_PER_PIXEL, -4 * WORLD_PER_PIXEL, 0);
+      await renderFrame(app);
+      expectCoveredReads(await capture.read(), 2 / PHYSICAL, 4 / PHYSICAL);
+
+      await renderFrame(app);
+      expect(largest(await capture.read()), 'it reads zero once it stops').toBeLessThan(1e-4);
+    });
+
+    it("adds the mesh's move to the camera's, in perspective", async () => {
+      const capture = new VelocityCapture();
+      await setup('object-perspective', [capture]);
+      view3d.camera.position.set(0, 0, 10);
+      const square = plane(2, 2);
+      view3d.root.addChild(square);
+      const halfHeight = 10 * Math.tan((view3d.camera.fov * Math.PI) / 360);
+      const centre = PHYSICAL / 2;
+
+      await renderFrame(app);
+      await capture.read();
+      square.position.set(0.4, -0.25, 0);
+      await renderFrame(app);
+      const [u, v] = at(await capture.read(), centre, centre);
+      expect(u, 'a 0.4 move right, 10 units away').toBeCloseTo(0.4 / (2 * halfHeight), 4);
+      expect(Math.abs(v)).toBeCloseTo(0.25 / (2 * halfHeight), 4);
+
+      square.position.set(0.8, -0.5, 0);
+      view3d.camera.position.set(0.2, 0.1, 10);
+      await renderFrame(app);
+      const [both, bothV] = at(await capture.read(), centre, centre);
+      expect(both, 'the mesh moves 0.4 right as the camera moves 0.2 right').toBeCloseTo(0.2 / (2 * halfHeight), 4);
+      expect(Math.abs(bothV)).toBeCloseTo(0.35 / (2 * halfHeight), 4);
+    });
+
+    it('reads a mesh that moves with the camera as still, and the wall behind it as panning', async () => {
+      const capture = new VelocityCapture();
+      await setup('cockpit', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      view3d.root.addChild(plane(400, 400));
+      const cockpit = plane(4, 4);
+      cockpit.position.set(0, 0, 5);
+      view3d.root.addChild(cockpit);
+
+      await renderFrame(app);
+      await capture.read();
+      view3d.camera.position.set(-2 * WORLD_PER_PIXEL, 0, 10);
+      cockpit.position.set(-2 * WORLD_PER_PIXEL, 0, 5);
+      await renderFrame(app);
+      const frame = await capture.read();
+
+      const [u, v] = at(frame, PHYSICAL / 2, PHYSICAL / 2);
+      expect(Math.abs(u)).toBeLessThan(1e-4);
+      expect(Math.abs(v)).toBeLessThan(1e-4);
+      expect(at(frame, 2, 2)[0], 'the wall').toBeCloseTo(2 / PHYSICAL, 4);
+    });
+
+    it("reads a BatchedMesh3D slot's move and the BatchedMesh3D's own", async () => {
+      const capture = new VelocityCapture();
+      await setup('batched', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const batched = new BatchedMesh3D({ size: 2 });
+      const matrix = new Matrix4();
+      for (let i = 0; i < 2; i++) {
+        batched.setGeometryAt(i, new PlaneGeometry({ width: 4, height: 4 }));
+        batched.setMaterialAt(i, new FlatMaterial({ doubleSided: true }));
+        batched.setPassesAt(i, RenderPassBit.OPAQUE);
+      }
+      batched.setMatrixAt(0, matrix.makeTranslation(-4, 0, 0));
+      batched.setMatrixAt(1, matrix.makeTranslation(4, 0, 0));
+      view3d.root.addChild(batched);
+      const left = Math.round(PHYSICAL * (6 / 20));
+      const right = PHYSICAL - left;
+      const row = PHYSICAL / 2;
+
+      await renderFrame(app);
+      await capture.read();
+      batched.setMatrixAt(1, matrix.makeTranslation(4 + 2 * WORLD_PER_PIXEL, 0, 0));
+      await renderFrame(app);
+      const slot = await capture.read();
+      expect(at(slot, right, row)[0], 'the slot that moved').toBeCloseTo(2 / PHYSICAL, 4);
+      expect(Math.abs(at(slot, left, row)[0]), 'the slot that held still').toBeLessThan(1e-4);
+
+      batched.position.set(0, 4 * WORLD_PER_PIXEL, 0);
+      await renderFrame(app);
+      const node = await capture.read();
+      expect(Math.abs(at(node, left, row)[1]), 'moving the node moves every slot').toBeCloseTo(4 / PHYSICAL, 4);
+      expect(Math.abs(at(node, right, row)[1])).toBeCloseTo(4 / PHYSICAL, 4);
+      expect(at(node, right, row)[0]).toBeCloseTo(0, 4);
+    });
+
+    it('reads each mesh its own move when their materials draw merged', async () => {
+      const capture = new VelocityCapture();
+      await setup('merged', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const geometry = new PlaneGeometry({ width: 1, height: 1 });
+      const tiles: Mesh3D[] = [];
+      for (let i = 0; i < MERGE_THRESHOLD + 4; i++) {
+        const tile = new Mesh3D({ geometry, material: new FlatMaterial({ doubleSided: true }) });
+        tile.position.set((i % 5) * 2 - 4, Math.floor(i / 5) * 2 - 4, 0);
+        view3d.root.addChild(tile);
+        tiles.push(tile);
+      }
+
+      await renderFrame(app);
+      await capture.read();
+      for (const tile of tiles) tile.position.x += 2 * WORLD_PER_PIXEL;
+      await renderFrame(app);
+      expectCoveredReads(await capture.read(), 2 / PHYSICAL, 0);
+
+      const commands = view3d._sceneBatch.drawLists[RenderPassBit.OPAQUE].commandList;
+      expect(commands.count, 'one merged command draws every tile').toBe(1);
+    });
+
+    it("reads zero on a mesh's first frame, though it takes the row a removed mesh left", async () => {
+      const capture = new VelocityCapture();
+      await setup('new-mesh', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const leaving = plane(4, 4);
+      leaving.position.set(-5, 0, 0);
+      view3d.root.addChild(leaving);
+
+      await renderFrame(app);
+      await capture.read();
+      const row = leaving._storeIndex;
+      view3d.root.removeChild(leaving);
+      const joining = plane(4, 4);
+      joining.position.set(5, 0, 0);
+      view3d.root.addChild(joining);
+      await renderFrame(app);
+
+      expect(joining._storeIndex, 'the new mesh reuses the store row').toBe(row);
+      expect(largest(await capture.read())).toBeLessThan(1e-4);
+      leaving.destroy();
+    });
+
+    it('reads a bone turning a skinned mesh in front of a still camera', async () => {
+      const capture = new VelocityCapture();
+      await setup('skinned', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const quad = deformedQuad({ skinned: true });
+      view3d.root.addChild(quad);
+      const turn = 0.1;
+
+      await renderFrame(app);
+      await capture.read();
+      quad.skeleton!.setLocalTRS(0, 0, 0, 0, 0, 0, Math.sin(turn / 2), Math.cos(turn / 2));
+      await renderFrame(app);
+      const frame = await capture.read();
+
+      const wrong: string[] = [];
+      let covered = 0;
+      for (let y = 0; y < PHYSICAL; y++) {
+        for (let x = 0; x < PHYSICAL; x++) {
+          if (!frame.covered[y * PHYSICAL + x]) continue;
+          covered++;
+          const radius = Math.hypot((x + 0.5) * WORLD_PER_PIXEL - 10, (y + 0.5) * WORLD_PER_PIXEL - 10);
+          const expected = (2 * radius * Math.sin(turn / 2)) / 20;
+          const speed = Math.hypot(...at(frame, x, y));
+          if (Math.abs(speed - expected) > 2e-4) wrong.push(`${x}, ${y} moved ${speed}, not ${expected}`);
+        }
+      }
+      expect(wrong.slice(0, 8), 'each texel moves along its arc round the bone').toEqual([]);
+      expect(covered).toBeGreaterThan(0);
+
+      await renderFrame(app);
+      expect(largest(await capture.read()), 'it reads zero once the bone stops').toBeLessThan(1e-4);
+    });
+
+    it('reads a morph weight moving the surface', async () => {
+      const capture = new VelocityCapture();
+      await setup('morph', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const quad = deformedQuad({ wholeQuadMorphs: [[2 * WORLD_PER_PIXEL, -4 * WORLD_PER_PIXEL, 0]] });
+      view3d.root.addChild(quad);
+
+      await renderFrame(app);
+      await capture.read();
+      quad.weights![0] = 1;
+      await renderFrame(app);
+      expectCoveredReads(await capture.read(), 2 / PHYSICAL, 4 / PHYSICAL);
+
+      await renderFrame(app);
+      expect(largest(await capture.read()), 'it reads zero once the weight stops').toBeLessThan(1e-4);
+    });
+
+    it('reads zero on a skinned and morphed mesh that holds a deformed pose', async () => {
+      const capture = new VelocityCapture();
+      await setup('deformed-still', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const ahead = deformedQuad({ skinned: true });
+      ahead.skeleton!.setLocalTRS(0, 50, 0, 0, 0, 0, 0, 1);
+      const quad = deformedQuad({
+        skinned: true,
+        wholeQuadMorphs: [
+          [1, 0, 0],
+          [0, 1, 0],
+        ],
+      });
+      quad.weights!.set([0.5, -0.25]);
+      quad.skeleton!.setLocalTRS(0, 1, 0, 0, 0, 0, Math.sin(0.2), Math.cos(0.2));
+      view3d.root.addChild(ahead, quad);
+
+      await renderFrame(app);
+      await capture.read();
+      await renderFrame(app);
+      const frame = await capture.read();
+      expect(
+        frame.covered.some((c) => c === 1),
+        'the mesh is in view',
+      ).toBe(true);
+      expect(largest(frame)).toBeLessThan(1e-4);
+    });
+
+    it('reads zero on the first frame of meshes that take the bone range and weight slot removed ones left', async () => {
+      const capture = new VelocityCapture();
+      await setup('deformed-new', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const leavingSkinned = deformedQuad({ skinned: true });
+      leavingSkinned.skeleton!.setLocalTRS(0, 50, 0, 0, 0, 0, 0, 1);
+      const leavingMorphed = deformedQuad({ wholeQuadMorphs: [[50, 0, 0]] });
+      leavingMorphed.weights![0] = 1;
+      view3d.root.addChild(leavingSkinned, leavingMorphed);
+
+      await renderFrame(app);
+      await capture.read();
+      const base = leavingSkinned.skeleton!._bonePitIndex;
+      const slot = leavingMorphed._morph!._slot;
+      view3d.root.removeChild(leavingSkinned, leavingMorphed);
+      const skinned = deformedQuad({ skinned: true });
+      skinned.position.set(-5, 0, 0);
+      const morphed = deformedQuad({ wholeQuadMorphs: [[50, 0, 0]] });
+      morphed.position.set(5, 0, 0);
+      view3d.root.addChild(skinned, morphed);
+      await renderFrame(app);
+
+      expect(skinned.skeleton!._bonePitIndex, 'the new skeleton takes the bone range').toBe(base);
+      expect(morphed._morph!._slot, 'the new morph takes the weight slot').toBe(slot);
+      const frame = await capture.read();
+      expect(
+        frame.covered.some((c) => c === 1),
+        'the new meshes are in view',
+      ).toBe(true);
+      expect(largest(frame)).toBeLessThan(1e-4);
+      leavingSkinned.destroy();
+      leavingMorphed.destroy();
     });
 
     it('reads UV across the view, not across the pooled texture, on a view of no power-of-two size', async () => {
@@ -540,6 +862,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       await renderFrame(app);
 
       expect(view3d._graph.sceneOutputs).toEqual([]);
+      expect(view3d._sceneBatch.storeBuffer.previous, "no copy of last frame's transforms").toBeNull();
       expect(view3d._graph.sceneColor, 'the view still draws straight to the screen').toBe(view3d._graph.defaultColor);
       expect(view3d.passByBit[RenderPassBit.OPAQUE].outputLocations).toEqual(['color']);
       expect(materialShaderOutputs(app, wall)).toBe(0b1);
@@ -550,6 +873,9 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       await capture.read();
 
       expect(view3d._graph.sceneOutputs, 'the graph attaches what the capture requires').toEqual([velocityOutput]);
+      const previous = view3d._sceneBatch.storeBuffer.previous!;
+      expect(previous, "the scene keeps last frame's transforms").not.toBeNull();
+      expect(gpuCopies(app, previous)).toBe(1);
       expect(view3d._graph.sceneColor, 'requiring velocity composites').not.toBe(view3d._graph.defaultColor);
       expect(view3d.passByBit[RenderPassBit.OPAQUE].outputLocations).toEqual(['color', 'velocity']);
       expect(materialShaderOutputs(app, wall)).toBe(0b11);
@@ -557,9 +883,34 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       capture.enabled = false;
       await renderFrame(app);
 
+      expect(view3d._sceneBatch.storeBuffer.previous).toBeNull();
+      expect(gpuCopies(app, previous), "the copy's GPU memory is freed").toBe(0);
       expect(view3d.passByBit[RenderPassBit.OPAQUE].outputLocations).toEqual(['color']);
       expect(view3d._graph.sceneColor).toBe(view3d._graph.defaultColor);
       expect(materialShaderOutputs(app, wall)).toBe(0b1);
+    });
+
+    it("frees the copy of last frame's transforms with the view's unload, and makes it again on the next render", async () => {
+      const capture = new VelocityCapture();
+      await setup('unload', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const square = plane(8, 8);
+      view3d.root.addChild(square);
+      await renderFrame(app);
+      await capture.read();
+      const previous = view3d._sceneBatch.storeBuffer.previous!;
+      expect(gpuCopies(app, previous)).toBe(1);
+
+      view3d.unload();
+      expect(gpuCopies(app, previous)).toBe(0);
+
+      await renderFrame(app);
+      await capture.read();
+      expect(gpuCopies(app, previous)).toBe(1);
+      square.position.set(2 * WORLD_PER_PIXEL, 0, 0);
+      await renderFrame(app);
+      expectCoveredReads(await capture.read(), 2 / PHYSICAL, 0);
     });
   });
 }

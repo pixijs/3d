@@ -13,6 +13,15 @@ const TEXELS_PER_ROW = MESH3D_STORE_STRIDE / 4;
 const COMPONENT = ['x', 'y', 'z', 'w'];
 const at = (lane: number) => ({ texel: lane >> 2, component: COMPONENT[lane & 3] });
 
+/**
+ * Reads one `u32` lane of the instance's store row, for a bit in the vertex `input` slot after `instanceFetchBitGl`
+ * @internal
+ */
+export function fetchStoreLaneGl(lane: number): string {
+  const { texel, component } = at(lane);
+  return `fetchStoreTexel(storeTexel + ${texel}).${component}`;
+}
+
 const BONES = at(MESH3D_LANE_BONES);
 const GEOMETRY = at(MESH3D_LANE_GEOMETRY);
 const MORPH = at(MESH3D_LANE_MORPH_WEIGHT);

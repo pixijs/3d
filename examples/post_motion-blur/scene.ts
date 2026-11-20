@@ -42,7 +42,7 @@ const POSTS: readonly { shape: ClayShape; color: ClayColor; post: ClayColor }[] 
 const TOP = { x: 4, z: 0, scale: 1.2 };
 /** The top's studs, round its widest point, in four colours so the spin shows */
 const STUDS: readonly ClayColor[] = ['pink', 'white', 'orange', 'purple'];
-/** Turns a second: fast enough that a blur that followed it would smear the studs into a ring */
+/** Turns a second: fast enough that the blur smears the studs along their spin */
 const TOP_SPEED = 2.5;
 /** How far its spin axis leans, in radians, and the turns a second the lean goes round, so it reads as a top */
 const WOBBLE = { lean: 0.1, speed: 0.5 };
@@ -50,7 +50,7 @@ const WOBBLE = { lean: 0.1, speed: 0.5 };
 let postGeometry: Geometry3D | null = null;
 
 export interface MotionScene {
-  /** Spins the top to `time` seconds: its own motion, which the blur ignores */
+  /** Spins the top to `time` seconds: its own motion, which the blur follows as it follows the camera's */
   spin(time: number): void;
 }
 

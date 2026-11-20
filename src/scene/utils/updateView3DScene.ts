@@ -31,8 +31,9 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
   view3d._syncShadowSampling();
 
   refillBonePit(view3d);
-  pipe._morphStoreBuffer.sync(view3d._morphedMeshes.items);
+  pipe._morphStoreBuffer.sync(view3d._morphedMeshes.items, view3d._readsPreviousTransforms);
 
+  keepPreviousStores(view3d);
   updateSceneBatch(view3d, pipe);
   updateUserBatches(view3d, pipe);
 
@@ -46,10 +47,11 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
 }
 
 /**
- * The pit refills every frame, so a skeleton's base moves when a skinned mesh joins or leaves, and the store row that
- * bakes the base is re-emitted when it moves
+ * The pit refills every frame, so a skeleton's base moves when a skinned mesh joins or leaves, or the pit starts or
+ * stops keeping previous matrices, and the store row that bakes the base is re-emitted when it moves
  */
 function refillBonePit(view3d: View3D): void {
+  const relaid = view3d._bonePit.keepPrevious(view3d._readsPreviousTransforms);
   view3d._bonePit.clear();
   const skinnedMeshes = view3d._skinnedMeshes.items;
   for (let i = 0; i < view3d._skinnedMeshes.items.length; i++) {
@@ -57,12 +59,21 @@ function refillBonePit(view3d: View3D): void {
     const skeleton = mesh.skeleton!;
     skeleton.updateWorld();
     const base = view3d._bonePit.add(skeleton);
-    if (mesh._lastBonePitIndex !== base) {
+    if (relaid || mesh._lastBonePitIndex !== base) {
       mesh._lastBonePitIndex = base;
       mesh._markStoreDirty();
     }
   }
   view3d._bonePit.update();
+}
+
+/** Runs before the batch walks, so a store row a mesh takes this frame starts its previous copy at its own value */
+function keepPreviousStores(view3d: View3D): void {
+  const keep = view3d._readsPreviousTransforms;
+  const batches = view3d._meshBatches;
+  for (let b = 0; b < batches.length; b++) {
+    if (batches[b].storeBuffer.keepPrevious(keep)) batches[b].invalidateBundleCaches();
+  }
 }
 
 /**

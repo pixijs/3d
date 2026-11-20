@@ -18,6 +18,7 @@ import { BonePit } from '../core/buffers/BonePit';
 import { LightDataList } from '../core/LightDataList';
 import { MAX_LIGHTS } from '../core/lightLimits';
 import type { RenderGraph } from '../core/render-graph/RenderGraph';
+import { readsPreviousTransforms } from '../core/render-graph/sceneOutputs';
 import { RenderPassBit } from '../core/render-passes/RenderPass';
 import type { RenderPass } from '../core/render-passes/RenderPass';
 import type { ShadowFilter, ShadowQuality } from '../core/render-passes/shadow/shadowPassUtils';
@@ -686,6 +687,12 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * @internal
    */
   public _toneMappingBit: ShaderBit | null = TONE_MAPPING_BITS.none;
+
+  /**
+   * `updateView3DScene` has every batch store keep its previous rows while it's set
+   * @internal
+   */
+  public _readsPreviousTransforms = false;
 
   private _fog: Fog | null = null;
   /** @internal */
@@ -1906,6 +1913,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
         : createDefaultGraph3D(renderer, graphOptions).graph;
       this._graph.compile();
       this._toneMappingBit = this._graph.sceneIsLinear ? null : TONE_MAPPING_BITS[this._toneMapping];
+      this._readsPreviousTransforms = this._graph.sceneOutputs.some(readsPreviousTransforms);
       this._passesEnabledKey = this._computePassesKey();
       this._compositeRequested = composite;
 

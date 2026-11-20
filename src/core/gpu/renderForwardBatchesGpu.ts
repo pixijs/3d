@@ -268,9 +268,14 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
   }
 }
 
-/** Binds the empty buffer for a batch with no instance store, so no draw reads another batch's store */
+/**
+ * Binds the empty buffer for a batch with no instance store, so no draw reads another batch's store, and the store
+ * itself as its previous copy while it keeps none, which reads as no motion
+ */
 function bindBatchStorage(session: RenderSession, batch: Mesh3DBatch, result: CullResult): void {
-  session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
+  const store = batch.storeBuffer;
+  session.globalBindGroup.setResource(store.bufferResource, 'uRenderableStorage');
+  session.globalBindGroup.setResource((store.previous ?? store).bufferResource, 'uPreviousRenderableStorage');
   session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
   session.globalBindGroup.setResource(
     batch.instanceStoreBuffer?.bufferResource ?? EMPTY_BUFFER_RESOURCE,

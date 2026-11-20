@@ -116,6 +116,7 @@ export function getGlobalGpuData(view3d: View3D, renderer: WebGPURenderer): View
       uOpaqueColorTexture: Texture.EMPTY.source,
       uMaterialStorage: UINT_EMPTY.source,
       uRenderableStorage: EMPTY_BUFFER_RESOURCE,
+      uPreviousRenderableStorage: EMPTY_BUFFER_RESOURCE,
       uRenderableInstanceStorage: EMPTY_BUFFER_RESOURCE,
       uBonePitStorage: view3d._bonePit.bufferResource,
       uMorphStorage: EMPTY_BUFFER_RESOURCE,

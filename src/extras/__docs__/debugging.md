@@ -1,6 +1,6 @@
 ---
 title: Debugging
-description: Show a mesh's triangles, record how a view draws each frame, and see how the camera's motion moves each pixel.
+description: Show a mesh's triangles, record how a view draws each frame, and see how far each pixel moves on screen.
 category: extras:debug
 ---
 
@@ -64,7 +64,7 @@ Copy Frame copies the frame you're looking at to the clipboard as JSON. Copy Rec
 
 ## Pixel velocity
 
-{@link VelocityViewer} replaces the picture with how far each pixel's surface moved on screen since the last frame. That motion is what {@link MotionBlurEffect} blurs by. The hue shows the direction and the brightness shows the speed, and the class reference lists the colours. Like the blur, it sees only the camera's motion, so with the camera still the picture is black, even where objects move.
+{@link VelocityViewer} replaces the picture with how far each pixel's surface moved on screen since the last frame. That motion is what {@link MotionBlurEffect} blurs by. The hue shows the direction and the brightness shows the speed, and the class reference lists the colours. It counts the camera's motion and each mesh's own, so with the camera still only the moving meshes show.
 
 ```ts
 import { VelocityViewer } from '@pixi/3d/extras';

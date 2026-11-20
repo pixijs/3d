@@ -1,25 +1,25 @@
 # Motion blur
 
-`MotionBlurEffect` streaks each pixel along the way its surface moved on screen since the camera's last render, and
-only the camera's motion counts. The camera circles the PixiJS logo by itself inside a ring of clay posts: the posts
-nearest its path sweep across the screen fastest and leave long coloured streaks, the far posts and the far floor
+`MotionBlurEffect` streaks each pixel along the way its surface moved on screen since the camera's last render, as
+the camera moved and as its mesh moved. The camera circles the PixiJS logo by itself inside a ring of clay posts: the
+posts nearest its path sweep across the screen fastest and leave long coloured streaks, the far posts and the far floor
 drift the other way, and the logo at the orbit's centre barely moves on screen, so it stays nearly sharp. A clay top
-spins fast beside the logo, yet its spin never smears, since objects count as still. The inset at the bottom right
-draws the same scene through a `VelocityViewer`, the velocity the blur follows: red where the floor and the near posts
-move right, cyan where the far side moves left, and black at the centre, where nothing moves.
+spins fast beside the logo, and its studs smear along their spin, since a mesh's own motion counts too. The inset at
+the bottom right draws the same scene through a `VelocityViewer`, the velocity the blur follows: red where the floor
+and the near posts move right, cyan where the far side moves left, and black at the logo, which barely moves.
 
-![A ring of eight pale clay posts topped with clay shapes stands on the light checker floor round the pink PixiJS logo, seen from above and in front, with a small sky-blue spinning top on the floor to the logo's right; the logo and the top are near sharp while the near posts at the bottom are smeared sideways into lilac and pink streaks, and the floor's checks and the far posts blur; in the bottom right a panel tagged velocity shows the same view in false colour, cyan across the far floor, black in a band through the logo, and red and magenta along the bottom, where the near posts show brighter red; the pane in the top right shows autoRotate on, autoRotateSpeed 10.0, a MotionBlurEffect folder with enabled on, intensity 5.00, samples 32 and maxLength 120, and a VelocityViewer folder with scale 0.40](reference.png)
+![A ring of eight pale clay posts topped with clay shapes stands on the light checker floor round the pink PixiJS logo, seen from above and in front, with a small sky-blue spinning top on the floor to the logo's right; the logo is near sharp and the top's orange and pink studs smear along their spin, while the near posts at the bottom are smeared sideways into lilac and pink streaks, and the floor's checks and the far posts blur; in the bottom right a panel tagged velocity shows the same view in false colour, cyan across the far floor, black in a band through the logo, where the top shows red on one side and blue on the other, and red and magenta along the bottom, where the near posts show brighter red; the pane in the top right shows autoRotate on, autoRotateSpeed 10.0, a MotionBlurEffect folder with enabled on, intensity 5.00, samples 32 and maxLength 120, and a VelocityViewer folder with scale 0.40](reference.png)
 
 ## API
 
 - `MotionBlurEffect` from `@pixi/3d/extras`, in `View3D`'s `passes`. While it's enabled the view writes each pixel's
-  velocity, how far its surface moved on screen since the camera's previous render, from the camera's motion alone, and
-  the effect blurs the pixel along it. `intensity` is how much of a frame's motion a streak covers: 0.5 is a film
-  camera's shutter, and the example opens it to 5 so the streaks read in a still; much wider and the logo at the
-  orbit's centre softens too. `samples` (32) is the taps along each
-  streak, the pass's cost; at a few the streak breaks into grain. `maxLength` caps a streak in physical pixels, so the
-  example multiplies 120 by `app.renderer.resolution`. All three are uniform writes, free every frame; flipping
-  `enabled` rebuilds the render graph.
+  velocity, how far its surface moved on screen since the camera's previous render, from the camera's motion and its
+  mesh's own, and the effect blurs the pixel along it. `intensity` is how much of a frame's motion a streak covers: 0.5
+  is a film camera's shutter, and the example opens it to 5 so the streaks read in a still; much wider and the logo at
+  the orbit's centre softens too. `samples` (32) is the taps along each streak, the pass's cost; at a few the streak
+  breaks into grain. `maxLength` caps a streak in physical pixels, so the example multiplies 120 by
+  `app.renderer.resolution`. All three are uniform writes, free every frame; flipping `enabled` rebuilds the render
+  graph.
 - A streak is one rendered frame's motion, so it shortens as the frame rate rises: on a 120 Hz screen it's half as long
   as on a 60 Hz one. Each pixel blurs along its own motion, so where the moving floor meets the still logo the floor's
   streak picks up a faint pink halo, clearest on the dark theme.
@@ -54,8 +54,8 @@ move right, cyan where the far side moves left, and black at the centre, where n
 ## Controls
 
 - Drag to orbit by hand, which streaks too; scroll to zoom.
-- Pane: `autoRotate` pauses the orbit, and the picture turns sharp while the top keeps spinning; `autoRotateSpeed` sets
-  the turns a minute. The `MotionBlurEffect` folder has `enabled`, `intensity`, `samples` and `maxLength`; the
+- Pane: `autoRotate` pauses the orbit, and the picture turns sharp but for the top, which keeps spinning and smearing;
+  `autoRotateSpeed` sets the turns a minute. The `MotionBlurEffect` folder has `enabled`, `intensity`, `samples` and `maxLength`; the
   `VelocityViewer` folder has `scale`, the inset's brightness.
 - URL flags: `?theme=light|dark`, `?renderer=webgl|webgpu`.
 
