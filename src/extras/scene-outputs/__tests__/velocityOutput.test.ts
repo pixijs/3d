@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { PassBuilder } from '~/core/render-graph/PassBuilder';
 import type { RenderGraph } from '~/core/render-graph/RenderGraph';
 import type { ColorHandle } from '~/core/render-graph/ResourceHandle';
+import type { SceneOutput } from '~/core/render-graph/SceneOutput';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
+import { reprojectionVelocityOutput } from '~/extras/scene-outputs/reprojectionVelocityOutput';
 import { velocityOutput } from '~/extras/scene-outputs/velocityOutput';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
@@ -29,6 +31,7 @@ interface Frame {
   width: number;
   height: number;
   velocity: Float32Array;
+  zw: Float32Array;
   covered: Uint8Array;
 }
 
@@ -37,10 +40,20 @@ interface PendingCopy {
   bytesPerRow: number;
 }
 
+function texelBytes(texture: Texture): number {
+  return texture.source.format === 'rgba16float' ? 8 : 4;
+}
+
 class VelocityReadbackPass {
   public readonly name = 'velocityReadback';
   public readonly bit = RenderPassBit.NONE;
-  private _pending: { velocity: PendingCopy; color: PendingCopy; width: number; height: number } | null = null;
+  private _pending: {
+    velocity: PendingCopy;
+    color: PendingCopy;
+    channels: number;
+    width: number;
+    height: number;
+  } | null = null;
   private _frame: Frame | null = null;
 
   constructor(
@@ -70,7 +83,7 @@ class VelocityReadbackPass {
       renderer.renderTarget.finishRenderPass();
       session.activeTarget = null;
       const copy = (texture: Texture): PendingCopy => {
-        const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+        const bytesPerRow = Math.ceil((width * texelBytes(texture)) / 256) * 256;
         const buffer = renderer.gpu.device.createBuffer({
           size: bytesPerRow * height,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
@@ -82,7 +95,13 @@ class VelocityReadbackPass {
         );
         return { buffer, bytesPerRow };
       };
-      this._pending = { velocity: copy(velocity), color: copy(color), width, height };
+      this._pending = {
+        velocity: copy(velocity),
+        color: copy(color),
+        channels: texelBytes(velocity) / 2,
+        width,
+        height,
+      };
       return;
     }
 
@@ -111,11 +130,16 @@ class VelocityReadbackPass {
       width,
       height,
       velocity: new Float32Array(width * height * 2),
+      zw: new Float32Array(width * height * 2),
       covered: new Uint8Array(width * height),
     };
     for (let i = 0; i < width * height; i++) {
       frame.velocity[i * 2] = rgba[i * 4];
       frame.velocity[i * 2 + 1] = rgba[i * 4 + 1];
+      if (velocity.source.format === 'rgba16float') {
+        frame.zw[i * 2] = rgba[i * 4 + 2];
+        frame.zw[i * 2 + 1] = rgba[i * 4 + 3];
+      }
       frame.covered[i] = bytes[i * 4 + 3] > 127 ? 1 : 0;
     }
     this._frame = frame;
@@ -130,14 +154,23 @@ class VelocityReadbackPass {
         width,
         height,
         velocity: new Float32Array(width * height * 2),
+        zw: new Float32Array(width * height * 2),
         covered: new Uint8Array(width * height),
       };
 
       await pending.velocity.buffer.mapAsync(GPUMapMode.READ);
       const halves = new Float16Array(pending.velocity.buffer.getMappedRange());
+      const channels = pending.channels;
       for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width * 2; x++) {
-          frame.velocity[y * width * 2 + x] = halves[(y * pending.velocity.bytesPerRow) / 2 + x];
+        for (let x = 0; x < width; x++) {
+          const row = (y * pending.velocity.bytesPerRow) / 2 + x * channels;
+          const i = (y * width + x) * 2;
+          frame.velocity[i] = halves[row];
+          frame.velocity[i + 1] = halves[row + 1];
+          if (channels === 4) {
+            frame.zw[i] = halves[row + 2];
+            frame.zw[i + 1] = halves[row + 3];
+          }
         }
       }
 
@@ -164,11 +197,16 @@ class VelocityReadbackPass {
 
 class VelocityCapture extends Pass3D {
   public readonly stage = 'afterTransparent';
-  public readonly requiredOutputs = [velocityOutput];
+  public readonly requiredOutputs: SceneOutput[];
   public readback: VelocityReadbackPass | null = null;
 
+  constructor(private readonly _output: SceneOutput = velocityOutput) {
+    super();
+    this.requiredOutputs = [_output];
+  }
+
   public build(graph: RenderGraph): void {
-    this.readback = graph.addPass(new VelocityReadbackPass(graph.getSceneOutput(velocityOutput), graph.sceneColor));
+    this.readback = graph.addPass(new VelocityReadbackPass(graph.getSceneOutput(this._output), graph.sceneColor));
   }
 
   public read(): Promise<Frame> {
@@ -507,6 +545,58 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       view3d.camera = next;
       await renderFrame(app);
       expect(largest(await capture.read()), "the new camera's first render").toBeLessThan(1e-4);
+    });
+
+    it('writes the reprojection velocity beside the velocity: the same xy, z and w at 0, zero where nothing drew', async () => {
+      const clamped = new VelocityCapture();
+      const whole = new VelocityCapture(reprojectionVelocityOutput);
+      await setup('reprojection', [clamped, whole]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const wall = plane(100, 100);
+      wall.position.set(-50, 50, 0);
+      view3d.root.addChild(wall);
+
+      await renderFrame(app);
+      await clamped.read();
+      await whole.read();
+      view3d.camera.position.set(-2 * WORLD_PER_PIXEL, 4 * WORLD_PER_PIXEL, 10);
+      await renderFrame(app);
+      const velocity = await clamped.read();
+      const reprojection = await whole.read();
+
+      expect(largest(reprojection), 'the wall moved').toBeGreaterThan(1e-3);
+      expect(Array.from(reprojection.velocity)).toEqual(Array.from(velocity.velocity));
+      expect(
+        reprojection.zw.every((c) => c === 0),
+        'z and w read 0',
+      ).toBe(true);
+      const empty = reprojection.covered.findIndex((c) => c === 0);
+      expect(empty, 'part of the view shows no wall').toBeGreaterThan(-1);
+      expect(at(reprojection, empty % PHYSICAL, Math.floor(empty / PHYSICAL))).toEqual([0, 0]);
+    });
+
+    it("reads a camera cut's whole jump in the reprojection velocity, where the velocity stops at 1", async () => {
+      const clamped = new VelocityCapture();
+      const whole = new VelocityCapture(reprojectionVelocityOutput);
+      await setup('cut', [clamped, whole]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      view3d.root.addChild(plane(400, 400));
+
+      await renderFrame(app);
+      await clamped.read();
+      await whole.read();
+      view3d.camera.position.set(-30, 50, 10);
+      await renderFrame(app);
+      const centre = PHYSICAL / 2;
+      const [u, v] = at(await whole.read(), centre, centre);
+      const [clampedU, clampedV] = at(await clamped.read(), centre, centre);
+
+      expect(u, 'a cut of one and a half view widths').toBeCloseTo(1.5, 2);
+      expect(Math.abs(v), 'and two and a half view heights').toBeCloseTo(2.5, 2);
+      expect([clampedU, Math.abs(clampedV)]).toEqual([1, 1]);
+      expect(Math.sign(clampedV), 'both outputs point v the same way').toBe(Math.sign(v));
     });
 
     it('draws the velocity-writing materials into a target with no velocity attachment', async () => {

@@ -248,6 +248,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
     for (const [format, multisampled] of [
       ['rg16float', true],
+      ['rgba16float', true],
       ['rgba8unorm', preference === 'webgpu'],
       ['r32uint', false],
     ] as const) {

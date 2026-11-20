@@ -41,5 +41,6 @@ export * from './post-processing/passes/WireframePass';
 export * from './scene-outputs/ExtractPass';
 export * from './scene-outputs/normalOutput';
 export * from './scene-outputs/normalOutputBit';
+export * from './scene-outputs/reprojectionVelocityOutput';
 export * from './scene-outputs/velocityBit';
 export * from './scene-outputs/velocityOutput';

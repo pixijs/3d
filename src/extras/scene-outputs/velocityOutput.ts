@@ -21,9 +21,9 @@ import { velocityBit } from './velocityBit';
  * motion the second time; give that render a camera of its own. A camera reads zero on its first
  * render. A camera cut reads the jump between shots for one frame; call
  * {@link Camera3D#resetHistory} on the cut so it reads zero instead. The camera's `jitter` cancels
- * out, and each component is clamped to ±1. On a canvas with `antialias` the velocity is
- * multisampled with the scene, so an edge pixel reads the average of its samples, counting zero
- * where nothing drew.
+ * out, and each component is clamped to ±1; {@link reprojectionVelocityOutput} keeps the whole
+ * value. On a canvas with `antialias` the velocity is multisampled with the scene, so an edge pixel
+ * reads the average of its samples, counting zero where nothing drew.
  *
  * Opaque surfaces write it. One whose material has a template of its own doesn't, so its pixels
  * keep zero or the motion of a surface behind it that drew first. Blended, glass and refractive
