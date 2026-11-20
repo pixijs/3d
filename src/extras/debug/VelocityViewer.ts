@@ -60,10 +60,10 @@ export interface VelocityViewerOptions extends PostEffectOptions {
  *
  * Each pixel's hue is the direction its surface moved on screen since the camera's previous
  * render: red is right, yellow-green up, cyan left and violet down. Brightness is the speed; raise
- * {@link VelocityViewer#scale | scale} to see small motions. The velocity comes from the camera's
- * motion alone, so with a still camera every pixel is black, moving objects included. The
- * background is black, and blended and transmissive surfaces show the motion of what's behind
- * them; {@link velocityOutput} lists what else writes no velocity.
+ * {@link VelocityViewer#scale | scale} to see small motions. The velocity counts the camera's motion
+ * and each mesh's own, so with a still camera only moving meshes show. The background is black, and
+ * blended and transmissive surfaces show the motion of what's behind them; {@link velocityOutput}
+ * lists what else writes no velocity.
  *
  * The view writes velocity only while an enabled pass needs it, so the viewer costs nothing while
  * disabled or left out of {@link View3D#passes}.

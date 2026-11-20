@@ -1,5 +1,6 @@
 import type { Pass3D } from '../../post-processing/Pass3D';
 import type { RenderPass } from '../render-passes/RenderPass';
+import { readsPreviousModelMatrix } from '../shader/bits/previousModelMatrixBit';
 import type { ShaderBit } from '../shader/ShaderBit';
 import { assertSceneOutput, sameSceneOutput } from './SceneOutput';
 import type { SceneOutput, SceneOutputPass } from './SceneOutput';
@@ -32,6 +33,16 @@ export function collectSceneOutputs(passes: readonly Pass3D[], extra: readonly S
   for (let i = 0; i < extra.length; i++) add(extra[i], "createDefaultGraph3D's `sceneOutputs`");
 
   return outputs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+/** @internal */
+export function readsPreviousTransforms(output: SceneOutput): boolean {
+  const bits = output.bits;
+  if (!bits) return false;
+  for (const pass in bits) {
+    if (readsPreviousModelMatrix(bits[pass as SceneOutputPass]!)) return true;
+  }
+  return false;
 }
 
 /** @internal */

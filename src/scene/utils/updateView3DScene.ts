@@ -33,6 +33,7 @@ export function updateView3DScene(view3d: View3D, pipe: View3DPipeGpu | View3DPi
   refillBonePit(view3d);
   pipe._morphStoreBuffer.sync(view3d._morphedMeshes.items);
 
+  keepPreviousStores(view3d);
   updateSceneBatch(view3d, pipe);
   updateUserBatches(view3d, pipe);
 
@@ -63,6 +64,15 @@ function refillBonePit(view3d: View3D): void {
     }
   }
   view3d._bonePit.update();
+}
+
+/** Runs before the batch walks, so a store row a mesh takes this frame starts its previous copy at its own value */
+function keepPreviousStores(view3d: View3D): void {
+  const keep = view3d._readsPreviousTransforms;
+  const batches = view3d._meshBatches;
+  for (let b = 0; b < batches.length; b++) {
+    if (batches[b].storeBuffer.keepPrevious(keep)) batches[b].invalidateBundleCaches();
+  }
 }
 
 /**

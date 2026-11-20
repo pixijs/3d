@@ -143,7 +143,7 @@ Within `focalNear` of the plane stays sharp; the blur grows to `maxBlur` physica
 ```ts
 import { MotionBlurEffect, SsaoEffect, TintEffect } from '@pixi/3d/extras';
 
-new MotionBlurEffect({ intensity: 0.5 }); // camera motion only; call camera.resetHistory() on a cut
+new MotionBlurEffect({ intensity: 0.5 }); // camera and mesh motion, not skinning; call camera.resetHistory() on a cut
 new SsaoEffect({ radius: 0.5, fadeDistance: [40, 80] }); // fades out with depth, skips far pixels
 new TintEffect({ tint: 0xffd9b3 }); // multiplies the finished picture
 ```

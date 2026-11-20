@@ -502,11 +502,11 @@ band position, width, blur, debug view.
 
 ### post_motion-blur: Motion blur
 
-`MotionBlurEffect` streaks each pixel by how far its surface moved on screen since the camera's last render, so only
-the camera's motion counts; `intensity`, `samples` and `maxLength`; `camera.resetHistory()` on a cut; `VelocityViewer`
-shows what the blur follows. Scene: the camera orbits the logo inside a ring of clay posts, which streak, while a clay
-top spins sharp beside the logo. Show: the velocity in an inset with its own view and camera. Pane: auto-rotate and its
-speed, the effect's settings, the viewer's scale.
+`MotionBlurEffect` streaks each pixel by how far its surface moved on screen since the camera's last render, from the
+camera's motion and its mesh's own; `intensity`, `samples` and `maxLength`; `camera.resetHistory()` on a cut;
+`VelocityViewer` shows what the blur follows. Scene: the camera orbits the logo inside a ring of clay posts, which
+streak, while a clay top spins beside the logo and smears round. Show: the velocity in an inset with its own view and
+camera. Pane: auto-rotate and its speed, the effect's settings, the viewer's scale.
 
 ### post_antialiasing: Anti-aliasing
 

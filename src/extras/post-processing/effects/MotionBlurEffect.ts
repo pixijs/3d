@@ -92,12 +92,12 @@ export interface MotionBlurEffectOptions extends PostEffectOptions {
 /**
  * Blurs the image along the direction each pixel moved since the camera's previous render
  *
- * Only the camera's motion counts: turning or moving the camera streaks opaque meshes, though not the
- * view's background, an object moving in front of a still camera stays sharp, and one that moves
- * with the camera, such as a cockpit, streaks with the scene. Each streak is measured per rendered
- * frame, so it shortens as the frame rate rises, as a real camera's does. The effect reads
- * {@link velocityOutput}, which notes the surfaces that have no velocity of their own, such as
- * blended ones.
+ * Turning or moving the camera streaks opaque meshes, though not the view's background, and so does a
+ * mesh's own motion: a car passing a still camera streaks, and a cockpit that moves with the camera
+ * stays sharp. A skinned or morphed mesh streaks as its node moves, not as it bends. Each streak is
+ * measured per rendered frame, so it shortens as the frame rate rises, as a real camera's does. The
+ * effect reads {@link velocityOutput}, which notes the surfaces that have no velocity of their own,
+ * such as blended ones.
  *
  * On a camera cut, such as a teleport or a change of shot, call {@link Camera3D#resetHistory} so
  * the first frame of the new shot isn't smeared by the jump. Every property can change every frame.
