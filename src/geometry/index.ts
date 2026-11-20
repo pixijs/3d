@@ -11,6 +11,7 @@ export * from './PlaneGeometry';
 export * from './SphereGeometry';
 export * from './TorusGeometry';
 export * from './TorusKnotGeometry';
+export * from './TriangleBvh';
 export * from './utils/buildCylinderBuffers';
 export * from './utils/clampSegments';
 export * from './utils/Geometry3DUtils';

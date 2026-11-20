@@ -8,6 +8,7 @@ import { Sphere } from '../math/shapes/Sphere';
 import type { Mesh3D } from '../scene/Mesh3D';
 import { UnstableList } from '../utils/UnstableList';
 import type { GeometryAllocation } from './GeometryAtlas';
+import { TriangleBvh } from './TriangleBvh';
 import {
   computeBoundsFromPositions,
   createIndexBuffer,
@@ -494,6 +495,10 @@ export class Geometry3D extends Geometry {
   public _morphTargets: { positions: Float32Array; normals?: Float32Array }[] | null = null;
 
   private _attributeKey: string | null = null;
+  /** `null` until `bvh` is read; dropped by `destroy` and by a new array that an event or `set indices` reports */
+  private _bvh: TriangleBvh | null = null;
+  /** Set by `unload`, `set indices` and position or index buffer events; the refit waits for the next `bvh` read */
+  private _bvhStale = false;
   /**
    * Set before pixi's `destroy` runs `unload`, so this class's `unload` can't free buffers that
    * `destroy(false)` leaves to the geometries sharing them
@@ -525,6 +530,58 @@ export class Geometry3D extends Geometry {
 
     this._attributeKey = key;
     return key;
+  }
+
+  /**
+   * A bounding volume hierarchy over the triangles as stored, before skinning and morph targets, which lets a ray
+   * skip the triangles far from it
+   *
+   * The first read builds it with {@link Geometry3D#buildBvh | buildBvh}, which gives the cost and when it's `null`.
+   * After you edit the arrays in place, {@link Geometry3D#unload | unload} or `update()` on the position buffer
+   * makes the next read refit it, as does `update()` on a {@link Geometry3DOptions#dynamic | dynamic} geometry's
+   * index buffer; updates to other vertex buffers leave it alone. New position or index arrays make the next read
+   * rebuild it, and {@link Geometry3D#buildBvh | buildBvh} replaces it after a large reshape.
+   * @example
+   * ```ts
+   * const terrain = new Geometry3D({ positions, indices });
+   * terrain.buildBvh(); // build it now, not on the first pick
+   * ```
+   * @see {@link HitVolume3DInput} For when per-triangle picking reads it.
+   * @see {@link TriangleBvh} To cast your own rays at it.
+   * @advanced
+   */
+  get bvh(): TriangleBvh | null {
+    const bvh = this._bvh;
+    if (
+      !bvh ||
+      bvh._positions !== this.attributes.aPosition?.buffer.data ||
+      bvh._indices !== (this.indexBuffer?.data ?? null)
+    ) {
+      return this.buildBvh();
+    }
+    if (this._bvhStale) {
+      this._bvhStale = false;
+      bvh.update();
+    }
+    return bvh;
+  }
+
+  /**
+   * Builds a new {@link Geometry3D#bvh | bvh} now and caches it, replacing any cached one
+   *
+   * A build takes about 20 to 40 ms per 100,000 triangles on a laptop. Call it while loading to keep the build off
+   * the first pick, or after a large deformation, which leaves a refitted hierarchy correct but slower.
+   * @returns The new hierarchy, or `null` unless the geometry is a triangle list with `Float32Array` positions.
+   * @advanced
+   */
+  public buildBvh(): TriangleBvh | null {
+    const positions = this.attributes.aPosition?.buffer.data;
+    this._bvhStale = false;
+    this._bvh =
+      this.topology === 'triangle-list' && positions instanceof Float32Array
+        ? new TriangleBvh(positions, this.indexBuffer ? this.indices : null)
+        : null;
+    return this._bvh;
   }
 
   /**
@@ -593,6 +650,12 @@ export class Geometry3D extends Geometry {
     this.morphTargetCount = options.morphTargets?.length ?? 0;
     this.hasMorphNormals = this.morphTargetCount > 0 && options.morphTargets!.every((target) => !!target.normals);
     this.dynamic = options.dynamic ?? false;
+    if (this.dynamic && this.indexBuffer) {
+      // oxlint-disable-next-line typescript/unbound-method -- the emitter calls it with this context, and pixi's destroy removes it by both
+      this.indexBuffer.on('update', this.onBufferUpdate, this);
+      // oxlint-disable-next-line typescript/unbound-method -- the emitter calls it with this context, and pixi's destroy removes it by both
+      this.indexBuffer.on('change', this.onBufferUpdate, this);
+    }
 
     if (options.bounds3D) {
       this.bounds3D = options.bounds3D;
@@ -607,6 +670,21 @@ export class Geometry3D extends Geometry {
     }
 
     this.boundsSphere = new Sphere().setFromBox(this.bounds3D);
+  }
+
+  /**
+   * A position or index buffer event with the array `bvh` was built over marks it for a refit; one with a new array
+   * drops it now, so the old array isn't kept alive. Pixi calls this for attribute buffers only, so the constructor
+   * adds dynamic index buffers
+   * @internal
+   */
+  protected override onBufferUpdate(buffer?: Buffer): void {
+    const bvh = this._bvh;
+    if (bvh && buffer && (buffer === this.attributes.aPosition?.buffer || buffer === this.indexBuffer)) {
+      if (buffer.data === bvh._positions || buffer.data === bvh._indices) this._bvhStale = true;
+      else this._bvh = null;
+    }
+    super.onBufferUpdate();
   }
 
   /**
@@ -632,6 +710,7 @@ export class Geometry3D extends Geometry {
     this._morphStore?.freeDeltas(this);
 
     super.unload();
+    this._bvh = null;
     // oxlint-disable-next-line pixijs-3d/destroy-release -- a mesh still using the destroyed geometry removes itself from this list when it detaches or swaps geometry, and clear() resets its index so that remove is a no-op
     this._meshes.clear();
     this._destroyed = true;
@@ -665,6 +744,7 @@ export class Geometry3D extends Geometry {
     for (let i = 0; i < buffers.length; i++) buffers[i].unload();
 
     super.unload();
+    this._bvhStale = true;
 
     if (allocation === null && !this.dynamic) return;
 
@@ -781,5 +861,7 @@ export class Geometry3D extends Geometry {
    */
   set indices(value: Uint32Array | Uint16Array) {
     this.indexBuffer.data = value;
+    if (this._bvh?._indices === value) this._bvhStale = true;
+    else this._bvh = null;
   }
 }

@@ -107,6 +107,8 @@ mesh.hitVolume = lowPolyGeometry; // any Geometry3D as a per-triangle stand-in f
 group.interactiveChildren = false; // on a static group with a hitVolume: one test for the subtree
 ```
 
+Per-triangle picking on a geometry of 64 triangles or more builds `geometry.bvh`, a bounding volume hierarchy, the first time a ray reaches its bounding box. Smaller and `dynamic: true` geometry tests every triangle on every pick, so give a large deforming mesh a `Box`, `Sphere` or low-poly stand-in. A build takes about 20 to 40 ms per 100,000 triangles on a laptop: call `geometry.buildBvh()` while loading to keep it off the first click, and again after a large reshape, which leaves a refitted tree correct but slower. After an in-place edit, the `geometry.unload()` that redraws the mesh also makes the next pick refit the tree, in about a tenth of a build; until then, picks test the old boxes. New position or index arrays rebuild the tree on the next read.
+
 A class with `boundingRadiusSq` and `raycast(localRay, out)` (`IHitVolume3D`) plugs in a shape of your own, such as a physics collider. A volume set on an ancestor clips its descendants' hits.
 
 ### Raycast without an event, and clicks on empty space
@@ -128,6 +130,84 @@ view3d.on('pointerdown', (e) => {
 ```
 
 Use `view3d.on(...)`, not `view3d.onpointerdown`: the View's `on*` handlers run before the 3D dispatch and see `null` 3D fields.
+
+### A ray from anywhere: ground height, line of sight
+
+`view3d.raycast` only casts from the camera. Cast any other ray at one mesh's `geometry.bvh`, in that mesh's local space:
+
+```ts
+const localToWorld = terrain.getGlobalTransform(); // redo both matrices if the terrain moves
+const worldToLocal = new Matrix4().getInverse(localToWorld);
+const down = new Ray(new Vector3(), new Vector3(0, -1, 0)); // world space, unit direction
+const localRay = new Ray();
+const ground = new Vector3();
+
+function groundHeight(x: number, z: number): number | null {
+  down.origin.set(x, 1000, z); // above the highest ground
+  down.applyMatrix4(worldToLocal, localRay);
+  const t = terrain.geometry.bvh?.raycast(localRay) ?? -1; // closest hit, front or back face; -1 on a miss
+  return t < 0 ? null : localRay.at(t, ground).applyAffineMatrix4(localToWorld).y; // back to world space
+}
+
+app.ticker.add(() => {
+  player.position.y = groundHeight(player.position.x, player.position.z) ?? player.position.y;
+});
+```
+
+`bvh` has four queries, all in the mesh's local space and units:
+
+- `raycast(localRay, maxDistance?)` returns the distance to the closest hit, front or back face, or `-1`.
+- `closestPointToPoint(point, out, maxDistance?)` writes the nearest point on the triangles to `out` and returns its distance, or `-1` when none is within `maxDistance`.
+- `intersectsSphere(sphere)` returns whether any triangle lies within the sphere. A sphere wholly inside a closed mesh touches none.
+- `traverse(intersectsBox, visitTriangle)` walks the boxes `intersectsBox` accepts and passes `visitTriangle` each triangle number in them; return `true` from `visitTriangle` to stop. It covers what the other three don't, such as the triangles in a region.
+
+A `raycast` or `closestPointToPoint` hit sets `bvh.triangle`, the triangle number, and `bvh.u`, `bvh.v`, the weights of its second and third vertices (the first gets `1 - u - v`). `bvh` is `null` unless the geometry is a triangle list with `Float32Array` positions, so quantized and `interleave: true` geometry has none. It ignores `eventMode`, `visible`, skinning and morph targets.
+
+To keep a ball out of a wall, push it away from the closest point on the wall's triangles:
+
+```ts
+const wallToWorld = wall.getGlobalTransform();
+const worldToWall = new Matrix4().getInverse(wallToWorld);
+const body = new Sphere(new Vector3(), 0.4); // the ball, in world space
+const local = new Sphere();
+const nearest = new Vector3();
+
+function keepOutOfWall(ball: Mesh3D): void {
+  body.center.copyFrom(ball.position); // the ball sits in view3d.root, so this is world space
+  body.applyMatrix4(worldToWall, local); // into the wall's space, radius scaled to match
+  const d = wall.geometry.bvh?.closestPointToPoint(local.center, nearest, local.radius) ?? -1;
+  if (d <= 0) return;
+  local.center.subtract(nearest).setLength(local.radius).add(nearest); // out along the shortest way
+  ball.position.copyFrom(local.center.applyAffineMatrix4(wallToWorld));
+}
+```
+
+For line of sight, move both ends into the wall's space and cast between them, limited to the gap there. That limit is in the wall's units, so scale needs no extra step:
+
+```ts
+const aim = new Vector3();
+const sight = new Ray();
+
+function wallBlocks(from: Vector3, to: Vector3): boolean {
+  from.applyAffineMatrix4(worldToWall, sight.origin); // worldToWall from the snippet above
+  to.applyAffineMatrix4(worldToWall, aim);
+  aim.subtract(sight.origin, sight.direction).normalize();
+  return (wall.geometry.bvh?.raycast(sight, sight.origin.distanceTo(aim)) ?? -1) >= 0;
+}
+```
+
+Filter what `traverse` hands over with your own test, such as a vertex inside the region. That test misses a triangle that spans the region with no vertex in it:
+
+```ts
+const footprint = new Box(new Vector3(-2, -1, -2), new Vector3(2, 1, 2)); // in the terrain's local space
+const candidates: number[] = [];
+terrain.geometry.bvh?.traverse(
+  (box) => box.intersectsBox(footprint), // one reused box: read it here, copy it to keep it
+  (triangle) => {
+    candidates.push(triangle); // vertices at indices[3 * triangle] to indices[3 * triangle + 2]
+  },
+);
+```
 
 ### Screen to world
 

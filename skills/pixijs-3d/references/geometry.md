@@ -146,7 +146,7 @@ A `Mesh3D` can start without either part (`new Mesh3D({ parent: view3d.root })`)
 
 ## Changing vertices after creation
 
-A normal geometry is copied into shared GPU buffers the first time it draws, and **later edits never show**. For a one-off change, build a new geometry and assign `mesh.geometry`. For per-frame edits construct it with `dynamic: true` (fixed at construction; built-ins accept it too), write the arrays in place, then call `update()` on the attribute's buffer. Dynamic geometry is never frustum-culled.
+A normal geometry is copied into shared GPU buffers the first time it draws, so **later edits show only after `geometry.unload()`**. For an occasional edit, write the arrays and call it; it also makes the next `geometry.bvh` read refit. Culling and picking keep testing the box the geometry was built with, so construct it with a `bounds3D` option big enough for every edited shape. For per-frame edits construct it with `dynamic: true` (fixed at construction; built-ins accept it too), write the arrays in place, then call `update()` on the attribute's buffer. Dynamic geometry is never frustum-culled.
 
 ```ts
 const water = new PlaneGeometry({ width: 10, height: 10, widthSegments: 48, heightSegments: 48, dynamic: true });
