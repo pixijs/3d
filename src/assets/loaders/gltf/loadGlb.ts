@@ -1,4 +1,4 @@
-import { checkDataUrl, checkExtension, ExtensionType, warn } from 'pixi.js';
+import { checkDataUrl, checkExtension, DOMAdapter, ExtensionType, warn } from 'pixi.js';
 import type { Loader, LoaderParser, ResolvedAsset } from 'pixi.js';
 
 import type { Scene3DSource } from '../../Scene3DSource';
@@ -41,7 +41,7 @@ export const loadGlb = {
     return checkDataUrl(url, 'model/gltf-binary') || checkExtension(url, '.glb');
   },
   async load(url: string, _resolvedAsset?: ResolvedAsset, loader?: Loader) {
-    const response = await fetch(url);
+    const response = await DOMAdapter.get().fetch(url);
     const arrayBuffer = await response.arrayBuffer();
 
     const basePath = url.substring(0, url.lastIndexOf('/') + 1);
