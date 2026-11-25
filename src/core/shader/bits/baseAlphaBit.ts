@@ -5,8 +5,8 @@ import { baseColorTextureBit } from './baseColorTextureBit';
  * Sets the fragment's `alpha` from the base colour: the alpha of the material's `baseColor` times
  * the alpha of its base colour texture
  *
- * Every engine material lists it, so each works out alpha the same way and its own colour bit
- * only sets `albedo`. List it ahead of the material's colour bit.
+ * Each engine material's colour bit requires it, so every material works out alpha the same way
+ * and its colour bit only sets `albedo`.
  * @category rendering
  * @advanced
  */

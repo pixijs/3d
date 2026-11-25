@@ -1,4 +1,4 @@
-import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
+import { baseAlphaBit } from '../../../core/shader/bits/baseAlphaBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
@@ -10,7 +10,7 @@ export const phongMaterialBit: ShaderBit = {
   name: 'phongMaterial',
 
   textures: ['normal'],
-  requires: [baseColorTextureBit],
+  requires: [baseAlphaBit],
 
   bindings: {
     material: {
