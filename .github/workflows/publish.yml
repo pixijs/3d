@@ -6,8 +6,9 @@ name: Publish (npm)
 # stops publishing until the publisher is updated (`npm trust list @pixi/3d`).
 #
 # A published GitHub release publishes the version in package.json, which must match the
-# tag: to `latest`, or to `beta` when the release is marked as a pre-release. A push to
-# main publishes `<version>-main.<sha>` under the `main` tag, as pixi.js does.
+# tag: to `latest`, or to `beta` when the version is a prerelease such as 0.2.0-beta.1.
+# A push to main publishes `<version>-dev.<sha>` under the `dev` tag, like pixi.js's dev
+# builds.
 on:
   release:
     types: [published]
@@ -56,17 +57,20 @@ jobs:
             exit 1
           fi
 
-      - name: Version the main build
+      - name: Version the dev build
         if: github.event_name == 'push'
         run: |
           version=$(node -p "require('./package.json').version")
-          npm version "$version-main.${GITHUB_SHA::7}" --no-git-tag-version
+          npm version "$version-dev.${GITHUB_SHA::7}" --no-git-tag-version
 
       - name: Build
         run: npm run build
 
       # The build above already ran, so the publish skips `prepublishOnly`, which builds again.
+      # A hyphen in the release tag, which matches package.json, marks a prerelease version.
+      # The release's pre-release box isn't used: past betas left it unticked, and npm's own
+      # check that keeps a prerelease off `latest` doesn't run when `--tag` is given.
       - name: Publish
         env:
-          DIST_TAG: ${{ github.event_name == 'push' && 'main' || (github.event.release.prerelease && 'beta' || 'latest') }}
+          DIST_TAG: ${{ github.event_name == 'push' && 'dev' || (contains(github.event.release.tag_name, '-') && 'beta' || 'latest') }}
         run: npm publish --ignore-scripts --tag "$DIST_TAG"
