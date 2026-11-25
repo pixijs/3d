@@ -3,6 +3,9 @@ import type { ShaderBit } from '../ShaderBit';
 /**
  * The bitangent points the way `v` shrinks, to match glTF tangents, and the frame's handedness is
  * worked out per fragment, since which way window y runs depends on the backend and the target
+ *
+ * Where UVs collapse to a point and leave no frame, the 1e-30 floor makes a normal map fall back to
+ * the surface normal rather than NaN. A higher floor flattens normal maps seen up close.
  * @internal
  */
 export const derivativeTangentFrameBit: ShaderBit = {
@@ -21,7 +24,7 @@ fn calculateTBN(surfaceNormal: vec3<f32>, position: vec3<f32>, texCoord: vec2<f3
   let tangent = dp2perp * duv1.x + dp1perp * duv2.x;
   let bitangent = -(dp2perp * duv1.y + dp1perp * duv2.y);
 
-  let invmax = inverseSqrt(max(dot(tangent, tangent), dot(bitangent, bitangent)));
+  let invmax = inverseSqrt(max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 1e-30));
   let scale = select(invmax, -invmax, dot(dp1, dp2perp) < 0.0);
   return mat3x3<f32>(tangent * scale, bitangent * scale, surfaceNormal);
 }
@@ -42,7 +45,7 @@ mat3 calculateTBN(highp vec3 surfaceNormal, highp vec3 position, highp vec2 texC
   highp vec3 tangent = dp2perp * duv1.x + dp1perp * duv2.x;
   highp vec3 bitangent = -(dp2perp * duv1.y + dp1perp * duv2.y);
 
-  highp float invmax = inversesqrt(max(dot(tangent, tangent), dot(bitangent, bitangent)));
+  highp float invmax = inversesqrt(max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 1e-30));
   highp float scale = dot(dp1, dp2perp) < 0.0 ? -invmax : invmax;
   return mat3(tangent * scale, bitangent * scale, surfaceNormal);
 }

@@ -31,3 +31,8 @@ examples/assets/mirror
 # (scripts/repos/manifest.mts).
 /.repos
 
+# Playground scenes made for an issue or PR stay local. The committed ones are listed so lint
+# and format still check them.
+*.playground.ts
+!playground/default.playground.ts
+!playground/depth/depth.playground.ts
