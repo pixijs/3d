@@ -16,7 +16,6 @@ interface BatcherRenderOptions {
   commandList: DrawCommandList;
   drawData: DrawArgs;
   passBit: number;
-  /** The batch the renderables belong to, which a merged run's shader is compiled against */
   batch: Mesh3DBatch;
   view3d: View3D;
 }
@@ -35,7 +34,7 @@ const noAlloc = {
 /**
  * Turns a pass's sorted renderables into instanced WebGPU draw commands, one run at a time
  *
- * A run is a stretch of rows with one batch key and one texture set. In a pass that binds materials it
+ * A run is a stretch of rows with one batch key and one texture set. In a run that binds its material it
  * records a command per change of material, and draws merged once it needs more than `MERGE_THRESHOLD`.
  * @internal
  */
@@ -49,12 +48,8 @@ export class Mesh3DBatcher {
   /**
    * Rebuilds `commandList` from the sorted renderables
    *
-   * At a change of material inside a run, the merge test counts the commands the run would then
-   * hold: the ones it has recorded, the one the change closes and one for the new material. The
-   * texture set is compared only where the material changes. A pass that draws with a shader of
-   * its own, which doesn't read the material (`MeshPassCache.bindsMaterial` false), binds none and
-   * never merges.
-   * @param options - Sources and destinations for the walk.
+   * Each later material of a direct run refreshes its own bind group, since the capture at a run's
+   * start refreshes only the first material's. Each run takes `bindsMaterial` from its mesh's pass entry.
    */
   public render(options: BatcherRenderOptions): void {
     const { renderables, globalBindGroup, commandList, drawData, passBit, batch, view3d } = options;

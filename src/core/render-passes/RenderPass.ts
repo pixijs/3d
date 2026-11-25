@@ -65,13 +65,7 @@ export const RenderPassBit = {
    */
   BLENDED_REFRACTION: 1 << 5,
 
-  /**
-   * `OPAQUE`, `TRANSPARENT`, `TRANSMISSION` and `BLENDED_REFRACTION` together: the bits of a
-   * material's main pass, one of which each material belongs to
-   *
-   * The material systems mask a material's `_passBit` with it to find that pass.
-   * @internal
-   */
+  /** @internal */
   MATERIAL_PASS_MASK: (1 << 1) | (1 << 2) | (1 << 4) | (1 << 5),
 } as const;
 
@@ -280,26 +274,8 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
   public render(_session: RenderSession): void {}
 
   /**
-   * Re-keys a mesh of this pass whose shader, material or geometry changed
-   *
-   * The scene update has just resolved the mesh's shader, state and topology for this pass into
-   * its pass cache entry (`ensurePassShader` on the material system). A mesh with no entry here
-   * has no shader for this pass and gets no key.
-   * A re-keyed mesh recomputes its batch key on every pass, even when its entry is current, so a
-   * changed field of its state reaches a new pipeline id and that pipeline's own copy of the state.
-   * It writes the pass's sort key back with it: the sort key is one field on the mesh, which each
-   * pass overwrites.
-   *
-   * A re-keyed mesh's sort key goes into the pass's sorted view when `_updatesViewKey` is on, for
-   * the list's next rebuild to sort by. The mesh itself is taken out of the command that draws it
-   * (`DrawList.move`), and the list's edit at the end of the scene update (`DrawList.applyEdits`)
-   * gives it the command that draws what it has become, whether or not its key changed. The list
-   * rebuilds instead when `rebuildsLists` is set, or when the pass sorts by distance and keeps no
-   * commands to edit.
-   * @param item - The dirty mesh to (re)key
-   * @param batch - The batch the mesh belongs to
-   * @param rebuildsLists - Whether the mesh's lists must rebuild rather than edit: its material
-   *   changed in place, or its geometry moved in the atlas, under commands that bind or bake them
+   * Re-keys a mesh of this pass whose shader, material or geometry changed; `ensurePassShader` must
+   * have written its pass entry first, and a mesh with no entry gets no key
    * @internal
    */
   public onRenderableDirty(item: Mesh3DData, batch: Mesh3DBatch, rebuildsLists: boolean): void {

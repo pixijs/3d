@@ -364,7 +364,7 @@ export interface GraphDebugDrawSnapshot {
   /**
    * How the command binds materials: `'direct'` binds one material's own group, `'merged'` one
    * group for every material of a texture set, each instance reading its own row, and
-   * `'no-material'` none, for a pass with a shader of its own
+   * `'no-material'` none, for a draw whose shader reads no material
    */
   form: 'direct' | 'merged' | 'no-material';
   /** Indices drawn per instance */

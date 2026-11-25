@@ -2,6 +2,7 @@ import { getApp, renderFrame } from '@test-utils';
 import type { Renderer, WebGPURenderer } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 
+import { MERGE_THRESHOLD } from '~/core/batcher/batchConstants';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
@@ -13,6 +14,7 @@ import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
+import type { CullMode } from '~/scene/View3D';
 
 const SIZE = 128;
 
@@ -47,8 +49,14 @@ const instanceShiftBit: ShaderBit = {
 
 const SHIFT_DATA = { shift: { value: [0, 0, 0, 0], type: 'vec4<f32>' } } as const;
 
-function oneCubeBatch(material: Material3D, geometry: CubeGeometry, x: number, z: number): BatchedMesh3D {
-  const batched = new BatchedMesh3D({ size: 1, instanceData: SHIFT_DATA });
+function oneCubeBatch(
+  material: Material3D,
+  geometry: CubeGeometry,
+  x: number,
+  z: number,
+  cull: CullMode,
+): BatchedMesh3D {
+  const batched = new BatchedMesh3D({ size: 1, instanceData: SHIFT_DATA, cull });
 
   batched.setGeometryAt(0, geometry);
   batched.setMaterialAt(0, material);
@@ -98,12 +106,12 @@ async function overridesReachThePipeline(renderer: Renderer): Promise<void> {
   });
 }
 
-async function shadowView(preference: 'webgpu' | 'webgl', id: string) {
+async function shadowView(preference: 'webgpu' | 'webgl', id: string, cull?: CullMode) {
   const app = await getApp<Renderer>({
     id: `shadow-pass-level-${id}-${preference}`,
     appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x101014 },
   });
-  const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low' });
+  const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull });
   view3d.camera.position.set(0, 12, 0.01);
   view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
   app.stage.addChild(view3d);
@@ -123,27 +131,6 @@ async function shadowView(preference: 'webgpu' | 'webgl', id: string) {
 
 for (const preference of ['webgpu', 'webgl'] as const) {
   describe(`the shadow pass at a level (${preference})`, () => {
-    it('draws plain casters in one command per geometry, binding no material', async () => {
-      const { app, view3d } = await shadowView(preference, 'plain');
-
-      try {
-        const geometry = new CubeGeometry({ width: 1, height: 1, depth: 1 });
-        for (let i = 0; i < 6; i++) {
-          const caster = new Mesh3D({ geometry, material: new Material3D({ baseColor: 0x202020 * (i + 1) }) });
-          caster.position.set(i * 1.5 - 3.75, 1, 0);
-          view3d.root.addChild(caster);
-        }
-
-        await renderFrame(app);
-
-        const list = view3d._sceneBatch.drawLists[RenderPassBit.SHADOW];
-        expect(list.commandList.count, "one geometry and one shader: the materials don't split the draw").toBe(1);
-        expect(list.commandList.commands[0].batchBindGroup).toBeUndefined();
-      } finally {
-        app.destroy();
-      }
-    });
-
     it("moves a caster's shadow with its material's shape bit, and not with a colour bit", async () => {
       const { app, view3d } = await shadowView(preference, 'shape');
 
@@ -202,6 +189,40 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
+    it("draws a merged run of mask casters, each cut by its own material's cutoff", async () => {
+      const { app, view3d } = await shadowView(preference, 'merged-mask', 'off');
+
+      try {
+        const geometry = new CubeGeometry({ width: 0.5, height: 0.5, depth: 0.5 });
+        const casters = Array.from({ length: MERGE_THRESHOLD + 1 }, (_, i) => {
+          const material = new Material3D({ alphaMode: 'mask', alpha: 0.5, alphaCutoff: i % 2 ? 0.7 : 0.3 });
+          const caster = new Mesh3D({ geometry, material });
+          caster.position.set((i - MERGE_THRESHOLD / 2) * 0.6, 1, 0);
+          view3d.root.addChild(caster);
+
+          return caster;
+        });
+
+        await renderFrame(app);
+        const merged = await renderFrame(app);
+        const list = view3d._sceneBatch.drawLists[RenderPassBit.SHADOW];
+        expect(list.commandList.count, 'one geometry, one shader, one run').toBe(1);
+        expect(list.commandList.commands[0].merged, 'the run draws merged').toBe(true);
+
+        for (let i = 1; i < casters.length; i += 2) casters[i].castShadow = false;
+        await renderFrame(app);
+        const keptOnly = await renderFrame(app);
+        expect(differingPixels(merged, keptOnly), 'the merged draw cut each caster by its own cutoff').toBeLessThan(10);
+
+        for (const caster of casters) caster.castShadow = false;
+        await renderFrame(app);
+        const none = await renderFrame(app);
+        expect(differingPixels(merged, none), 'the kept casters cast').toBeGreaterThan(50);
+      } finally {
+        app.destroy();
+      }
+    });
+
     it('casts a shadow for a material whose overrides belong to a bit its shadow leaves out', async () => {
       const { app, view3d } = await shadowView(preference, 'overrides');
 
@@ -227,42 +248,46 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
-    it("moves a batch slot's shadow with a shape bit that reads the slot's own instance data", async () => {
-      const { app, view3d } = await shadowView(preference, 'instance');
+    for (const cull of ['off', 'cpu'] as const) {
+      it(`moves a batch slot's shadow with a shape bit that reads the slot's own instance data (batch cull '${cull}')`, async () => {
+        const { app, view3d } = await shadowView(preference, `instance-${cull}`);
 
-      try {
-        const material = new Material3D({ baseColor: 0x808080, extraBits: [instanceShiftBit] });
-        const geometry = new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 });
-        const shifted = oneCubeBatch(material, geometry, -2, 0);
-        const still = oneCubeBatch(material, geometry, 0, 4);
-        view3d.root.addChild(shifted, still);
+        try {
+          const material = new Material3D({ baseColor: 0x808080, extraBits: [instanceShiftBit] });
+          const geometry = new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 });
+          const shifted = oneCubeBatch(material, geometry, -2, 0, cull);
+          const still = oneCubeBatch(material, geometry, 0, 4, cull);
+          view3d.root.addChild(shifted, still);
 
-        const shadowX = async (x: number, shift: number): Promise<number> => {
-          shifted.setMatrixAt(0, new Matrix4().makeTranslation(x, 1.5, 0));
-          shifted.setInstanceDataAt(0, 'shift', shift, 0, 0, 0);
-          shifted.setPassesAt(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
-          await renderFrame(app);
-          const casting = await renderFrame(app);
-          shifted.setPassesAt(0, RenderPassBit.OPAQUE);
-          await renderFrame(app);
+          const shadowX = async (x: number, shift: number): Promise<number> => {
+            shifted.setMatrixAt(0, new Matrix4().makeTranslation(x, 1.5, 0));
+            shifted.setInstanceDataAt(0, 'shift', shift, 0, 0, 0);
+            shifted.setPassesAt(0, RenderPassBit.OPAQUE | RenderPassBit.SHADOW);
+            await renderFrame(app);
+            const casting = await renderFrame(app);
+            shifted.setPassesAt(0, RenderPassBit.OPAQUE);
+            await renderFrame(app);
 
-          return meanXOfDifferingPixels(casting, await renderFrame(app));
-        };
+            return meanXOfDifferingPixels(casting, await renderFrame(app));
+          };
 
-        const shiftedByBit = await shadowX(-2, 4);
-        const placedThere = await shadowX(2, 0);
-        const unshifted = await shadowX(-2, 0);
+          const shiftedByBit = await shadowX(-2, 4);
+          const placedThere = await shadowX(2, 0);
+          const unshifted = await shadowX(-2, 0);
 
-        expect(Math.abs(shiftedByBit - placedThere), 'the shadow lies where a cube placed there casts it').toBeLessThan(
-          3,
-        );
-        expect(Math.abs(shiftedByBit - unshifted), 'and not where the slot stands before the bit runs').toBeGreaterThan(
-          8,
-        );
-      } finally {
-        app.destroy();
-      }
-    });
+          expect(
+            Math.abs(shiftedByBit - placedThere),
+            'the shadow lies where a cube placed there casts it',
+          ).toBeLessThan(3);
+          expect(
+            Math.abs(shiftedByBit - unshifted),
+            'and not where the slot stands before the bit runs',
+          ).toBeGreaterThan(8);
+        } finally {
+          app.destroy();
+        }
+      });
+    }
 
     it("cuts a shadow with a material's own cutout bit, and not with a colour bit that discards", async () => {
       const { app, view3d } = await shadowView(preference, 'discard');

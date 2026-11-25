@@ -20,13 +20,7 @@ interface ShadowRenderPassGpuOptions {
   shadowMapHandle: DepthHandle;
 }
 
-/**
- * WebGPU's `ShadowData`: the shared cascade slots plus this light's cull results
- *
- * Code can read a light's `_gpuShadowData` into a `ShadowDataGpu` variable without a cast, since
- * `cullResults`, the one field this type adds, is optional.
- * @internal
- */
+/** @internal */
 export interface ShadowDataGpu extends ShadowData {
   /** One per batch per cascade, owned by the light and released with it by `releaseShadowCascades` */
   cullResults?: CullResults;
@@ -157,46 +151,10 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
   }
 
   /**
-   * Main render loop
-   *
-   * For each shadow-casting light, iterates its cascades (or its single layer) and renders the
-   * casters' depth into the matching layer of the shadow-map array. A cascade the update cadence
-   * skipped this frame keeps its depth layer and frozen matrix. Colour writes are masked off for
-   * the whole pass, so every bundle records under that mask.
-   *
-   * Draw data was built in `prepare`. Here each cascade binds its layer, a pass of its own, with
-   * `bind` rather than `push`: the graph re-establishes the default target after this pass, so
-   * there is nothing to pop back to. Every light draws through its cascades' camera groups; spot
-   * lights and fixed boxes use slot 0, like a lone directional. Each cascade binds its own cull
-   * result, the survivors and args `prepare` filled for it, and records or replays its bundle,
-   * cached on that result until the list rebuilds or the map is recreated. An indirect bundle holds
-   * the body's commands only; the tail's, after `commandList.bodyCount`, draw straight into the
-   * cascade's pass every frame, so a tail command added or emptied records nothing.
-   * A result the cascade draws direct (`CullResult.direct`) has its direct draws recorded into that
-   * bundle, which also re-records when `CullResult.countsDirtyId` moves. A light or batch with no result was skipped
-   * by `prepare` this frame and draws nothing. `isBundleValid` vets the state a bundle baked
-   * (attachment formats, sample count, winding), which the shadow target keeps fixed; a replaced
-   * map isn't part of that stamp, and `_bindShadowSource` re-records for it.
-   *
-   * The cascade's recorded bundles bake its camera group's buffer and replay it without touching
-   * it, and a throttled cascade never re-uploads, so pixi's GC would see an idle buffer and free it
-   * under a live bundle. The buffer opts out of the GC; `releaseShadowCascades` frees it instead.
-   *
-   * Every shader drawn here is compiled with the full global bit, so its layout holds `uShadowMap`,
-   * and WebGPU rejects a texture bound for sampling in a render pass that also has it as the depth
-   * attachment. So the slot holds `DEPTH_EMPTY` while the cascades draw, and the live map goes back
-   * once they have. The swap re-records nothing, unlike `_bindShadowSource`: the bundles recorded
-   * here bake the placeholder, every other pass draws and records while the slot holds the live
-   * map, and the next `prepare` finds the live map already bound. Both halves use
-   * `setResourceUnwatched`, so the swap moves no `change` listener: the live map keeps the one
-   * `_bindShadowSource` gave it, and the placeholder is never destroyed.
-   *
-   * A cascade's valid bundles replay in one `executeBundle` call, and the scratch run is emptied
-   * right after, so it holds no bundle, and so no GPU resource, past the cascade. Once a light's
-   * due cascades are drawn, its layers belong to the live map and its one-shot refresh is spent.
-   * The last bind leaves the shadow map as the live target, so `activeTarget` is reset for the
-   * next pass to bind its own, as `CopyOpaquePass` does.
-   * @param session - The current frame's render session
+   * Binds each layer rather than pushing it, and resets `activeTarget`, as the next pass binds its own;
+   * cascade camera buffers opt out of pixi's GC, which can't see bundles use them, and
+   * `releaseShadowCascades` frees them. `uShadowMap` holds `DEPTH_EMPTY` while the cascades draw, as
+   * WebGPU rejects sampling a depth attachment; both swaps are unwatched, so they move no listener
    */
   public override render(session: RenderSession): void {
     const { view3d, lights } = session;

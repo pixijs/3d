@@ -56,8 +56,8 @@ export interface ShaderDescriptorOptions {
    * Whether the compiler adds the view-wide values, such as the lights and fog, in the `global` bind
    * group
    *
-   * Set `false` when the bit list already holds the global bit, as the engine's material shaders'
-   * lists do, so it isn't added twice.
+   * Set `false` for a template with no `global` group, or when the bits declare a `global` group of
+   * their own. A material's `descriptor` ignores it and always has them.
    * @default true
    */
   includeGlobal?: boolean;
@@ -104,13 +104,7 @@ export class ShaderDescriptor {
   public bitsGpu: ShaderBit[];
   /** Shader bits for the WebGL (GLSL) backend */
   public bitsGl: ShaderBit[];
-  /**
-   * Shader template, which makes this a whole shader, drawn as it is
-   *
-   * Left out, a material's `descriptor` compiles on the engine's material template, and a pass's
-   * shader, or a material's entry for a pass, adds its bits to each material's own at the pass's
-   * `level`.
-   */
+  /** Custom shader template; see {@link ShaderDescriptorOptions#template} */
   public template?: ShaderBitTemplate;
   /** Values for the bits' specialization constants; see {@link ShaderDescriptorOptions#overrides} */
   public overrides?: Record<string, number>;

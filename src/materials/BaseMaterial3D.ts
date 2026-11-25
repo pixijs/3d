@@ -678,18 +678,14 @@ export class BaseMaterial3D<
   public _materialStructSnapshot = '{}';
 
   /**
-   * The bit that declares this material's whole layout and no code, which `compileShader` lists
-   * ahead of the first bit that reads the material; see `materialLayoutBit`
+   * Declares this material's whole layout; see `materialLayoutBit`
    * @internal
    */
   public _materialLayoutBit: ShaderBit = materialLayoutBit({}, []);
 
   /**
-   * The values the material's shader reads, laid out exactly as its packed GPU struct
-   *
-   * One field per struct member; assigning a field queues the upload ({@link MaterialData} covers
-   * vector fields). Built from the material's bits during construction; a material with no bits
-   * gets an empty one.
+   * The values the material's shader reads, one property per field its bits declare; see
+   * {@link MaterialData} for how they read and write
    * @example
    * ```ts
    * const toon = new ToonMaterial({ bands: 3 });
@@ -886,22 +882,11 @@ export class BaseMaterial3D<
   }
 
   /**
-   * Lays out this material's packed data and texture slots from `bits`, once, at construction
+   * Lays out `data` and `textures` from `bits`; a subclass that builds its own bits calls it once,
+   * from its constructor
    *
-   * The packed struct merges every bit's `bindings.material` fields; `data` is created in that
-   * layout and `_materialStructSnapshot` records it. The texture slots come from walking the bits'
-   * `textures` declarations in order, which builds `_textures`, `_slotByName` and `textures`; the
-   * `textures` argument fills them by name, and a name it leaves out gets `Texture.WHITE`. The
-   * base colour, alpha and cutoff staged before `data` existed are copied in, and the UV transform
-   * is pointed at its fields. Slots are filled directly rather than through `_setTextureSlot`, so
-   * the UV frame is derived once, at the end.
-   *
-   * A bit brings the bits it `requires`, as it does when a shader compiles, so listing a colour
-   * bit lays out the base colour texture and the UV transform it reads. The `extraBits` of the
-   * material's `passes` entries are laid out after `bits`, so one group holds what every pass
-   * reads. A bit that turns up twice is laid out once.
-   *
-   * `bits` must declare every material field and texture that
+   * The bits each one `requires`, and the `extraBits` of the material's `passes` entries, are laid
+   * out with them. `bits` must declare every material field and texture that
    * {@link BaseMaterial3D#getPrimaryDescriptor} can compile, or the shader is rejected when it's
    * built. `data` and `textures` are cast to `TData` and `TTextures` unchecked, so the type
    * arguments must match what the bits declare. A raw `descriptor` is laid out for you.

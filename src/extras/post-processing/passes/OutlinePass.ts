@@ -44,7 +44,7 @@ export interface OutlinePassOptions extends Omit<MeshPassOptions, 'name' | 'desc
  * The view half of a toon look: add it to `View3D.passes`, and meshes join by opting into the
  * `outline` pass on their material (`passes: { outline: true }`). The shell is drawn at the
  * `'shape'` level, so it follows skinning, morph targets, the mesh's billboard mode and the
- * material's own vertex bits.
+ * material's bits that set `level: 'shape'`.
  * @example
  * ```ts
  * new View3D({ passes: [new OutlinePass({ width: 0.05 })] });

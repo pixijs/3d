@@ -4,14 +4,7 @@ import { Color } from 'pixi.js';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 import type { ShaderDescriptorOptions } from '../../../core/shader/ShaderDescriptor';
 
-/**
- * The flat-colour draw as one bit, for a pass at the `'shape'` level
- *
- * It pushes each vertex `SOLID_EXTRUDE` local units along its normal, after the material's own
- * vertex bits have placed it, and gives every fragment the one colour. Colour and extrusion are
- * shader constants, pipeline overrides on WebGPU and `#define`s on WebGL: they are fixed per pass,
- * so a constant is cheaper than a uniform block.
- */
+/** Override constants rather than uniforms, since each pass fixes them: cheaper than a uniform block */
 const solidMeshBit: ShaderBit = {
   name: 'solidMesh',
   overrideDefs: {
@@ -49,17 +42,11 @@ export interface SolidMeshDescriptorOptions {
 }
 
 /**
- * Shader recipe for a {@link MeshPass} at the `'shape'` level that draws meshes in one flat colour
+ * Shader recipe for a {@link MeshPass} that draws meshes in one flat colour, such as a selection mask
  *
- * {@link OutlinePass} and {@link WireframePass} draw with it, and it suits any flat-colour redraw
- * such as a selection mask. It is one bit added to each material's own vertex bits, so skinning,
- * morph targets, billboards and a material's own vertex bits all apply, with no lighting, no
- * textures, and an optional push along the normal.
- *
- * It has no template of its own, so the pass must set `level: 'shape'`, whether the recipe is the
- * pass's own or comes from a material's `passes` entry.
- *
- * Each colour and extrusion pair compiles its own shader, so pick them once per pass rather than
+ * It has no template, so the pass needs a `level`: at `'shape'` each mesh keeps its skinning, morph
+ * targets, billboard and its material's `'shape'` bits. Lighting and textures don't apply. Each
+ * colour and extrusion pair compiles its own shader, so pick them once per pass rather than
  * animating them.
  * @example
  * ```ts

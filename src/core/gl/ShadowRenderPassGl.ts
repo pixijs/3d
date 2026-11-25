@@ -16,18 +16,8 @@ interface ShadowRenderPassGlOptions {
 }
 
 /**
- * Renders shadows for 3D scenes in WebGL, generating shadow maps from light perspectives
- *
- * Uses a cached DrawCommandList per batch, and `DrawList.nextBuild` decides when it rebuilds. On
- * clean frames, redraws the cached commands.
- *
- * Draw state lives in each batch's DrawList, so View3D instances never share an index texture
- * or command list.
- *
- * The shadow shader gets `globalBitGl` and the camera bit from `compileShader`, like every mesh
- * pass, so a shader drawn here can read any global uniform. It declares `uShadowMap` too, but the
- * GLSL compiler drops a sampler the program never reads, and pixi binds a texture only for an
- * active uniform, so the live map is never bound for sampling while the pass renders into it.
+ * WebGL drops the shader's unread `uShadowMap` sampler and pixi binds only active uniforms, so the
+ * live map is never bound for sampling while the pass renders into it; WebGPU swaps in `DEPTH_EMPTY`
  * @internal
  */
 export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, ShadowData> {

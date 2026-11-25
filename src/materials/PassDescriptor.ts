@@ -16,11 +16,11 @@ export interface PassDescriptorOptions {
   /** Shader to draw with in this pass; plain options are wrapped in a {@link ShaderDescriptor} */
   shaderDescriptor?: ShaderDescriptor | ShaderDescriptorOptions;
   /**
-   * Bits a material brings to this pass, one list for both backends, as its own `extraBits` are
+   * Bits a material adds in this pass alone, one list for both backends, as its own `extraBits` are
    *
-   * Read from a material's `passes` entry. The fields and textures these bits declare join the
-   * material's own, so every pass reads them through the one `material.data` and `textures`, and
-   * they are fixed when the material is built.
+   * Read from a material's `passes` entry, and drawn only where the pass draws the material's bits:
+   * a pass with a {@link RenderPassOptions#level | level}, or the material's main pass.
+   * Their fields and textures join the material's own `data` and `textures`, fixed when it's built.
    */
   extraBits?: readonly ShaderBit[];
   /** Render state (blending, depth, culling) for this pass */

@@ -499,8 +499,7 @@ export class DrawList {
   }
 
   /**
-   * Records a tail command for a kind no command draws; a list's commands all carry a material
-   * group or none do, as the batchers build them, so the first says which
+   * Records a tail command for a kind no command draws
    * @returns The command's index, or -1 when the tail is full
    */
   private _record(item: Mesh3DData, cache: MeshPassCache): number {

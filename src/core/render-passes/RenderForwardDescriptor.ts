@@ -5,12 +5,7 @@ import type { CullResults } from './CullResults';
 export interface RenderForwardDescriptor {
   readonly bit: number;
 
-  /**
-   * The pass's own cull results per batch: its surviving instances, their counts and its bundles
-   *
-   * Every pass on the bit shares the draw list, but what its frustum keeps is its own. WebGL leaves
-   * these empty and compacts each list in place.
-   */
+  /** Per pass, since passes on one bit share each batch's draw list but can each have their own camera */
   readonly cullResults: CullResults;
 
   /** `null` for the view's own camera */

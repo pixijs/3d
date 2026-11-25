@@ -786,19 +786,12 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    */
   public _hasShadows = false;
   /**
-   * Changes whenever a setting of this view that picks a shader bit does: tone mapping, fog, the
-   * environment's kind, the shadow filter, shadows first being cast, and its passes
-   *
-   * A mesh's pass entry records it (`MeshPassCache.isStaleFor`), so a shader resolved under other
-   * settings is resolved again, also for a mesh that was out of the view when they changed. No two
-   * views share a value, so a mesh moved to another view resolves there.
+   * Takes a new value when a view setting that picks a shader bit changes; unique across views, so a
+   * mesh's pass entry (`MeshPassCache.isStaleFor`) goes stale on a change or a move to another view
    * @internal
    */
   public _shaderVersion = ++lastShaderVersion;
-  /**
-   * Scene-wide bone-matrix arena for skinned meshes
-   * @internal
-   */
+  /** @internal */
   public _bonePit = new BonePit();
 
   /** @internal */
@@ -1578,17 +1571,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
     }
   }
 
-  /**
-   * Marks every mesh and batch item in this view to look up its shader again on the next frame
-   *
-   * For a view setting that is part of the shader cache key, such as `toneMapping`. It takes a new
-   * `_shaderVersion`, which makes every mesh's pass entry stale, and queues every scene mesh so
-   * the next scene update runs `ensurePassShader` again. Material data doesn't change, since a
-   * material's struct is fixed at construction, so nothing is uploaded again.
-   *
-   * User batches only process the indices in `_dirtyIndices`, so that list is refilled from the
-   * start with every index, replacing any partial list rather than appending past its end.
-   */
+  /** Refills each user batch's `_dirtyIndices` from the start, since appending every index could run past its end */
   private _invalidateMaterialShaders(): void {
     this._shaderVersion = ++lastShaderVersion;
     const meshes = this.meshes.items;

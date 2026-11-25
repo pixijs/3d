@@ -21,9 +21,10 @@ interface Scene {
   app: Awaited<ReturnType<typeof getApp<Renderer3D>>>;
   view3d: View3D;
   mesh: Mesh3D;
+  sun: DirectionalLight;
 }
 
-async function drawnMesh(preference: 'webgpu' | 'webgl', id: string): Promise<Scene> {
+async function drawnMesh(preference: 'webgpu' | 'webgl', id: string, sunCasts = true): Promise<Scene> {
   const app = await getApp<Renderer3D>({
     id: `pass-shader-stale-${id}-${preference}`,
     appOptions: { preference, width: SIZE, height: SIZE },
@@ -32,7 +33,7 @@ async function drawnMesh(preference: 'webgpu' | 'webgl', id: string): Promise<Sc
   view3d.camera.position.set(0, 0, 6);
   app.stage.addChild(view3d);
 
-  const sun = new DirectionalLight({ intensity: 2, castShadow: true });
+  const sun = new DirectionalLight({ intensity: 2, castShadow: sunCasts });
   sun.position.set(2, 5, 3);
   sun.lookAt({ x: 0, y: 0, z: 0 });
   const mesh = new Mesh3D({ geometry: new CubeGeometry(), material: new Material3D({ baseColor: 0xff7733 }) });
@@ -41,7 +42,7 @@ async function drawnMesh(preference: 'webgpu' | 'webgl', id: string): Promise<Sc
   app.render();
   app.render();
 
-  return { app, view3d, mesh };
+  return { app, view3d, mesh, sun };
 }
 
 const KEEPS: Record<string, (scene: Scene) => void> = {
@@ -106,6 +107,9 @@ const RESOLVES: Record<string, (scene: Scene) => void> = {
     app.stage.addChild(other);
     other.root.addChild(mesh);
   },
+  "has its view's environment changed in kind": ({ view3d }) => {
+    view3d.environment = { skyColor: 0xffffff, groundColor: 0x333333 };
+  },
 };
 
 for (const preference of ['webgpu', 'webgl'] as const) {
@@ -164,6 +168,24 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         view3d.fog = null;
         app.render();
         expect(mesh._passCache[RenderPassBit.OPAQUE].shader, 'and without it the first shader is back').toBe(lit);
+      } finally {
+        scene.app.destroy();
+      }
+    });
+
+    it('resolves a receiver again when a light in its view casts shadows for the first time', async () => {
+      const scene = await drawnMesh(preference, 'first-caster', false);
+
+      try {
+        const unshadowed = scene.mesh._passCache[RenderPassBit.OPAQUE].shader;
+
+        scene.sun.castShadow = true;
+        scene.app.render();
+        scene.app.render();
+
+        expect(scene.mesh._passCache[RenderPassBit.OPAQUE].shader, 'the receiver now samples the shadow map').not.toBe(
+          unshadowed,
+        );
       } finally {
         scene.app.destroy();
       }

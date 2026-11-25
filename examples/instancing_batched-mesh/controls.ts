@@ -51,12 +51,12 @@ const MIN_SHARE = 0.05;
 
 export function createControls(options: ControlsOptions): void {
   const { pane, settings, webgpu } = options;
-  // The shadow pass draws with a shader of its own and binds no material, so it draws each shape once. The opaque pass
-  // binds each slot's material: WebGL draws each shape once, as the colours share a shader, and WebGPU once per colour
-  // in use, until a shape's colours would pass 16 draws and merge into one; there are only eight. The size and the
-  // share shown change how many instances a draw holds, not how many draws there are. It's worked out from these
-  // settings, not measured, and counts the main view only: a profiler also sees the loupe draw the opaque pass again,
-  // and a material of another class, alpha mode or render state would split draws it misses.
+  // The shadow pass draws these clays with a shader that reads no material, so it binds none and draws each shape once.
+  // The opaque pass binds each slot's material: WebGL draws each shape once, as the colours share a shader, and WebGPU
+  // once per colour in use, until a shape's colours would pass 16 draws and merge into one; there are only eight. The
+  // size and the share shown change how many instances a draw holds, not how many draws there are. It's worked out from
+  // these settings, not measured, and counts the main view only: a profiler also sees the loupe draw the opaque pass
+  // again, and a material of another class, alpha mode or render state would split draws it misses.
   const cost = {
     get draws(): number {
       const opaque = settings.passes & RenderPassBit.OPAQUE ? settings.shapes * (webgpu ? settings.colors : 1) : 0;

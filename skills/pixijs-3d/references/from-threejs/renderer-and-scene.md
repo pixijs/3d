@@ -181,7 +181,7 @@ const view = new View3D({ autoResize: true, passes: [new BloomEffect(), new Vign
 - `camera.layers`, `object.layers`: toggle `visible`, use a second `View3D`, or opt a material into a named pass with `passes: { name: true }` and a `MeshPass` of that name (additive; the mesh still draws in the main pass).
 - setViewOffset, filmGauge, filmOffset, setFocalLength, getEffectiveFOV: none beyond `camera.jitter`.
 - scene.backgroundBlurriness, backgroundIntensity, backgroundRotation, environmentIntensity, environmentRotation: none; a hemisphere's `up` rotates only that gradient.
-- scene.overrideMaterial: a `MeshPass` with a `descriptor` redraws opted-in meshes with another shader but doesn't replace the main draw.
+- scene.overrideMaterial: a `MeshPass` with a `descriptor` redraws opted-in meshes with another shader but doesn't replace the main draw; give the pass a `level`, usually `'shape'`, when its shader has no template, such as one from `solidMeshDescriptor`.
 - AgXToneMapping, NeutralToneMapping, CineonToneMapping: none. `LinearToneMapping` is close to `'none'` with `exposure`. `'uncharted2'` is Hable's curve.
 - VSMShadowMap: none.
 - CSS3DRenderer: a `ContainerTexture` on a plane (Pixi content, not DOM).

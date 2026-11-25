@@ -82,27 +82,8 @@ const LIGHT_SPOT: f32 = 2.0;
 };
 
 /**
- * This renderer's global data on the View3D, made on first use
- *
- * Lives at `view._gpuData[renderer.uid]`. Pixi destroys it and clears the slot when the view
- * unloads or the renderer is destroyed, and the next call makes a new one.
- *
- * `createGlobalUniformGroup` builds the uniform group. Its pixi `Buffer` is created here rather
- * than at the first upload, so it can be kept out of the renderer GC before a render bundle bakes
- * it.
- *
- * Every binding starts with a placeholder (the bone pit with the view's own buffer), so the group
- * is valid before the first frame. `View3DPipeGpu` sets `uBrdfLutTexture` once the view has an
- * environment, `uEnvironmentTexture` when that environment is a cubemap, and `uMaterialStorage`,
- * `uBonePitStorage`, `uMorphStorage` and `uGeometryStorage` every frame. The forward passes set
- * `uRenderableStorage`, `uRenderableInstanceStorage` and `uInstanceStorage` per batch, and the
- * shadow pass sets the first two per batch as well. The data's `globalTextureBindings` names
- * `uShadowMap` for the shadow pass and `uOpaqueDepthTexture` and `uOpaqueColorTexture` for the
- * render graph, the same names as on WebGL. `uShadowMap` holds the shadow pass's current map, or the
- * placeholder when it has none and while it draws into the map.
- * @param view3d - The View3D instance to get or create the global WebGPU data for.
- * @param renderer - The renderer whose data on the View is read.
- * @returns The renderer's global data on the View.
+ * Made on first use, and freed as `View3DGlobalData` says; the uniform buffer is made here so it can
+ * opt out of the renderer GC before a bundle bakes it
  * @internal
  */
 export function getGlobalGpuData(view3d: View3D, renderer: WebGPURenderer): View3DGlobalData {

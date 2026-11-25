@@ -4,6 +4,7 @@ import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { OutlinePass } from '~/extras/post-processing/passes/OutlinePass';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
+import type { Material3DData } from '~/materials/pbr/Material3D';
 import { AmbientLight } from '~/scene/lights/AmbientLight';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
@@ -71,7 +72,7 @@ export const scene: TestScene = {
       roughness: 0.55,
       passes: { outline: { extraBits: [outlineInkBit] } },
     });
-    const inkedData = inked.data as unknown as OutlineInkData;
+    const inkedData = inked.data as Material3DData & OutlineInkData;
     inkedData.outlineWidth = 0.09;
     inkedData.outlineInk.set([0.85, 0.1, 0.2]);
 

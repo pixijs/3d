@@ -6,6 +6,8 @@ import type { ShaderBit } from '~/core/shader/ShaderBit';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { Material3D } from '~/materials/pbr/Material3D';
+import type { Material3DData } from '~/materials/pbr/Material3D';
+import type { MaterialData } from '~/materials/utils/createMaterialDataClass';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
@@ -26,7 +28,7 @@ interface GlowData {
 describe("a material's pass entry with extraBits", () => {
   it("lays the entry's field and texture out with the material's own", () => {
     const material = new Material3D({ baseColor: 0xff0000, passes: { glow: { extraBits: [glowBit] } } });
-    const data = material.data as unknown as GlowData;
+    const data = material.data as Material3DData & GlowData;
 
     expect(data.glowStrength).toBe(0);
     data.glowStrength = 0.5;
@@ -50,7 +52,7 @@ describe("a material's pass entry with extraBits", () => {
       passes: { glow: { extraBits: [glowBit] } },
     });
 
-    expect((material.data as unknown as GlowData).glowStrength).toBe(0);
+    expect((material.data as MaterialData & GlowData).glowStrength).toBe(0);
     const view3d = new View3D({ width: SIZE, height: SIZE });
 
     expect(

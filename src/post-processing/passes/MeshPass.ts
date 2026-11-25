@@ -62,7 +62,7 @@ export interface MeshPassOptions extends Pass3DOptions {
  * draw.
  * @example
  * ```ts
- * new View3D({ passes: [new MeshPass({ name: 'wireframe', descriptor: wireframeDescriptor })] });
+ * new View3D({ passes: [new MeshPass({ name: 'wireframe', level: 'shape', descriptor: wireframeDescriptor })] });
  * new Material3D({ passes: { wireframe: true } });
  * ```
  * @category rendering

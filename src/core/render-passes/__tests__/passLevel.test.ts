@@ -9,6 +9,7 @@ import type { ShaderBit } from '~/core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
+import type { Material3DData } from '~/materials/pbr/Material3D';
 import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
@@ -221,7 +222,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           extraBits: [materialShiftBit],
           passes: { green: true },
         });
-        (material.data as unknown as ShiftData).uShift = 4;
+        (material.data as Material3DData & ShiftData).uShift = 4;
 
         const mesh = new Mesh3D({ geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }), material });
         mesh.position.set(-2, 0, 0);
@@ -247,7 +248,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           extraBits: [droppedShiftBit, requiringBit],
           passes: { green: true },
         });
-        (material.data as unknown as ShiftData).uShift = 4;
+        (material.data as Material3DData & ShiftData).uShift = 4;
 
         const mesh = new Mesh3D({ geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }), material });
         mesh.position.set(-2, 0, 0);
@@ -269,7 +270,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
       try {
         const material = new Material3D({ baseColor: 0xff0000, passes: { green: { extraBits: [passShiftBit] } } });
-        (material.data as unknown as ShiftData).uPassShift = 4;
+        (material.data as Material3DData & ShiftData).uPassShift = 4;
 
         const mesh = new Mesh3D({ geometry: new CubeGeometry({ width: 1, height: 1, depth: 1 }), material });
         mesh.position.set(-2, 0, 0);

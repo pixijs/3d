@@ -20,7 +20,6 @@ type SortBatchFnGpu = (renderables: SortedMesh3DView<Mesh3DData>, batch: Mesh3DB
 interface RenderForwardBatchesGpuOptions {
   pipe: View3DPipeGpu;
   bit: number;
-  /** This pass's per-batch cull results: where its survivors, counts and bundles live */
   cullResults: CullResults;
   /** `null` for the view's own camera */
   camera: Camera3D | null;
@@ -258,11 +257,7 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
 }
 
 /**
- * Binds a batch's stores for its draws: its mesh store, the survivors of its cull, and its
- * instance store, or the empty buffer for a batch with none, so no draw reads another batch's
- * @param session - The frame's session, whose global group the draws bind
- * @param batch - The batch about to draw
- * @param result - The batch's cull result for this pass
+ * Binds the empty buffer for a batch with no instance store, so no draw reads another batch's store
  * @internal
  */
 export function bindBatchStorage(session: RenderSession, batch: Mesh3DBatch, result: CullResult): void {

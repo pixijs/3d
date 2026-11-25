@@ -67,8 +67,8 @@ export interface BatchedMesh3DOptions extends Omit<Container3DOptions, 'width' |
    * ```
    *
    * Changing a value uploads only the instance data, not the matrices. Each field read in fragment
-   * code takes a varying, so keep those few. Shadows don't run material bits, so a bit that moves
-   * vertices from instance data doesn't move the slot's shadow.
+   * code takes a varying, so keep those few. A bit that moves vertices from instance data moves
+   * the slot's shadow only when it sets {@link ShaderBit#level | level} to `'shape'`.
    * @example
    * ```ts
    * const boxes = new BatchedMesh3D({

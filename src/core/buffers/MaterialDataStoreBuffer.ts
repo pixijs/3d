@@ -87,13 +87,8 @@ export class MaterialDataStoreBuffer implements MaterialUploadQueue {
   }
 
   /**
-   * Gives a material a place in this store; the scene update calls it whenever a mesh gets a material
-   *
-   * The index is assigned straight away, since callers write it into mesh rows in the same walk,
-   * but the data goes through the queue like every other change. Does nothing for a material that
-   * already has a place here. A place from another store is handed back there and a new one given
-   * here, as `GeometryDataStoreBuffer.set` explains.
-   * @param material - The material to register.
+   * Places the material at once, since callers write its index into mesh rows in the same walk;
+   * another store's place is handed back, as in `GeometryDataStoreBuffer.set`
    */
   public register(material: BaseMaterial3D): void {
     const old = material._uploadQueue;

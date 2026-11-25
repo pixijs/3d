@@ -13,12 +13,6 @@ type SortBatchFnGl = (renderables: SortedMesh3DView<Mesh3DData>, batch: Mesh3DBa
 interface RenderForwardBatchesGlOptions {
   pipe: View3DPipeGl;
   bit: number;
-  /**
-   * Camera to cull and draw from, or `null` for the view's own camera
-   *
-   * Supplies the frustum, the bind group bound at group 1, and the eye the distance sort
-   * measures from. Culling reads {@link Camera3D#cullFrustum}.
-   */
   camera: Camera3D | null;
   session: RenderSession;
   alwaysRebuild: boolean;
