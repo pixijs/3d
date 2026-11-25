@@ -482,6 +482,11 @@ export class BatchedMesh3D extends Container3D {
     this.batch.unload();
   }
 
+  /** @internal */
+  public override _storeWorldTransform(): void {
+    this.batch.writeBatchWorldMatrix(this.worldTransform);
+  }
+
   /**
    * Destroys this node and its batch
    *
