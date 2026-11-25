@@ -169,7 +169,7 @@ app.ticker.add(dissolveStep);
 ```
 
 - `dissolveHoleSize` is in the mesh's stored units, before any scale, so holes stay put as it animates. The 0.25 default suits a model about 2 units tall and speckles a bigger one (the Fox is 80): size it from `getLocalBounds()`, which ignores the model's own scale too.
-- Shadows and outlines draw the whole mesh: build dissolving models with `castShadow: false`, and take a copy out of an outline with `material.disablePass('outline')`.
+- A dissolving model's shadow dissolves with it, but its outline stays a solid silhouette: take a copy out of an outline with `material.disablePass('outline')`.
 
 ## Bones and morph targets
 

@@ -67,8 +67,7 @@ const [source, reflections] = await loading.load(() =>
 // The chrome and the visor mirror their surroundings, so the stage lights the helmets with a cube map.
 const stage = new ThemeStage(view3d, { theme, reflections });
 
-// The shadow pass draws a caster with only the bits that carry a `level`, which `dissolveBit` doesn't, so a dissolving
-// helmet would cast a whole shadow. None cast, and the key renders no shadow map.
+// The helmets cast no shadow, so the key renders no shadow map.
 stage.key.castShadow = false;
 app.stage.addChild(view3d);
 

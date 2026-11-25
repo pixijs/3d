@@ -129,7 +129,7 @@ Each line is the fix; its link owns the rule. These run without errors and draw 
 **Surfaces**
 
 - `alphaMode` defaults to `'opaque'`, which ignores `alpha` and texture alpha (transparent PNG texels draw black): set `'blend'` or `'mask'`. [materials](references/materials.md)
-- A `'mask'` cut-out's shadow has its holes; its outline doesn't. A shader bit reaches shadows and outlines only through its `level`: `'shape'` on one that moves vertices, `'cutout'` on one that discards pixels (shadows only). A bit with no `level`, such as `dissolveBit`, still casts the whole undisplaced shadow and outline: give the mesh `castShadow: false` and `material.disablePass('outline')` if that shows. [materials](references/materials.md), [custom-shaders](references/custom-shaders.md)
+- A `'mask'` cut-out's shadow has its holes; its outline doesn't. A shader bit reaches shadows and outlines only through its `level`: `'shape'` on one that moves vertices, `'cutout'` on one that discards pixels, such as `dissolveBit`, which reaches shadows only. A bit with no `level` still casts the whole undisplaced shadow and outline: give the mesh `castShadow: false` if that shows, and `material.disablePass('outline')` to drop a dissolving mesh's solid outline. [materials](references/materials.md), [custom-shaders](references/custom-shaders.md)
 - Images show upside down on `PlaneGeometry` unless `flipV: true`, and on `CubeGeometry` faces unless the material has `uvTransform: new Matrix(1, 0, 0, -1, 0, 1)` (`Matrix` from pixi.js). [from-threejs](references/from-threejs.md)
 - A `ContainerTexture` on an opaque material draws black where the 2D is transparent: add a backdrop, `clearColor`, or `alphaMode: 'blend'`. [render-to-texture](references/render-to-texture.md)
 
