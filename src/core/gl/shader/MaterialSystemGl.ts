@@ -58,7 +58,7 @@ const scratchDescriptor = new ShaderDescriptor({});
 const MATERIAL_PLUGINS: ShaderCompilerPlugin[] = [
   materialStructPackPlugin,
   materialTextureAccessPluginGl,
-  createTexturesPluginGl('merged'),
+  createTexturesPluginGl(),
 ];
 
 /**

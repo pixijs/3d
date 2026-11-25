@@ -16,7 +16,7 @@ import { collectTextureNames } from '~/materials/utils/validateMaterialTextureSl
 import { View3D } from '~/scene/View3D';
 
 const texturesPluginGpu = createTexturesPluginGpu('direct');
-const texturesPluginGl = createTexturesPluginGl('direct');
+const texturesPluginGl = createTexturesPluginGl();
 
 const parityTemplate: ShaderBitTemplate = {
   bindGroups: ['global', 'batch'],
