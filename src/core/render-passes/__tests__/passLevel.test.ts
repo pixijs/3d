@@ -1,18 +1,21 @@
 import { getApp, renderFrame } from '@test-utils';
 import { State } from 'pixi.js';
 import type { Renderer } from 'pixi.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { passBitRegistry } from '~/core/render-passes/passBitRegistry';
 import { instanceFetchBitGl } from '~/core/shader/bits/instanceFetchBitGl';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
 import type { ShaderBitTemplate } from '~/core/shader/ShaderBitTemplate';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
+import { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { Material3D } from '~/materials/pbr/Material3D';
 import type { Material3DData } from '~/materials/pbr/Material3D';
 import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
+
+import { engineTemplateCopy } from '../../../../tests/scenes/helpers/engineTemplateCopy';
 
 const SIZE = 128;
 
@@ -126,6 +129,14 @@ void main() {
 const wholeGreenBit: ShaderBit = {
   name: 'passLevelWholeGreen',
   attributes: { aNormal: 'float32x3' },
+};
+
+const gainTemplate = engineTemplateCopy('let templateGain = 0.5;', 'float templateGain = 0.5;');
+
+const templateGainBit: ShaderBit = {
+  name: 'passLevelTemplateGain',
+  gpu: { fragment: { end: 'finalColor = vec3<f32>(0.0, 2.0 * templateGain, 0.0); alpha = 1.0;' } },
+  gl: { fragment: { end: 'finalColor = vec3(0.0, 2.0 * templateGain, 0.0); alpha = 1.0;' } },
 };
 
 interface ShiftData {
@@ -338,6 +349,45 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         expect(green.left, 'the whole shader drew the mesh where it sits').toBeGreaterThan(4);
         expect(green.right, "and took none of the material's bits, so the shape bit moved nothing").toBe(0);
       } finally {
+        app.destroy();
+      }
+    });
+
+    it("keeps a material's own template in a pass at level 'color'", async () => {
+      const app = await getApp<Renderer>({
+        id: `pass-level-colour-template-${preference}`,
+        appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x0000ff },
+      });
+      const consoleError = vi.spyOn(console, 'error');
+
+      try {
+        const view3d = new View3D({
+          width: SIZE,
+          height: SIZE,
+          passes: [new MeshPass({ name: 'colourLevel', level: 'color', descriptor: { state: new State() } })],
+        });
+        view3d.camera.position.set(0, 0, 10);
+        app.stage.addChild(view3d);
+
+        const material = new BaseMaterial3D({
+          descriptor: { bitsGpu: [templateGainBit], bitsGl: [templateGainBit], template: gainTemplate },
+          passes: { colourLevel: true },
+        });
+        const mesh = new Mesh3D({ geometry: new CubeGeometry({ width: 2, height: 2, depth: 2 }), material });
+        mesh.disablePass('opaque');
+        view3d.root.addChild(mesh);
+
+        const green = greenInMiddleRow(await renderFrame(app));
+        expect(
+          green.left + green.right,
+          "the 'color' pass drew the mesh with the local its template declares",
+        ).toBeGreaterThan(8);
+        expect(
+          consoleError.mock.calls.filter((args) => args.some((arg) => String(arg).includes('templateGain'))),
+          'no shader failed to compile on templateGain',
+        ).toEqual([]);
+      } finally {
+        consoleError.mockRestore();
         app.destroy();
       }
     });

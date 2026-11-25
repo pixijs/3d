@@ -4,17 +4,22 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MERGE_THRESHOLD } from '~/core/batcher/batchConstants';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
+import { instanceFetchBitGl } from '~/core/shader/bits/instanceFetchBitGl';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
+import { OutlinePass } from '~/extras/post-processing/passes/OutlinePass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Matrix4 } from '~/math/matrix/Matrix4';
+import type { Pass3D } from '~/post-processing/Pass3D';
 import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 import type { CullMode } from '~/scene/View3D';
+
+import { engineTemplateCopy, shiftedShadowTemplate } from '../../../../../tests/scenes/helpers/engineTemplateCopy';
 
 const SIZE = 128;
 
@@ -90,6 +95,23 @@ function meanXOfDifferingPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): num
   return sum / count;
 }
 
+const templateHelperBit: ShaderBit = {
+  name: 'shadowLevelTemplateHelper',
+  gpu: { header: 'fn templateTint(c: vec3<f32>) -> vec3<f32> { return c * vec3<f32>(1.0, 0.8, 0.6); }' },
+  gl: { fragment: { header: 'vec3 templateTint(vec3 c) { return c * vec3(1.0, 0.8, 0.6); }' } },
+};
+
+const templateColourBit: ShaderBit = {
+  name: 'shadowLevelTemplateColour',
+  gpu: { fragment: { material: 'albedo *= vec3<f32>(0.8, 0.4, 0.2);' } },
+  gl: { fragment: { material: 'albedo *= vec3(0.8, 0.4, 0.2);' } },
+};
+
+const helperTemplate = engineTemplateCopy(
+  'finalColor = templateTint(finalColor);',
+  'finalColor = templateTint(finalColor);',
+);
+
 function differingPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -106,12 +128,12 @@ async function overridesReachThePipeline(renderer: Renderer): Promise<void> {
   });
 }
 
-async function shadowView(preference: 'webgpu' | 'webgl', id: string, cull?: CullMode) {
+async function shadowView(preference: 'webgpu' | 'webgl', id: string, cull?: CullMode, passes?: Pass3D[]) {
   const app = await getApp<Renderer>({
     id: `shadow-pass-level-${id}-${preference}`,
     appOptions: { preference, width: SIZE, height: SIZE, backgroundColor: 0x101014 },
   });
-  const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull });
+  const view3d = new View3D({ width: SIZE, height: SIZE, shadowQuality: 'low', cull, passes });
   view3d.camera.position.set(0, 12, 0.01);
   view3d.camera.lookAt({ x: 0, y: 0, z: 0 });
   app.stage.addChild(view3d);
@@ -218,6 +240,89 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         await renderFrame(app);
         const none = await renderFrame(app);
         expect(differingPixels(merged, none), 'the kept casters cast').toBeGreaterThan(50);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('casts and outlines a material with its own template, on the engine template, when the template calls a helper its own bit declares', async () => {
+      const outline = new OutlinePass({ width: 0.1, color: 0x00ff00 });
+      const { app, view3d } = await shadowView(preference, 'own-template', undefined, [outline]);
+      const consoleError = vi.spyOn(console, 'error');
+
+      try {
+        const bits = [templateHelperBit, templateColourBit];
+        const material = new BaseMaterial3D({
+          descriptor: { bitsGpu: bits, bitsGl: bits, template: helperTemplate },
+          passes: { outline: true },
+        });
+        const caster = new Mesh3D({
+          geometry: new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 }),
+          material,
+          castShadow: true,
+        });
+        caster.position.set(0, 1.5, 0);
+        view3d.root.addChild(caster);
+
+        await renderFrame(app);
+        const casting = await renderFrame(app);
+        caster.castShadow = false;
+        await renderFrame(app);
+        const notCasting = await renderFrame(app);
+        expect(differingPixels(casting, notCasting), 'the shadow pass draws the templated caster').toBeGreaterThan(100);
+
+        caster.disablePass('outline');
+        await renderFrame(app);
+        const noOutline = await renderFrame(app);
+        expect(differingPixels(notCasting, noOutline), 'the outline pass draws the templated caster').toBeGreaterThan(
+          50,
+        );
+
+        expect(
+          consoleError.mock.calls.filter((args) => args.some((arg) => String(arg).includes('templateTint'))),
+          'no shader failed to compile on templateTint',
+        ).toEqual([]);
+      } finally {
+        consoleError.mockRestore();
+        app.destroy();
+      }
+    });
+
+    it("draws a material's own shadow shader with a template as written", async () => {
+      const { app, view3d } = await shadowView(preference, 'own-shadow-shader');
+
+      try {
+        const shaderDescriptor = { bitsGpu: [], bitsGl: [instanceFetchBitGl], template: shiftedShadowTemplate };
+        const caster = new Mesh3D({
+          geometry: new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 }),
+          material: new Material3D({ passes: { shadow: { shaderDescriptor } } }),
+        });
+        caster.position.set(-1.5, 1.5, 0);
+        view3d.root.addChild(caster);
+
+        const shadowX = async (): Promise<number> => {
+          caster.castShadow = true;
+          await renderFrame(app);
+          const casting = await renderFrame(app);
+          caster.castShadow = false;
+          await renderFrame(app);
+
+          return meanXOfDifferingPixels(casting, await renderFrame(app));
+        };
+
+        const ownShader = await shadowX();
+        caster.castShadow = true;
+        await renderFrame(app);
+        const list = view3d._sceneBatch.drawLists[RenderPassBit.SHADOW];
+        expect(
+          list.commandList.commands[0].batchBindGroup,
+          'its bits read no material, so it binds none',
+        ).toBeUndefined();
+
+        caster.material = new Material3D();
+        const plain = await shadowX();
+
+        expect(Math.abs(ownShader - plain), 'the shadow lies where its own shader moved the caster').toBeGreaterThan(8);
       } finally {
         app.destroy();
       }
