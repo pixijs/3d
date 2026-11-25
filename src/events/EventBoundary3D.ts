@@ -278,7 +278,6 @@ export class EventBoundary3D {
   private readonly _scratchLocalRay = new Ray();
   private readonly _scratchNormalMatrix = new Matrix4();
   private readonly _scratchWorldPoint = new Vector3();
-  private readonly _scratchCenter = new Vector3();
   private readonly _scratchHit: HitResult3D = createHitResult3D();
   /** Apart from the pick loop's scratch, which holds live values while the clip tests run */
   private readonly _scratchClipRay = new Ray();
@@ -436,13 +435,17 @@ export class EventBoundary3D {
 
   /**
    * Compares hits by world distance, since each node's local `t` is in its own units; the ancestor
-   * walk runs last, only for a hit that beats the best so far
+   * walk runs last, only for a hit that beats the best so far. The bounds test inlines
+   * `Ray#distanceSqToPoint`, as it runs for every listed node
    */
   private _pickWithWorldRay(worldRay: Ray, out: RaycastHit3D): boolean {
     const list = this._interactiveList;
     const ox = worldRay.origin.x;
     const oy = worldRay.origin.y;
     const oz = worldRay.origin.z;
+    const dirX = worldRay.direction.x;
+    const dirY = worldRay.direction.y;
+    const dirZ = worldRay.direction.z;
     const clipStamp = this._clipVolumeCount > 0 ? ++_clipPickStamp : 0;
 
     let bestDistance = Infinity;
@@ -457,9 +460,14 @@ export class EventBoundary3D {
       if (node._worldVisible === 0) continue;
 
       const wt = node.worldTransform.elements;
-      this._scratchCenter.set(wt[12], wt[13], wt[14]);
-      const radiusSq = hitVolumeBoundingRadiusSq(volume) * node._getWorldScaleSq();
-      if (worldRay.distanceSqToPoint(this._scratchCenter) > radiusSq) continue;
+      const cx = wt[12] - ox;
+      const cy = wt[13] - oy;
+      const cz = wt[14] - oz;
+      const along = Math.max(cx * dirX + cy * dirY + cz * dirZ, 0);
+      const px = cx - dirX * along;
+      const py = cy - dirY * along;
+      const pz = cz - dirZ * along;
+      if (px * px + py * py + pz * pz > hitVolumeBoundingRadiusSq(volume) * node._getWorldScaleSq()) continue;
 
       if (clipStamp !== 0 && !this._passesClipPrefilter(node, worldRay, clipStamp)) continue;
 

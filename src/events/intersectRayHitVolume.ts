@@ -11,15 +11,10 @@ import { intersectRayGeometry } from './intersectRayGeometry';
  * @internal
  */
 export function hitVolumeBoundingRadiusSq(volume: HitVolume3D): number {
-  if (volume instanceof Sphere) {
-    const c = volume.center;
-    const r = Math.sqrt(c.x * c.x + c.y * c.y + c.z * c.z) + Math.max(volume.radius, 0);
-    return r * r;
-  }
+  const shape = volume instanceof Geometry3D ? volume.bounds3D : volume;
 
-  if (volume instanceof Box || volume instanceof Geometry3D) {
-    const box = volume instanceof Geometry3D ? volume.bounds3D : volume;
-    const { min, max } = box;
+  if (shape instanceof Box) {
+    const { min, max } = shape;
     const x = Math.max(min.x * min.x, max.x * max.x);
     const y = Math.max(min.y * min.y, max.y * max.y);
     const z = Math.max(min.z * min.z, max.z * max.z);
@@ -27,7 +22,13 @@ export function hitVolumeBoundingRadiusSq(volume: HitVolume3D): number {
     return x + y + z;
   }
 
-  return volume.boundingRadiusSq;
+  if (shape instanceof Sphere) {
+    const c = shape.center;
+    const r = Math.sqrt(c.x * c.x + c.y * c.y + c.z * c.z) + Math.max(shape.radius, 0);
+    return r * r;
+  }
+
+  return shape.boundingRadiusSq;
 }
 
 /**
