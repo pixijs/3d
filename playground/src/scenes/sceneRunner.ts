@@ -4,6 +4,7 @@
 // assets (`src/index.ts` is what wires these up for the examples and vitest).
 import '@pixi/3d';
 import { Application, Assets } from 'pixi.js';
+import type { TestContext } from 'vitest';
 
 import type { TestScene } from '../../../tests/test-utils';
 import type { RenderType } from '../types';
@@ -28,7 +29,7 @@ export async function runScene(scene: TestScene, rendererType: RenderType): Prom
     await Assets.load(scene.assets);
   }
 
-  await scene.create(app, {} as any);
+  await scene.create(app, { onTestFinished() {} } as unknown as TestContext);
 
   return app.canvas as HTMLCanvasElement;
 }

@@ -443,6 +443,7 @@ function makeFixture(): Fixture {
   const batch = {
     uid: 50,
     cull: 'off' as CullMode,
+    _gpuCullSized: true,
     items: meshes,
     drawLists: { [PASS_BIT]: passData },
     storeBuffer: { bufferVersion: 0, data: batchMatrix, u32Data: storeU32, stride: 24 },

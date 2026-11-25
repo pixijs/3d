@@ -4,6 +4,7 @@ import { Matrix4 } from '../../math/matrix/Matrix4';
 import type { CullMode } from '../../scene/View3D';
 import { InstanceDataStoreBuffer } from '../buffers/InstanceDataStoreBuffer';
 import { MESH3D_LANE_MATERIAL, MESH3D_STORE_STRIDE, Mesh3DDataStoreBuffer } from '../buffers/Mesh3DDataStoreBuffer';
+import { gpuCullMin } from '../cull';
 import { DrawList } from '../render-passes/DrawList';
 import { BatchInstanceData } from './BatchInstanceData';
 import { BatchMatrices } from './BatchMatrices';
@@ -58,6 +59,12 @@ export class Mesh3DBatch {
   public _dirtyCount = 0;
 
   public _editsPending = false;
+
+  /**
+   * Whether the batch's largest draw list reaches {@link gpuCullMin}; one flag for every pass, so a small shadow list
+   * doesn't cull on the CPU and keep sphere writes on; turning it on stops those writes, as a {@link cull} change does
+   */
+  public _gpuCullSized = false;
 
   public destroyed = false;
 
@@ -332,7 +339,15 @@ export class Mesh3DBatch {
   public applyEdits(): void {
     if (!this._editsPending) return;
     this._editsPending = false;
-    for (const bit in this.drawLists) this.drawLists[bit].applyEdits();
+    let largest = 0;
+    for (const bit in this.drawLists) {
+      const list = this.drawLists[bit];
+      list.applyEdits();
+      if (list.view.count > largest) largest = list.view.count;
+    }
+    const sized = largest >= gpuCullMin();
+    if (sized && !this._gpuCullSized && this.storeBuffer.writesSpheres) this.storeBuffer.enableSphereWrites(false);
+    this._gpuCullSized = sized;
   }
 
   public invalidateDrawCaches(): void {

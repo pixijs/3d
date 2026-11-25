@@ -7,9 +7,12 @@ import { DirectionalLight } from '~/scene/lights/DirectionalLight';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
+import { gpuCullAtAnySize } from './helpers/gpuCullAtAnySize';
+
 export const scene: TestScene = {
   app: { backgroundColor: 0x1a1a2e },
-  create: async (app) => {
+  create: async (app, context) => {
+    gpuCullAtAnySize(context);
     const view3d = new View3D({
       width: app.screen.width,
       height: app.screen.height,

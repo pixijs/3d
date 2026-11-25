@@ -8,6 +8,8 @@ import { Mesh3D } from '~/scene/Mesh3D';
 import type { CullMode } from '~/scene/View3D';
 import { View3D } from '~/scene/View3D';
 
+import { gpuCullAtAnySize } from './gpuCullAtAnySize';
+
 /**
  * Shadow-caster culling against the light frustum. A cascaded directional light
  * (3 cascades) shadows a row of cubes receding into the distance — every caster
@@ -27,7 +29,8 @@ export function shadowCullScene(cull: CullMode): TestScene {
     app: {
       backgroundColor: 0x1a1a2e,
     },
-    create: async (app) => {
+    create: async (app, context) => {
+      if (cull === 'gpu') gpuCullAtAnySize(context);
       const view3d = new View3D({
         width: app.screen.width,
         height: app.screen.height,

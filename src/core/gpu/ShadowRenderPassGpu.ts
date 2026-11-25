@@ -176,7 +176,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           const result = results.ensure(batch, c);
           result.sync(list, direct);
 
-          const producer = resolveCullProducer(batch.cull, !direct);
+          const producer = resolveCullProducer(batch, !direct);
           if (producer === 'off') {
             produceVisibilityCompaction(computeSystem, list, batch, boundsBuffer, result);
           } else if (producer === 'cpu') {

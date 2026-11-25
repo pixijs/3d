@@ -308,6 +308,31 @@ describe('RenderGraphDebugger on the shadow pass', () => {
     });
   });
 
+  it("reads a small batch the light culls on the CPU as drawing only the casters in the light's view", async () => {
+    await withScene('debug-shadow-cpu-cull', (app, { view3d, sun }) => {
+      sun.removeFromParent();
+      const spot = addSpot(view3d);
+      spot.shadow.update = 1;
+      const outside = createCaster();
+      outside.position.set(500, 0, 0);
+      view3d.root.addChild(outside);
+      const debug = new RenderGraphDebugger({ view: view3d });
+
+      app.render();
+      const shadow = debug
+        .capture()!
+        .batches.flatMap((batch) => batch.passes)
+        .find((pass) => pass.name === 'shadow');
+
+      expect(shadow, 'the shadow pass drew the batch').toBeDefined();
+      expect({
+        source: shadow!.sourceInstanceCount,
+        drawn: shadow!.drawnInstanceCount,
+        statuses: [...new Set(shadow!.draws.map((draw) => draw.drawnInstanceCountStatus))],
+      }).toEqual({ source: 2, drawn: 1, statuses: ['exact'] });
+    });
+  });
+
   it('reads every WebGL frame as using no bundle, since WebGL records none', async () => {
     await withScene(
       'debug-shadow-webgl',
