@@ -61,8 +61,8 @@ export class Mesh3DBatch {
   public _editsPending = false;
 
   /**
-   * Whether `'gpu'` culls this batch on the GPU, from its largest draw list so every pass agrees; turning on stops the
-   * sphere writes a CPU walk started while the batch was smaller, as a {@link cull} change does
+   * Whether the batch's largest draw list reaches {@link gpuCullMin}; one flag for every pass, so a small shadow list
+   * doesn't cull on the CPU and keep sphere writes on; turning it on stops those writes, as a {@link cull} change does
    */
   public _gpuCullSized = false;
 

@@ -1,12 +1,12 @@
 import type { TestScene } from '@test-utils';
 
-import { gpuCull } from '~/core/cull';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import type { Mesh3D } from '~/scene/Mesh3D';
 import type { CullMode } from '~/scene/View3D';
 import { View3D } from '~/scene/View3D';
 
 import { buildCubeGrid } from './cubeGrid';
+import { gpuCullAtAnySize } from './gpuCullAtAnySize';
 
 interface VisibilitySceneOptions {
   /** Cull mode the view renders under. */
@@ -29,7 +29,8 @@ interface VisibilitySceneOptions {
  * draw-command / render-bundle rebuild:
  *
  * - `cull: 'gpu'` — the compaction compute kernel (visibility-lane gate; CPU walk on WebGL), with
- *   `gpuCull.minInstances` at 0 since the grid is under it;
+ *   `gpuCull.minInstances` set to 0 through `gpuCullAtAnySize`, since the 49 cubes are under the
+ *   default minimum;
  * - `cull: 'cpu'` — the CPU frustum compaction;
  * - `cull: 'off'` — the visibility-only walk (dirty-gated on WebGPU);
  * - `alphaMode: 'blend'` — the transparent pass, which runs the same compaction after its
@@ -44,12 +45,7 @@ export function visibilityScene(options: VisibilitySceneOptions): TestScene {
   return {
     app: { backgroundColor: 0x101018 },
     create: async (app, context) => {
-      if (options.cull === 'gpu') {
-        gpuCull.minInstances = 0;
-        context.onTestFinished(() => {
-          delete gpuCull.minInstances;
-        });
-      }
+      if (options.cull === 'gpu') gpuCullAtAnySize(context);
 
       const view3d = new View3D({ width: app.screen.width, height: app.screen.height, cull: options.cull });
       app.stage.addChild(view3d);

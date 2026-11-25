@@ -2,6 +2,7 @@ import { getApp, isCI } from '@test-utils';
 import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { gpuCull } from '~/core/cull';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
@@ -67,10 +68,12 @@ async function renderPixels(preference: 'webgl' | 'webgpu', cull: CullMode): Pro
     appOptions: { preference, width: SIZE, height: SIZE },
   });
   try {
+    gpuCull.minInstances = 0;
     const view3d = buildScene(app, cull);
     app.render();
     return new Uint8Array(app.renderer.extract.pixels(view3d).pixels);
   } finally {
+    delete gpuCull.minInstances;
     app.destroy();
   }
 }

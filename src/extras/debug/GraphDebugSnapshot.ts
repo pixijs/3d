@@ -378,7 +378,11 @@ export interface GraphDebugDrawSnapshot {
   firstInstance: number;
   /** Original instances assigned to this command by the batcher */
   sourceInstanceCount: number;
-  /** Surviving instances when CPU-visible; null when the count only exists in a GPU-written buffer */
+  /**
+   * Surviving instances when CPU-visible; null when the count only exists in a GPU-written buffer
+   *
+   * In a shadow pass with several lights or cascades, it's the count of the last cascade culled this frame.
+   */
   drawnInstanceCount: number | null;
   /**
    * How `drawnInstanceCount` was obtained: an exact CPU count, a CPU rerun of the GPU cull, or not at
@@ -769,9 +773,11 @@ function captureBatchPass(
     bodyCount < passData.commandList.count ? passData.drawData.drawCalls[bodyCount * 5 + 4] : drawn.length;
   const tailMeshIds = drawn.slice(tailStart).flatMap((mesh) => (mesh ? [mesh.uid] : []));
 
-  const result = cullResultFor(pass, batch);
-  const args = result ? result.indirectDrawData.drawCalls : passData.drawData.drawCalls;
   const webGpu = pass.pipe.renderer.type === RendererType.WEBGPU;
+  const result =
+    cullResultFor(pass, batch) ??
+    (webGpu && bit === RenderPassBit.SHADOW ? lastCulledShadowResult(view.lights, batch) : undefined);
+  const args = result ? result.indirectDrawData.drawCalls : passData.drawData.drawCalls;
   const forward = forwardConfig(pass);
   let lastBundleDirtyId: number | null = null;
   let scheduledBundleDirtyId: number | null = null;
@@ -847,6 +853,24 @@ interface CullingPass {
  */
 function cullResultFor(pass: GraphRenderPass, batch: Mesh3DBatch): CullResult | undefined {
   return (pass as CullingPass).cullResults?.get(batch);
+}
+
+/**
+ * The result of the last cascade drawn this frame, to match WebGL, whose draws rewrite the counts in place so they
+ * end the frame as that cascade's
+ */
+function lastCulledShadowResult(lights: readonly Light[], batch: Mesh3DBatch): CullResult | undefined {
+  let last: CullResult | undefined;
+  for (let i = 0; i < lights.length; i++) {
+    const light = lights[i];
+    const data: ShadowDataGpu | null = light._gpuShadowData;
+    if (!data?.cullResults || !castsShadowThisFrame(light)) continue;
+    const cascadeCount = cascadeCountFor(light);
+    for (let c = 0; c < cascadeCount; c++) {
+      if (data.cascades?.[c]?.needsRender) last = data.cullResults.get(batch, c);
+    }
+  }
+  return last;
 }
 
 /**

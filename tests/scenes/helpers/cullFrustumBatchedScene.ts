@@ -9,6 +9,8 @@ import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import type { CullMode } from '~/scene/View3D';
 import { View3D } from '~/scene/View3D';
 
+import { gpuCullAtAnySize } from './gpuCullAtAnySize';
+
 const SIDE = 7;
 const SPACING = 1.4;
 const CUBE = 0.7;
@@ -27,7 +29,8 @@ const CULL_APEX_Z = 11;
 export function cullFrustumBatchedScene(cull: CullMode): TestScene {
   return {
     app: { backgroundColor: 0x101018 },
-    create: async (app) => {
+    create: async (app, context) => {
+      if (cull === 'gpu') gpuCullAtAnySize(context);
       const view3d = new View3D({ width: app.screen.width, height: app.screen.height, cull });
       app.stage.addChild(view3d);
 

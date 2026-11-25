@@ -4,8 +4,9 @@ import type { CullMode } from '../scene/View3D';
 import type { Mesh3DBatch } from './batcher/Mesh3DBatch';
 
 /**
- * The fewest instances in a batch's largest draw list that `'gpu'` culls on the GPU; a smaller batch walks on the CPU,
- * cheaper there than the compute passes and their submit, and still draws indirect. An unset entry takes the default
+ * The size in instances a batch's largest draw list needs for `'gpu'` to cull on the GPU; a smaller batch culls on
+ * the CPU, which costs less than the compute passes and their submit, and still draws indirect. Unset, it takes
+ * `GPU_CULL_MIN`
  * @internal
  */
 export const gpuCull: { minInstances?: number } = {};

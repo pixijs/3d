@@ -2,7 +2,7 @@ import { getApp, renderFrame } from '@test-utils';
 import type { Renderer, WebGPURenderer } from 'pixi.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { cpuSubmission } from '~/core/cull';
+import { cpuSubmission, gpuCull } from '~/core/cull';
 import type { CullResults } from '~/core/render-passes/CullResults';
 import type { ForwardRenderPass } from '~/core/render-passes/ForwardRenderPass';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
@@ -75,6 +75,7 @@ const recordings = (spies: { beginBundle: ReturnType<typeof vi.spyOn> }, label: 
 async function renderParityScene(id: string, cap: number) {
   cpuSubmission.forward = cap;
   cpuSubmission.shadow = cap;
+  gpuCull.minInstances = 0;
   const app = await getApp<Renderer>({
     id,
     appOptions: { preference: 'webgpu', width: 96, height: 96, backgroundColor: 0x203040 },
@@ -132,6 +133,7 @@ async function renderParityScene(id: string, cap: number) {
       draw: vi.spyOn(encoder, 'draw'),
       drawIndirect: vi.spyOn(encoder, 'drawIndirect'),
       executeBundle: vi.spyOn(encoder, 'executeBundle'),
+      dispatch: vi.spyOn((app.renderer as WebGPURenderer).compute3d, 'dispatch'),
     };
     const pixels = await renderFrame(app);
 
@@ -147,6 +149,7 @@ async function renderParityScene(id: string, cap: number) {
       direct: directDraws(spies).length,
       indirect: spies.drawIndirect.mock.calls.length,
       bundles: spies.executeBundle.mock.calls.length,
+      dispatched: spies.dispatch.mock.calls.length,
     };
 
     return { pixels, direct, drew };
@@ -160,6 +163,7 @@ describe('CPU submission on WebGPU', () => {
   afterEach(() => {
     delete cpuSubmission.forward;
     delete cpuSubmission.shadow;
+    delete gpuCull.minInstances;
   });
 
   it('within the cap: culls on the CPU, draws direct, records no bundle, skips the empty command', async () => {
@@ -463,6 +467,7 @@ describe('CPU submission on WebGPU', () => {
       shadow: false,
     });
     expect(indirect.drew.bundles, 'the opaque pass replays its bundle').toBeGreaterThan(0);
+    expect(indirect.drew.dispatched, 'the indirect side culls in the compute pass').toBeGreaterThan(0);
     expect(direct.direct, 'no cap puts every pass on direct draws').toEqual({
       opaque: true,
       transparent: true,

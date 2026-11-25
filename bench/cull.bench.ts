@@ -12,8 +12,10 @@
  * `culling off` is the field spinning in a view that doesn't cull, which pays for keeping bounds it never reads.
  *
  * `default small` is spinning meshes in a view left on its default, `'gpu'`. At 250, on WebGPU nothing reads the
- * bounds, and on WebGL the pass culls on the CPU and keeps them. At 100 and 1, under the batch size that culls on the
- * GPU, WebGPU culls on the CPU too, sparing the compute passes and their submit.
+ * bounds, and on WebGL the pass culls on the CPU and keeps them. At 100 and 1, below `gpuCull`'s minimum, WebGPU
+ * culls on the CPU too and skips the compute passes and their submit. `sun100` is `spin100` with every mesh casting
+ * a shadow from the sun, in four cascades at `'low'` quality, so each frame culls five times: once for the forward
+ * pass and once per cascade.
  *
  * `batched cull` is the field as one `BatchedMesh3D` that culls on the CPU, its container swaying so the planes
  * move into its frame every frame. `still20k` leaves the slots alone, `spin20k` rewrites every slot's matrix every
@@ -21,7 +23,7 @@
  * matrix write is the update's.
  */
 
-import { BatchedMesh3D, Matrix4, Quaternion, RenderPassBit, Vector3 } from '@pixi/3d';
+import { BatchedMesh3D, Matrix4, Mesh3D, Quaternion, RenderPassBit, Vector3 } from '@pixi/3d';
 import type { CullMode } from '@pixi/3d';
 import { frame } from 'benchy';
 
@@ -97,12 +99,26 @@ frame('culling off', {
 });
 
 frame('default small', {
-  variants: { spin250: { count: 250 }, spin100: { count: 100 }, spin1: { count: 1 } },
+  variants: {
+    spin250: { count: 250, shadows: false },
+    spin100: { count: 100, shadows: false },
+    spin1: { count: 1, shadows: false },
+    sun100: { count: 100, shadows: true },
+  },
   primary: 'cpu.render',
-  create(stage: PixiStage, { count }) {
+  create(stage: PixiStage, { count, shadows }) {
     const data = fieldScene(count);
     applyLook(stage, data.look);
-    return meshPerObject(stage, data);
+    const scene = meshPerObject(stage, data);
+    if (!shadows) return scene;
+    const { view, lights } = stage;
+    view.shadowQuality = 'low';
+    lights.sun.castShadow = true;
+    lights.sun.shadow.cascades = 4;
+    for (const child of view.root.children) {
+      if (child instanceof Mesh3D) child.castShadow = true;
+    }
+    return scene;
   },
 });
 

@@ -2,6 +2,7 @@ import { getApp, readCanvasPixels } from '@test-utils';
 import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { gpuCull } from '~/core/cull';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
@@ -90,6 +91,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         });
 
         try {
+          gpuCull.minInstances = 0;
           const churned = build(mode, 0, cube(), cull);
           const referenceCube = cube();
           app.stage.addChild(churned.view3d);
@@ -117,6 +119,7 @@ for (const preference of ['webgpu', 'webgl'] as const) {
           }
           expect(mismatches).toEqual([]);
         } finally {
+          delete gpuCull.minInstances;
           app.destroy();
           reference.destroy();
         }

@@ -101,9 +101,9 @@ export type ToneMapping = 'aces' | 'reinhard' | 'uncharted2' | 'none' | 'custom'
 /**
  * How a view or a {@link BatchedMesh3D} skips what's outside the camera's view
  *
- * - `'gpu'`: culls on the GPU, off the main thread. Under 128 meshes it culls on the CPU instead,
- *   where that costs less. So do WebGL, Safari or any iOS browser for all but very large batches,
- *   and blended meshes, which draw sorted back to front.
+ * - `'gpu'`: culls on the GPU, off the main thread. WebGL, and Safari or any iOS browser for all
+ *   but very large batches, cull on the CPU instead. So do a small view or batch, where that costs
+ *   less, and blended meshes, which draw sorted back to front.
  * - `'cpu'`: culls on the CPU every frame. Can suit a frame that waits on the GPU.
  * - `'off'`: draws everything. Suits a scene that always fits in view.
  *
