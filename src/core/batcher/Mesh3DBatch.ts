@@ -16,14 +16,12 @@ const _identityMatrix = new Matrix4();
 
 interface BatchRenderData {
   worldTransform: Matrix4;
-  _worldTransformId: number;
   _worldVisible: number;
   label?: string | null;
 }
 
 const SCENE_BATCH_RENDER_DATA: BatchRenderData = {
   worldTransform: _identityMatrix,
-  _worldTransformId: 0,
   _worldVisible: 1,
 };
 
@@ -50,9 +48,6 @@ export class Mesh3DBatch {
 
   /** Row 0, allocated first, since the WebGPU shaders read the batch matrix from `uRenderableStorage[0]` */
   private readonly _batchWorldMatrixIndex: number = 0;
-
-  /** The `renderData._worldTransformId` last written to row 0, so a still batch leaves the row clean */
-  public _batchWorldTransformId = -1;
 
   public readonly renderData: BatchRenderData;
 

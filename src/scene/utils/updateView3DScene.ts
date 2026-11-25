@@ -138,13 +138,6 @@ function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): 
   const geomStore = pipe.geometryDataStoreBuffer;
   for (let b = 1; b < view3d._meshBatches.length; b++) {
     const batch = view3d._meshBatches[b];
-
-    const renderData = batch.renderData;
-    if (batch._batchWorldTransformId !== renderData._worldTransformId) {
-      batch._batchWorldTransformId = renderData._worldTransformId;
-      batch.writeBatchWorldMatrix(renderData.worldTransform);
-    }
-
     const dirtyIndices = batch._dirtyIndices!;
     const dirtyCount = batch._dirtyCount;
 

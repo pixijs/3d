@@ -54,8 +54,9 @@ export class BatchMatrices {
    * drawing, culling and shadows alike
    *
    * Pass the range that changed, or nothing for every slot. Throws a `RangeError` for a range outside
-   * the batch. The next render then uploads every matrix from slot 0 to the end of the range in one
-   * go, so for a few scattered slots use `setMatrixAt` alone.
+   * the batch. Once it's called, every slot marked before the next render uploads as one span, from
+   * the lowest to the highest, so for a few scattered slots use
+   * {@link BatchedMesh3D.setMatrixAt | setMatrixAt} alone.
    * @param first - The first slot that changed
    * @param count - How many slots changed; defaults to every slot from `first` on
    */
