@@ -479,6 +479,21 @@ describe('View3D.raycast — broadphase sphere reject stays conservative', () =>
     expect(hit).not.toBeNull();
     expect(hit!.target).toBe(node);
   });
+
+  test('picks a volume around the camera whose origin is behind it, at the face in front', () => {
+    const view3d = new View3D({ ...SIZE });
+    view3d.camera.position.set(0, 0, 10);
+    const room = new Container3D();
+    room.position.set(0, 0, 14);
+    room.eventMode = 'static';
+    room.hitVolume = new Box(new Vector3(-6, -6, -6), new Vector3(6, 6, 6));
+    view3d.root.addChild(room);
+    tickPick(view3d);
+
+    const hit = view3d.raycast({ x: 50, y: 50 });
+    expect(hit?.target).toBe(room);
+    expect(hit?.distance).toBeCloseTo(2, 4);
+  });
 });
 
 describe('View3D — pick caches track transform changes', () => {

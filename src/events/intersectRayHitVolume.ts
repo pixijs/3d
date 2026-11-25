@@ -7,13 +7,14 @@ import { intersectRayGeometry } from './intersectRayGeometry';
 
 /**
  * Squared radius of a sphere about the node's local origin enclosing `volume`, as the pick in
- * `EventBoundary3D.ts` centres it on the node; uncached, so a shape edited in place picks right.
- * Tests `Geometry3D` first, the usual volume, since each failed `instanceof` walks its prototype chain
+ * `EventBoundary3D.ts` centres it on the node; uncached, so a shape edited in place picks right
  * @internal
  */
 export function hitVolumeBoundingRadiusSq(volume: HitVolume3D): number {
-  if (volume instanceof Geometry3D || volume instanceof Box) {
-    const { min, max } = volume instanceof Geometry3D ? volume.bounds3D : volume;
+  const shape = volume instanceof Geometry3D ? volume.bounds3D : volume;
+
+  if (shape instanceof Box) {
+    const { min, max } = shape;
     const x = Math.max(min.x * min.x, max.x * max.x);
     const y = Math.max(min.y * min.y, max.y * max.y);
     const z = Math.max(min.z * min.z, max.z * max.z);
@@ -21,13 +22,13 @@ export function hitVolumeBoundingRadiusSq(volume: HitVolume3D): number {
     return x + y + z;
   }
 
-  if (volume instanceof Sphere) {
-    const c = volume.center;
-    const r = Math.sqrt(c.x * c.x + c.y * c.y + c.z * c.z) + Math.max(volume.radius, 0);
+  if (shape instanceof Sphere) {
+    const c = shape.center;
+    const r = Math.sqrt(c.x * c.x + c.y * c.y + c.z * c.z) + Math.max(shape.radius, 0);
     return r * r;
   }
 
-  return volume.boundingRadiusSq;
+  return shape.boundingRadiusSq;
 }
 
 /**
