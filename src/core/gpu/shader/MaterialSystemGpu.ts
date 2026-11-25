@@ -29,6 +29,7 @@ import { normalBit } from '../../shader/bits/normalBit';
 import { normalMappingBit } from '../../shader/bits/normalMappingBit';
 import { noShadowBit } from '../../shader/bits/noShadowBit';
 import { getPositionBit } from '../../shader/bits/positionBit';
+import { previousPositionBit, readsPreviousModelMatrix } from '../../shader/bits/previousModelMatrixBit';
 import { tangentNormalMappingBit } from '../../shader/bits/tangentNormalMappingBit';
 import { srgbEncodeBit } from '../../shader/bits/tonemapping/srgbEncodeBit';
 import { getUvsBit } from '../../shader/bits/uvsBit';
@@ -41,9 +42,14 @@ import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 import { ShaderDescriptor } from '../../shader/ShaderDescriptor';
 import { NORMAL_MAP } from '../../textures/DefaultTextures';
-import { morphTargetBitGpu, morphTargetNormalBitGpu } from '../bits/morphTargetBitGpu';
+import {
+  morphTargetBitGpu,
+  morphTargetNormalBitGpu,
+  previousMorphTargetBitGpu,
+  previousMorphTargetNormalBitGpu,
+} from '../bits/morphTargetBitGpu';
 import { shadowBitsGpu } from '../bits/shadowBitGpu';
-import { skinningBitGpu } from '../bits/skinningBitGpu';
+import { previousSkinningBitGpu, skinningBitGpu } from '../bits/skinningBitGpu';
 import { compileWgslSource } from '../codegen/compileWgslSource';
 import { materialTextureAccessPlugin } from '../codegen/materialTextureAccessPlugin';
 import { globalBitGpu } from './globalBitGpu';
@@ -275,7 +281,8 @@ export class MaterialSystemGpu {
 
   /**
    * Appends the position, morph and skinning bits in that order, so skinning moves the morphed vertex,
-   * and adds what it appends to the key; validation reads the material, so it runs on cache hits too
+   * and adds what it appends to the key; validation reads the material, so it runs on cache hits too. Their
+   * previous-render twins follow a descriptor bit that reads `previousModelMatrix`, already in the key
    */
   public compileShader(
     descriptor: ShaderDescriptor,
@@ -303,12 +310,17 @@ export class MaterialSystemGpu {
     finalBits.push(positionBit);
     key += `|${positionBit.name}`;
 
+    const previous = descriptor.bitsGpu.some(readsPreviousModelMatrix);
+    if (previous) finalBits.push(previousPositionBit);
+
     if (mesh._morph) {
       if (mesh.geometry.hasMorphNormals) {
         finalBits.push(morphTargetNormalBitGpu);
+        if (previous) finalBits.push(previousMorphTargetNormalBitGpu);
         key += '|morphN';
       } else {
         finalBits.push(morphTargetBitGpu);
+        if (previous) finalBits.push(previousMorphTargetBitGpu);
         key += '|morph';
       }
     }
@@ -316,6 +328,7 @@ export class MaterialSystemGpu {
     if (mesh.skeleton) {
       assertBitIdentity(skinningBitGpu);
       finalBits.push(skinningBitGpu);
+      if (previous) finalBits.push(previousSkinningBitGpu);
       key += `|${skinningBitGpu.name}`;
     }
 

@@ -153,8 +153,11 @@ export class MorphStoreBuffer {
     recycle(this._freeDeltaBlocks, floats, base);
   }
 
-  /** Packs every geometry before placing any weights, since arena growth moves the weights base */
-  public sync(morphedMeshes: Mesh3D[]): void {
+  /**
+   * Packs every geometry before placing any weights, since arena growth moves the weights base. With `keepPrevious`
+   * each slot is twice the size, its second half holding the last sync's weights; a morph changing over gets a new slot
+   */
+  public sync(morphedMeshes: Mesh3D[], keepPrevious = false): void {
     for (let i = 0; i < morphedMeshes.length; i++) {
       this.uploadDeltas(morphedMeshes[i].geometry);
     }
@@ -163,24 +166,29 @@ export class MorphStoreBuffer {
     for (let i = 0; i < morphedMeshes.length; i++) {
       const mesh = morphedMeshes[i];
       const morph = mesh._morph!;
-      if (morph._store !== this) {
+      const keeps = morph._previousWeightIndex !== morph._weightIndex;
+      const fresh = morph._store !== this || keeps !== keepPrevious;
+      if (fresh) {
         morph._store?.freeSlot(morph);
-        this.allocSlot(morph);
+        this.allocSlot(morph, keepPrevious);
       }
       const absolute = weightsBase + morph._slot;
-      if (morph._weightIndex !== absolute) {
+      const previous = keepPrevious ? absolute + morph._slotSize / 2 : absolute;
+      if (morph._weightIndex !== absolute || morph._previousWeightIndex !== previous) {
         morph._weightIndex = absolute;
+        morph._previousWeightIndex = previous;
         mesh._markStoreDirty();
       }
-      this.writeWeights(morph);
+      this.writeWeights(morph, fresh);
     }
 
     this.update();
   }
 
-  public allocSlot(morph: Morph): void {
+  public allocSlot(morph: Morph, keepPrevious = false): void {
     let size = 1;
     while (size < morph.weights.length) size <<= 1;
+    if (keepPrevious) size <<= 1;
 
     const free = this._freeSlots.get(size);
     let slot: number;
@@ -217,23 +225,32 @@ export class MorphStoreBuffer {
 
   /**
    * Marks the slot for upload only when a copied value differs, the only change tracking weights have;
-   * the copy stops at the slot's size, in case `weights` grew
+   * the copy stops at the slot's size, in case `weights` grew. A `fresh` slot's previous half takes these weights,
+   * not the last owner's
    */
-  public writeWeights(morph: Morph): void {
+  public writeWeights(morph: Morph, fresh = false): void {
     const weights = morph.weights;
     const data = this.data;
     const base = this._deltaCapacity + morph._slot;
-    const count = Math.min(weights.length, morph._slotSize);
+    const previous = morph._previousWeightIndex - morph._weightIndex;
+    const count = Math.min(weights.length, previous > 0 ? previous : morph._slotSize);
 
     let changed = false;
     for (let i = 0; i < count; i++) {
       const value = weights[i];
+      if (previous > 0) {
+        const last = fresh ? value : data[base + i];
+        if (data[base + previous + i] !== last) {
+          data[base + previous + i] = last;
+          changed = true;
+        }
+      }
       if (data[base + i] !== value) {
         data[base + i] = value;
         changed = true;
       }
     }
-    if (changed) this._markDirty(base, base + count - 1);
+    if (changed) this._markDirty(base, base + previous + count - 1);
   }
 
   public update(): void {

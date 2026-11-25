@@ -237,6 +237,11 @@ export class Skeleton {
    */
   public _bonePitIndex = -1;
   /**
+   * Base of the matrices from the view's previous render, which is `_bonePitIndex` while the pit keeps none
+   * @internal
+   */
+  public _previousBonePitIndex = -1;
+  /**
    * The bone pit tick of its last `BonePit.add`, so a skeleton several meshes share is copied once a frame
    * @internal
    */
@@ -520,6 +525,7 @@ export class Skeleton {
     this._containerBones.length = 0;
 
     this._bonePitIndex = -1;
+    this._previousBonePitIndex = -1;
     this._bonePitTick = -1;
   }
 

@@ -60,7 +60,9 @@ export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): 
       });
     }
 
-    session.globalBindGroup.setResource(batch.storeBuffer.texture.source, 'uMeshStoreTexture');
+    const store = batch.storeBuffer;
+    session.globalBindGroup.setResource(store.texture.source, 'uMeshStoreTexture');
+    session.globalBindGroup.setResource((store.previous ?? store).texture.source, 'uPreviousMeshStoreTexture');
     if (list.glData.indexTexture) {
       session.globalBindGroup.setResource(list.glData.indexTexture.texture.source, 'uRenderInstanceTexture');
     }

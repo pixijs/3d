@@ -22,6 +22,22 @@ interface RenderDataBufferOptions<T extends object> {
 /** Holds its slot index under the store's `indexKey`, which must start at -1 or `allocate` never gives it a slot */
 type SlotOwner = Record<string, number>;
 
+const noCopy = (): void => {};
+
+const LONG_RUN_LANES = 1024;
+
+/**
+ * Copies `u32` lanes, since a float copy may change a NaN's bits and an index lane can hold any. A long run takes
+ * `set`, several times faster than the loop for one view's allocation, so a frame allocates one per long run only
+ */
+function copyLanes(from: Uint32Array, to: Uint32Array, start: number, end: number): void {
+  if (end - start >= LONG_RUN_LANES) {
+    to.set(from.subarray(start, end), start);
+    return;
+  }
+  for (let i = start; i < end; i++) to[i] = from[i];
+}
+
 /** @internal */
 export class DataStoreBuffer<T extends object = object> {
   public data: Float32Array;
@@ -55,6 +71,8 @@ export class DataStoreBuffer<T extends object = object> {
 
   /** Bumped when growth replaces the GPU views, so whatever bound the old ones must bind again */
   public bufferVersion = 0;
+
+  private _previous: DataStoreBuffer<T> | null = null;
 
   constructor(options: RenderDataBufferOptions<T>) {
     this._stride = options.stride;
@@ -108,18 +126,56 @@ export class DataStoreBuffer<T extends object = object> {
     return this._texture;
   }
 
+  /**
+   * `null` while {@link keepPrevious} is off. Its GPU views copy its data on first bind, after `update` copied this
+   * render's rows in, so the render that makes them reads no change
+   */
+  public get previous(): DataStoreBuffer<T> | null {
+    return this._previous;
+  }
+
+  /**
+   * Stopping unloads the copy rather than destroying it, since the view's bind group may hold it until the next draw
+   * re-points the slot, and pixi warns when a bound resource dies
+   * @returns Whether it started or stopped, which replaces what a recorded draw bound
+   */
+  public keepPrevious(keep: boolean): boolean {
+    if (keep === (this._previous !== null) || !this.data) return false;
+
+    if (keep) {
+      const previous = new DataStoreBuffer<T>({
+        stride: this._stride,
+        initialSize: Math.ceil(this.data.length / this._stride),
+        indexKey: this._indexKey,
+        copier: noCopy,
+      });
+      copyLanes(this.u32Data, previous.u32Data, 0, this.u32Data.length);
+      this._previous = previous;
+    } else {
+      this._previous!.unload();
+      this._previous = null;
+    }
+
+    return true;
+  }
+
+  /** {@link previous} uploads the last update's rows before this update's rows overwrite its data */
   public update(): void {
     const dirty = this._dirty;
+    const previous = this._previous;
+    previous?.update();
     if (dirty.isEmpty) return;
 
     const buffer = this._buffer;
     const source = this._textureSource;
 
-    if (buffer || source) {
+    if (buffer || source || previous) {
       dirty.planRuns();
 
       const stride = this._stride;
       const runs = dirty.runs;
+
+      if (previous) this._copyDirtyInto(previous);
 
       if (buffer) {
         if (dirty.runsBeatSpan(BUFFER_CALL_BYTES, BUFFER_SPAN_FLOOR_BYTES)) {
@@ -145,6 +201,27 @@ export class DataStoreBuffer<T extends object = object> {
     }
 
     dirty.clear();
+  }
+
+  /** Marks {@link previous}'s copies for its next upload, a render later than this store's own */
+  private _copyDirtyInto(previous: DataStoreBuffer<T>): void {
+    const dirty = this._dirty;
+    const stride = this._stride;
+
+    if (dirty.spanOnly) {
+      copyLanes(this.u32Data, previous.u32Data, dirty.min * stride, (dirty.max + 1) * stride);
+      previous.markDirtyRange(dirty.min, dirty.max);
+
+      return;
+    }
+
+    const runs = dirty.runs;
+    for (let r = 0; r < dirty.runCount; r++) {
+      const start = runs[r * 2];
+      const end = runs[r * 2 + 1];
+      copyLanes(this.u32Data, previous.u32Data, start * stride, end * stride);
+      for (let slot = start; slot < end; slot++) previous.markDirty(slot);
+    }
   }
 
   /** Checks the new slot's end against the array, which is sized in texture rows and can end partway through a slot */
@@ -175,11 +252,18 @@ export class DataStoreBuffer<T extends object = object> {
   public set(item: T): number {
     if (!this.data) return -1;
 
+    const previous = this._previous;
+    const newRow = previous !== null && (item as SlotOwner)[this._indexKey] < 0;
     const index = this.allocate(item);
     const stride = this._stride;
 
     this._copier(item, this.data, this.u32Data, this.fl64Data, index * stride, stride);
     this._dirty.mark(index);
+
+    if (newRow) {
+      copyLanes(this.u32Data, previous.u32Data, index * stride, (index + 1) * stride);
+      previous.markDirty(index);
+    }
 
     return index;
   }
@@ -254,6 +338,7 @@ export class DataStoreBuffer<T extends object = object> {
     this._buffer?.unload();
     this._textureSource?.unload();
     this._freeRetired();
+    this._previous?.unload();
   }
 
   public destroy(): void {
@@ -265,6 +350,9 @@ export class DataStoreBuffer<T extends object = object> {
     this._freeRetired();
 
     this._texture?.destroy(true);
+
+    this._previous?.destroy();
+    this._previous = null;
 
     (this.data as Float32Array | null) = null;
     (this.u32Data as Uint32Array | null) = null;
@@ -314,5 +402,8 @@ export class DataStoreBuffer<T extends object = object> {
     }
 
     this.bufferVersion++;
+
+    const previous = this._previous;
+    if (previous && previous.data.length < newSize) previous._expand(newSize);
   }
 }

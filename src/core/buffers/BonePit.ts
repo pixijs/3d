@@ -41,8 +41,14 @@ export class BonePit {
    * slot changed, and `update` trims it to the frame's adds, since later slots may lie under moved bones
    */
   private readonly _slotWorldIds: number[] = [];
+  /**
+   * The `Skeleton._worldId` each slot's previous range holds, its own range while {@link keepPrevious} is off. An id
+   * copied from another slot never matches, so it costs a copy, never a stale skip
+   */
+  private readonly _slotPreviousWorldIds: number[] = [];
   private _addCount = 0;
   private _changed = false;
+  private _keepsPrevious = false;
 
   constructor(options: BonePitOptions = {}) {
     const initialBones = options.initialBoneCapacity ?? 256;
@@ -82,6 +88,21 @@ export class BonePit {
     return this._texture;
   }
 
+  /**
+   * While on, each skeleton takes twice its joints: this render's matrices, then the previous render's at
+   * `Skeleton._previousBonePitIndex`, which `add` copies from the skeleton's own range before overwriting it, or
+   * takes from this render when the range is new or moved
+   * @returns Whether it started or stopped, which moves the skinned meshes' bases
+   */
+  public keepPrevious(keep: boolean): boolean {
+    if (keep === this._keepsPrevious) return false;
+
+    this._keepsPrevious = keep;
+    this._slotWorldIds.length = 0;
+
+    return true;
+  }
+
   public clear(): void {
     this._boneCount = 0;
     this._addCount = 0;
@@ -93,26 +114,46 @@ export class BonePit {
       return skeleton._bonePitIndex;
     }
 
+    const baseIndex = this._boneCount;
+    const sameBase = skeleton._bonePitTick === this._tick - 1 && skeleton._bonePitIndex === baseIndex;
     skeleton._bonePitTick = this._tick;
 
-    const baseIndex = this._boneCount;
     const slot = this._addCount++;
+    const previousIndex = this._keepsPrevious ? baseIndex + skeleton.jointCount : baseIndex;
+    const worldId = skeleton._worldId;
 
-    this._boneCount += skeleton.jointCount;
+    this._boneCount = previousIndex + skeleton.jointCount;
     skeleton._bonePitIndex = baseIndex;
+    skeleton._previousBonePitIndex = previousIndex;
 
-    if (!this._changed && this._slotWorldIds[slot] === skeleton._worldId) return baseIndex;
+    if (!this._changed && this._slotWorldIds[slot] === worldId && this._slotPreviousWorldIds[slot] === worldId) {
+      return baseIndex;
+    }
 
     this._changed = true;
-    this._slotWorldIds[slot] = skeleton._worldId;
     this._ensureCapacity(this._boneCount);
-    this.data.set(skeleton.worldMatrix, baseIndex * BONE_MATRIX_FLOATS);
+
+    const data = this.data;
+    const start = baseIndex * BONE_MATRIX_FLOATS;
+    if (previousIndex === baseIndex) {
+      this._slotPreviousWorldIds[slot] = worldId;
+    } else if (sameBase) {
+      data.copyWithin(previousIndex * BONE_MATRIX_FLOATS, start, previousIndex * BONE_MATRIX_FLOATS);
+      this._slotPreviousWorldIds[slot] = this._slotWorldIds[slot];
+    } else {
+      data.set(skeleton.worldMatrix, previousIndex * BONE_MATRIX_FLOATS);
+      this._slotPreviousWorldIds[slot] = worldId;
+    }
+
+    this._slotWorldIds[slot] = worldId;
+    data.set(skeleton.worldMatrix, start);
 
     return baseIndex;
   }
 
   public update(): void {
     if (this._slotWorldIds.length !== this._addCount) this._slotWorldIds.length = this._addCount;
+    if (this._slotPreviousWorldIds.length !== this._addCount) this._slotPreviousWorldIds.length = this._addCount;
     if (!this._changed) return;
 
     this._changed = false;
@@ -181,6 +222,7 @@ export class BonePit {
 
     (this.data as Float32Array | null) = null;
     (this._slotWorldIds as number[] | null) = null;
+    (this._slotPreviousWorldIds as number[] | null) = null;
     this._buffer = null;
     this._bufferResource = null;
 

@@ -45,6 +45,8 @@ export const globalBitGl: ShaderBit = {
       uOpaqueColorTexture: 'texture_2d<f32>',
       uMorphTexture: 'texture_2d<f32>',
       uGeometryTexture: 'texture_2d<u32>',
+      /** Declared for `previousModelMatrixBit`, whose own bindings hold only its WebGPU storage buffer */
+      uPreviousMeshStoreTexture: 'texture_2d<u32>',
     },
   },
   gl: {
@@ -90,6 +92,7 @@ export function getGlobalGlData(view3d: View3D, renderer: WebGLRenderer): View3D
       uMorphTexture: Texture.EMPTY.source,
       uGeometryTexture: UINT_EMPTY.source,
       uMeshStoreTexture: UINT_EMPTY.source,
+      uPreviousMeshStoreTexture: UINT_EMPTY.source,
       uRenderInstanceTexture: UINT_EMPTY.source,
       batchTransform: renderer.material3d.batcher.batchTransform,
       uInstanceStoreTexture: UINT_EMPTY.source,

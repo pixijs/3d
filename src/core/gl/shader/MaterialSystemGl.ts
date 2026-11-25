@@ -28,6 +28,7 @@ import { normalBit } from '../../shader/bits/normalBit';
 import { normalMappingBit } from '../../shader/bits/normalMappingBit';
 import { noShadowBit } from '../../shader/bits/noShadowBit';
 import { getPositionBit } from '../../shader/bits/positionBit';
+import { previousPositionBit, readsPreviousModelMatrix } from '../../shader/bits/previousModelMatrixBit';
 import { tangentNormalMappingBit } from '../../shader/bits/tangentNormalMappingBit';
 import { srgbEncodeBit } from '../../shader/bits/tonemapping/srgbEncodeBit';
 import { getUvsBit } from '../../shader/bits/uvsBit';
@@ -39,9 +40,14 @@ import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 import { ShaderDescriptor } from '../../shader/ShaderDescriptor';
 import { NORMAL_MAP } from '../../textures/DefaultTextures';
-import { morphTargetBitGl, morphTargetNormalBitGl } from '../bits/morphTargetBitGl';
+import {
+  morphTargetBitGl,
+  morphTargetNormalBitGl,
+  previousMorphTargetBitGl,
+  previousMorphTargetNormalBitGl,
+} from '../bits/morphTargetBitGl';
 import { shadowBitsGl } from '../bits/shadowBitGl';
-import { skinningBitGl } from '../bits/skinningBitGl';
+import { previousSkinningBitGl, skinningBitGl } from '../bits/skinningBitGl';
 import { compileGlslSource } from '../codegen/compileGlslSource';
 import type { CompileGlslSourceOptions } from '../codegen/compileGlslSource';
 import { materialTextureAccessPluginGl } from '../codegen/materialTextureAccessPluginGl';
@@ -201,7 +207,8 @@ export class MaterialSystemGl {
 
   /**
    * Appends the mesh's position, morph and skinning bits in the order they deform the vertex, and every bit added
-   * here joins the cache key. Validation runs on cache hits too, since it checks the material, not the shader.
+   * here joins the cache key, apart from their previous-render twins, which follow a descriptor bit that reads
+   * `previousModelMatrix`. Validation runs on cache hits too, since it checks the material, not the shader.
    */
   public compileShader(
     descriptor: ShaderDescriptor,
@@ -230,12 +237,17 @@ export class MaterialSystemGl {
     finalBits.push(positionBit);
     key += `|${positionBit.name}`;
 
+    const previous = descriptor.bitsGl.some(readsPreviousModelMatrix);
+    if (previous) finalBits.push(previousPositionBit);
+
     if (mesh._morph) {
       if (mesh.geometry.hasMorphNormals) {
         finalBits.push(morphTargetNormalBitGl);
+        if (previous) finalBits.push(previousMorphTargetNormalBitGl);
         key += '|morphN';
       } else {
         finalBits.push(morphTargetBitGl);
+        if (previous) finalBits.push(previousMorphTargetBitGl);
         key += '|morph';
       }
     }
@@ -243,6 +255,7 @@ export class MaterialSystemGl {
     if (mesh.skeleton) {
       assertBitIdentity(skinningBitGl);
       finalBits.push(skinningBitGl);
+      if (previous) finalBits.push(previousSkinningBitGl);
       key += `|${skinningBitGl.name}`;
     }
 

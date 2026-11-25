@@ -39,6 +39,7 @@ const GLOBAL_SLOTS = [
   'uOpaqueColorTexture',
   'uMorphTexture',
   'uGeometryTexture',
+  'uPreviousMeshStoreTexture',
   'uMeshStoreTexture',
   'uRenderInstanceTexture',
   'batchTransform',

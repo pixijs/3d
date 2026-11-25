@@ -1,14 +1,14 @@
 /**
- * Motion blur: `MotionBlurEffect` streaks each pixel along the way its surface moved on screen as the camera moved
+ * Motion blur: `MotionBlurEffect` streaks each pixel along the way its surface moved on screen
  *
  * A `MotionBlurEffect` in `view3d.passes` makes the view write each pixel's velocity: how far the surface under it
- * moved on screen since this camera's previous render, from the camera's motion alone. The effect blurs each pixel
- * along that line. As the camera circles the logo, the posts nearest its path sweep across the screen fastest and
+ * moved on screen since this camera's previous render, as the camera moved and as its mesh moved. The effect blurs each
+ * pixel along that line. As the camera circles the logo, the posts nearest its path sweep across the screen fastest and
  * streak most, the far posts and the far floor drift the other way, and the logo at the orbit's centre barely moves on
- * screen, so it stays nearly sharp. Objects count as still, so the top spinning beside the logo never smears round,
- * however fast it turns, and the view's background has no velocity, so the sky never streaks. The inset draws the scene
- * through a `VelocityViewer`, which shows what the blur follows: hue is the way a surface moves on screen, brightness
- * how fast.
+ * screen, so it stays nearly sharp. A mesh's own motion counts too, so the studs of the top spinning beside the logo
+ * smear along their spin, and the view's background has no velocity, so the sky never streaks. The inset draws the
+ * scene through a `VelocityViewer`, which shows what the blur follows: hue is the way a surface moves on screen,
+ * brightness how fast.
  *
  * Controls: drag to orbit by hand; the pane pauses the orbit and sets its speed, switches the effect, sets its
  * intensity, samples and longest streak, and brightens the inset. URL flags: `?theme=light|dark`,

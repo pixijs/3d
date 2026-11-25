@@ -14,6 +14,12 @@ export class Morph {
    */
   public _weightIndex = 0;
   /**
+   * Absolute float offset of the weights from the view's previous render, the second half of the slot; equal to
+   * `_weightIndex` while the store keeps none
+   * @internal
+   */
+  public _previousWeightIndex = 0;
+  /**
    * Weight slot relative to the store's weights base; `-1` when unallocated
    * @internal
    */

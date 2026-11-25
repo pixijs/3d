@@ -9,6 +9,8 @@ export const RenderableStruct = {
   geometryDataIndex: 'u32',
   visibility: 'u32',
   morphWeightIndex: 'u32',
+  previousBonePitIndex: 'u32',
+  previousMorphWeightIndex: 'u32',
 } as const;
 
 /**

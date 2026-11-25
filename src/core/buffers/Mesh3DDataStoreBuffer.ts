@@ -31,6 +31,16 @@ export const MESH3D_LANE_VISIBILITY = 19;
  * @internal
  */
 export const MESH3D_LANE_MORPH_WEIGHT = 20;
+/**
+ * Written for skinned meshes only, since only skinned velocity shaders read it
+ * @internal
+ */
+export const MESH3D_LANE_PREVIOUS_BONES = 21;
+/**
+ * Always written, so a reused row never keeps the last owner's offset
+ * @internal
+ */
+export const MESH3D_LANE_PREVIOUS_MORPH_WEIGHT = 22;
 
 /** @internal */
 export const MESH3D_SPHERE_STRIDE = 4;
@@ -56,14 +66,18 @@ const copyMeshData = (
 ) => {
   copyWorldTransform(fl64Buffer, offset / 2, renderable.worldTransform.elements64);
 
-  if (renderable.skeleton) {
-    u32Buffer[offset + MESH3D_LANE_BONES] = renderable.skeleton._bonePitIndex;
+  const skeleton = renderable.skeleton;
+  if (skeleton) {
+    u32Buffer[offset + MESH3D_LANE_BONES] = skeleton._bonePitIndex;
+    u32Buffer[offset + MESH3D_LANE_PREVIOUS_BONES] = skeleton._previousBonePitIndex;
   }
 
   u32Buffer[offset + MESH3D_LANE_MATERIAL] = renderable.material._materialIndex;
   u32Buffer[offset + MESH3D_LANE_GEOMETRY] = renderable.geometry._geometryDataIndex;
 
-  u32Buffer[offset + MESH3D_LANE_MORPH_WEIGHT] = renderable._morph ? renderable._morph._weightIndex : 0;
+  const morph = renderable._morph;
+  u32Buffer[offset + MESH3D_LANE_MORPH_WEIGHT] = morph ? morph._weightIndex : 0;
+  u32Buffer[offset + MESH3D_LANE_PREVIOUS_MORPH_WEIGHT] = morph ? morph._previousWeightIndex : 0;
 };
 
 /**

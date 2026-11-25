@@ -1,12 +1,48 @@
 import { glTexelAddress } from '../../buffers/dataTextureLayout';
+import { MESH3D_LANE_PREVIOUS_MORPH_WEIGHT } from '../../buffers/Mesh3DDataStoreBuffer';
+import { fetchStoreLaneGl } from '../../shader/bits/instanceFetchBitGl';
 import type { ShaderBit } from '../../shader/ShaderBit';
 
 /**
  * The GLSL twin of `createMorphTargetBitGpu`. Reads `morphData` (weight offset, geometry row) from
- * `instanceFetchBitGl`, and that row's morph texel from `GeometryDataStoreBuffer`.
+ * `instanceFetchBitGl`, and that row's morph texel from `GeometryDataStoreBuffer`. The `previous` form morphs
+ * `previousPosition` alone, with the stride its geometry's normals set, and the material system adds it after its
+ * twin, whose helpers it calls.
  */
-function createMorphTargetBitGl(hasNormals: boolean): ShaderBit {
+function createMorphTargetBitGl(hasNormals: boolean, previous = false): ShaderBit {
   const step = hasNormals ? ' * 2' : '';
+  const target = previous ? 'previousPosition' : 'position';
+  const weightIndex = previous ? `float(${fetchStoreLaneGl(MESH3D_LANE_PREVIOUS_MORPH_WEIGHT)})` : 'morphData.x';
+  const deformNormals = hasNormals && !previous;
+
+  const input = `
+        if (${weightIndex} != 0.0) {
+          uvec4 morphFacts = fetchGeometryMorphFacts(int(morphData.y));
+          int morphTargetCount = int(morphFacts.y);
+          int vidLocal = gl_VertexID - int(morphFacts.z);
+          int morphDeltaTexel = int(morphFacts.x) / 4 + vidLocal * morphTargetCount${step};
+          int morphWeightIndex = int(${weightIndex});
+          vec3 morphedPosition = ${target}.xyz;${deformNormals ? '\n          vec3 morphedNormal = normal;' : ''}
+          for (int morphIndex = 0; morphIndex < morphTargetCount; morphIndex++) {
+            float morphWeight = fetchMorphWeight(morphWeightIndex + morphIndex);
+            if (morphWeight != 0.0) {
+              morphedPosition += fetchMorphTexel(morphDeltaTexel + morphIndex${step}).xyz * morphWeight;${
+                deformNormals
+                  ? '\n              morphedNormal += fetchMorphTexel(morphDeltaTexel + morphIndex * 2 + 1).xyz * morphWeight;'
+                  : ''
+              }
+            }
+          }
+          ${target} = vec4(morphedPosition, ${target}.w);${deformNormals ? '\n          normal = normalize(morphedNormal);' : ''}
+        }
+      `;
+
+  if (previous) {
+    return {
+      name: hasNormals ? 'previousMorphTargetNormalGl' : 'previousMorphTargetGl',
+      gl: { vertex: { input } },
+    };
+  }
 
   return {
     name: hasNormals ? 'morphTargetNormalGl' : 'morphTargetGl',
@@ -32,27 +68,7 @@ function createMorphTargetBitGl(hasNormals: boolean): ShaderBit {
           return texelFetch(uGeometryTexture, ${glTexelAddress('texel')}, 0);
         }
       `,
-        input: `
-        if (morphData.x != 0.0) {
-          uvec4 morphFacts = fetchGeometryMorphFacts(int(morphData.y));
-          int morphTargetCount = int(morphFacts.y);
-          int vidLocal = gl_VertexID - int(morphFacts.z);
-          int morphDeltaTexel = int(morphFacts.x) / 4 + vidLocal * morphTargetCount${step};
-          int morphWeightIndex = int(morphData.x);
-          vec3 morphedPosition = position.xyz;${hasNormals ? '\n          vec3 morphedNormal = normal;' : ''}
-          for (int morphIndex = 0; morphIndex < morphTargetCount; morphIndex++) {
-            float morphWeight = fetchMorphWeight(morphWeightIndex + morphIndex);
-            if (morphWeight != 0.0) {
-              morphedPosition += fetchMorphTexel(morphDeltaTexel + morphIndex${step}).xyz * morphWeight;${
-                hasNormals
-                  ? '\n              morphedNormal += fetchMorphTexel(morphDeltaTexel + morphIndex * 2 + 1).xyz * morphWeight;'
-                  : ''
-              }
-            }
-          }
-          position = vec4(morphedPosition, position.w);${hasNormals ? '\n          normal = normalize(morphedNormal);' : ''}
-        }
-      `,
+        input,
       },
     },
   };
@@ -63,3 +79,9 @@ export const morphTargetBitGl: ShaderBit = createMorphTargetBitGl(false);
 
 /** @internal */
 export const morphTargetNormalBitGl: ShaderBit = createMorphTargetBitGl(true);
+
+/** @internal */
+export const previousMorphTargetBitGl: ShaderBit = createMorphTargetBitGl(false, true);
+
+/** @internal */
+export const previousMorphTargetNormalBitGl: ShaderBit = createMorphTargetBitGl(true, true);
