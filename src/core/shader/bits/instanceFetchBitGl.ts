@@ -60,6 +60,7 @@ function createInstanceFetchBitGl(material: boolean): ShaderBit {
       vec2 morphData = vec2(
         float(fetchStoreTexel(storeTexel + ${MORPH.texel}).${MORPH.component}),
         float(int(indexLanes.${GEOMETRY.component})));
+      uint meshIndex = renderInstance.x;
       ${material ? `vMaterialIndex = indexLanes.${MATERIAL.component};` : ''}
       `,
       },
@@ -72,8 +73,9 @@ function createInstanceFetchBitGl(material: boolean): ShaderBit {
  *
  * List it in the pass descriptor's `bitsGl`. A material's shader fetches the same data already, so
  * listing it in a material's `descriptor` fails the compile. It fills the vertex template's
- * `{{input}}` slot with the matrix and the indices skinning and morphing read. WebGPU templates
- * read the same data themselves, so `bitsGpu` needs no counterpart.
+ * `{{input}}` slot with the matrix and the indices skinning and morphing read, and declares the
+ * {@link Mesh3D#meshIndex | meshIndex}. WebGPU templates read the same data themselves, so `bitsGpu`
+ * needs no counterpart.
  * @example
  * ```ts
  * const shaderDescriptor = {

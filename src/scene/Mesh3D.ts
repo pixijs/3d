@@ -573,6 +573,23 @@ export class Mesh3D extends Container3D implements Mesh3DData {
   }
 
   /**
+   * This mesh's number among its view's meshes, for looking up per-mesh data of your own without a material per
+   * mesh; a material's vertex code reads it as the `u32` `meshIndex`
+   *
+   * It's -1 until a render with the mesh in a pass sets it, before any pass runs, and stays the same until the
+   * mesh leaves the view. Then it's -1 again, and another mesh can take the number. The slots of a
+   * {@link BatchedMesh3DSlot#meshIndex | BatchedMesh3D} are numbered on their own, so a slot can share a mesh's number.
+   * @example
+   * ```ts
+   * previousMatrices.set(mesh.worldTransform.elements, mesh.meshIndex * 16);
+   * ```
+   * @advanced
+   */
+  public get meshIndex(): number {
+    return this._storeIndex;
+  }
+
+  /**
    * This mesh's bounding {@link Sphere} in world space, large enough for morph weights from 0 to 1
    *
    * Cached until the world transform or geometry changes, so reading it often is cheap. It follows

@@ -130,6 +130,8 @@ When {@link BaseMaterial3D#alphaMode | alphaMode} is `'opaque'`, the default, th
 
 Fragment code can also read the world position and the texture coordinates: `input.vPosition` and `input.vUV` in WGSL, `vPosition` and `vUV` in GLSL. Every material's shader also has `global.uTime`, the seconds since the page loaded, and `camera.uCameraPosition`, the camera's position. In GLSL they're `uTime` and `uCameraPosition`.
 
+Vertex code can read `meshIndex`, the mesh's number among its view's meshes, which {@link Mesh3D#meshIndex} gives in JavaScript. Use it to look up values of your own for each mesh, so meshes that share a material can keep sharing it. To use it in fragment code, pass it on through a varying your bit declares in {@link ShaderBit#interStage}.
+
 Shadows and outlines don't run your vertex code. If a bit moves vertices, their shadow and outline stay where the vertices were.
 
 A bit can also sample its own textures. For each one, {@link ShaderBit#textures} names the functions the shader gets, and says how to undo the alpha that PixiJS multiplies into images by default. Set the textures with the {@link BaseMaterial3DOptions#textures | textures} option, or later through {@link BaseMaterial3D#textures | material.textures}. After dividing out the alpha, pass a colour image through `decodeColor` to convert it to the colour space the shader works in, as {@link BaseMaterial3D#colorSpace} explains.

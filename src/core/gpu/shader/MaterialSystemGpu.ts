@@ -84,6 +84,7 @@ fn mainVertex(input: VertexInput,
   
   let inst = uRenderableInstanceStorage[ii];
   let renderable = uRenderableStorage[inst.id];
+  let meshIndex = inst.id;
   let vMaterialIndex = renderable.materialIndex;
   {{vertexStoreAccess}}
 
