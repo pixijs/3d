@@ -51,7 +51,7 @@ An effect's other properties, such as {@link BloomEffect#intensity | intensity} 
 | {@link BloomEffect}      | Bright parts of the picture glow into their surroundings.                        | `'beforeToneMapping'` |
 | {@link SsaoEffect}       | Ambient occlusion: darkens creases, corners and the places where objects meet.   | `'beforeToneMapping'` |
 | {@link TiltShiftEffect}  | Keeps a band of depth sharp and blurs the rest, so the scene looks like a model. | `'beforeToneMapping'` |
-| {@link MotionBlurEffect} | Streaks opaque meshes as the camera moves or turns.                              | `'beforeToneMapping'` |
+| {@link MotionBlurEffect} | Streaks opaque meshes that move on screen, as the camera or the mesh moves.      | `'beforeToneMapping'` |
 | {@link FxaaEffect}       | Smooths jagged edges.                                                            | `'afterToneMapping'`  |
 | {@link TintEffect}       | Multiplies the picture by a colour, as `Container.tint` does in 2D.              | `'afterToneMapping'`  |
 
@@ -69,9 +69,9 @@ Use both with a camera in its default perspective {@link Camera3D#mode | mode}, 
 
 ### Motion blur
 
-{@link MotionBlurEffect} blurs only by the camera's motion. Turning or moving the camera streaks opaque meshes, but not the view's background. A car driving past a still camera stays sharp. On a camera cut, such as a respawn, call the camera's {@link Camera3D#resetHistory | resetHistory} so the jump doesn't smear the first frame of the new shot.
+{@link MotionBlurEffect} blurs by how far each surface moved on screen. Turning or moving the camera streaks opaque meshes, but not the view's background, and a car driving past a still camera streaks too. A mesh that moves with the camera, such as a cockpit, stays sharp. A skinned or morphed mesh streaks as its node moves, not as it bends. On a camera cut, such as a respawn, call the camera's {@link Camera3D#resetHistory | resetHistory} so the jump doesn't smear the first frame of the new shot.
 
-[Motion blur](/3d/examples?example=post_motion-blur) circles the camera round a ring of clay posts. The posts near its path streak, the logo at the centre of the orbit stays nearly sharp, and a top spinning beside the logo never smears.
+[Motion blur](/3d/examples?example=post_motion-blur) circles the camera round a ring of clay posts. The posts near its path streak, the logo at the centre of the orbit stays nearly sharp, and a top spinning beside the logo smears round as it turns.
 
 ### FXAA
 

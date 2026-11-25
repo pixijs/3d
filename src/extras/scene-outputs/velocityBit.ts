@@ -1,12 +1,16 @@
+import { previousModelMatrixBit } from '../../core/shader/bits/previousModelMatrixBit';
 import type { ShaderBit } from '../../core/shader/ShaderBit';
 
 /**
  * Runs in the vertex `end` slot to read the clip position the draw rasterises. Only WGSL negates `y`, as row 0
- * sits at NDC `y` +1 there and -1 on WebGL; the ±1 clamp keeps a `w` near zero from overflowing `rg16float`
+ * sits at NDC `y` +1 there and -1 on WebGL; the ±1 clamp keeps a `w` near zero from overflowing `rg16float`.
+ * It adds the mesh's move to `worldPosition` rather than transforming `position` again, so a still billboard,
+ * which rewrites `worldPosition`, reads as still
  * @internal
  */
 export const velocityBit: ShaderBit = {
   name: 'velocity',
+  requires: [previousModelMatrixBit],
   outputs: {
     velocity: 'vec2<f32>',
   },
@@ -18,7 +22,7 @@ export const velocityBit: ShaderBit = {
     vertex: {
       end: /* wgsl */ `
   output.vCurrentClip = clipPosition.xyw;
-  output.vPreviousClip = (camera.uPreviousViewProjectionMatrix * worldPosition).xyw;`,
+  output.vPreviousClip = (camera.uPreviousViewProjectionMatrix * (worldPosition + previousModelMatrix * position - modelMatrix * position)).xyw;`,
     },
     fragment: {
       end: /* wgsl */ `
@@ -33,7 +37,7 @@ export const velocityBit: ShaderBit = {
     vertex: {
       end: /* glsl */ `
   vCurrentClip = gl_Position.xyw;
-  vPreviousClip = (uPreviousViewProjectionMatrix * worldPosition).xyw;`,
+  vPreviousClip = (uPreviousViewProjectionMatrix * (worldPosition + previousModelMatrix * position - modelMatrix * position)).xyw;`,
     },
     fragment: {
       end: /* glsl */ `
