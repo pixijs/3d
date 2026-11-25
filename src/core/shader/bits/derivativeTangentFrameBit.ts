@@ -4,8 +4,8 @@ import type { ShaderBit } from '../ShaderBit';
  * The bitangent points the way `v` shrinks, to match glTF tangents, and the frame's handedness is
  * worked out per fragment, since which way window y runs depends on the backend and the target
  *
- * The 1e-30 floor makes UVs collapsed to a point, which leave no frame, fall back to the surface
- * normal rather than NaN. A higher floor flattens normal maps seen up close.
+ * Where UVs collapse to a point and leave no frame, the 1e-30 floor makes a normal map fall back to
+ * the surface normal rather than NaN. A higher floor flattens normal maps seen up close.
  * @internal
  */
 export const derivativeTangentFrameBit: ShaderBit = {
