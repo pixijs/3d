@@ -45,7 +45,7 @@ These are the differences you're most likely to meet:
 
 Culling skips meshes outside the camera's frustum, the volume of space the camera sees, so the GPU never draws them. The view's {@link View3D#cull | cull} mode is `'gpu'` by default. In that mode, where the test runs depends on the renderer and the browser:
 
-- **WebGPU** tests the meshes in a compute shader, a GPU program that calculates rather than draws.
+- **WebGPU** tests the meshes in a compute shader, a GPU program that calculates rather than draws. A view of a few dozen meshes, or a {@link BatchedMesh3D} of a few dozen slots, tests them on the CPU instead, which costs less than starting the compute shader.
 - **WebGPU in Safari, and in any browser on an iPhone or iPad,** tests them on the CPU instead. That holds for a typical scene, and even for a {@link BatchedMesh3D} of ten thousand trees whose {@link BatchedMesh3D#cull | cull} is `'gpu'`. There, only a far larger batch culls in the compute shader.
 - **WebGL2** has no compute shaders, so it tests on the CPU in `'gpu'` mode, the same as in `'cpu'` mode.
 - **Blended meshes**, whose material has an {@link BaseMaterial3D#alphaMode | alphaMode} of `'blend'`, are tested on the CPU on both renderers.

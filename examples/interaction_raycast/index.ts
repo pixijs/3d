@@ -66,8 +66,9 @@ const field = createField(view3d.root);
 for (const shape of field.shapes) shape.eventMode = 'static';
 
 /**
- * 'geometry' is the opt-in: it tests every triangle, so a hit carries the face's normal, uv and index. 'box' is what a
- * Mesh3D gets with hitVolume left null: it tests the bounds alone, so the normal and uv stay zero and the index -1.
+ * 'geometry' is the opt-in: it tests the triangles themselves, so a hit carries the face's normal, uv and index.
+ * 'box' is what a Mesh3D gets with hitVolume left null: it tests the bounds alone, so the normal and uv stay zero and
+ * the index -1.
  */
 function setHitVolume(volume: HitVolumeChoice): void {
   for (const shape of field.shapes) shape.hitVolume = volume;

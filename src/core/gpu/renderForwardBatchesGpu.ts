@@ -100,7 +100,7 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
     const result = cullResults.ensure(batch);
     result.sync(list, direct);
 
-    const producer = resolveCullProducer(batch.cull, !direct);
+    const producer = resolveCullProducer(batch, !direct);
     if (producer === 'off') {
       produceVisibilityCompaction(pipe.renderer.compute3d, list, batch, boundsBuffer, result);
       continue;
@@ -125,9 +125,8 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
 }
 
 /**
- * Replays the valid bundles in one `executeBundle` after the walk, since WebGPU resets the pass state
- * after each call. Only an `'off'` batch bundles its direct draws; a culled one's counts change every frame.
- * An immediate pass binds each batch's storage every frame, rebuilt or not.
+ * Replays the valid bundles in one `executeBundle` after the walk, since WebGPU resets the pass state after each
+ * call. An immediate pass binds each batch's storage every frame, rebuilt or not.
  * @internal
  */
 export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions): void {
@@ -166,14 +165,6 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
     }
 
     const result = cullResults.ensure(batch);
-
-    if (useBundles && result.direct && batch.cull !== 'off') {
-      result.bundle = null;
-      bindBatchStorage(session, batch, result);
-      list.claimDrawBuilt();
-      list.commandList.replayDirect(encoder, result.indirectDrawData, cameraData);
-      continue;
-    }
 
     if (useBundles) {
       const recorded = result.bundle;
@@ -227,7 +218,7 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
 
       bindBatchStorage(session, batch, result);
 
-      const producer = resolveCullProducer(batch.cull, !sortBatch && !direct);
+      const producer = resolveCullProducer(batch, !sortBatch && !direct);
       if (producer === 'gpu') {
         const batchPlanes = transformFrustumToBatch(planes, batch.storeBuffer.data);
         pipe.renderer.compute3d.dispatch(

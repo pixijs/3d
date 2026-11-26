@@ -287,8 +287,8 @@ export interface GraphDebugDrawBuildSnapshot {
  * - `'draws-rebuilt'`: the pass rebuilt its draw commands.
  * - `'bundle-only-change'`: the draws weren't rebuilt, but a resource the bundle baked changed, such as
  *   the environment map, the shadow map or a texture the pass samples.
- * - `'counts-changed'`: hiding or showing a mesh changed an instance count the bundle baked in. Only
- *   a batch with `cull: 'off'` drawn with direct draws, as on Safari and iOS, bakes its counts.
+ * - `'counts-changed'`: an instance count the bundle baked in changed, from hiding or showing a mesh or
+ *   from the frustum cull. Only a batch drawn with direct draws, as on Safari and iOS, bakes its counts.
  * @category extras:debug
  * @advanced
  */
@@ -320,8 +320,7 @@ export interface GraphDebugBundleSnapshot {
    *   has drawn again.
    * - `'first-capture'`: no previous capture to compare with.
    * - `'not-used'`: the pass keeps no bundle for the batch: on WebGL, with `cache: 'never'` (the
-   *   default for a distance sort), for a frustum-culled batch drawn with direct draws, and in a
-   *   shadow pass where no visible shadow-casting light holds one.
+   *   default for a distance sort), and in a shadow pass where no visible shadow-casting light holds one.
    */
   status: 'first-capture' | 'invalidated' | 'not-used' | 'recorded' | 'reused';
   /** Bundle cache revision requested by the renderer; null when the status is `'not-used'` */
@@ -378,7 +377,11 @@ export interface GraphDebugDrawSnapshot {
   firstInstance: number;
   /** Original instances assigned to this command by the batcher */
   sourceInstanceCount: number;
-  /** Surviving instances when CPU-visible; null when the count only exists in a GPU-written buffer */
+  /**
+   * Surviving instances when CPU-visible; null when the count only exists in a GPU-written buffer
+   *
+   * In a shadow pass with several lights or cascades, it's the count of the last cascade culled this frame.
+   */
   drawnInstanceCount: number | null;
   /**
    * How `drawnInstanceCount` was obtained: an exact CPU count, a CPU rerun of the GPU cull, or not at
@@ -769,9 +772,11 @@ function captureBatchPass(
     bodyCount < passData.commandList.count ? passData.drawData.drawCalls[bodyCount * 5 + 4] : drawn.length;
   const tailMeshIds = drawn.slice(tailStart).flatMap((mesh) => (mesh ? [mesh.uid] : []));
 
-  const result = cullResultFor(pass, batch);
-  const args = result ? result.indirectDrawData.drawCalls : passData.drawData.drawCalls;
   const webGpu = pass.pipe.renderer.type === RendererType.WEBGPU;
+  const result =
+    cullResultFor(pass, batch) ??
+    (webGpu && bit === RenderPassBit.SHADOW ? lastCulledShadowResult(view.lights, batch) : undefined);
+  const args = result ? result.indirectDrawData.drawCalls : passData.drawData.drawCalls;
   const forward = forwardConfig(pass);
   let lastBundleDirtyId: number | null = null;
   let scheduledBundleDirtyId: number | null = null;
@@ -780,7 +785,7 @@ function captureBatchPass(
     lastBundleDirtyId = shadowBundleWatermark(view.lights, batch, passData, true);
     scheduledBundleDirtyId = shadowBundleWatermark(view.lights, batch, passData, false);
     lastBundleCountsDirtyId = shadowBundleCountsDirtyId(view.lights, batch);
-  } else if (webGpu && forward && cachesDrawWork(forward) && !(result?.direct && batch.cull !== 'off')) {
+  } else if (webGpu && forward && cachesDrawWork(forward)) {
     lastBundleDirtyId = result?.lastBundleDirtyId ?? -1;
     scheduledBundleDirtyId = lastBundleDirtyId;
     if (result?.direct) lastBundleCountsDirtyId = result.lastBundleCountsDirtyId;
@@ -805,7 +810,7 @@ function captureBatchPass(
   const previousState = previous.get(key);
   const drawBuild = compareDrawBuildState(previousState, state);
   const bundle = compareBundleState(previousState, state, drawBuild);
-  const producer = resolveCullProducer(batch.cull, webGpu && forward?.sort !== 'distance' && !result?.direct);
+  const producer = resolveCullProducer(batch, webGpu && forward?.sort !== 'distance' && !result?.direct);
   let mirroredDrawCounts: Uint32Array | null = null;
   if (producer === 'gpu' && forward) {
     mirroredDrawCounts = mirrorCullDrawCounts(passData, batch, drawn, view.camera.cullFrustum.planesData);
@@ -850,6 +855,24 @@ function cullResultFor(pass: GraphRenderPass, batch: Mesh3DBatch): CullResult | 
 }
 
 /**
+ * The result of the last cascade drawn this frame, to match WebGL, whose draws rewrite the counts in place so they
+ * end the frame as that cascade's
+ */
+function lastCulledShadowResult(lights: readonly Light[], batch: Mesh3DBatch): CullResult | undefined {
+  let last: CullResult | undefined;
+  for (let i = 0; i < lights.length; i++) {
+    const light = lights[i];
+    const data: ShadowDataGpu | null = light._gpuShadowData;
+    if (!data?.cullResults || !castsShadowThisFrame(light)) continue;
+    const cascadeCount = cascadeCountFor(light);
+    for (let c = 0; c < cascadeCount; c++) {
+      if (data.cascades?.[c]?.needsRender) last = data.cullResults.get(batch, c);
+    }
+  }
+  return last;
+}
+
+/**
  * Oldest bundle watermark across the casting lights' cascades, mirroring when `ShadowRenderPassGpu`
  * re-records them; `null` when no counted cascade has a result for `batch`
  */
@@ -868,7 +891,7 @@ function shadowBundleWatermark(
     const cascadeCount = cascadeCountFor(light);
     for (let c = 0; c < cascadeCount; c++) {
       const result = data.cullResults.get(batch, c);
-      if (!result || (result.direct && batch.cull !== 'off')) continue;
+      if (!result) continue;
       if (!includeWaiting && !data.cascades?.[c]?.needsRender && updateRateFor(light.shadow.update, c) === 0) {
         continue;
       }
@@ -884,7 +907,6 @@ function shadowBundleWatermark(
  * or not, so hiding or showing a light leaves the sum alone
  */
 function shadowBundleCountsDirtyId(lights: readonly Light[], batch: Mesh3DBatch): number | null {
-  if (batch.cull !== 'off') return null;
   let sum: number | null = null;
   for (let i = 0; i < lights.length; i++) {
     const light = lights[i];

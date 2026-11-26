@@ -176,7 +176,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           const result = results.ensure(batch, c);
           result.sync(list, direct);
 
-          const producer = resolveCullProducer(batch.cull, !direct);
+          const producer = resolveCullProducer(batch, !direct);
           if (producer === 'off') {
             produceVisibilityCompaction(computeSystem, list, batch, boundsBuffer, result);
           } else if (producer === 'cpu') {
@@ -242,14 +242,6 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
 
           const result = results.get(batch, c);
           if (!result) continue;
-
-          if (result.direct && batch.cull !== 'off') {
-            result.bundle = null;
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
-            list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
-            continue;
-          }
 
           const recorded = result.bundle;
 

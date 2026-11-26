@@ -1,4 +1,4 @@
-import { checkExtension, ExtensionType, path } from 'pixi.js';
+import { checkExtension, DOMAdapter, ExtensionType, path } from 'pixi.js';
 import type { CubeTexture, LoaderParser, ResolvedAsset } from 'pixi.js';
 
 import { equirectToCube } from './equirectToCube';
@@ -69,7 +69,7 @@ export const loadHdr = {
   },
 
   async load(url: string, resolvedAsset?: ResolvedAsset<HdrAssetData>) {
-    const response = await fetch(url);
+    const response = await DOMAdapter.get().fetch(url);
     if (!response.ok) throw new Error(`loadHdr: fetching ${url} failed with status ${response.status}.`);
     const image = parseRadianceHdr(await response.arrayBuffer());
     const faceSize = resolvedAsset?.data?.faceSize ?? defaultFaceSize(image.width);

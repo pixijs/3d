@@ -113,16 +113,18 @@ export interface IHitVolume3D {
  *
  * - `'box'`: the node's bounding box.
  * - `'geometry'`: every triangle of the node's own geometry, as stored: skinning and morph targets
- *   don't move it. Hits carry a normal and UV, but every triangle is tested once the ray reaches
- *   the bounding box.
+ *   don't move it. Hits carry a normal and UV. A geometry of 64 triangles or more builds its
+ *   {@link Geometry3D#bvh | bvh} the first time a ray reaches its bounding box, and later picks reuse
+ *   it; a smaller or {@link Geometry3DOptions#dynamic | dynamic} one tests every triangle once the
+ *   ray reaches the bounding box.
  *
  * An instance gives a shape the node can't work out, in the node's local space:
  *
  * - {@link Box}: an axis-aligned box.
- * - {@link Sphere}: an analytic sphere. A {@link SphereGeometry} works too, but tests every
+ * - {@link Sphere}: an analytic sphere. A {@link SphereGeometry} works too, but is tested per
  *   triangle.
- * - {@link Geometry3D}: a mesh tested per triangle, typically a simpler stand-in for a detailed
- *   model.
+ * - {@link Geometry3D}: a mesh tested per triangle as `'geometry'` is, typically a simpler stand-in
+ *   for a detailed model.
  * - {@link IHitVolume3D}: a shape of your own, such as a physics collider.
  * @example
  * ```ts
@@ -144,6 +146,9 @@ export interface IHitVolume3D {
  * - On a `Mesh3D`, `'box'` and `'geometry'` keep reading the mesh's current geometry, even after a
  *   swap. On a plain `Container3D`, `'box'` measures the subtree once, when set, and unlike
  *   `getLocalBounds()` it includes hidden descendants.
+ * - Where per-triangle tests use a {@link Geometry3D#bvh | bvh}, as the `'geometry'` bullet
+ *   describes, an edit made in place to the geometry's arrays shows only after
+ *   {@link Geometry3D#unload | unload}.
  * - Per-triangle tests need `'triangle-list'` topology and float32 positions. Line, strip and
  *   point geometry, quantised positions (KHR_mesh_quantization), and interleaved geometry
  *   (`interleave: true`) never hit; use `'box'` or a stand-in geometry for those.

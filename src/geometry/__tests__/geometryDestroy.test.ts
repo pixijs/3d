@@ -1,3 +1,4 @@
+import { Buffer, BufferUsage } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
 import { GEOMETRY_DATA_STRIDE, GeometryDataStoreBuffer } from '~/core/buffers/GeometryDataStoreBuffer';
@@ -83,5 +84,27 @@ describe('Geometry3D.destroy', () => {
 
     geometry.destroy(true);
     store.destroy();
+  });
+
+  it("destroy takes a dynamic geometry's listeners off an index buffer it shares", () => {
+    const shared = new Buffer({ data: new Uint16Array([0, 1, 2]), usage: BufferUsage.INDEX | BufferUsage.COPY_DST });
+
+    new Geometry3D({
+      positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      indices: shared,
+      dynamic: true,
+    }).destroy();
+
+    expect(shared.listenerCount('update')).toBe(0);
+    expect(shared.listenerCount('change')).toBe(0);
+  });
+
+  it('destroy drops the hierarchy', () => {
+    const geometry = triangle();
+    expect(geometry.bvh).not.toBeNull();
+
+    geometry.destroy();
+
+    expect(geometry['_bvh']).toBeNull();
   });
 });

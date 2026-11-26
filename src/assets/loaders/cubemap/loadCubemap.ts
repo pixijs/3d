@@ -1,4 +1,4 @@
-import { checkExtension, CubeTexture, ExtensionType, path } from 'pixi.js';
+import { checkExtension, CubeTexture, DOMAdapter, ExtensionType, path } from 'pixi.js';
 import type { Loader, LoaderParser, ResolvedAsset, Texture } from 'pixi.js';
 
 const FACE_KEYS = ['right', 'left', 'top', 'bottom', 'front', 'back'] as const;
@@ -49,7 +49,7 @@ export const loadCubemap = {
   },
 
   async load(url: string, _resolvedAsset?: ResolvedAsset, loader?: Loader) {
-    const response = await fetch(url);
+    const response = await DOMAdapter.get().fetch(url);
     const json: CubemapJson = await response.json();
     const basePath = url.substring(0, url.lastIndexOf('/') + 1);
 

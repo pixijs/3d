@@ -333,7 +333,7 @@ share a geometry adds one. Draw what the lesson is about, not every node.
   settable `color` and `alpha` written in place, for a colour that follows a picker or a fade. It follows the theme
   while it's alive; `destroy()` it when you're done.
 - `helperColor(color)`: a helper colour as it shows on the current theme. `helperGeometry('shaft' | 'head' | 'dot' |
-'bar')`: the kit's arrow shaft and head, dot sphere and unit cube. `sharedHelperResource(key, create)`: a geometry
+  'bar')`: the kit's arrow shaft and head, dot sphere and unit cube. `sharedHelperResource(key, create)`: a geometry
   or texture your helper module shares, kept and freed by the kit.
 - `new BarsGeometry(capacity)` (`BarsGeometry.ts`): thin six-sided bars between point pairs in one dynamic geometry,
   the line most helpers draw with. `bars.setBar(i, ax, ay, az, bx, by, bz, radiusA, radiusB)` writes one in place (a
@@ -376,7 +376,7 @@ each. Their points are in the parent's space.
     `capacity` points (64), so `capacity` sets the trail's length. A point within `minStep` of the last is skipped,
     so the spacing doesn't follow the frame rate. `path.clear()` empties it, and an empty path hides.
   - `closed: true` joins each curve's last point back to its first (never a segment's). `PathHelper.circle(radius,
-segments = 48, out?)` returns points round local +y in the xz plane, from +x the way a positive `rotation.y`
+    segments = 48, out?)` returns points round local +y in the xz plane, from +x the way a positive `rotation.y`
     turns, for a ring: an orbit, a floor circle.
   - `dash` is a dash's length along the line, in the parent's units (0, solid), and `gap` the space after it (the
     dash's length). The pattern runs on along each curve through its points, so a curve of short steps still dashes

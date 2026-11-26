@@ -157,6 +157,7 @@ export default defineConfig({
           },
           { name: 'document', message: 'Do not use document. Use DOMAdapter instead.' },
           { name: 'Image', message: 'Do not use Image. Use DOMAdapter instead.' },
+          { name: 'fetch', message: 'Do not use fetch. Use DOMAdapter.get().fetch instead.' },
         ],
         'no-restricted-properties': [
           'warn',

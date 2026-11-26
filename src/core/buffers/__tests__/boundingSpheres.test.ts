@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { Mesh3DBatch } from '~/core/batcher/Mesh3DBatch';
 import { MESH3D_SPHERE_STRIDE, Mesh3DDataStoreBuffer } from '~/core/buffers/Mesh3DDataStoreBuffer';
-import { cpuSubmissionLimit, transformFrustumToBatch } from '~/core/cull';
+import { cpuSubmissionLimit, gpuCull, transformFrustumToBatch } from '~/core/cull';
 import type { ForwardRenderPass } from '~/core/render-passes/ForwardRenderPass';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
@@ -503,6 +503,7 @@ describe('bounding sphere gate', () => {
         appOptions: { preference, width: SIZE, height: SIZE },
       });
 
+      gpuCull.minInstances = 0;
       try {
         const view3d = new View3D({ width: SIZE, height: SIZE });
         view3d.camera.position.set(0, 0, 60);
@@ -551,6 +552,7 @@ describe('bounding sphere gate', () => {
         glass.destroy();
         material.destroy();
       } finally {
+        delete gpuCull.minInstances;
         app.destroy();
       }
     });

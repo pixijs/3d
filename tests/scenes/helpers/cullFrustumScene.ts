@@ -7,6 +7,7 @@ import type { CullMode } from '~/scene/View3D';
 import { View3D } from '~/scene/View3D';
 
 import { buildCubeGrid } from './cubeGrid';
+import { gpuCullAtAnySize } from './gpuCullAtAnySize';
 
 const CULL_APEX_Z = 11;
 
@@ -24,7 +25,8 @@ const CULL_APEX_Z = 11;
 export function cullFrustumScene(cull: CullMode): TestScene {
   return {
     app: { backgroundColor: 0x101018 },
-    create: async (app) => {
+    create: async (app, context) => {
+      if (cull === 'gpu') gpuCullAtAnySize(context);
       const view3d = new View3D({ width: app.screen.width, height: app.screen.height, cull });
       app.stage.addChild(view3d);
 

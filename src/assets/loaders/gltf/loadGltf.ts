@@ -1,4 +1,4 @@
-import { checkDataUrl, checkExtension, ExtensionType } from 'pixi.js';
+import { checkDataUrl, checkExtension, DOMAdapter, ExtensionType } from 'pixi.js';
 import type { Loader, LoaderParser, ResolvedAsset } from 'pixi.js';
 
 import type { Scene3DSource } from '../../Scene3DSource';
@@ -54,20 +54,14 @@ export const loadGltf = {
     return checkDataUrl(url, 'model/gltf+json') || checkExtension(url, '.gltf');
   },
   async load(url: string, _resolvedAsset?: ResolvedAsset, loader?: Loader) {
-    const response = await fetch(url);
+    const response = await DOMAdapter.get().fetch(url);
     const json: GltfFormat = await response.json();
     const basePath = url.substring(0, url.lastIndexOf('/') + 1);
 
     const bufferPromises = (json.buffers || []).map(async (buffer) => {
       if (buffer.uri) {
-        if (buffer.uri.startsWith('data:')) {
-          const response = await fetch(buffer.uri);
-
-          return await response.arrayBuffer();
-        }
-
-        const bufferUrl = basePath + buffer.uri;
-        const bufferResponse = await fetch(bufferUrl);
+        const bufferUrl = buffer.uri.startsWith('data:') ? buffer.uri : basePath + buffer.uri;
+        const bufferResponse = await DOMAdapter.get().fetch(bufferUrl);
 
         return await bufferResponse.arrayBuffer();
       }

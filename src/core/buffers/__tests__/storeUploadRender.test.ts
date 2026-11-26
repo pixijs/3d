@@ -452,6 +452,42 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       }
     });
 
+    it.runIf(preference === 'webgpu')(
+      'a still batch uploads nothing, and moving it uploads only its matrix row and draws it at the new place',
+      async () => {
+        const app = await getApp({ id: `store-upload-still-batch-${preference}`, appOptions });
+
+        try {
+          const view3d = new View3D({ toneMapping: 'none', width: SIZE, height: SIZE });
+          app.stage.addChild(view3d);
+          view3d.camera.position.set(0, 0, 6);
+
+          const batched = new BatchedMesh3D({ size: 1, parent: view3d.root });
+          batched.setGeometryAt(0, new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 }));
+          batched.setMaterialAt(0, new FlatMaterial({ baseColor: 0xff0000 }));
+          batched.setMatrixAt(0, new Matrix4());
+          batched.setPassesAt(0, RenderPassBit.OPAQUE);
+          batched.position.set(-1.2, 0, 0);
+
+          await renderFrame(app);
+          const update = vi.spyOn(batched.batch.storeBuffer.buffer, 'update');
+
+          await renderFrame(app);
+          expect(update, 'a still batch uploads nothing').not.toHaveBeenCalled();
+
+          batched.position.set(1.2, 0, 0);
+          const pixels = await renderFrame(app);
+          expect(update.mock.calls, 'a move uploads only the matrix row').toEqual([[MESH3D_STORE_STRIDE * 4, 0]]);
+          expect(rgbAt(pixels, SIZE, 21, 32), 'the old place is empty').toEqual([0, 0, 0]);
+          expect(rgbAt(pixels, SIZE, 43, 32), 'the batch draws at its new place').toEqual([255, 0, 0]);
+
+          view3d.destroy({ children: true });
+        } finally {
+          app.destroy();
+        }
+      },
+    );
+
     it('scattered slot changes at both ends of a large batch all reach the GPU in one frame', async () => {
       const app = await getApp({ id: `store-upload-runs-${preference}`, appOptions });
 

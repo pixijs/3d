@@ -270,9 +270,9 @@ describe('RenderGraphDebugger', () => {
     });
   });
 
-  it("reports a direct-draw bundle re-recorded for changed counts, and a frustum-culled batch's direct draws as no bundle", () => {
+  it('reports a direct-draw bundle re-recorded for changed counts', () => {
     const fixture = makeFixture();
-    fixture.batch.cull = 'off';
+    fixture.batch.cull = 'cpu';
     fixture.result.direct = true;
     const debug = new RenderGraphDebugger({ view: fixture.view });
     debug.capture();
@@ -285,9 +285,6 @@ describe('RenderGraphDebugger', () => {
       causes: [{ code: 'counts-changed' }],
     });
     expect(debug.capture()!.batches[0].passes[0].bundle.status, 'the same counts reuse it').toBe('reused');
-
-    fixture.batch.cull = 'cpu';
-    expect(debug.capture()!.batches[0].passes[0].bundle.status).toBe('not-used');
   });
 
   it('reports mesh membership and batch-buffer growth causes independently', () => {
@@ -446,6 +443,7 @@ function makeFixture(): Fixture {
   const batch = {
     uid: 50,
     cull: 'off' as CullMode,
+    _gpuCullSized: true,
     items: meshes,
     drawLists: { [PASS_BIT]: passData },
     storeBuffer: { bufferVersion: 0, data: batchMatrix, u32Data: storeU32, stride: 24 },
