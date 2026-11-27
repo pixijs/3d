@@ -147,7 +147,7 @@ depthOfField.debug = true; // white line = focus depth, green = sharp zone, oran
 
 For tilt-shift from an `OrbitCamera`, focus on its target: `orbit.on('change', () => (depthOfField.focusDistance = orbit.distance))`, with something like `{ focusRange: 1.5, focusFalloff: 5.5 }`.
 
-`quality` is fixed at construction: `'high'` takes 48 taps a pixel, `'low'` 16, and the default `'auto'` picks `'low'` when pixi's `isMobile.any` is true. On a Pixel 7 at 1920 × 1080 the effect cost about 26 ms a frame at `'high'` and 7.5 ms at `'low'`; `'low'` looks grainy only at large `maxBlur`. One full-resolution pass, no mips.
+`quality` is fixed at construction: `'high'` takes 48 taps a pixel in one full-resolution pass, `'low'` 16 taps at half the screen's resolution and a merge back to full size, and the default `'auto'` picks `'low'` when pixi's `isMobile.any` is true. On a Pixel 7 at 1920 × 1080 the effect cost about 26 ms a frame at `'high'` and 4.6 ms at `'low'`; `'low'` looks grainy only at large `maxBlur`.
 
 ## Other effects
 

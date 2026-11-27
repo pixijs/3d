@@ -4,7 +4,7 @@
  * The effect reads the scene's depth and gives every pixel a blur radius from its distance to `focusDistance`: none
  * within `focusRange`, growing over `focusFalloff` to `maxBlur`. The sharp zone is a plane facing the camera, so the
  * floor at the shape's depth stays sharp with it. Sharp edges stay sharp against the blur behind them, and a blurred
- * shape in front spreads over what's behind it. `quality` picks 48 taps a pixel or 16; `'auto'` takes 16 on a phone.
+ * shape in front spreads over what's behind it. `quality` picks 48 taps a pixel, or 16 at half resolution; `'auto'` takes the second on a phone.
  * `debug` paints the zones instead of blurring.
  *
  * Controls: tap a shape to focus on it; drag to orbit; the pane picks the focus, sets a manual distance, shapes the

@@ -14,8 +14,8 @@ and paints the focus zones.
   `focusRange` (0.65) of `focusDistance` a pixel stays sharp, and its blur grows over `focusFalloff` (0.65) to
   `maxBlur` physical pixels. `maxBlur` is 16 CSS pixels times `app.renderer.resolution`, so it looks the same on a 2×
   screen. Every setting but `quality` is a uniform write, so the focus follows the picked shape every frame for free.
-- `DepthOfFieldEffect` `quality`: `'high'` takes 48 taps a pixel, `'low'` 16, and the default `'auto'` takes 16 on a
-  phone. It's fixed at construction, so the pane's row builds a new effect with the same settings (`DepthOfFieldEffectOptions`)
+- `DepthOfFieldEffect` `quality`: `'high'` takes 48 taps a pixel, `'low'` 16 at half the screen's resolution, and the
+  default `'auto'` takes `'low'` on a phone. It's fixed at construction, so the pane's row builds a new effect with the same settings (`DepthOfFieldEffectOptions`)
   and replaces `view3d.passes`, which rebuilds the render graph once. Raise `maxBlur` to see where `'low'` turns grainy.
 - `DepthOfFieldEffect` `debug`: paints the zones over a grey copy of the frame, a white line at the depth in focus,
   green in the sharp zone, orange in front of it and blue behind.

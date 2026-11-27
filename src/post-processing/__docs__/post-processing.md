@@ -69,7 +69,7 @@ Use both with a camera in its default perspective {@link Camera3D#mode | mode}, 
 
 The tilt-shift look, a full-size scene that reads as a miniature, is the same effect with a narrow sharp zone, a long falloff and a high, angled camera, as [Tilt shift](/3d/examples?example=post_tilt-shift) shows.
 
-The effect is the most expensive of these. {@link DepthOfFieldEffectOptions#quality | quality} picks 48 taps a pixel or 16, and its default, `'auto'`, takes 16 on phones and tablets. On a 2022 mid-range phone at 1920 × 1080 that cut the effect from about 26 ms a frame to 7.5 ms, with a slight grain at large blur radii.
+The effect is the most expensive of these. {@link DepthOfFieldEffectOptions#quality | quality} picks 48 taps a pixel at full resolution, or 16 at half the screen's resolution, and its default, `'auto'`, takes the second on phones and tablets. On a 2022 mid-range phone at 1920 × 1080 that cut the effect from about 26 ms a frame to 4.6 ms, with a slight grain at large blur radii.
 
 ### Motion blur
 

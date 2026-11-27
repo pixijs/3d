@@ -1,52 +1,78 @@
 import { definedProps, isMobile, UniformGroup } from 'pixi.js';
 
+import type { RenderGraph } from '../../../core/render-graph/RenderGraph';
+import { FullscreenPass } from '../../../post-processing/effects/FullscreenPass';
 import { PostEffect } from '../../../post-processing/effects/PostEffect';
-import type { EffectFragment, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
+import type { EffectFragment, EffectIO, PostEffectOptions } from '../../../post-processing/effects/PostEffect';
 
-/**
- * A tap behind this pixel takes this pixel's radius, or what is behind would smear over sharp edges. Colour and
- * alpha share every weight, or the output stops being premultiplied over a transparent background. Taps read colour
- * at a texel centre, since a filtered read would carry a sharp edge's colour into a blurred tap beside it.
- */
-function dofFragment(taps: number): EffectFragment {
-  return {
-    gpu: /* wgsl */ `
-const DOF_TAPS: i32 = ${taps};
-const DOF_GOLDEN: vec2<f32> = vec2<f32>(-0.7373688, 0.6754903);
-
+/** `dofDebug` takes the frame's colour as `base`, since the blur reads it as `sampleColor` and the merge as `sampleColor2` */
+const DOF_ZONES: EffectFragment = {
+  gpu: /* wgsl */ `
 fn dofAmount(lz: f32) -> f32 {
   let range = fx.uDof.y;
   let t = clamp((abs(lz - fx.uDof.x) - range) / max(fx.uDof.z, 0.0001), 0.0, 1.0);
   return t * t * (3.0 - 2.0 * t);
 }
 
-fn dofDebug(uv: vec2<f32>) -> vec4<f32> {
+fn dofDebug(uv: vec2<f32>, base: vec3<f32>) -> vec4<f32> {
   let lz = linearDepth(sampleDepth(uv));
   let s = lz - fx.uDof.x;
-  let grey = dot(sampleColor(uv).rgb, vec3<f32>(0.299, 0.587, 0.114));
+  let grey = dot(base, vec3<f32>(0.299, 0.587, 0.114));
   let blurred = select(vec3<f32>(0.3, 0.55, 1.0), vec3<f32>(1.0, 0.45, 0.2), s < 0.0);
   let zone = mix(vec3<f32>(0.25, 1.0, 0.45), blurred, dofAmount(lz));
   let line = 1.0 - smoothstep(0.0, (fx.uDof.y + fx.uDof.z) * 0.02 + 0.02, abs(s));
   return vec4<f32>(mix(mix(vec3<f32>(grey * 0.4), zone, 0.55), vec3<f32>(1.0), line * 0.9), 1.0);
 }
+`,
+  gl: /* glsl */ `
+float dofAmount(float lz) {
+  float range = uDof.y;
+  float t = clamp((abs(lz - uDof.x) - range) / max(uDof.z, 0.0001), 0.0, 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}
+
+vec4 dofDebug(vec2 uv, vec3 base) {
+  float lz = linearDepth(sampleDepth(uv));
+  float s = lz - uDof.x;
+  float grey = dot(base, vec3(0.299, 0.587, 0.114));
+  vec3 blurred = s < 0.0 ? vec3(1.0, 0.45, 0.2) : vec3(0.3, 0.55, 1.0);
+  vec3 zone = mix(vec3(0.25, 1.0, 0.45), blurred, dofAmount(lz));
+  float line = 1.0 - smoothstep(0.0, (uDof.y + uDof.z) * 0.02 + 0.02, abs(s));
+  return vec4(mix(mix(vec3(grey * 0.4), zone, 0.55), vec3(1.0), line * 0.9), 1.0);
+}
+`,
+};
+
+/**
+ * A tap behind this pixel takes this pixel's radius, or what is behind would smear over sharp edges. Colour and
+ * alpha share every weight, or the output stops being premultiplied over a transparent background. Every read of
+ * colour lands on a texel centre, since a filtered read would carry a sharp edge's colour past the depth it was read
+ * with.
+ */
+function dofBlurFragment(taps: number): EffectFragment {
+  return {
+    gpu: /* wgsl */ `${DOF_ZONES.gpu}
+const DOF_TAPS: i32 = ${taps};
+const DOF_GOLDEN: vec2<f32> = vec2<f32>(-0.7373688, 0.6754903);
 
 fn effect(uv: vec2<f32>) -> vec4<f32> {
-  if (fx.uDofView.x > 0.5) { return dofDebug(uv); }
+  let snap = inputTexel();
+  let cuv = (floor(uv / snap) + 0.5) * snap;
+  if (fx.uDofView.x > 0.5) { return dofDebug(cuv, sampleColor(cuv).rgb); }
   let px = viewTexel();
   let reach = fx.uDof.w;
-  let cz = linearDepth(sampleDepth(uv));
+  let cz = linearDepth(sampleDepth(cuv));
   let cr = dofAmount(cz) * reach;
   let cw = 1.0 / max(3.14159265 * cr * cr, 1.0);
-  var sum = sampleColor(uv) * cw;
+  var sum = sampleColor(cuv) * cw;
   var wsum = cw;
-  let cell = uv / px;
+  let cell = floor(uv / texel());
   let turn = fract(52.9829189 * fract(dot(cell, vec2<f32>(0.06711056, 0.00583715)))) * 6.2831853;
   var dir = vec2<f32>(cos(turn), sin(turn));
-  let snap = inputTexel();
   let area = 2.0 * reach / f32(DOF_TAPS);
   for (var i = 0; i < DOF_TAPS; i = i + 1) {
     let d = (f32(i) + 0.5) / f32(DOF_TAPS) * reach;
-    let tuv = (floor((uv + dir * d * px) / snap) + 0.5) * snap;
+    let tuv = (floor((cuv + dir * d * px) / snap) + 0.5) * snap;
     let tz = linearDepth(sampleDepth(tuv));
     let tr = select(dofAmount(tz) * reach, cr, tz > cz);
     let w = clamp(tr - d + 0.5, 0.0, 1.0) * area * d / max(3.14159265 * tr * tr, 1.0);
@@ -57,43 +83,28 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
   return sum / wsum;
 }
 `,
-    gl: /* glsl */ `
+    gl: /* glsl */ `${DOF_ZONES.gl}
 const int DOF_TAPS = ${taps};
 const vec2 DOF_GOLDEN = vec2(-0.7373688, 0.6754903);
 
-float dofAmount(float lz) {
-  float range = uDof.y;
-  float t = clamp((abs(lz - uDof.x) - range) / max(uDof.z, 0.0001), 0.0, 1.0);
-  return t * t * (3.0 - 2.0 * t);
-}
-
-vec4 dofDebug(vec2 uv) {
-  float lz = linearDepth(sampleDepth(uv));
-  float s = lz - uDof.x;
-  float grey = dot(sampleColor(uv).rgb, vec3(0.299, 0.587, 0.114));
-  vec3 blurred = s < 0.0 ? vec3(1.0, 0.45, 0.2) : vec3(0.3, 0.55, 1.0);
-  vec3 zone = mix(vec3(0.25, 1.0, 0.45), blurred, dofAmount(lz));
-  float line = 1.0 - smoothstep(0.0, (uDof.y + uDof.z) * 0.02 + 0.02, abs(s));
-  return vec4(mix(mix(vec3(grey * 0.4), zone, 0.55), vec3(1.0), line * 0.9), 1.0);
-}
-
 vec4 effect(vec2 uv) {
-  if (uDofView.x > 0.5) { return dofDebug(uv); }
+  vec2 snap = inputTexel();
+  vec2 cuv = (floor(uv / snap) + 0.5) * snap;
+  if (uDofView.x > 0.5) { return dofDebug(cuv, sampleColor(cuv).rgb); }
   vec2 px = viewTexel();
   float reach = uDof.w;
-  float cz = linearDepth(sampleDepth(uv));
+  float cz = linearDepth(sampleDepth(cuv));
   float cr = dofAmount(cz) * reach;
   float cw = 1.0 / max(3.14159265 * cr * cr, 1.0);
-  vec4 sum = sampleColor(uv) * cw;
+  vec4 sum = sampleColor(cuv) * cw;
   float wsum = cw;
-  vec2 cell = uv / px;
+  vec2 cell = floor(uv / texel());
   float turn = fract(52.9829189 * fract(dot(cell, vec2(0.06711056, 0.00583715)))) * 6.2831853;
   vec2 dir = vec2(cos(turn), sin(turn));
-  vec2 snap = inputTexel();
   float area = 2.0 * reach / float(DOF_TAPS);
   for (int i = 0; i < DOF_TAPS; i++) {
     float d = (float(i) + 0.5) / float(DOF_TAPS) * reach;
-    vec2 tuv = (floor((uv + dir * d * px) / snap) + 0.5) * snap;
+    vec2 tuv = (floor((cuv + dir * d * px) / snap) + 0.5) * snap;
     float tz = linearDepth(sampleDepth(tuv));
     float tr = tz > cz ? cr : dofAmount(tz) * reach;
     float w = clamp(tr - d + 0.5, 0.0, 1.0) * area * d / max(3.14159265 * tr * tr, 1.0);
@@ -107,9 +118,74 @@ vec4 effect(vec2 uv) {
   };
 }
 
-const DOF_FRAGMENTS: Record<'high' | 'low', EffectFragment> = {
-  high: dofFragment(48),
-  low: dofFragment(16),
+/**
+ * Brings the half-resolution blur back to full size. Its four nearest texels count by how close their depth is to
+ * this pixel's, or blur from across a sharp edge would bleed over it. A sharp pixel keeps its own colour and adds
+ * what the blur changed at those texels, which is where a blurred foreground spreads over it. `sampleColor` is the
+ * blur and `sampleColor2` the frame; each texel's frame colour is read where the blur read its centre.
+ */
+const DOF_MERGE: EffectFragment = {
+  gpu: /* wgsl */ `${DOF_ZONES.gpu}
+fn effect(uv: vec2<f32>) -> vec4<f32> {
+  let frame = sampleColor2(uv);
+  if (fx.uDofView.x > 0.5) { return dofDebug(uv, frame.rgb); }
+  let lowTexel = inputTexel();
+  let sceneTexel = depthTexel();
+  let z = linearDepth(sampleDepth(uv));
+  let p = uv / lowTexel - 0.5;
+  let corner = floor(p);
+  let f = p - corner;
+  var blurSum = vec4<f32>(0.0);
+  var frameSum = vec4<f32>(0.0);
+  var wsum = 0.0;
+  for (var k = 0; k < 4; k = k + 1) {
+    let o = vec2<f32>(f32(k & 1), f32(k >> 1u));
+    let c = (corner + o + 0.5) * lowTexel;
+    let s = (floor(c / sceneTexel) + 0.5) * sceneTexel;
+    let near = clamp(1.0 - abs(linearDepth(sampleDepth(s)) - z) / z * 20.0, 0.001, 1.0);
+    let w = mix(1.0 - f.x, f.x, o.x) * mix(1.0 - f.y, f.y, o.y) * near;
+    blurSum = blurSum + sampleColor(c) * w;
+    frameSum = frameSum + sampleColor2(s) * w;
+    wsum = wsum + w;
+  }
+  let blurred = blurSum / wsum;
+  let blurAmount = clamp(dofAmount(z) * fx.uDof.w - 0.5, 0.0, 1.0);
+  return mix(max(frame + blurred - frameSum / wsum, vec4<f32>(0.0)), blurred, blurAmount);
+}
+`,
+  gl: /* glsl */ `${DOF_ZONES.gl}
+vec4 effect(vec2 uv) {
+  vec4 frame = sampleColor2(uv);
+  if (uDofView.x > 0.5) { return dofDebug(uv, frame.rgb); }
+  vec2 lowTexel = inputTexel();
+  vec2 sceneTexel = depthTexel();
+  float z = linearDepth(sampleDepth(uv));
+  vec2 p = uv / lowTexel - 0.5;
+  vec2 corner = floor(p);
+  vec2 f = p - corner;
+  vec4 blurSum = vec4(0.0);
+  vec4 frameSum = vec4(0.0);
+  float wsum = 0.0;
+  for (int k = 0; k < 4; k++) {
+    vec2 o = vec2(float(k & 1), float(k >> 1));
+    vec2 c = (corner + o + 0.5) * lowTexel;
+    vec2 s = (floor(c / sceneTexel) + 0.5) * sceneTexel;
+    float near = clamp(1.0 - abs(linearDepth(sampleDepth(s)) - z) / z * 20.0, 0.001, 1.0);
+    float w = mix(1.0 - f.x, f.x, o.x) * mix(1.0 - f.y, f.y, o.y) * near;
+    blurSum += sampleColor(c) * w;
+    frameSum += sampleColor2(s) * w;
+    wsum += w;
+  }
+  vec4 blurred = blurSum / wsum;
+  float blurAmount = clamp(dofAmount(z) * uDof.w - 0.5, 0.0, 1.0);
+  return mix(max(frame + blurred - frameSum / wsum, vec4(0.0)), blurred, blurAmount);
+}
+`,
+};
+
+const DOF_BLUR: Record<'high' | 'low', EffectFragment> = {
+  high: dofBlurFragment(48),
+  low: dofBlurFragment(16),
 };
 
 /**
@@ -174,8 +250,9 @@ export interface DepthOfFieldEffectOptions extends PostEffectOptions {
   /**
    * How many taps the blur takes per pixel; fixed at construction
    *
-   * - `'high'`: 48 taps, smooth at any blur radius.
-   * - `'low'`: 16 taps, under half the cost; large blurs look grainy.
+   * - `'high'`: 48 taps at the scene's resolution, smooth at any blur radius.
+   * - `'low'`: 16 taps at half the screen's resolution, then merged back at full size; about a sixth of the cost,
+   *   and large blurs look grainy.
    * - `'auto'`: `'low'` on phones and tablets, as pixi's `isMobile.any` reports them, and `'high'` elsewhere.
    * @default 'auto'
    * @example
@@ -202,8 +279,9 @@ export interface DepthOfFieldEffectOptions extends PostEffectOptions {
  * Over a view with no background, blurred edges fade to transparent, so the effect composites over the page. A
  * narrow sharp zone seen from a high, angled camera makes a full-size scene read as a miniature, the tilt-shift look.
  *
- * One pass at the scene's resolution with no mipmaps. On a 2022 mid-range phone at 1920 × 1080 it took about 26 ms
- * a frame at `quality: 'high'` and 7.5 ms at `'low'`, which `'auto'` picks there. It needs a perspective camera. Every property but `quality` can change every frame, so a focus that
+ * At `quality: 'high'` it is one pass at the scene's resolution; at `'low'`, which `'auto'` picks on phones, it blurs
+ * at half the screen's resolution and merges back at full size. On a 2022 mid-range phone at 1920 × 1080 it took
+ * about 26 ms a frame at `'high'` and 4.6 ms at `'low'`. It needs a perspective camera. Every property but `quality` can change every frame, so a focus that
  * follows a target costs a uniform write.
  * @example
  * ```ts
@@ -255,12 +333,55 @@ export class DepthOfFieldEffect extends PostEffect {
     super(rest);
 
     this.quality = quality === 'auto' ? (isMobile.any ? 'low' : 'high') : quality!;
-    this.fragment = DOF_FRAGMENTS[this.quality];
+    this.fragment = DOF_BLUR[this.quality];
     this.focusDistance = focusDistance!;
     this.focusRange = focusRange!;
     this.focusFalloff = focusFalloff!;
     this.maxBlur = maxBlur!;
     this.debug = debug!;
+  }
+
+  /**
+   * Adds the blur for this slot in the chain: one pass at `'high'`, and at `'low'` a blur at half the screen's
+   * resolution and a merge back to full size
+   * @param graph - Render graph being built.
+   * @param io - Input/output handles for this slot in the chain.
+   * @example
+   * ```ts
+   * const focused = graph.createColor({ label: 'focused' });
+   * depthOfField.build(graph, { ...io, output: focused });
+   * ```
+   * @advanced
+   */
+  public override build(graph: RenderGraph, io: EffectIO): void {
+    if (this.quality === 'high') {
+      super.build(graph, io);
+
+      return;
+    }
+
+    const blurred = graph.createColor({ resolution: io.renderer.resolution / 2, label: 'depthOfFieldBlur' });
+
+    graph.addPass(
+      new FullscreenPass({
+        renderer: io.renderer,
+        label: 'depthOfField:blur',
+        fragment: this.fragment,
+        uniforms: this.uniforms,
+        reads: { color: io.input, depth: graph.sceneDepth },
+        writes: blurred,
+      }),
+    );
+    graph.addPass(
+      new FullscreenPass({
+        renderer: io.renderer,
+        label: 'depthOfField:merge',
+        fragment: DOF_MERGE,
+        uniforms: this.uniforms,
+        reads: { color: blurred, color2: io.input, depth: graph.sceneDepth },
+        writes: io.output,
+      }),
+    );
   }
 
   /**

@@ -1,13 +1,12 @@
 /**
- * `depth-of-field`: what `DepthOfFieldEffect` costs over the lit field at each `quality`, and whether gathering
- * the low-quality blur at half resolution saves more.
+ * `depth-of-field`: what `DepthOfFieldEffect` costs over the lit field at each `quality`, and what gathering the
+ * low-quality blur at half resolution saves.
  *
  * - `high`: `quality: 'high'`, 48 taps a pixel at the scene's resolution. First, so `--against` measures a change
  *   to it and every other variant is judged against it.
- * - `low`: `quality: 'low'`, 16 taps.
- * - `low-half`: the low shader into a half-resolution texture, then a full-resolution pass that keeps the sharp
- *   pixel where its blur is under a pixel and takes the half-resolution blur elsewhere. A cost probe: it loses a
- *   blurred foreground's spread over sharp pixels, which a shipped form would have to keep.
+ * - `low`: `quality: 'low'` as it ships, 16 taps at half the screen's resolution and a merge back to full size.
+ * - `low-full`: the same 16-tap blur in one pass at the scene's resolution, without the half-resolution texture or
+ *   the merge.
  * - `copy`: one pass that only copies the scene, the floor any effect pays. Every variant runs at
  *   `'beforeToneMapping'`, so all draw the same float scene and output pass.
  *
@@ -16,7 +15,7 @@
  */
 
 import { FullscreenPass, Mesh3D } from '@pixi/3d';
-import type { EffectFragment, EffectIO, Pass3D, RenderGraph } from '@pixi/3d';
+import type { EffectIO, Pass3D, RenderGraph } from '@pixi/3d';
 import { DepthOfFieldEffect } from '@pixi/3d/extras';
 import { frame } from 'benchy';
 
@@ -25,55 +24,24 @@ import { postScene } from './data/post.ts';
 import { applyLook, toGeometry, toMaterial } from './stage.ts';
 import type { PixiStage } from './stage.ts';
 
-type Mode = 'high' | 'low' | 'low-half' | 'copy';
+type Mode = 'high' | 'low' | 'low-full' | 'copy';
 
 const FOCUS = { focusDistance: 40, focusRange: 3, focusFalloff: 3, maxBlur: 16 };
 
-/** Keeps the sharp pixel where its own blur is under a pixel and takes the half-resolution blur elsewhere */
-const COMBINE: EffectFragment = {
-  gpu: /* wgsl */ `
-fn effect(uv: vec2<f32>) -> vec4<f32> {
-  let range = fx.uDof.y;
-  let t = clamp((abs(linearDepth(sampleDepth(uv)) - fx.uDof.x) - range) / max(fx.uDof.z, 0.0001), 0.0, 1.0);
-  let r = t * t * (3.0 - 2.0 * t) * fx.uDof.w;
-  return mix(sampleColor(uv), sampleColor2(uv), clamp(r - 0.5, 0.0, 1.0));
-}
-`,
-  gl: /* glsl */ `
-vec4 effect(vec2 uv) {
-  float range = uDof.y;
-  float t = clamp((abs(linearDepth(sampleDepth(uv)) - uDof.x) - range) / max(uDof.z, 0.0001), 0.0, 1.0);
-  float r = t * t * (3.0 - 2.0 * t) * uDof.w;
-  return mix(sampleColor(uv), sampleColor2(uv), clamp(r - 0.5, 0.0, 1.0));
-}
-`,
-};
-
-/** The low-quality shader and uniforms, gathered into a half-resolution texture */
-class HalfResolutionDepthOfField extends DepthOfFieldEffect {
+/** The low-quality blur in one pass at the scene's resolution */
+class FullResolutionLowDepthOfField extends DepthOfFieldEffect {
   constructor() {
     super({ ...FOCUS, quality: 'low' });
   }
 
   public override build(graph: RenderGraph, io: EffectIO): void {
-    const blurred = graph.createColor({ resolution: graph.resolution * 0.5, label: 'dofHalf' });
     graph.addPass(
       new FullscreenPass({
         renderer: io.renderer,
-        label: 'dofHalf:gather',
+        label: 'depthOfField:lowFull',
         fragment: this.fragment,
         uniforms: this.uniforms,
         reads: { color: io.input, depth: graph.sceneDepth },
-        writes: blurred,
-      }),
-    );
-    graph.addPass(
-      new FullscreenPass({
-        renderer: io.renderer,
-        label: 'dofHalf:combine',
-        fragment: COMBINE,
-        uniforms: this.uniforms,
-        reads: { color: io.input, color2: blurred, depth: graph.sceneDepth },
         writes: io.output,
       }),
     );
@@ -84,14 +52,14 @@ function createEffect(mode: Mode): Pass3D {
   if (mode === 'high' || mode === 'low') return new DepthOfFieldEffect({ ...FOCUS, quality: mode });
   if (mode === 'copy') return new CopyEffect();
 
-  return new HalfResolutionDepthOfField();
+  return new FullResolutionLowDepthOfField();
 }
 
 frame('depth-of-field', {
   variants: {
     high: { mode: 'high' },
     low: { mode: 'low' },
-    'low-half': { mode: 'low-half' },
+    'low-full': { mode: 'low-full' },
     copy: { mode: 'copy' },
   },
   primary: 'gpu.frame',
