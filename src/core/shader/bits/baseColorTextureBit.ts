@@ -4,8 +4,8 @@ import { uvTransformBit } from './uvTransformBit';
 /**
  * Reads the material's base colour texture once, into the fragment local `baseTex`
  *
- * {@link baseAlphaBit} requires it, and each material's colour bit requires `baseAlphaBit`, so
- * a shader samples the texture once however many of them it lists. The sample is as uploaded,
+ * {@link baseAlphaBit} and each material's colour bit read `baseTex` and require this bit, so the
+ * texture is sampled once however many of them a shader lists. The sample is as uploaded,
  * premultiplied by its alpha, and is taken unconditionally: an unset slot holds `Texture.WHITE`,
  * which reads as `(1, 1, 1, 1)`.
  *
