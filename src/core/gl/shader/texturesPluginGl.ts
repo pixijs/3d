@@ -1,6 +1,6 @@
 import { collectTextureNames } from '../../../materials/utils/validateMaterialTextureSlots';
 import { materialBindingsBit } from '../../shader/bits/materialBindingsBit';
-import type { MaterialShaderForm } from '../../shader/bits/materialBindingsBit';
+import { capitalize } from '../../shader/codegen/parseBindingType';
 import type { ShaderCompilerPlugin } from '../../shader/ShaderCompilerPlugin';
 
 function textureGetters(funcName: string, index: number, isFragment: boolean): string[] {
@@ -15,11 +15,11 @@ function textureGetters(funcName: string, index: number, isFragment: boolean): s
  * texture `t` the same binding index
  * @internal
  */
-export function createTexturesPluginGl(form: MaterialShaderForm): ShaderCompilerPlugin {
+export function createTexturesPluginGl(): ShaderCompilerPlugin {
   return {
     collectData(context) {
       if (!context.bits.some((b) => b.name.startsWith('materialBindings:'))) {
-        context.bits.unshift(materialBindingsBit(context.bits, form));
+        context.bits.unshift(materialBindingsBit(context.bits, 'merged'));
       }
     },
 
@@ -29,7 +29,7 @@ export function createTexturesPluginGl(form: MaterialShaderForm): ShaderCompiler
       const isFragment = context.stage === 'fragment';
 
       for (let i = 0; i < names.length; i++) {
-        lines.push(...textureGetters(`sample${names[i][0].toUpperCase()}${names[i].slice(1)}`, i, isFragment));
+        lines.push(...textureGetters(`sample${capitalize(names[i])}`, i, isFragment));
       }
 
       return { textureGetters: lines.join('\n') };

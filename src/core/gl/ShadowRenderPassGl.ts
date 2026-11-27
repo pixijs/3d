@@ -7,7 +7,7 @@ import { RenderPassBit } from '../render-passes/RenderPass';
 import type { RenderSession } from '../render-passes/RenderSession';
 import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/shadowPassUtils';
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
-import { UINT_EMPTY } from '../textures/DefaultTextures';
+import { bindBatchStorage } from './renderForwardBatchesGl';
 import type { View3DPipeGl } from './View3DPipeGl';
 
 interface ShadowRenderPassGlOptions {
@@ -105,15 +105,7 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
           const list = batch.drawLists[this.bit];
           if (!list || list.view.count === 0) continue;
 
-          bindGroup.setResource(batch.storeBuffer.texture.source, 'uMeshStoreTexture');
-          if (list.glData.indexTexture) {
-            bindGroup.setResource(list.glData.indexTexture.texture.source, 'uRenderInstanceTexture');
-          }
-          bindGroup.setResource(
-            batch.instanceStoreBuffer?.texture.source ?? UINT_EMPTY.source,
-            'uInstanceStoreTexture',
-          );
-
+          bindBatchStorage(session, batch, list);
           batcher.draw(this.pipe.renderer, list, batch, frustum, slot.cameraData);
         }
       }
