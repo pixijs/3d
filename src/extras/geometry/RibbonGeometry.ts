@@ -1,3 +1,4 @@
+import { Buffer, BufferUsage } from 'pixi.js';
 import type { TypedArray } from 'pixi.js';
 
 import type { ShaderBit } from '../../core/shader/ShaderBit';
@@ -101,6 +102,11 @@ export interface RibbonGeometryOptions {
    * ```
    */
   dynamic?: boolean;
+}
+
+/** `COPY_DST` as `Geometry3D` gives its own attributes, so WebGPU accepts the re-upload after `setPoints` */
+function vertexBuffer(data: Float32Array): Buffer {
+  return new Buffer({ data, usage: BufferUsage.VERTEX | BufferUsage.COPY_DST });
 }
 
 function doublePerPoint<T extends TypedArray>(data: T, size: number): T {
@@ -307,12 +313,12 @@ export class RibbonGeometry extends Geometry3D {
       topology: 'triangle-list',
     });
 
-    this.addAttribute('aRibbon', { buffer: ribbon, format: 'float32x4' });
+    this.addAttribute('aRibbon', { buffer: vertexBuffer(ribbon), format: 'float32x4' });
     for (const name in pointAttributes) {
       const data = pointAttributes[name];
       const size = data.length / pointCount;
       this.addAttribute(name, {
-        buffer: doublePerPoint(data, size),
+        buffer: vertexBuffer(doublePerPoint(data, size)),
         format: size === 1 ? 'float32' : (`float32x${size}` as 'float32x2' | 'float32x3' | 'float32x4'),
       });
     }

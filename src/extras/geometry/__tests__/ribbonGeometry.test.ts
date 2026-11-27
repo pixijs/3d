@@ -170,6 +170,24 @@ describe('RibbonGeometry', () => {
       expect(Math.abs(whiteRowsInColumn(pixels, SIZE, SIZE / 2) - 10)).toBeLessThanOrEqual(1);
     });
 
+    it('draws a dynamic ribbon in the direction setPoints turns it to', async () => {
+      const geometry = new RibbonGeometry({
+        points: straightLineAlongXAtDepth(0),
+        width: 10,
+        widthUnits: 'pixels',
+        dynamic: true,
+      });
+      const alongY = straightLineAlongXAtDepth(0).map((_, i, points) =>
+        i % 3 === 0 ? points[i + 1] : i % 3 === 1 ? points[i - 1] : 0,
+      );
+      const pixels = await render(preference, 'perspective', [white(geometry)], 1, () => geometry.setPoints(alongY));
+      const row = SIZE / 2;
+      let columns = 0;
+      for (let x = 0; x < SIZE; x++) if (pixels[(row * SIZE + x) * 4] > 128) columns++;
+
+      expect(Math.abs(columns - 10), 'columns the vertical ribbon covers').toBeLessThanOrEqual(1);
+    });
+
     it('keeps drawing a pixel ribbon whose points are off screen while its edge is on it', async () => {
       const justPastRightEdge = [3.5, -0.3, 0, 3.5, 0.3, 0];
       const ribbon = white(new RibbonGeometry({ points: justPastRightEdge, width: 24, widthUnits: 'pixels' }));
