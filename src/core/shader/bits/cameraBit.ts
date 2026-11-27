@@ -15,7 +15,7 @@ export const cameraBit: ShaderBit = {
       uViewProjectionMatrix: 'mat4x4<f32>',
       uPreviousViewProjectionMatrix: 'mat4x4<f32>',
       uViewportUVScale: 'vec2<f32>',
-      uViewportSize: 'vec2<f32>',
+      uFrameSize: 'vec2<f32>',
       uLightTileTransform: 'vec4<f32>',
       uLightTiles: `array<vec4<i32>, ${LIGHT_TILE_LANES}>`,
       uLightDepthMasks: `array<vec4<i32>, ${LIGHT_DEPTH_LANES}>`,

@@ -11,7 +11,7 @@ const HALF_WIDTH_GPU: Record<RibbonWidthUnits, string> = {
   pixels: /* wgsl */ `
   let rbClipSide = camera.uViewProjectionMatrix * vec4<f32>(rbSide, 0.0);
   let rbW = max(abs(clipPosition.w), 1e-6);
-  let rbPixels = (rbClipSide.xy * rbW - clipPosition.xy * rbClipSide.w) / (rbW * rbW) * camera.uViewportSize * 0.5;
+  let rbPixels = (rbClipSide.xy * rbW - clipPosition.xy * rbClipSide.w) / (rbW * rbW) * camera.uFrameSize * 0.5;
   let rbHalf = input.aRibbon.w * 0.5 / max(length(rbPixels), 1e-6);`,
 };
 
@@ -20,7 +20,7 @@ const HALF_WIDTH_GL: Record<RibbonWidthUnits, string> = {
   pixels: /* glsl */ `
   vec4 rbClipSide = uViewProjectionMatrix * vec4(rbSide, 0.0);
   float rbW = max(abs(gl_Position.w), 1e-6);
-  vec2 rbPixels = (rbClipSide.xy * rbW - gl_Position.xy * rbClipSide.w) / (rbW * rbW) * uViewportSize * 0.5;
+  vec2 rbPixels = (rbClipSide.xy * rbW - gl_Position.xy * rbClipSide.w) / (rbW * rbW) * uFrameSize * 0.5;
   float rbHalf = aRibbon.w * 0.5 / max(length(rbPixels), 1e-6);`,
 };
 

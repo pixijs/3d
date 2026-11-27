@@ -264,7 +264,7 @@ export abstract class ShadowRenderPassBase<
 
     const cameraData = slot.cameraData;
 
-    cameraData.setViewportSize(mapSize, mapSize);
+    cameraData.setFrameSize(mapSize, mapSize);
     cameraData.set(tempEye, view, projection);
     cameraData.frustum.setFromProjectionMatrix(cameraData.viewProjection);
   }
