@@ -53,7 +53,8 @@ loading.progress(0.2);
 const view3d = new View3D({ autoResize: true });
 const stage = new ThemeStage(view3d, { theme });
 
-// The shadow pass skips the material's extra bits, so a burning logo would cast a whole shadow: nothing casts one.
+// The shadow pass skips bits with no `level`, as these extra bits are, so a burning logo would cast a whole shadow:
+// nothing casts one.
 stage.key.castShadow = false;
 app.stage.addChild(view3d);
 

@@ -799,7 +799,9 @@ for (const preference of ['webgl', 'webgpu'] as const) {
         await renderFrame(app);
 
         const { material3d } = app.renderer as unknown as {
-          material3d: { compileShader(descriptor: ShaderDescriptor, mesh: unknown, batch: unknown): Shader };
+          material3d: {
+            compileShader(descriptor: ShaderDescriptor, mesh: unknown, batch: unknown): { shader: Shader };
+          };
         };
         const descriptor = (slots: boolean): ShaderDescriptor =>
           new ShaderDescriptor({
@@ -808,7 +810,7 @@ for (const preference of ['webgl', 'webgpu'] as const) {
             template: customTemplate(slots),
           });
 
-        const shader = material3d.compileShader(descriptor(true), batched.batch.items[0], batched.batch);
+        const { shader } = material3d.compileShader(descriptor(true), batched.batch.items[0], batched.batch);
 
         let compileLog: string;
         if (shader.gpuProgram) {

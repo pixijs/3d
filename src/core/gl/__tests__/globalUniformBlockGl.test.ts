@@ -44,15 +44,6 @@ const GLOBAL_SLOTS = [
   'batchTransform',
 ];
 
-const SHADOW_SLOTS = [
-  'uBonePitTexture',
-  'uMorphTexture',
-  'uGeometryTexture',
-  'uMeshStoreTexture',
-  'uRenderInstanceTexture',
-  'batchTransform',
-];
-
 function expectSlots(group: BindGroup, slots: string[], uniformGroups: Record<string, UniformGroup>): void {
   const wrong = slots.filter((name) => {
     const resource = group.getResource(name);
@@ -77,7 +68,7 @@ describe('WebGL global uniform block', () => {
     try {
       const plain: ShaderBitTemplate = { bindGroups: ['global', 'camera'], gl: template.gl };
 
-      expect(() => app.renderer.material3d.compilePassShader([], plain)).toThrow(/\{ name: 'global', ubo: true \}/);
+      expect(() => app.renderer.material3d.compileViewShader([], plain)).toThrow(/\{ name: 'global', ubo: true \}/);
     } finally {
       app.destroy(true, { children: true });
     }
@@ -134,20 +125,15 @@ describe('WebGL global uniform block', () => {
       const { batchTransform } = renderer.material3d.batcher;
 
       expectSlots(globalBindGroup, GLOBAL_SLOTS, { global: globalUniformGroup, batchTransform });
-      expect(
-        Object.keys(globalBindGroup.layout!),
-        'the global group names every binding the shadow shader declares',
-      ).toEqual(expect.arrayContaining(SHADOW_SLOTS));
 
       const items: Mesh3DData[] = [ground, ball, morph, batched.batch.items[0]];
       const passes = new Set<string>();
       for (const item of items) {
         for (const bit in item._passCache) {
           const pass = view3d.passByBit[Number(bit)];
-          const slots = pass.bit === RenderPassBit.SHADOW ? SHADOW_SLOTS : GLOBAL_SLOTS;
 
           expect(item._passCache[bit].shader._uniformBindMap[0], `mesh ${item.uid}, pass ${pass.name}`).toEqual(
-            slotMap(slots),
+            slotMap(GLOBAL_SLOTS),
           );
           passes.add(pass.name);
         }

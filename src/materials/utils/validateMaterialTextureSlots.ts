@@ -2,11 +2,7 @@ import { materialStructSnapshot, mergeMaterialStruct } from '../../core/shader/c
 import type { ShaderBit } from '../../core/shader/ShaderBit';
 import type { BaseMaterial3D } from '../BaseMaterial3D';
 
-/**
- * Built once per compiled shader and kept beside it, so validating a material on a cache hit stays cheap
- * @internal
- */
-export interface MaterialLayout {
+interface MaterialLayout {
   structSnapshot: string;
   textureNames: string[];
 }
@@ -41,7 +37,8 @@ export function validateMaterialStruct(layout: MaterialLayout, material: BaseMat
 }
 
 /**
- * Texture names across `bits`, in the order the textures plugins number the shader's samplers
+ * Texture names across `bits`, each once at its first place, in the order the textures plugins number the
+ * shader's samplers
  * @internal
  */
 export function collectTextureNames(bits: readonly ShaderBit[]): string[] {
@@ -49,7 +46,9 @@ export function collectTextureNames(bits: readonly ShaderBit[]): string[] {
 
   for (const bit of bits) {
     if (!bit.textures) continue;
-    for (const name of bit.textures) names.push(name);
+    for (const name of bit.textures) {
+      if (!names.includes(name)) names.push(name);
+    }
   }
 
   return names;

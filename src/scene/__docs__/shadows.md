@@ -50,7 +50,8 @@ The light draws each caster again for each shadow map it falls in, so turn a mes
 - A {@link Model3D} takes both as {@link Model3DOptions#castShadow | options} and passes them to every mesh it builds.
 - A {@link Sprite3D} casts no shadow by {@link Sprite3DOptions#castShadow | default} and blends by {@link Sprite3DOptions#alphaMode | default}. It casts only with `castShadow: true` and an `alphaMode` of `'mask'` or `'opaque'`. [Sprite3D](./sprite3d.md#shadows) explains why.
 - A {@link BatchedMesh3D} slot casts only when you turn casting on with {@link BatchedMesh3D#setPassesAt | setPassesAt}, as [Batched meshes](./batched-mesh.md#filling-the-slots) shows.
-- A `'mask'` card's shadow doesn't show its holes yet, so turn casting off on cards such as leaves.
+- A `'mask'` card's shadow has the same holes as the card.
+- A shader bit of your own changes a shadow only through its {@link ShaderBit#level | level}: `'shape'` for one that moves vertices, `'cutout'` for one that discards pixels. [Adding your own shader code](../../extras/__docs__/custom-materials.md#adding-your-own-shader-code) covers bits.
 - A {@link PlaneGeometry} doesn't cast yet while its back faces the light, even when its material is {@link BaseMaterial3D#doubleSided | doubleSided}. For a flat caster that the light sees from both sides, use a thin {@link CubeGeometry}.
 
 ## Quality and soft edges

@@ -35,10 +35,10 @@ describe('glslOverridesPlugin', () => {
   });
 
   it('should throw when a required override has no value supplied', () => {
-    const context = createMockContext([{ name: 'bit', overrideDefs: { HAS_UVS: { type: 'u32', required: true } } }]);
+    const context = createMockContext([{ name: 'bit', overrideDefs: { MY_FLAG: { type: 'u32', required: true } } }]);
 
     glslOverridesPlugin.collectData!(context);
 
-    expect(() => glslOverridesPlugin.injectCode!(context)).toThrow(/HAS_UVS/);
+    expect(() => glslOverridesPlugin.injectCode!(context)).toThrow(/MY_FLAG/);
   });
 });

@@ -78,6 +78,8 @@ export * from './shader/bitRegistry';
 export * from './shader/bits/alphaMaskBit';
 export * from './shader/bits/alphaOpaqueBit';
 export * from './shader/bits/anisotropyBit';
+export * from './shader/bits/baseAlphaBit';
+export * from './shader/bits/baseColorTextureBit';
 export * from './shader/bits/cameraBit';
 export * from './shader/bits/colorSpaceBits';
 export * from './shader/bits/decodeToLinearBit';

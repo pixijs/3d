@@ -71,6 +71,7 @@ function refillBonePit(view3d: View3D): void {
  */
 function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): void {
   const geomStore = pipe.geometryDataStoreBuffer;
+  const material3d = pipe.renderer.material3d;
   const queue = view3d._renderablesToUpdate;
   const queued = queue.list;
   const queuedCount = queue.index;
@@ -101,7 +102,7 @@ function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): v
       renderable._batchDirty = false;
       rebuildsLists ||= unpacked && geometry._atlasVacated;
 
-      pipe.renderer.material3d.ensureMaterial(renderable, view3d._sceneBatch, view3d);
+      pipe.materialStoreBuffer.register(material);
 
       if (!geometry.dynamic) {
         geometry._geometryAtlasAllocation = pipe.atlasPool.allocate(geometry);
@@ -111,7 +112,9 @@ function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): v
       let bits = renderable.renderPassMask & view3d._dirtyHookBits;
       while (bits) {
         const bit = bits & -bits;
-        view3d.passByBit[bit].onRenderableDirty(renderable, view3d._sceneBatch, rebuildsLists);
+        const pass = view3d.passByBit[bit];
+        material3d.ensurePassShader(renderable, view3d._sceneBatch, pass, view3d);
+        pass.onRenderableDirty(renderable, view3d._sceneBatch, rebuildsLists);
         bits ^= bit;
       }
     }
@@ -136,6 +139,7 @@ function updateSceneBatch(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): v
  */
 function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): void {
   const geomStore = pipe.geometryDataStoreBuffer;
+  const material3d = pipe.renderer.material3d;
   for (let b = 1; b < view3d._meshBatches.length; b++) {
     const batch = view3d._meshBatches[b];
     const dirtyIndices = batch._dirtyIndices!;
@@ -155,7 +159,7 @@ function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): 
         item._lastDescriptorDirtyId = material._descriptorDirtyId;
       }
 
-      pipe.renderer.material3d.ensureMaterial(item, batch, view3d);
+      pipe.materialStoreBuffer.register(material);
 
       if (!item.geometry.dynamic) {
         item.geometry._geometryAtlasAllocation = pipe.atlasPool.allocate(item.geometry);
@@ -171,7 +175,9 @@ function updateUserBatches(view3d: View3D, pipe: View3DPipeGpu | View3DPipeGl): 
       let bits = passes & view3d._dirtyHookBits;
       while (bits) {
         const bit = bits & -bits;
-        view3d.passByBit[bit].onRenderableDirty(item, batch, rebuildsLists);
+        const pass = view3d.passByBit[bit];
+        material3d.ensurePassShader(item, batch, pass, view3d);
+        pass.onRenderableDirty(item, batch, rebuildsLists);
         bits ^= bit;
       }
     }

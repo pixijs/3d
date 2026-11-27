@@ -24,26 +24,49 @@ export class MeshPassCache {
    */
   public lastGeometryUid = -1;
   public lastMaterialUid = -1;
+  public lastDescriptorDirtyId = -1;
+  public lastViewShaderVersion = -1;
+  public lastBillboardMode: BillboardMode = 'none';
+  public lastReceiveShadow = true;
 
-  constructor(shader: Shader, state: State, topology: Topology) {
+  /** Per mesh, since one pass's list can hold draws that bind a material and draws that don't */
+  public bindsMaterial: boolean;
+
+  constructor(shader: Shader, state: State, topology: Topology, bindsMaterial: boolean) {
     this.shader = shader;
     this.state = state;
     this.topology = topology;
+    this.bindsMaterial = bindsMaterial;
   }
 
-  /**
-   * Whether a pass with a shader of its own has to resolve the entry again; the uids are compared
-   * apart, since packing them would truncate one
-   */
-  public isStaleFor(item: Mesh3DData): boolean {
+  /** Whether the entry must resolve its shader again; the inputs are compared apart, since packing them would truncate one */
+  public isStaleFor(item: Mesh3DData, viewShaderVersion: number): boolean {
+    const material = item.material;
+
     return (
-      this.shader._destroyed || this.lastGeometryUid !== item.geometry.uid || this.lastMaterialUid !== item.material.uid
+      this.lastGeometryUid !== item.geometry.uid ||
+      this.lastMaterialUid !== material.uid ||
+      this.lastDescriptorDirtyId !== material._descriptorDirtyId ||
+      this.lastViewShaderVersion !== viewShaderVersion ||
+      this.lastBillboardMode !== item.billboardMode ||
+      this.lastReceiveShadow !== item.receiveShadow ||
+      this.shader._destroyed
     );
   }
 
-  public claimBuiltFrom(item: Mesh3DData): void {
+  public claimBuiltFrom(item: Mesh3DData, viewShaderVersion: number): void {
+    const material = item.material;
+
     this.lastGeometryUid = item.geometry.uid;
-    this.lastMaterialUid = item.material.uid;
+    this.lastMaterialUid = material.uid;
+    this.lastDescriptorDirtyId = material._descriptorDirtyId;
+    this.lastViewShaderVersion = viewShaderVersion;
+    this.lastBillboardMode = item.billboardMode;
+    this.lastReceiveShadow = item.receiveShadow;
+  }
+
+  public markStale(): void {
+    this.lastGeometryUid = -1;
   }
 }
 
@@ -82,10 +105,7 @@ export interface Mesh3DData {
   skeleton?: Skeleton;
   _morph?: Morph;
 
-  /**
-   * The item's pass-cache entry per `RenderPassBit`; on a material's own pass bit `ensureMaterial`
-   * writes first, so a pass's own shader wins
-   */
+  /** The item's pass-cache entry per `RenderPassBit`, which `ensurePassShader` writes; on the material's main pass bit a pass's own shader wins */
   _passCache: Record<number, MeshPassCache>;
 
   receiveShadow: boolean;

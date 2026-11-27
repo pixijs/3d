@@ -9,11 +9,13 @@ stage and colour are fixed when it's built, so changing either builds a new pass
 
 ## API
 
-- `MeshPass` with `name: 'xray'`, `stage`, a `description` and a `descriptor` of `{ state, shaderDescriptor }`:
-  redraws every mesh whose material joined `'xray'`, with its own shader and render state. `MeshPass['stage']` places
-  it: at `'afterOpaque'` the silhouettes land on the wall; at `'beforeOpaque'` the opaque scene paints over them.
-- `solidMeshDescriptor({ color })` from `@pixi/3d/extras`: the shader, one flat colour with no lighting, so the example
-  has no shader file of its own. The colour is a constant in that shader, so a new colour means a new pass.
+- `MeshPass` with `name: 'xray'`, `level: 'shape'`, `stage`, a `description` and a `descriptor` of
+  `{ state, shaderDescriptor }`: redraws every mesh whose material joined `'xray'`, in the shape its own material
+  gives it, with the pass's shader and render state. `MeshPass['stage']` places it: at `'afterOpaque'` the
+  silhouettes land on the wall; at `'beforeOpaque'` the opaque scene paints over them.
+- `solidMeshDescriptor({ color })` from `@pixi/3d/extras`: the shader, one flat colour with no lighting, for a pass at
+  `level: 'shape'`, so the example has no shader file of its own. The colour is a constant in that shader, so a new
+  colour means a new pass.
 - `material.enablePass('xray')` and `disablePass('xray')`: join and leave the pass. Every mesh wearing a member
   material joins with it; each critter wears its own clay colour, so it joins alone.
 - `View3D` `passes`: a rebuild swaps the pass in place with `view3d.passes.map(...)`, keeping the inset's passes, and

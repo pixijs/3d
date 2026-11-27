@@ -20,7 +20,6 @@ type SortBatchFnGpu = (renderables: SortedMesh3DView<Mesh3DData>, batch: Mesh3DB
 interface RenderForwardBatchesGpuOptions {
   pipe: View3DPipeGpu;
   bit: number;
-  bindsMaterial: boolean;
   cullResults: CullResults;
   /** `null` for the view's own camera */
   camera: Camera3D | null;
@@ -36,7 +35,7 @@ interface RenderForwardBatchesGpuOptions {
  * @internal
  */
 export function prepareForwardBatchesGpu(options: RenderForwardBatchesGpuOptions): void {
-  const { pipe, bit, bindsMaterial, session, useBundles, sortBatch } = options;
+  const { pipe, bit, session, useBundles, sortBatch } = options;
 
   if (!useBundles) return;
 
@@ -64,7 +63,6 @@ export function prepareForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
       commandList: list.commandList,
       drawData: list.drawData,
       passBit: bit,
-      bindsMaterial,
       batch,
       view3d,
     });
@@ -130,7 +128,7 @@ export function computeForwardBatchesGpu(options: RenderForwardBatchesGpuOptions
  * @internal
  */
 export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions): void {
-  const { pipe, bit, bindsMaterial, cullResults, session, useBundles, sortBatch } = options;
+  const { pipe, bit, cullResults, session, useBundles, sortBatch } = options;
 
   const { view3d } = session;
   const encoder = pipe.renderer.encoder;
@@ -205,7 +203,6 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
           commandList: list.commandList,
           drawData: list.drawData,
           passBit: bit,
-          bindsMaterial,
           batch,
           view3d,
         });
@@ -259,8 +256,11 @@ export function renderForwardBatchesGpu(options: RenderForwardBatchesGpuOptions)
   }
 }
 
-/** Binds the empty buffer for a batch with no instance store, so no draw reads another batch's store */
-function bindBatchStorage(session: RenderSession, batch: Mesh3DBatch, result: CullResult): void {
+/**
+ * Binds the empty buffer for a batch with no instance store, so no draw reads another batch's store
+ * @internal
+ */
+export function bindBatchStorage(session: RenderSession, batch: Mesh3DBatch, result: CullResult): void {
   session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
   session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
   session.globalBindGroup.setResource(

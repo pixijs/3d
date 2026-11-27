@@ -7,13 +7,13 @@ export class DrawCommand {
   public geometry: Geometry = null!;
   public shader: Shader = null!;
   public globalBindGroup: BindGroup = null!;
-  /** The group bound at 2: a material's own, a merged run's, or `undefined` for a pass that binds no material */
+  /** The group bound at 2: a material's own, a merged run's, or `undefined` for a draw that binds no material */
   public batchBindGroup: BindGroup | undefined = undefined;
   public state: State = null!;
   public topology: Topology = null!;
   /** Held here, since the members may be re-keyed or destroyed before a draw list edits the command */
   public batchKey = 0;
-  /** The id of the texture set {@link batchBindGroup} binds, or 0 for a pass that binds no material */
+  /** The id of the texture set {@link batchBindGroup} binds, or 0 for a draw that binds no material */
   public textureSetId = 0;
   public merged = false;
   /**

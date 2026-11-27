@@ -50,3 +50,31 @@ describe('a uniform<Struct> binding', () => {
     });
   });
 });
+
+describe("a uniform<Struct> binding the std140 block can't hold", () => {
+  const batchTemplate: ShaderBitTemplate = {
+    bindGroups: ['batch'],
+    gpu: '{{header}}',
+    gl: {
+      vertex: '#version 300 es\n{{header}}\nvoid main() {}',
+      fragment: '#version 300 es\n{{header}}\nvoid main() {}',
+    },
+  };
+  const compile = (bit: ShaderBit) => compileGlslSource({ bits: [bit], template: batchTemplate, useLocations: false });
+
+  it('refuses a member std140 lays out unlike WGSL', () => {
+    const bit: ShaderBit = {
+      name: 'probeWide',
+      structs: { Wide: { rows: 'mat3x2<f32>' } },
+      bindings: { batch: { wide: 'uniform<Wide>' } },
+    };
+
+    expect(() => compile(bit)).toThrow(/"rows" of uniform block "wide" is "mat3x2<f32>"/);
+  });
+
+  it('refuses a struct no bit declares fields for', () => {
+    const bit: ShaderBit = { name: 'probeLost', bindings: { batch: { lost: 'uniform<Lost>' } } };
+
+    expect(() => compile(bit)).toThrow(/"lost" is "uniform<Lost>", but no bit declares fields for a "Lost" struct/);
+  });
+});

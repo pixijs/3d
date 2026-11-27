@@ -7,7 +7,6 @@ import {
   validateMaterialStruct,
   validateMaterialTextureSlots,
 } from '../../../materials/utils/validateMaterialTextureSlots';
-import type { MaterialLayout } from '../../../materials/utils/validateMaterialTextureSlots';
 import type { View3D } from '../../../scene/View3D';
 import type { Mesh3DBatch } from '../../batcher/Mesh3DBatch';
 import { Mesh3DBatcher } from '../../batcher/Mesh3DBatcher';
@@ -15,6 +14,7 @@ import { MeshPassCache } from '../../batcher/Mesh3DData';
 import type { Mesh3DData } from '../../batcher/Mesh3DData';
 import { addPassMaterialBits } from '../../render-graph/sceneOutputs';
 import { RenderPassBit } from '../../render-passes/RenderPass';
+import type { RenderPass } from '../../render-passes/RenderPass';
 import { assertBindGroups, assertBitIdentity } from '../../shader/bitRegistry';
 import { alphaOpaqueBit } from '../../shader/bits/alphaOpaqueBit';
 import { anisotropyTangentVariant } from '../../shader/bits/anisotropyBit';
@@ -24,6 +24,7 @@ import { decodeToLinearBit } from '../../shader/bits/decodeToLinearBit';
 import { doubleSidedNormalBit } from '../../shader/bits/doubleSidedNormalBit';
 import { flatShadingBit } from '../../shader/bits/flatShadingBit';
 import type { MaterialShaderForm } from '../../shader/bits/materialBindingsBit';
+import { firstBitReadingMaterial } from '../../shader/bits/materialBindingsBit';
 import { getMeshBillboardBit } from '../../shader/bits/meshBillboardBits';
 import { normalBit } from '../../shader/bits/normalBit';
 import { normalMappingBit } from '../../shader/bits/normalMappingBit';
@@ -35,6 +36,8 @@ import { getUvsBit } from '../../shader/bits/uvsBit';
 import { vertexColorBit } from '../../shader/bits/vertexColorBit';
 import { readsInstanceData } from '../../shader/codegen/instanceAccess';
 import { materialStructPackPlugin } from '../../shader/codegen/materialStructPackPlugin';
+import { declaredOverrides } from '../../shader/collectOverrideDefs';
+import { isBitInLevel } from '../../shader/ShaderBit';
 import type { ShaderBit } from '../../shader/ShaderBit';
 import { resolveBindGroups } from '../../shader/ShaderBitTemplate';
 import type { ShaderBitTemplate } from '../../shader/ShaderBitTemplate';
@@ -147,9 +150,6 @@ fn mainFragment(input: FragmentInput) -> FragmentOutput {
 
 const layoutBit: ShaderBit = {
   name: 'layout',
-  overrideDefs: {
-    HAS_UVS: { type: 'u32', required: true },
-  },
   outputs: {
     color: 'vec4<f32>',
   },
@@ -246,7 +246,7 @@ export class MaterialSystemGpu {
 
   private _destroyed = false;
   private readonly _renderer: WebGPURenderer;
-  public _shaderCache = new Map<string, { shader: Shader; layout: MaterialLayout }>();
+  public _shaderCache = new Map<string, { shader: Shader; bindsMaterial: boolean }>();
 
   constructor(renderer: WebGPURenderer) {
     this._renderer = renderer;
@@ -263,7 +263,7 @@ export class MaterialSystemGpu {
     );
   }
 
-  public compilePassShader(bits: ShaderBit[], template: ShaderBitTemplate): Shader {
+  public compileViewShader(bits: ShaderBit[], template: ShaderBitTemplate): Shader {
     const gpu = compileWgslSource({ bits: [globalBitGpu, cameraBit, ...bits], template });
     assertBindGroups(gpu.bits, template);
     return Shader.from({ gpu });
@@ -275,16 +275,15 @@ export class MaterialSystemGpu {
 
   /**
    * Appends the position, morph and skinning bits in that order, so skinning moves the morphed vertex,
-   * and adds what it appends to the key; validation reads the material, so it runs on cache hits too
+   * and adds what it appends to the key. A shader whose bits read the material gets its layout bit.
+   * The bit's name and the form join the key, so the material is checked only when the shader compiles
    */
   public compileShader(
     descriptor: ShaderDescriptor,
     mesh: Mesh3DData,
     batch: Mesh3DBatch,
-    plugins?: ShaderCompilerPlugin[],
-    validateMaterial?: boolean,
     form: MaterialShaderForm = 'direct',
-  ): Shader {
+  ): { shader: Shader; bindsMaterial: boolean } {
     const finalBits: ShaderBit[] = [];
     let key = '';
     if (descriptor.includeGlobal ?? true) {
@@ -295,7 +294,15 @@ export class MaterialSystemGpu {
       finalBits.push(cameraBit);
       key += `${cameraBit.name}|`;
     }
-    finalBits.push(...descriptor.bitsGpu);
+
+    const bits = descriptor.bitsGpu;
+    const materialLayoutBit = mesh.material._materialLayoutBit;
+    const readingBit = firstBitReadingMaterial(bits);
+    const readsMaterial = readingBit >= 0;
+    for (let i = 0; i < bits.length; i++) {
+      if (i === readingBit) finalBits.push(materialLayoutBit);
+      finalBits.push(bits[i]);
+    }
     key += descriptor.keyGpu;
 
     const positionBit = getPositionBit(mesh.geometry.attributes.aPosition.format!);
@@ -323,7 +330,7 @@ export class MaterialSystemGpu {
       key += `|inst:${batch.instanceStoreBuffer.layout.key}`;
     }
 
-    key += `|${form}`;
+    if (readsMaterial) key += `|${materialLayoutBit.name}|${form}`;
 
     let entry = this._shaderCache.get(key);
 
@@ -331,7 +338,7 @@ export class MaterialSystemGpu {
       const gpu = compileWgslSource({
         bits: finalBits,
         template: descriptor.template!,
-        extraPlugins: plugins,
+        extraPlugins: readsMaterial ? MATERIAL_PLUGINS[form] : undefined,
         instanceLayout: batch.instanceStoreBuffer?.layout,
         outputLocations: descriptor.outputLocations,
       });
@@ -345,70 +352,112 @@ export class MaterialSystemGpu {
         gpu.bits,
       );
 
-      entry = { shader: Shader.from({ gpu, overrides: descriptor.overrides }), layout: getMaterialLayout(gpu.bits) };
+      if (readsMaterial) {
+        const layout = getMaterialLayout(gpu.bits);
+        validateMaterialTextureSlots(layout, mesh.material);
+        validateMaterialStruct(layout, mesh.material);
+      }
+
+      entry = { shader: Shader.from({ gpu, overrides: descriptor.overrides }), bindsMaterial: readsMaterial };
       this._shaderCache.set(key, entry);
     }
 
-    if (validateMaterial) {
-      validateMaterialTextureSlots(entry.layout, mesh.material);
-      validateMaterialStruct(entry.layout, mesh.material);
-    }
-
-    return entry.shader;
+    return entry;
   }
 
   /**
-   * Looks the store up through `renderPipes` each call, since pixi builds pipes after systems, and drops
-   * the merged shader, which `ensureMergedShader` rebuilds from the same bits
+   * Writes the mesh's shader, state and topology for `pass` into its pass entry, in place, since
+   * other code holds the entry; it drops the merged shader, which `ensureMergedShader` rebuilds
    */
-  public ensureMaterial(mesh: Mesh3DData, batch: Mesh3DBatch, view3d: View3D): Shader {
+  public ensurePassShader(mesh: Mesh3DData, batch: Mesh3DBatch, pass: RenderPass, view3d: View3D): void {
+    const bit = pass.bit;
     const material = mesh.material;
+    const materialEntry = material._passes[bit];
+    const ownDescriptor =
+      (materialEntry && materialEntry.shaderDescriptor) || (pass.descriptor && pass.descriptor.shaderDescriptor);
+    const level = pass.level;
+    const drawsAsPass = !!level || !!ownDescriptor;
 
-    this._renderer.renderPipes.view3d.materialStoreBuffer.register(material);
+    if (!drawsAsPass && bit !== (material._passBit & RenderPassBit.MATERIAL_PASS_MASK)) return;
 
-    const shader = this.compileShader(
-      this._materialDescriptor(mesh, view3d),
-      mesh,
-      batch,
-      MATERIAL_PLUGINS.direct,
-      true,
-    );
+    const passEntry = drawsAsPass ? pass.descriptor : undefined;
+    const state = (materialEntry && materialEntry.state) || (passEntry && passEntry.state) || material.state;
+    const topology =
+      (materialEntry && materialEntry.topology) ||
+      (passEntry && passEntry.topology) ||
+      material.topology ||
+      mesh.geometry.topology;
+    const viewShaderVersion = view3d._shaderVersion;
+    const cache = mesh._passCache[bit];
 
-    const passBit = material._passBit & RenderPassBit.MATERIAL_PASS_MASK;
-    const pd = material._passes[passBit];
-    const state = (pd && pd.state) || material.state;
-    const topology = (pd && pd.topology) || material.topology || mesh.geometry.topology;
-    const cache = mesh._passCache[passBit];
-    if (!cache) {
-      mesh._passCache[passBit] = new MeshPassCache(shader, state, topology);
-    } else {
+    if (cache && !cache.isStaleFor(mesh, viewShaderVersion)) {
+      cache.state = state;
+      cache.topology = topology;
+
+      return;
+    }
+
+    if (ownDescriptor && !level && !ownDescriptor.template) {
+      throw new Error(
+        `[MaterialSystemGpu] The '${pass.name}' pass draws ${material.constructor.name} with a shader that has no ` +
+          "template. Give the pass a `level`, such as 'shape', to draw it with the material's own bits, or " +
+          'give the shader a template of its own.',
+      );
+    }
+
+    const descriptor =
+      ownDescriptor && ownDescriptor.template
+        ? ownDescriptor
+        : this._passShaderDescriptor(mesh, pass, view3d, ownDescriptor);
+    const { shader, bindsMaterial } = this.compileShader(descriptor, mesh, batch);
+
+    if (cache) {
       cache.shader = shader;
       cache.mergedShader = null;
       cache.state = state;
       cache.topology = topology;
-      cache.lastGeometryUid = -1;
+      cache.bindsMaterial = bindsMaterial;
+      cache.claimBuiltFrom(mesh, viewShaderVersion);
+    } else {
+      (mesh._passCache[bit] = new MeshPassCache(shader, state, topology, bindsMaterial)).claimBuiltFrom(
+        mesh,
+        viewShaderVersion,
+      );
     }
-
-    return shader;
   }
 
-  /** Call after `ensureMaterial` has built the mesh's pass cache entry this frame */
-  public ensureMergedShader(mesh: Mesh3DData, batch: Mesh3DBatch, view3d: View3D): Shader {
-    const cache = mesh._passCache[mesh.material._passBit & RenderPassBit.MATERIAL_PASS_MASK];
+  /** Call after `ensurePassShader` has built the mesh's entry for `pass` this frame */
+  public ensureMergedShader(mesh: Mesh3DData, batch: Mesh3DBatch, pass: RenderPass, view3d: View3D): Shader {
+    const cache = mesh._passCache[pass.bit];
     if (cache.mergedShader) return cache.mergedShader;
 
-    const descriptor = this._materialDescriptor(mesh, view3d);
-    cache.mergedShader = this.compileShader(descriptor, mesh, batch, MATERIAL_PLUGINS.merged, true, 'merged');
+    const materialEntry = mesh.material._passes[pass.bit];
+    const passEntry = pass.descriptor;
+    const ownDescriptor =
+      (materialEntry && materialEntry.shaderDescriptor) || (passEntry && passEntry.shaderDescriptor);
+
+    const descriptor =
+      ownDescriptor && ownDescriptor.template
+        ? ownDescriptor
+        : this._passShaderDescriptor(mesh, pass, view3d, ownDescriptor);
+    cache.mergedShader = this.compileShader(descriptor, mesh, batch, 'merged').shader;
 
     return cache.mergedShader;
   }
 
   /**
    * Bits share slots and run in list order, so the order is load-bearing: normals settle before the
-   * material's bits, billboarding before fog, fog before tone mapping, and the pass's output bits go last
+   * material's bits, billboarding before fog, fog before tone mapping, and the pass's output bits go last.
+   * A pass's `level` then drops the bits above it, apart from the template's own. The pass's shader
+   * bits and the entry's `extraBits` go after, and are never dropped
    * @returns `scratchDescriptor`, which the next call overwrites
    */
-  private _materialDescriptor(mesh: Mesh3DData, view3d: View3D): ShaderDescriptor {
+  private _passShaderDescriptor(
+    mesh: Mesh3DData,
+    pass: RenderPass,
+    view3d: View3D,
+    ownDescriptor?: ShaderDescriptor,
+  ): ShaderDescriptor {
     const geometry = mesh.geometry;
     const material = mesh.material;
     const fogBit = material.fog ? view3d._fogBit : null;
@@ -418,6 +467,7 @@ export class MaterialSystemGpu {
     const materialDescriptor = material.getPrimaryDescriptor(view3d);
 
     const bitsGpu: ShaderBit[] = [globalBitGpu, layoutBit, colorSpaceBit];
+    const templateBitCount = bitsGpu.length;
 
     if (geometry.attributes.aNormal) bitsGpu.push(normalBit);
     if (geometry.attributes.aUV) bitsGpu.push(getUvsBit(geometry.attributes.aUV.format!));
@@ -462,15 +512,36 @@ export class MaterialSystemGpu {
       );
     }
 
-    const pass = view3d.passByBit[material._passBit & RenderPassBit.MATERIAL_PASS_MASK];
-    const outputLocations = addPassMaterialBits(bitsGpu, pass, !!materialDescriptor.template);
+    const level = pass.level;
+    const filtered = level !== undefined && level !== 'color';
+    /** A level that drops bits draws on the engine template, which the kept engine bits are written for */
+    const ownTemplate = filtered ? undefined : materialDescriptor.template;
+    const outputLocations = addPassMaterialBits(bitsGpu, pass, !!ownTemplate);
+
+    const materialOverrides = materialDescriptor.overrides;
+    if (filtered) {
+      let kept = templateBitCount;
+      for (let i = templateBitCount; i < bitsGpu.length; i++) {
+        if (isBitInLevel(bitsGpu[i], level)) bitsGpu[kept++] = bitsGpu[i];
+      }
+      bitsGpu.length = kept;
+    }
+
+    if (ownDescriptor) {
+      for (let i = 0; i < ownDescriptor.bitsGpu.length; i++) bitsGpu.push(ownDescriptor.bitsGpu[i]);
+    }
+
+    const extraBits = material._passes[pass.bit]?.extraBits;
+    if (extraBits) {
+      for (let i = 0; i < extraBits.length; i++) bitsGpu.push(extraBits[i]);
+    }
 
     return scratchDescriptor.update({
       bitsGpu,
-      template: materialDescriptor.template ?? template,
+      template: ownTemplate ?? template,
       overrides: {
-        HAS_UVS: geometry.attributes.aUV ? 1 : 0,
-        ...materialDescriptor.overrides,
+        ...(filtered && materialOverrides ? declaredOverrides(materialOverrides, bitsGpu) : materialOverrides),
+        ...ownDescriptor?.overrides,
       },
       outputLocations,
       includeGlobal: false,
@@ -486,7 +557,7 @@ export class MaterialSystemGpu {
     this._destroyed = true;
 
     for (const { shader } of this._shaderCache.values()) shader.destroy();
-    (this._shaderCache as Map<string, { shader: Shader; layout: MaterialLayout }> | null) = null;
+    (this._shaderCache as Map<string, { shader: Shader; bindsMaterial: boolean }> | null) = null;
   }
 }
 

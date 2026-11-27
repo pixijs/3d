@@ -7,6 +7,7 @@ import type { ShaderBit } from '../ShaderBit';
  */
 export const normalBit: ShaderBit = {
   name: 'normal',
+  level: 'shape',
 
   attributes: {
     aNormal: 'float32x3',

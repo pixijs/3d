@@ -20,7 +20,6 @@ interface GlBatcherBuildOptions {
   list: DrawList;
   globalBindGroup: BindGroup;
   passBit: number;
-  bindsMaterial: boolean;
 }
 
 const noAlloc: {
@@ -36,7 +35,7 @@ const noAlloc: {
 const _noPlanes = new Float32Array(24);
 
 /**
- * Every run that binds a material draws merged, the form `MaterialSystemGl.ensureMaterial` compiles. Commands draw
+ * Every run that binds a material draws merged, the form `MaterialSystemGl.ensurePassShader` compiles. Commands draw
  * with a base vertex of 0, since the WebGL atlas bakes it into the indices (`GeometryAtlas.rebaseIndices`).
  * @internal
  */
@@ -55,7 +54,7 @@ export class Mesh3DBatcherGl {
    * @returns The number of instances written
    */
   public build(options: GlBatcherBuildOptions): number {
-    const { renderables, list, globalBindGroup, passBit, bindsMaterial } = options;
+    const { renderables, list, globalBindGroup, passBit } = options;
     const len = renderables.count;
     const commandList = list.commandList;
 
@@ -77,6 +76,7 @@ export class Mesh3DBatcherGl {
     let currentState = pipelineState(currentBatchKey, cache.state);
     let currentTopology = cache.topology;
     let currentMaterial = r.material;
+    let bindsMaterial = cache.bindsMaterial;
 
     let currentAlloc = currentGeometry._geometryAtlasAllocation || noAlloc;
     let geometry: Geometry = currentAlloc.atlas ? currentAlloc.atlas.geometry : currentGeometry;
@@ -131,6 +131,7 @@ export class Mesh3DBatcherGl {
         currentBatchKey = cache.batchKey;
         currentGeometry = r.geometry;
         currentShader = cache.shader;
+        bindsMaterial = cache.bindsMaterial;
         currentState = pipelineState(currentBatchKey, cache.state);
         currentTopology = cache.topology;
 
@@ -141,7 +142,7 @@ export class Mesh3DBatcherGl {
       }
       runFirstMaterial = m;
 
-      if (bindsMaterial && materialChanged) commandList.captureMaterialTextures(m);
+      if (bindsMaterial && (materialChanged || keyChanged)) commandList.captureMaterialTextures(m);
     }
 
     this._recordCommand(

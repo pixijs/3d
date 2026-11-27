@@ -57,7 +57,7 @@ const RESOURCE_TYPES = new Set([
  * the instance is `u` plus the capitalised name
  * @internal
  */
-export function uniformBlockInstanceName(bindingName: string): string {
+function uniformBlockInstanceName(bindingName: string): string {
   return `u${capitalize(bindingName)}`;
 }
 
@@ -66,7 +66,7 @@ export function uniformBlockInstanceName(bindingName: string): string {
  * WGSL packs 16
  * @internal
  */
-export function mat2ColumnMember(name: string, column: 0 | 1): string {
+function mat2ColumnMember(name: string, column: 0 | 1): string {
   return `${name}_${column}`;
 }
 

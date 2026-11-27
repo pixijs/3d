@@ -7,9 +7,7 @@ import { RenderPassBit } from '../render-passes/RenderPass';
 import type { RenderSession } from '../render-passes/RenderSession';
 import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/shadowPassUtils';
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
-import { instanceFetchBitGl } from '../shader/bits/instanceFetchBitGl';
-import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
-import { shadowGlobalBitGl } from './shader/shadowGlobalBitGl';
+import { bindBatchStorage } from './renderForwardBatchesGl';
 import type { View3DPipeGl } from './View3DPipeGl';
 
 interface ShadowRenderPassGlOptions {
@@ -17,46 +15,9 @@ interface ShadowRenderPassGlOptions {
   shadowMapHandle: DepthHandle;
 }
 
-/** Declares `normal` and `tangent`, which depth doesn't need, because the skinning and morph bits write them */
-const shadowGlVertexTemplate = `#version 300 es
-
-{{header}}
-
-void main() {
-  mat4 modelMatrix;
-
-  vec4 position;
-  vec3 normal = vec3(0.0);
-  vec3 tangent = vec3(0.0);
-
-  {{input}}
-
-  vec4 worldPosition = modelMatrix * position;
-  gl_Position = uViewProjectionMatrix * worldPosition;
-
-  {{end}}
-}`;
-
-const shadowGlFragmentTemplate = `#version 300 es
-out vec4 fragColor;
-
-{{header}}
-
-void main() {
-    fragColor = vec4(0.);
-}`;
-
-const shadowTemplateGl: ShaderBitTemplate = {
-  bindGroups: [{ name: 'global', ubo: true }, 'camera'],
-  gl: {
-    vertex: shadowGlVertexTemplate,
-    fragment: shadowGlFragmentTemplate,
-  },
-};
-
 /**
- * The descriptor turns off the `globalBitGl` that `compileShader` adds, whose bindings would clash with
- * `shadowGlobalBitGl`
+ * WebGL drops the shader's unread `uShadowMap` sampler and pixi binds only active uniforms, so the
+ * live map is never bound for sampling while the pass renders into it; WebGPU swaps in `DEPTH_EMPTY`
  * @internal
  */
 export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, ShadowData> {
@@ -73,12 +34,8 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
       description: 'Renders shadow-casting scene geometry into each light shadow map.',
       bit: RenderPassBit.SHADOW,
       shadowMapHandle: options.shadowMapHandle,
+      level: 'cutout',
       descriptor: {
-        shaderDescriptor: {
-          bitsGl: [shadowGlobalBitGl, instanceFetchBitGl],
-          template: shadowTemplateGl,
-          includeGlobal: false,
-        },
         state: shadowState,
       },
     });
@@ -122,7 +79,6 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
           list: list,
           globalBindGroup: bindGroup,
           passBit: this.bit,
-          bindsMaterial: false,
         });
       }
     }
@@ -149,11 +105,7 @@ export class ShadowRenderPassGl extends ShadowRenderPassBase<View3DPipeGl, Shado
           const list = batch.drawLists[this.bit];
           if (!list || list.view.count === 0) continue;
 
-          bindGroup.setResource(batch.storeBuffer.texture.source, 'uMeshStoreTexture');
-          if (list.glData.indexTexture) {
-            bindGroup.setResource(list.glData.indexTexture.texture.source, 'uRenderInstanceTexture');
-          }
-
+          bindBatchStorage(session, batch, list);
           batcher.draw(this.pipe.renderer, list, batch, frustum, slot.cameraData);
         }
       }
