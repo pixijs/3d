@@ -30,9 +30,15 @@ export const scene: TestScene = {
     tiltedSquashedParent.position.set(-1.1, 0.25, 0);
     tiltedSquashedParent.rotation.z = 0.25;
     tiltedSquashedParent.scale.set(1, 0.8, 1.3);
+    const helixRibbon = new RibbonGeometry({ points: helix, width: widths, colors });
     new Mesh3D({
-      geometry: new RibbonGeometry({ points: helix, width: widths, colors }),
-      material: new Material3D({ baseColor: 0xffffff, roughness: 0.5, vertexColors: true }),
+      geometry: helixRibbon,
+      material: new Material3D({
+        baseColor: 0xffffff,
+        roughness: 0.5,
+        vertexColors: true,
+        extraBits: [helixRibbon.shaderBit],
+      }),
       parent: tiltedSquashedParent,
     });
 
@@ -41,14 +47,15 @@ export const scene: TestScene = {
       for (let i = 0; i <= 40; i++)
         threePixelLines.push(0.6 + l * 0.5 + Math.sin(i * 0.4) * 0.15, 0.3 + i * 0.03, 2 - i * 0.2);
     }
+    const pixelRibbon = new RibbonGeometry({
+      points: threePixelLines,
+      pointsPerLine: 41,
+      width: [4, 8, 12].flatMap((w) => Array.from({ length: 41 }, () => w)),
+      widthUnits: 'pixels',
+    });
     new Mesh3D({
-      geometry: new RibbonGeometry({
-        points: threePixelLines,
-        pointsPerLine: 41,
-        width: [4, 8, 12].flatMap((w) => Array.from({ length: 41 }, () => w)),
-        widthUnits: 'pixels',
-      }),
-      material: new Material3D({ baseColor: 0x6a41e2, roughness: 0.6 }),
+      geometry: pixelRibbon,
+      material: new Material3D({ baseColor: 0x6a41e2, roughness: 0.6, extraBits: [pixelRibbon.shaderBit] }),
       parent: view3d.root,
     });
 

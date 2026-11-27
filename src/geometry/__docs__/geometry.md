@@ -102,7 +102,7 @@ Lines are one pixel wide on both WebGL and WebGPU. For a wider line, use a [ribb
 
 ### Ribbons
 
-A {@link RibbonGeometry}, from `@pixi/3d/extras`, draws a line of points as a strip that turns to face the camera, with a {@link RibbonGeometryOptions#width | width} in the units of its points, which scales with the mesh, or, with {@link RibbonGeometryOptions#widthUnits | widthUnits} set to `'pixels'`, in pixels on screen. Use it for paths, trails, cables, hair and fibres. Any material draws it, and a lit one shades it as a round cord:
+A {@link RibbonGeometry}, from `@pixi/3d/extras`, draws a line of points as a strip that turns to face the camera, with a {@link RibbonGeometryOptions#width | width} in the units of its points, which scales with the mesh, or, with {@link RibbonGeometryOptions#widthUnits | widthUnits} set to `'pixels'`, in pixels on screen. Use it for paths, trails, cables, hair and fibres. Any material draws it once its `extraBits` include the ribbon's {@link RibbonGeometry#shaderBit | shaderBit}, and a lit one shades it as a round cord:
 
 ```ts
 import { Material3D, Mesh3D } from '@pixi/3d';
@@ -111,14 +111,15 @@ import { RibbonGeometry } from '@pixi/3d/extras';
 const points: number[] = [];
 for (let i = 0; i <= 64; i++) points.push(Math.cos(i * 0.3), i * 0.05, Math.sin(i * 0.3));
 
+const ribbon = new RibbonGeometry({ points, width: 0.08 });
 const spring = new Mesh3D({
-  geometry: new RibbonGeometry({ points, width: 0.08 }),
-  material: new Material3D({ baseColor: 0xe72264 }),
+  geometry: ribbon,
+  material: new Material3D({ baseColor: 0xe72264, extraBits: [ribbon.shaderBit] }),
   parent: view3d.root,
 });
 ```
 
-The CPU builds the strip once: two vertices at each point, holding the line's direction there and the width. The vertex shader pushes them apart across the line, square to the direction to the camera, each time the ribbon draws, so the strip never shows its edge. Shadows run the same step facing their light, so a ribbon casts a shadow its own width. A pixel width means nothing to a light, whose shadow map has pixels of its own, so turn {@link Mesh3D#castShadow | castShadow} off on a pixel ribbon.
+The CPU builds the strip once: two vertices at each point, holding the line's direction there and the width. The `shaderBit` pushes them apart across the line, square to the direction to the camera, each time the ribbon draws, so the strip never shows its edge. It reads the ribbon's own vertex data, so a material that carries it draws only ribbons with the same `widthUnits`. Shadows run the same step facing their light, so a ribbon casts a shadow its own width. A pixel width means nothing to a light, whose shadow map has pixels of its own, so turn {@link Mesh3D#castShadow | castShadow} off on a pixel ribbon.
 
 - **Many lines.** {@link RibbonGeometryOptions#pointsPerLine | pointsPerLine} splits the points into lines, so thousands of strands draw as one mesh.
 - **Per point.** `width` takes one number per point to taper the line. {@link RibbonGeometryOptions#colors | colors} takes an RGBA colour per point, and {@link RibbonGeometryOptions#pointAttributes | pointAttributes} any data of your own, which a [shader bit](../../extras/__docs__/custom-materials.md) reads as a vertex attribute. Each point's values go to both of its vertices.

@@ -394,7 +394,6 @@ export class MaterialSystemGl {
 
     const geometryBits = geo.extraBits;
     for (let i = 0; i < geometryBits.length; i++) bitsGl.push(geometryBits[i]);
-    if (geo._vertexBit) bitsGl.push(geo._vertexBit);
 
     const hasTangent = !!geo.attributes.aTangent;
     for (let i = 0; i < materialDescriptor.bitsGl.length; i++) {

@@ -23,12 +23,14 @@ width all the way back, tagged widthUnits: 'pixels'; the pane shows Theme Light,
 - `RibbonGeometry` `colors`: an RGBA colour per point, blended along the line. Vertex colours are linear light, so
   `scene.ts` converts each palette colour with `srgbToLinear` from `@pixi/3d`, after pixi's `Color` splits it into
   red, green and blue.
-- `Mesh3D` with `geometry`, `material`, `castShadow` and `parent`: any material draws a ribbon. Widths and colours
-  are vertex data, so a pane change builds new geometries, assigns them to each mesh's `geometry` and destroys the
+- `RibbonGeometry` `shaderBit`: the bit that turns the strip to the camera. Any material draws a ribbon once its
+  `extraBits` hold it. Each width unit has its own bit, so each ribbon has its own `Material3D`, and a rebuilt
+  geometry with the same units keeps working with it.
+- `Mesh3D` with `geometry`, `material`, `castShadow` and `parent`. Widths and colours are vertex data, so a pane change builds new geometries, assigns them to each mesh's `geometry` and destroys the
   old ones with `destroy(true)`. The pixel ribbon has `castShadow: false`, since a pixel width means nothing in the
   light's shadow map.
-- `createClayMaterial` from the theme kit, with `vertexColors` on so it reads the geometry's `colors`: a lit
-  material shades the strip as a round cord.
+- `createClayMaterial` from the theme kit, with `extraBits: [geometry.shaderBit]` and `vertexColors` on so it reads
+  the geometry's `colors`: a lit material shades the strip as a round cord.
 - `View3D` and its `camera`; `OrbitCamera` from `@pixi/3d/extras` to orbit round the strips and see them turn.
 - `Application` from `pixi.js`.
 

@@ -1,5 +1,6 @@
 import type { TypedArray } from 'pixi.js';
 
+import type { ShaderBit } from '../../core/shader/ShaderBit';
 import { Geometry3D } from '../../geometry/Geometry3D';
 import { computeBoundsFromPositions } from '../../geometry/utils/Geometry3DUtils';
 import { ribbonBits } from './ribbonBit';
@@ -164,8 +165,9 @@ function writeCentreline(
  * A line of points drawn as a strip that turns to face the camera, with a width in world units or pixels
  *
  * Use it for wide lines, paths, trails, cables, hair and fibres: the `'line-list'` topology draws lines only 1 px
- * wide. Give it to a {@link Mesh3D} with any material. One geometry can draw many lines, and each point can have
- * its own width and colour.
+ * wide. Give it to a {@link Mesh3D} with any material whose `extraBits` include the ribbon's
+ * {@link RibbonGeometry#shaderBit | shaderBit}. One geometry can draw many lines, and each point can have its own
+ * width and colour.
  *
  * Each point becomes two vertices, built once on the CPU. The vertex shader pushes them apart across the line,
  * facing the camera, every time the ribbon is drawn, so shadows face their light. A lit material shades the strip
@@ -186,9 +188,10 @@ function writeCentreline(
  * const helix: number[] = [];
  * for (let i = 0; i <= 64; i++) helix.push(Math.cos(i * 0.3), i * 0.05, Math.sin(i * 0.3));
  *
+ * const ribbon = new RibbonGeometry({ points: helix, width: 0.08 });
  * const spring = new Mesh3D({
- *   geometry: new RibbonGeometry({ points: helix, width: 0.08 }),
- *   material: new Material3D({ baseColor: 0xe72264 }),
+ *   geometry: ribbon,
+ *   material: new Material3D({ baseColor: 0xe72264, extraBits: [ribbon.shaderBit] }),
  * });
  * ```
  * @category extras:geometry
@@ -218,6 +221,20 @@ export class RibbonGeometry extends Geometry3D {
    * ```
    */
   public readonly widthUnits: RibbonWidthUnits;
+
+  /**
+   * The shader bit that turns the strip to face the camera, for the material's `extraBits`
+   *
+   * Without it the strip has no width, so nothing draws. The bit reads the ribbon's own vertex data, so a
+   * material that carries it draws only ribbons, and only ribbons with the same {@link RibbonGeometry#widthUnits},
+   * which share one bit. It runs in shadows too, facing each light.
+   * @example
+   * ```ts
+   * const ribbon = new RibbonGeometry({ points, width: 0.1 });
+   * const material = new Material3D({ extraBits: [ribbon.shaderBit] });
+   * ```
+   */
+  public readonly shaderBit: ShaderBit;
 
   /** Points in each line, in order */
   private readonly _lineSizes: number[];
@@ -302,7 +319,7 @@ export class RibbonGeometry extends Geometry3D {
 
     this.widthUnits = widthUnits!;
     this._lineSizes = lineSizes;
-    this._vertexBit = ribbonBits[this.widthUnits];
+    this.shaderBit = ribbonBits[this.widthUnits];
     if (this.widthUnits === 'pixels') this.boundsSphere.makeEmpty();
   }
 

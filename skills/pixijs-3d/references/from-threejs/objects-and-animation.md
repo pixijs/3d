@@ -107,13 +107,13 @@ All take one options object.
 
 ## Points and lines
 
-| Three.js                            | @pixi/3d                                                                                    | note                                                         |
-| ----------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| LineSegments + LineBasicMaterial    | `Mesh3D` + `Geometry3D({ topology: 'line-list' })` + `FlatMaterial`, `castShadow: false`    | 1 px.                                                        |
-| `Line`                              | `topology: 'line-strip'`                                                                    |                                                              |
-| Line2 + LineMaterial({ linewidth }) | `Mesh3D` + `RibbonGeometry({ points, width, widthUnits: 'pixels' })` (extras), any material | worldUnits: true is `widthUnits: 'world'`, the default.      |
-| LineLoop                            | `'line-strip'` with the first vertex repeated                                               |                                                              |
-| `Points` + PointsMaterial({ size }) | `ParticleContainer3D`, below; `ParticleSystem3D` (extras) for emitters                      | `'point-list'` draws 1 px dots. [particles](../particles.md) |
+| Three.js                            | @pixi/3d                                                                                                                     | note                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| LineSegments + LineBasicMaterial    | `Mesh3D` + `Geometry3D({ topology: 'line-list' })` + `FlatMaterial`, `castShadow: false`                                     | 1 px.                                                        |
+| `Line`                              | `topology: 'line-strip'`                                                                                                     |                                                              |
+| Line2 + LineMaterial({ linewidth }) | `Mesh3D` + `RibbonGeometry({ points, width, widthUnits: 'pixels' })` (extras), material with `extraBits: [ribbon.shaderBit]` | worldUnits: true is `widthUnits: 'world'`, the default.      |
+| LineLoop                            | `'line-strip'` with the first vertex repeated                                                                                |                                                              |
+| `Points` + PointsMaterial({ size }) | `ParticleContainer3D`, below; `ParticleSystem3D` (extras) for emitters                                                       | `'point-list'` draws 1 px dots. [particles](../particles.md) |
 
 `Points` with a ShaderMaterial carrying per-particle size, colour and alpha ports to `ParticleContainer3D` with no shader:
 
