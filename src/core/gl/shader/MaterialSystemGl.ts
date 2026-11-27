@@ -140,9 +140,6 @@ void main() {
 
 const layoutBit: ShaderBit = {
   name: 'layout',
-  overrideDefs: {
-    HAS_UVS: { type: 'u32', required: true },
-  },
   outputs: {
     color: 'vec4<f32>',
   },
@@ -442,7 +439,6 @@ export class MaterialSystemGl {
       bitsGl,
       template: materialDescriptor.template ?? template,
       overrides: {
-        HAS_UVS: geo.attributes.aUV ? 1 : 0,
         ...(filtered && materialOverrides ? declaredOverrides(materialOverrides, bitsGl) : materialOverrides),
         ...ownDescriptor?.overrides,
       },

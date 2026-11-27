@@ -150,9 +150,6 @@ fn mainFragment(input: FragmentInput) -> FragmentOutput {
 
 const layoutBit: ShaderBit = {
   name: 'layout',
-  overrideDefs: {
-    HAS_UVS: { type: 'u32', required: true },
-  },
   outputs: {
     color: 'vec4<f32>',
   },
@@ -541,7 +538,6 @@ export class MaterialSystemGpu {
       bitsGpu,
       template: materialDescriptor.template ?? template,
       overrides: {
-        HAS_UVS: geometry.attributes.aUV ? 1 : 0,
         ...(filtered && materialOverrides ? declaredOverrides(materialOverrides, bitsGpu) : materialOverrides),
         ...ownDescriptor?.overrides,
       },
