@@ -47,6 +47,7 @@ export const UINT_EMPTY = new Texture({
     format: 'rgba32uint',
     scaleMode: 'nearest',
     alphaMode: 'no-premultiply-alpha',
+    autoGenerateMipmaps: false,
     label: 'UINT_EMPTY',
   }),
   label: 'UINT_EMPTY',
