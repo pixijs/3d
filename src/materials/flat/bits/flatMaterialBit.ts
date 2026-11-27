@@ -1,26 +1,16 @@
+import { baseAlphaBit } from '../../../core/shader/bits/baseAlphaBit';
 import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
- * The unlit surface: the material's base colour times its base colour texture, written into
- * `albedo`, which the material template outputs with no lighting
- *
- * The texture sample is `baseTex`, which `baseColorTextureBit` took, and `baseAlphaBit` sets
- * `alpha`. This bit undoes pixi's premultiplied-alpha upload, then reads the texture and tint through the
- * colour-space helpers, so `albedo` is a straight colour in the shader's colour space: linear
- * light, decoded with a 2.2 gamma, or as authored when a `colorSpace: 'display'` material skips
- * the decode and its encode. Either way the texture and tint show as authored.
- *
- * It declares `alphaCutoff` without reading it, so the struct, which is fixed at construction,
- * already holds the field when `alphaMode` switches to `'mask'` and `alphaMaskBit` joins.
- *
- * Shared by `FlatMaterial` and `ParticleMaterial`.
+ * Declares `alphaCutoff` without reading it, so the struct, fixed at construction, already holds it
+ * when `'mask'` mode adds `alphaMaskBit`
  * @internal
  */
 export const flatMaterialBit: ShaderBit = {
   name: 'flatMaterial',
 
-  requires: [baseColorTextureBit],
+  requires: [baseColorTextureBit, baseAlphaBit],
 
   bindings: {
     material: {

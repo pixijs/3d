@@ -1,3 +1,4 @@
+import { baseAlphaBit } from '../../../core/shader/bits/baseAlphaBit';
 import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
 import { createLightingBit } from '../../../core/shader/createLightingBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
@@ -5,17 +6,17 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 /**
  * Sets up the inputs {@link toonLightingBit} reads
  *
- * Tints `albedo` by the base colour and its texture, then declares `viewDir` (normalised) and the
- * `bands`, `specularSize`, `rimPower` and `rimIntensity` scalars from the material buffer. The
- * texture sample is `baseTex`, which `baseColorTextureBit` took. It is premultiplied, so it is
- * divided by its alpha first. `baseAlphaBit` sets `alpha`.
+ * Tints `albedo` by the base colour and its texture, then declares a normalised `viewDir` and the
+ * `bands`, `specularSize`, `rimPower` and `rimIntensity` scalars from the material buffer. It
+ * requires {@link baseColorTextureBit}, which declares `baseTex`, and {@link baseAlphaBit}, which
+ * sets `alpha`. `baseTex` is premultiplied, so this bit divides it by its alpha first.
  * @category extras:materials
  * @advanced
  */
 export const toonMaterialBit: ShaderBit = {
   name: 'toonMaterial',
 
-  requires: [baseColorTextureBit],
+  requires: [baseColorTextureBit, baseAlphaBit],
 
   bindings: {
     material: {
