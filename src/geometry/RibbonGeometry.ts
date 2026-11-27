@@ -1,0 +1,353 @@
+import type { TypedArray } from 'pixi.js';
+
+import { ribbonBits } from '../core/shader/bits/ribbonBit';
+import { Geometry3D } from './Geometry3D';
+import { computeBoundsFromPositions } from './utils/Geometry3DUtils';
+
+/**
+ * What a {@link RibbonGeometry}'s widths measure
+ *
+ * - `'world'`: units of the ribbon's local space, so it thins with distance like any object.
+ * - `'pixels'`: pixels on screen, the same at any distance, like a 2D stroke.
+ * @example
+ * ```ts
+ * const units: RibbonWidthUnits = 'pixels';
+ * const path = new RibbonGeometry({ points, width: 3, widthUnits: units });
+ * ```
+ * @category geometry
+ * @standard
+ */
+export type RibbonWidthUnits = 'world' | 'pixels';
+
+/**
+ * Options for {@link RibbonGeometry}
+ * @example
+ * ```ts
+ * const options: RibbonGeometryOptions = { points: [0, 0, 0, 1, 1, 0, 2, 0, 0], width: 0.1 };
+ * const ribbon = new RibbonGeometry(options);
+ * ```
+ * @category geometry
+ * @standard
+ */
+export interface RibbonGeometryOptions {
+  /**
+   * The points the ribbon runs through, x, y and z for each, every line's points one after another
+   * @example
+   * ```ts
+   * const ribbon = new RibbonGeometry({ points: new Float32Array([0, 0, 0, 1, 0.5, 0, 2, 0, 0]) });
+   * ```
+   */
+  points: Float32Array | number[];
+  /**
+   * How many points each line has, so one geometry draws many lines
+   *
+   * A number gives every line that many points. Left out, all the points make one line.
+   * @example
+   * ```ts
+   * // Two lines: the first three points, then the next two
+   * const ribbon = new RibbonGeometry({ points, pointsPerLine: [3, 2] });
+   * ```
+   */
+  pointsPerLine?: number | number[];
+  /**
+   * The ribbon's full width, one number for every point or one per point to taper it
+   * @default 0.1
+   * @example
+   * ```ts
+   * const tapered = new RibbonGeometry({ points, width: [0.2, 0.1, 0] });
+   * ```
+   */
+  width?: number | Float32Array | number[];
+  /**
+   * What `width` measures; see {@link RibbonWidthUnits}
+   * @default 'world'
+   * @example
+   * ```ts
+   * const outline = new RibbonGeometry({ points, width: 2, widthUnits: 'pixels' });
+   * ```
+   */
+  widthUnits?: RibbonWidthUnits;
+  /**
+   * A colour for each point, red, green, blue and alpha, blended along the line
+   *
+   * Read the same way as {@link Geometry3DOptions#colors}: floats as they are, integers as 0 to 1.
+   * The material tints with them only when its {@link BaseMaterial3D#vertexColors | vertexColors} is on.
+   * @example
+   * ```ts
+   * const ribbon = new RibbonGeometry({ points, colors: new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]) });
+   * const material = new Material3D({ vertexColors: true });
+   * ```
+   */
+  colors?: Float32Array | Uint16Array | Uint8Array;
+  /**
+   * Your own data for each point, keyed by the attribute name a shader bit reads it by
+   *
+   * Each array holds 1 to 4 floats per point, and its length divided by the point count says how many.
+   * @example
+   * ```ts
+   * // One float per point, read as `aGlow` by a bit that declares `attributes: { aGlow: 'float32' }`
+   * const ribbon = new RibbonGeometry({ points, pointAttributes: { aGlow: new Float32Array([0, 0.5, 1]) } });
+   * ```
+   */
+  pointAttributes?: Record<string, Float32Array>;
+  /**
+   * Draw from the geometry's own buffers, for a ribbon whose points move every frame with
+   * {@link RibbonGeometry#setPoints | setPoints}
+   * @default false
+   * @example
+   * ```ts
+   * const trail = new RibbonGeometry({ points: new Float32Array(64 * 3), dynamic: true });
+   * ```
+   */
+  dynamic?: boolean;
+}
+
+function doublePerPoint<T extends TypedArray>(data: T, size: number): T {
+  const out = new (data.constructor as new (length: number) => T)(data.length * 2);
+
+  for (let p = 0, count = data.length / size; p < count; p++) {
+    for (let c = 0; c < size; c++) {
+      const value = data[p * size + c];
+      out[p * 2 * size + c] = value;
+      out[(p * 2 + 1) * size + c] = value;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Writes the two vertices of every point: the point itself, its direction along the line into `aRibbon.xyz`, and
+ * the distance along the line into `u`; leaves the widths in `aRibbon.w` alone
+ */
+function writeCentreline(
+  points: ArrayLike<number>,
+  lineSizes: number[],
+  positions: Float32Array,
+  ribbon: Float32Array,
+  uvs: Float32Array,
+): void {
+  let start = 0;
+
+  for (let l = 0; l < lineSizes.length; l++) {
+    const count = lineSizes[l];
+    let distance = 0;
+
+    for (let i = 0; i < count; i++) {
+      const p = start + i;
+      const prev = (start + Math.max(i - 1, 0)) * 3;
+      const next = (start + Math.min(i + 1, count - 1)) * 3;
+      const x = points[p * 3];
+      const y = points[p * 3 + 1];
+      const z = points[p * 3 + 2];
+
+      if (i > 0) distance += Math.hypot(x - points[p * 3 - 3], y - points[p * 3 - 2], z - points[p * 3 - 1]);
+
+      for (let side = 0; side < 2; side++) {
+        const v = p * 2 + side;
+        positions[v * 3] = x;
+        positions[v * 3 + 1] = y;
+        positions[v * 3 + 2] = z;
+        ribbon[v * 4] = points[next] - points[prev];
+        ribbon[v * 4 + 1] = points[next + 1] - points[prev + 1];
+        ribbon[v * 4 + 2] = points[next + 2] - points[prev + 2];
+        uvs[v * 2] = distance;
+        uvs[v * 2 + 1] = side;
+      }
+    }
+
+    start += count;
+  }
+}
+
+/**
+ * A line of points drawn as a strip that turns to face the camera, with a width in world units or pixels
+ *
+ * Use it for wide lines, paths, trails, cables, hair and fibres: the `'line-list'` topology draws lines only 1 px
+ * wide. Give it to a {@link Mesh3D} with any material. One geometry can draw many lines, and each point can have
+ * its own width and colour.
+ *
+ * Each point becomes two vertices, built once on the CPU. The vertex shader pushes them apart across the line,
+ * facing the camera, every time the ribbon is drawn, so shadows face their light. A lit material shades the strip
+ * as a round cord. `uv` runs along the line in world units of distance, `u`, and across it from 0 to 1, `v`.
+ *
+ * - Corners pinch: a point's width runs square to the line's average direction there, so a sharp turn draws
+ *   narrower. Add points either side of a corner to keep it full.
+ * - Each line ends flat at its first and last point; repeat the first point at the end to close a loop.
+ * - Picking can't hit the strip, since it only exists on the GPU; give the mesh a box or sphere
+ *   {@link Container3D#hitVolume | hitVolume} instead.
+ * - A pixel ribbon casts a shadow its width in shadow map texels.
+ * - The {@link OutlinePass} and {@link solidMeshDescriptor} read normals, which a ribbon has none of, so it can't
+ *   join their passes.
+ * @example
+ * ```ts
+ * const helix: number[] = [];
+ * for (let i = 0; i <= 64; i++) helix.push(Math.cos(i * 0.3), i * 0.05, Math.sin(i * 0.3));
+ *
+ * const spring = new Mesh3D({
+ *   geometry: new RibbonGeometry({ points: helix, width: 0.08 }),
+ *   material: new Material3D({ baseColor: 0xe72264 }),
+ * });
+ * ```
+ * @category geometry
+ * @standard
+ */
+export class RibbonGeometry extends Geometry3D {
+  /**
+   * Defaults for every new `RibbonGeometry`
+   * @example
+   * ```ts
+   * RibbonGeometry.defaultOptions.widthUnits = 'pixels';
+   * RibbonGeometry.defaultOptions.width = 2;
+   * ```
+   */
+  public static defaultOptions: Omit<RibbonGeometryOptions, 'points'> = {
+    width: 0.1,
+    widthUnits: 'world',
+    dynamic: false,
+  };
+
+  /**
+   * What the widths measure, fixed at construction
+   * @example
+   * ```ts
+   * const ribbon = new RibbonGeometry({ points, widthUnits: 'pixels' });
+   * ribbon.widthUnits; // 'pixels'
+   * ```
+   */
+  public readonly widthUnits: RibbonWidthUnits;
+
+  /** Points in each line, in order */
+  private readonly _lineSizes: number[];
+  /** Half the widest width in world units, added to the bounds on every side; 0 for pixel widths */
+  private readonly _boundsPadding: number = 0;
+
+  /**
+   * Creates a new `RibbonGeometry`
+   * @param options - See {@link RibbonGeometryOptions} for available options
+   */
+  constructor(options: RibbonGeometryOptions) {
+    const { points, pointsPerLine, width, widthUnits, colors, pointAttributes, dynamic } = {
+      ...RibbonGeometry.defaultOptions,
+      ...options,
+    };
+    const pointCount = Math.floor(points.length / 3);
+    const lineSizes =
+      pointsPerLine === undefined
+        ? [pointCount]
+        : typeof pointsPerLine === 'number'
+          ? Array.from({ length: Math.floor(pointCount / pointsPerLine) }, () => pointsPerLine)
+          : pointsPerLine;
+    const vertexCount = pointCount * 2;
+
+    const positions = new Float32Array(vertexCount * 3);
+    const ribbon = new Float32Array(vertexCount * 4);
+    const uvs = new Float32Array(vertexCount * 2);
+
+    writeCentreline(points, lineSizes, positions, ribbon, uvs);
+
+    let widest = 0;
+    for (let p = 0; p < pointCount; p++) {
+      const w = typeof width === 'number' ? width : width![p];
+      ribbon[p * 8 + 3] = -w;
+      ribbon[p * 8 + 7] = w;
+      widest = Math.max(widest, w);
+    }
+
+    let segmentCount = 0;
+    for (let l = 0; l < lineSizes.length; l++) segmentCount += Math.max(lineSizes[l] - 1, 0);
+
+    const indices = vertexCount > 65536 ? new Uint32Array(segmentCount * 6) : new Uint16Array(segmentCount * 6);
+    let k = 0;
+    let start = 0;
+
+    for (let l = 0; l < lineSizes.length; l++) {
+      for (let i = 0; i < lineSizes[l] - 1; i++) {
+        const left = (start + i) * 2;
+        indices[k++] = left;
+        indices[k++] = left + 1;
+        indices[k++] = left + 2;
+        indices[k++] = left + 1;
+        indices[k++] = left + 3;
+        indices[k++] = left + 2;
+      }
+      start += lineSizes[l];
+    }
+
+    const boundsPadding = widthUnits === 'world' ? widest * 0.5 : 0;
+
+    super({
+      positions,
+      uvs,
+      colors: colors && doublePerPoint(colors, 4),
+      indices,
+      dynamic,
+      bounds3D: computeBoundsFromPositions(positions),
+    });
+
+    this.addAttribute('aRibbon', { buffer: ribbon, format: 'float32x4' });
+    for (const name in pointAttributes) {
+      const data = pointAttributes[name];
+      const size = data.length / pointCount;
+      this.addAttribute(name, {
+        buffer: doublePerPoint(data, size),
+        format: size === 1 ? 'float32' : (`float32x${size}` as 'float32x2' | 'float32x3' | 'float32x4'),
+      });
+    }
+
+    this.widthUnits = widthUnits!;
+    this._lineSizes = lineSizes;
+    this._boundsPadding = boundsPadding;
+    this._vertexBit = ribbonBits[this.widthUnits];
+    this._padBounds();
+  }
+
+  /**
+   * Moves every point, keeping the lines, widths and colours
+   *
+   * Pass as many points as the ribbon was built with. On a {@link RibbonGeometryOptions#dynamic | dynamic}
+   * ribbon the next frame draws them, so call it every frame for a trail. Any other ribbon uploads itself again,
+   * which suits an occasional change, and its mesh keeps the culling sphere of its old points until it moves.
+   * @param points - The new points, x, y and z for each, in the order the ribbon was built with.
+   * @example
+   * ```ts
+   * const trail = new RibbonGeometry({ points: new Float32Array(32 * 3), dynamic: true });
+   *
+   * app.ticker.add(() => {
+   *   writeTrailPoints(trailPoints);
+   *   trail.setPoints(trailPoints);
+   * });
+   * ```
+   */
+  public setPoints(points: Float32Array | number[]): void {
+    const attributes = this.attributes;
+
+    writeCentreline(
+      points,
+      this._lineSizes,
+      attributes.aPosition.buffer.data as Float32Array,
+      attributes.aRibbon.buffer.data as Float32Array,
+      attributes.aUV.buffer.data as Float32Array,
+    );
+    this.bounds3D.copyFrom(computeBoundsFromPositions(this.positions));
+    this._padBounds();
+
+    if (!this.dynamic) {
+      this.unload();
+      return;
+    }
+
+    attributes.aPosition.buffer.update();
+    attributes.aRibbon.buffer.update();
+    attributes.aUV.buffer.update();
+  }
+
+  private _padBounds(): void {
+    const { min, max } = this.bounds3D;
+    const pad = this._boundsPadding;
+
+    min.set(min.x - pad, min.y - pad, min.z - pad);
+    max.set(max.x + pad, max.y + pad, max.z + pad);
+    this.boundsSphere.setFromBox(this.bounds3D);
+  }
+}

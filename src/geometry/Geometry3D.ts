@@ -531,6 +531,12 @@ export class Geometry3D extends Geometry {
    */
   public _morphTargets: { positions: Float32Array; normals?: Float32Array }[] | null = null;
 
+  /**
+   * Added after skinning by both material systems' `compileShader`, so every pass that draws the geometry runs it
+   * @internal
+   */
+  public _vertexBit: ShaderBit | null = null;
+
   private _attributeKey: string | null = null;
   /** `null` until `bvh` is read; dropped by `destroy` and by a new array that an event or `set indices` reports */
   private _bvh: TriangleBvh | null = null;

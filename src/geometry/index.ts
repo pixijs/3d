@@ -8,6 +8,7 @@ export * from './GeometryAtlas';
 export * from './GeometryAtlasPool';
 export * from './IcosahedronGeometry';
 export * from './PlaneGeometry';
+export * from './RibbonGeometry';
 export * from './SphereGeometry';
 export * from './TorusGeometry';
 export * from './TorusKnotGeometry';

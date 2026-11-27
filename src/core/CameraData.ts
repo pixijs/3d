@@ -71,6 +71,11 @@ export class CameraData {
    */
   public readonly previousViewProjection = new Matrix4();
   public readonly viewportUvScale = new Point(1, 1);
+  /**
+   * The size NDC spans, in logical pixels on screen, texels over resolution in a render texture, or texels in a
+   * shadow map; read by `ribbonBit` for pixel widths, and written before `set`, which uploads it
+   */
+  public readonly viewportSize = new Point(1, 1);
   public readonly lightTiles = new LightTiles();
   /**
    * Built from unflipped matrices, as `buildProjection` in `prepareCamera.ts` builds a camera's, since a Y flip
@@ -101,6 +106,7 @@ export class CameraData {
       uViewProjectionMatrix: { value: this.viewProjection, type: 'mat4x4<f32>' },
       uPreviousViewProjectionMatrix: { value: this.previousViewProjection, type: 'mat4x4<f32>' },
       uViewportUVScale: { value: this.viewportUvScale, type: 'vec2<f32>' },
+      uViewportSize: { value: this.viewportSize, type: 'vec2<f32>' },
       uLightTileTransform: { value: this.lightTiles.tileTransform, type: 'vec4<f32>' },
       uLightTiles: { value: this.lightTiles.masks, type: 'vec4<i32>', size: LIGHT_TILE_LANES },
       uLightDepthMasks: { value: this.lightTiles.depthMasks, type: 'vec4<i32>', size: LIGHT_DEPTH_LANES },

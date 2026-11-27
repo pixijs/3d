@@ -138,8 +138,15 @@ attribute's effect.
 
 ### geometry_lines-and-points: Lines and points
 
-`topology` draws line lists and point lists (always 1 px wide), and `indexCount` draws part of a geometry, so a line
+`topology` draws line lists and point lists (always 1 px wide; the ribbons example draws wide ones), and `indexCount` draws part of a geometry, so a line
 grows across the scene. Scene: a pink path tracing over the floor, a point cloud. Pane: topology, how much is drawn.
+
+### geometry_ribbons: Ribbons
+
+`RibbonGeometry` draws lines of points as strips that turn to face the camera, with a width in world units or
+pixels, and a width and colour per point. Scene: two corkscrews running away from the camera, one in each unit, the
+world one casting its shadow. Show: a tag naming each ribbon's units; the points as dots on request. Pane: each
+width, taper, colours, points.
 
 ### geometry_morph-targets: Morph targets in code
 

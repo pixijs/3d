@@ -10,7 +10,7 @@ Three.js materials, textures, lights and shadows mapped to `@pixi/3d`. Defaults 
 | MeshLambertMaterial                                | `PhongMaterial({ specularStrength: 0 })`                    |                                                                                                                 |
 | MeshPhongMaterial                                  | `PhongMaterial`                                             | Same Blinn-Phong maths and defaults.                                                                            |
 | MeshToonMaterial                                   | `ToonMaterial` (extras)                                     | Different model, not divided by π, ignores `view.environment`.                                                  |
-| LineBasicMaterial, PointsMaterial                  | `FlatMaterial` on a `'line-list'` / `'point-list'` geometry | Always 1 px.                                                                                                    |
+| LineBasicMaterial, PointsMaterial                  | `FlatMaterial` on a `'line-list'` / `'point-list'` geometry | Always 1 px; wide lines are a `RibbonGeometry`.                                                                 |
 | SpriteMaterial + `Sprite`                          | `Sprite3D`                                                  | See [renderer-and-scene](renderer-and-scene.md#labels-and-sprites).                                             |
 | ShaderMaterial, RawShaderMaterial, onBeforeCompile | a `ShaderBit` in `extraBits`                                | Snippets per slot in WGSL and GLSL, no `main()`. [custom-shaders](../custom-shaders.md)                         |
 
