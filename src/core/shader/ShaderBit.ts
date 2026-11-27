@@ -423,6 +423,8 @@ export type ShaderBit<
   /** @internal */
   _identityChecked?: boolean;
   /** @internal */
+  _geometryChecked?: boolean;
+  /** @internal */
   _contentSnapshot?: string;
   /**
    * `firstBitReadingMaterial`'s cached answer, `requires` included

@@ -3,6 +3,8 @@ import type { Attribute, Topology, TypedArray } from 'pixi.js';
 
 import type { GeometryDataStoreBuffer } from '../core/buffers/GeometryDataStoreBuffer';
 import type { MorphStoreBuffer } from '../core/buffers/MorphStoreBuffer';
+import { assertGeometryBit } from '../core/shader/bitRegistry';
+import type { ShaderBit } from '../core/shader/ShaderBit';
 import { Box } from '../math/shapes/Box';
 import { Sphere } from '../math/shapes/Sphere';
 import type { Mesh3D } from '../scene/Mesh3D';
@@ -18,6 +20,8 @@ import {
   vertexCountFromAttributes,
 } from './utils/Geometry3DUtils';
 import type { IntegerFormat } from './utils/Geometry3DUtils';
+
+const NO_EXTRA_BITS: readonly ShaderBit[] = Object.freeze([]);
 
 /**
  * Options for {@link Geometry3D}
@@ -256,6 +260,29 @@ export interface Geometry3DOptions {
    */
   dynamic?: boolean;
   /**
+   * Shader bits the geometry carries, fixed at construction, which every material that draws it adds
+   * to its shader
+   *
+   * Use one for a vertex step the geometry's data needs, such as turning a ribbon to the camera or
+   * swaying grass, so any material draws the geometry right, shadow and outline included. Each bit
+   * has `level: 'shape'`, puts code only in vertex slots and `header`, and declares no `material` or
+   * `instance` bindings and no `textures`; the constructor throws, naming the bit, on one that breaks
+   * a rule. Pass a `bounds3D` that holds every place the bits move a vertex to, and expect meshes
+   * whose geometries carry different bits to draw separately.
+   * @example
+   * ```ts
+   * const swayBit: ShaderBit = {
+   *   name: 'grassSway',
+   *   level: 'shape',
+   *   gpu: { vertex: { beforeTransform: 'position.x += sin(global.uTime + position.z) * 0.1 * position.y;' } },
+   *   gl: { vertex: { beforeTransform: 'position.x += sin(uTime + position.z) * 0.1 * position.y;' } },
+   * };
+   * const grass = new Geometry3D({ positions, normals, indices, extraBits: [swayBit] });
+   * ```
+   * @advanced
+   */
+  extraBits?: readonly ShaderBit[];
+  /**
    * Morph targets (blend shapes), each a set of per-vertex offsets from `positions`
    *
    * A {@link Mesh3D} drawing the geometry blends the targets by its {@link Mesh3D#weights}.
@@ -447,6 +474,16 @@ export class Geometry3D extends Geometry {
    * @advanced
    */
   public readonly dynamic: boolean;
+
+  /**
+   * The shader bits every material that draws this geometry adds; see {@link Geometry3DOptions#extraBits}
+   * @example
+   * ```ts
+   * const longer = new Geometry3D({ positions: longerPositions, extraBits: ribbon.extraBits });
+   * ```
+   * @advanced
+   */
+  public readonly extraBits: readonly ShaderBit[];
 
   /**
    * Count of morph targets; a mesh drawing the geometry takes one weight per target
@@ -649,6 +686,9 @@ export class Geometry3D extends Geometry {
     this._morphTargets = options.morphTargets ?? null;
     this.morphTargetCount = options.morphTargets?.length ?? 0;
     this.hasMorphNormals = this.morphTargetCount > 0 && options.morphTargets!.every((target) => !!target.normals);
+    this.extraBits = options.extraBits?.length ? options.extraBits : NO_EXTRA_BITS;
+    for (let i = 0; i < this.extraBits.length; i++) assertGeometryBit(this.extraBits[i]);
+
     this.dynamic = options.dynamic ?? false;
     if (this.dynamic && this.indexBuffer) {
       // oxlint-disable-next-line typescript/unbound-method -- the emitter calls it with this context, and pixi's destroy removes it by both

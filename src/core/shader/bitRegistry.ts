@@ -38,6 +38,60 @@ export function assertBitIdentity(bit: ShaderBit): void {
   );
 }
 
+/**
+ * Throws, naming the bit and the rule it breaks, unless a geometry may carry `bit`; the rules are on
+ * `Geometry3DOptions.extraBits`
+ * @internal
+ */
+export function assertGeometryBit(bit: ShaderBit): void {
+  if (bit._geometryChecked) return;
+
+  if (bit.level !== 'shape') {
+    throw new Error(
+      `[Geometry3D] The shader bit '${bit.name}' in a geometry's extraBits has level '${bit.level ?? 'color'}'. ` +
+        "A geometry bit only moves vertices, so give it `level: 'shape'`.",
+    );
+  }
+
+  assertShapeOnly(bit, `The shader bit '${bit.name}' in a geometry's extraBits`);
+  bit._geometryChecked = true;
+}
+
+/** Also checks the bits `bit` requires, since the compiler adds them wherever `bit` is kept, whatever their level */
+function assertShapeOnly(bit: ShaderBit, subject: string): void {
+  const fragmentSlot = Object.keys(bit.gpu?.fragment ?? {})[0] ?? Object.keys(bit.gl?.fragment ?? {})[0];
+
+  if (fragmentSlot) {
+    throw new Error(
+      `[Geometry3D] ${subject} writes the fragment slot '${fragmentSlot}'. A geometry bit only moves vertices, ` +
+        'so its code goes in vertex slots and `header`, and the material colours the surface.',
+    );
+  }
+
+  const group = bit.bindings?.material ? 'material' : bit.bindings?.instance ? 'instance' : undefined;
+
+  if (group) {
+    throw new Error(
+      `[Geometry3D] ${subject} declares '${group}' bindings. Those live in a material's storage, and a geometry ` +
+        'is shared across materials, so pass the values through a vertex attribute instead.',
+    );
+  }
+
+  if (bit.textures?.length) {
+    throw new Error(
+      `[Geometry3D] ${subject} declares textures. A material binds textures, and a geometry is shared across ` +
+        'materials, so a geometry bit samples none.',
+    );
+  }
+
+  const required = bit.requires;
+  if (!required) return;
+
+  for (let i = 0; i < required.length; i++) {
+    assertShapeOnly(required[i], `The shader bit '${required[i].name}', which '${bit.name}' requires,`);
+  }
+}
+
 const ENGINE_BIND_GROUPS: readonly ResolvedBindGroup[] = [
   { name: 'global', ubo: true },
   { name: 'camera', ubo: false },

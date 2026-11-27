@@ -349,10 +349,10 @@ export class MaterialSystemGl {
   }
 
   /**
-   * Bits writing one slot run in list order: normal changes (flat shading, then the normal map), tint and billboard
-   * before the material's bits, `alphaOpaqueBit` after them, fog before tone mapping, and the pass's bits last. A
-   * pass's `level` then drops the bits above it, apart from the template's own. The pass's shader bits and the
-   * entry's `extraBits` go after, and are never dropped.
+   * Bits writing one slot run in list order: normal changes (flat shading, then the normal map), tint, billboard and
+   * the geometry's bits before the material's bits, `alphaOpaqueBit` after them, fog before tone mapping, and the
+   * pass's bits last. A pass's `level` then drops the bits above it, apart from the template's own. The pass's shader
+   * bits and the entry's `extraBits` go after, and are never dropped.
    * @returns `scratchDescriptor`, which the next call overwrites
    */
   private _passShaderDescriptor(
@@ -391,6 +391,9 @@ export class MaterialSystemGl {
     if (mesh.billboardMode !== 'none') {
       bitsGl.push(getMeshBillboardBit(mesh.billboardMode, lit));
     }
+
+    const geometryBits = geo.extraBits;
+    for (let i = 0; i < geometryBits.length; i++) bitsGl.push(geometryBits[i]);
 
     const hasTangent = !!geo.attributes.aTangent;
     for (let i = 0; i < materialDescriptor.bitsGl.length; i++) {

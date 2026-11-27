@@ -447,7 +447,8 @@ export class MaterialSystemGpu {
 
   /**
    * Bits share slots and run in list order, so the order is load-bearing: normals settle before the
-   * material's bits, billboarding before fog, fog before tone mapping, and the pass's output bits go last.
+   * material's bits, billboarding then the geometry's bits come before the material's, fog before tone
+   * mapping, and the pass's output bits go last.
    * A pass's `level` then drops the bits above it, apart from the template's own. The pass's shader
    * bits and the entry's `extraBits` go after, and are never dropped
    * @returns `scratchDescriptor`, which the next call overwrites
@@ -490,6 +491,9 @@ export class MaterialSystemGpu {
     if (mesh.billboardMode !== 'none') {
       bitsGpu.push(getMeshBillboardBit(mesh.billboardMode, lit));
     }
+
+    const geometryBits = geometry.extraBits;
+    for (let i = 0; i < geometryBits.length; i++) bitsGpu.push(geometryBits[i]);
 
     const hasTangent = !!geometry.attributes.aTangent;
     for (let i = 0; i < materialDescriptor.bitsGpu.length; i++) {
