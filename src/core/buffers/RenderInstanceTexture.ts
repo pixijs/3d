@@ -52,6 +52,7 @@ export class RenderInstanceTexture {
         format: 'r32uint',
         scaleMode: 'nearest',
         alphaMode: 'no-premultiply-alpha',
+        autoGenerateMipmaps: false,
         label: 'InstanceIndex',
       });
       this._texture = new Texture({ source: this._source });

@@ -49,6 +49,7 @@ export function createDataTextureSource(data: Float32Array): BufferImageSource {
     format: 'rgba32uint',
     scaleMode: 'nearest',
     alphaMode: 'no-premultiply-alpha',
+    autoGenerateMipmaps: false,
   });
 }
 
