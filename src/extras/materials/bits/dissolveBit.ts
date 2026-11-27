@@ -69,11 +69,11 @@ float dissolveNoise(vec3 p) {
  * speckle, needs about 25. For a quantized glTF, divide the hole size you want by the scale on its
  * node.
  *
- * Shadows and outlines don't dissolve. The shadow pass and an {@link OutlinePass} draw a mesh with
- * only the bits at their {@link RenderPassOptions#level | level}, and this bit has none. So a half-dissolved mesh still
- * casts a whole shadow, and its outline shows through the holes and stays as a solid silhouette
- * at `dissolve` 1. To drop the outline while a copy dissolves, take the copy out of that pass with
- * {@link BaseMaterial3D#disablePass}: `copy.disablePass('outline')`.
+ * The bit is `'cutout'`, so a dissolving mesh's shadow has the same holes as the mesh. An
+ * {@link OutlinePass} draws at `'shape'` and leaves the bit out, so the outline shows through the
+ * holes and stays a solid silhouette at `dissolve` 1. To drop the outline while a copy dissolves,
+ * take the copy out of that pass with {@link BaseMaterial3D#disablePass}:
+ * `copy.disablePass('outline')`.
  * @example
  * ```ts
  * enemy.materials = (material) => material.clone({ extraBits: [dissolveBit] });
@@ -88,6 +88,7 @@ float dissolveNoise(vec3 p) {
  */
 export const dissolveBit: ShaderBit = {
   name: 'dissolve',
+  level: 'cutout',
   interStage: { vDissolvePos: 'vec3<f32>' },
   bindings: { material: { dissolveEdgeColor: 'vec3<f32>', dissolve: 'f32', dissolveHoleSize: 'f32' } },
   gpu: {

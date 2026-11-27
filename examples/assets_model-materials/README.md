@@ -31,9 +31,7 @@ its materials until you give one its own through `materials`, and assigning neve
 - `OrbitCamera` from `@pixi/3d/extras`: drag to orbit, with damping and distance and angle limits.
 - `Application` from `pixi.js`.
 
-The shadow pass draws a caster with only the bits that carry a `level`, and `dissolveBit` has none, so a dissolving
-helmet would cast a whole shadow. None cast, and the stage's key light renders no shadow map
-(`stage.key.castShadow = false`).
+The helmets cast no shadow, so the stage's key light renders no shadow map (`stage.key.castShadow = false`).
 
 ## Controls
 

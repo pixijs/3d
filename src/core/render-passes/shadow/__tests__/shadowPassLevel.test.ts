@@ -6,11 +6,13 @@ import { MERGE_THRESHOLD } from '~/core/batcher/batchConstants';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import { instanceFetchBitGl } from '~/core/shader/bits/instanceFetchBitGl';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
+import { dissolveBit } from '~/extras/materials/bits/dissolveBit';
 import { OutlinePass } from '~/extras/post-processing/passes/OutlinePass';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { BaseMaterial3D } from '~/materials/BaseMaterial3D';
 import { Material3D } from '~/materials/pbr/Material3D';
+import type { Material3DData } from '~/materials/pbr/Material3D';
 import { Matrix4 } from '~/math/matrix/Matrix4';
 import type { Pass3D } from '~/post-processing/Pass3D';
 import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
@@ -22,6 +24,19 @@ import type { CullMode } from '~/scene/View3D';
 import { engineTemplateCopy, shiftedShadowTemplate } from '../../../../../tests/scenes/helpers/engineTemplateCopy';
 
 const SIZE = 128;
+
+interface DissolveData {
+  dissolve: number;
+}
+
+function vertexAlphaCube(alpha: number): CubeGeometry {
+  return new CubeGeometry({
+    width: 1.5,
+    height: 1.5,
+    depth: 1.5,
+    colors: new Float32Array(24 * 4).map((_, i) => (i % 4 === 3 ? alpha : 1)),
+  });
+}
 
 function shiftBit(name: string, level?: 'shape'): ShaderBit {
   return {
@@ -206,6 +221,71 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         await renderFrame(app);
         const keptNotCasting = await renderFrame(app);
         expect(differingPixels(kept, keptNotCasting), 'alpha 0.2 is over the cutoff, so it casts').toBeGreaterThan(100);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it('cuts a mask-mode caster out of its shadow where its vertex alpha is under the cutoff', async () => {
+      const { app, view3d } = await shadowView(preference, 'vertex-alpha');
+
+      try {
+        const material = new Material3D({ alphaMode: 'mask', alphaCutoff: 0.5, vertexColors: true });
+        const caster = new Mesh3D({ geometry: vertexAlphaCube(0), material });
+        caster.position.set(0, 1.5, 0);
+        view3d.root.addChild(caster);
+
+        await renderFrame(app);
+        const cut = await renderFrame(app);
+        caster.castShadow = false;
+        await renderFrame(app);
+        const cutNotCasting = await renderFrame(app);
+        expect(
+          differingPixels(cut, cutNotCasting),
+          'vertex alpha 0 is under the cutoff, so nothing casts',
+        ).toBeLessThan(10);
+
+        caster.castShadow = true;
+        caster.geometry = vertexAlphaCube(1);
+        await renderFrame(app);
+        const kept = await renderFrame(app);
+        caster.castShadow = false;
+        await renderFrame(app);
+        const keptNotCasting = await renderFrame(app);
+        expect(differingPixels(kept, keptNotCasting), 'vertex alpha 1 casts').toBeGreaterThan(100);
+      } finally {
+        app.destroy();
+      }
+    });
+
+    it("cuts a dissolving caster's shadow where dissolveBit cuts the surface", async () => {
+      const { app, view3d } = await shadowView(preference, 'dissolve');
+
+      try {
+        const material = new Material3D({ extraBits: [dissolveBit] });
+        const data = material.data as Material3DData & DissolveData;
+        data.dissolve = 1;
+        const caster = new Mesh3D({ geometry: new CubeGeometry({ width: 1.5, height: 1.5, depth: 1.5 }), material });
+        caster.position.set(0, 1.5, 0);
+        view3d.root.addChild(caster);
+
+        await renderFrame(app);
+        const cut = await renderFrame(app);
+        caster.castShadow = false;
+        await renderFrame(app);
+        const cutNotCasting = await renderFrame(app);
+        expect(differingPixels(cut, cutNotCasting), 'dissolve 1 cuts the whole surface, so nothing casts').toBeLessThan(
+          10,
+        );
+
+        caster.castShadow = true;
+        data.dissolve = 0;
+        await renderFrame(app);
+        const whole = await renderFrame(app);
+        caster.castShadow = false;
+        await renderFrame(app);
+        const wholeNotCasting = await renderFrame(app);
+        expect(differingPixels(whole, wholeNotCasting), 'dissolve 0 casts').toBeGreaterThan(100);
       } finally {
         app.destroy();
       }
