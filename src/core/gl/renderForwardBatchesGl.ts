@@ -4,6 +4,7 @@ import type { Mesh3DBatch } from '../batcher/Mesh3DBatch';
 import type { Mesh3DData } from '../batcher/Mesh3DData';
 import type { SortedMesh3DView } from '../batcher/SortedMesh3DView';
 import { getCameraData } from '../CameraData';
+import type { DrawList } from '../render-passes/DrawList';
 import type { RenderSession } from '../render-passes/RenderSession';
 import { UINT_EMPTY } from '../textures/DefaultTextures';
 import type { View3DPipeGl } from './View3DPipeGl';
@@ -58,15 +59,22 @@ export function renderForwardBatchesGl(options: RenderForwardBatchesGlOptions): 
       });
     }
 
-    session.globalBindGroup.setResource(batch.storeBuffer.texture.source, 'uMeshStoreTexture');
-    if (list.glData.indexTexture) {
-      session.globalBindGroup.setResource(list.glData.indexTexture.texture.source, 'uRenderInstanceTexture');
-    }
-    session.globalBindGroup.setResource(
-      batch.instanceStoreBuffer?.texture.source ?? UINT_EMPTY.source,
-      'uInstanceStoreTexture',
-    );
-
+    bindBatchStorage(session, batch, list);
     batcher.draw(pipe.renderer, list, batch, cullFrustum, cameraData);
   }
+}
+
+/**
+ * Binds a batch's store textures before its draws, so no draw reads another batch's stores
+ * @internal
+ */
+export function bindBatchStorage(session: RenderSession, batch: Mesh3DBatch, list: DrawList): void {
+  session.globalBindGroup.setResource(batch.storeBuffer.texture.source, 'uMeshStoreTexture');
+  if (list.glData.indexTexture) {
+    session.globalBindGroup.setResource(list.glData.indexTexture.texture.source, 'uRenderInstanceTexture');
+  }
+  session.globalBindGroup.setResource(
+    batch.instanceStoreBuffer?.texture.source ?? UINT_EMPTY.source,
+    'uInstanceStoreTexture',
+  );
 }

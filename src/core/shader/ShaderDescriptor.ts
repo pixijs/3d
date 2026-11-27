@@ -27,11 +27,13 @@ export interface ShaderDescriptorOptions {
    */
   bitsGl?: ShaderBit[];
   /**
-   * Shader template, which makes this a whole shader, drawn as it is
+   * Custom shader template
    *
-   * Left out, a material's `descriptor` compiles on the engine's material template, and a pass's
-   * shader, or a material's entry for a pass, adds its bits to each material's own at the pass's
-   * `level`.
+   * Left out, a material's `descriptor` uses the engine's material template, and a pass's shader,
+   * or a material's entry for a pass, needs a pass with a {@link RenderPassOptions#level | level}.
+   * A material's own template draws only its main pass and `'color'` passes; the shadow and outline
+   * draw it on the engine's template, as {@link RenderPassOptions#level} says. A pass's shader with
+   * a template, a material's `passes` entry included, is drawn as written.
    */
   template?: ShaderBitTemplate;
   /**

@@ -143,7 +143,7 @@ const FOG_BITS: Record<FogType, ShaderBit> = {
 const NEAR_PLANE_NDC_Z = -1;
 
 /** The last value a view took for its `_shaderVersion`; one counter for every view, so no two share one */
-let lastShaderVersion = 0;
+let shaderVersionCount = 0;
 
 const _screenMatrix2D = new Matrix();
 const _screenPoint = new Point();
@@ -790,7 +790,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
    * mesh's pass entry (`MeshPassCache.isStaleFor`) goes stale on a change or a move to another view
    * @internal
    */
-  public _shaderVersion = ++lastShaderVersion;
+  public _shaderVersion = ++shaderVersionCount;
   /** @internal */
   public _bonePit = new BonePit();
 
@@ -1573,7 +1573,7 @@ export class View3D<TRoot extends Container3D = Container3D> extends ViewContain
 
   /** Refills each user batch's `_dirtyIndices` from the start, since appending every index could run past its end */
   private _invalidateMaterialShaders(): void {
-    this._shaderVersion = ++lastShaderVersion;
+    this._shaderVersion = ++shaderVersionCount;
     const meshes = this.meshes.items;
     for (let i = 0; i < meshes.length; i++) meshes[i]._markBatchDirty();
 

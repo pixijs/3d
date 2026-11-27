@@ -15,9 +15,6 @@ export function getUvsBit(format: VertexFormat): ShaderBit {
   const bit: ShaderBit = {
     name: `uvs:${format}`,
     level: 'shape',
-    overrideDefs: {
-      HAS_UVS: { type: 'u32', required: true },
-    },
     attributes: {
       aUV: format,
     },
