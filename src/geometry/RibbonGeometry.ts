@@ -7,7 +7,7 @@ import { computeBoundsFromPositions } from './utils/Geometry3DUtils';
 /**
  * What a {@link RibbonGeometry}'s widths measure
  *
- * - `'world'`: units of the ribbon's local space, so it thins with distance like any object.
+ * - `'world'`: the units of the points, so it scales with the mesh and thins with distance like any object.
  * - `'pixels'`: pixels on screen, the same at any distance, like a 2D stroke.
  * @example
  * ```ts
@@ -169,7 +169,7 @@ function writeCentreline(
  *
  * Each point becomes two vertices, built once on the CPU. The vertex shader pushes them apart across the line,
  * facing the camera, every time the ribbon is drawn, so shadows face their light. A lit material shades the strip
- * as a round cord. `uv` runs along the line in world units of distance, `u`, and across it from 0 to 1, `v`.
+ * as a round cord. `uv` runs along the line as distance in the points' units, `u`, and across it from 0 to 1, `v`.
  *
  * - Corners pinch: a point's width runs square to the line's average direction there, so a sharp turn draws
  *   narrower. Add points either side of a corner to keep it full.

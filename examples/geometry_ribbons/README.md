@@ -18,7 +18,7 @@ width all the way back, tagged widthUnits: 'pixels'; the pane shows Theme Light,
 
 - `RibbonGeometry` from `@pixi/3d`: built from `points`, x, y and z for each, and `width`, one number for every point
   or a `Float32Array` with one per point, which the Taper row passes to swell each ribbon from nothing at its ends.
-- `RibbonWidthUnits`, the `widthUnits` option: `'world'` measures `width` in the ribbon's own units, `'pixels'` in
+- `RibbonWidthUnits`, the `widthUnits` option: `'world'` measures `width` in the units of the points, so it scales with the mesh, `'pixels'` in
   pixels on screen at any distance.
 - `RibbonGeometry` `colors`: an RGBA colour per point, blended along the line. Vertex colours are linear light, so
   `scene.ts` converts each palette colour with `srgbToLinear` from `@pixi/3d`, after pixi's `Color` splits it into

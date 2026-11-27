@@ -2,27 +2,27 @@ import type { RibbonWidthUnits } from '../../../geometry/RibbonGeometry';
 import type { ShaderBit } from '../ShaderBit';
 
 /**
- * The world half-width at the point, from the signed full width in `aRibbon.w`; pixels divide by how many pixels one
- * world unit along the side spans there, measured from the side's clip-space derivative
+ * The offset across the line in local space, from the signed full width in `aRibbon.w`: a world width is a local
+ * length, so it scales with the mesh; a pixel width divides by the pixels one world unit along the side spans there
  */
-const HALF_WIDTH_GPU: Record<RibbonWidthUnits, string> = {
-  world: /* wgsl */ `let rbHalf = input.aRibbon.w * 0.5;`,
+const OFFSET_GPU: Record<RibbonWidthUnits, string> = {
+  world: /* wgsl */ `let rbOffset = normalize(rbInverse * rbSide) * (input.aRibbon.w * 0.5);`,
   pixels: /* wgsl */ `
   let rbClip = camera.uViewProjectionMatrix * vec4<f32>(rbWorld, 1.0);
   let rbClipSide = camera.uViewProjectionMatrix * vec4<f32>(rbSide, 0.0);
   let rbW = max(abs(rbClip.w), 1e-6);
   let rbPixels = (rbClipSide.xy * rbW - rbClip.xy * rbClipSide.w) / (rbW * rbW) * camera.uViewportSize * 0.5;
-  let rbHalf = input.aRibbon.w * 0.5 / max(length(rbPixels), 1e-6);`,
+  let rbOffset = rbInverse * (rbSide * (input.aRibbon.w * 0.5 / max(length(rbPixels), 1e-6)));`,
 };
 
-const HALF_WIDTH_GL: Record<RibbonWidthUnits, string> = {
-  world: /* glsl */ `float rbHalf = aRibbon.w * 0.5;`,
+const OFFSET_GL: Record<RibbonWidthUnits, string> = {
+  world: /* glsl */ `vec3 rbOffset = normalize(rbInverse * rbSide) * (aRibbon.w * 0.5);`,
   pixels: /* glsl */ `
   vec4 rbClip = uViewProjectionMatrix * vec4(rbWorld, 1.0);
   vec4 rbClipSide = uViewProjectionMatrix * vec4(rbSide, 0.0);
   float rbW = max(abs(rbClip.w), 1e-6);
   vec2 rbPixels = (rbClipSide.xy * rbW - rbClip.xy * rbClipSide.w) / (rbW * rbW) * uViewportSize * 0.5;
-  float rbHalf = aRibbon.w * 0.5 / max(length(rbPixels), 1e-6);`,
+  vec3 rbOffset = rbInverse * (rbSide * (aRibbon.w * 0.5 / max(length(rbPixels), 1e-6)));`,
 };
 
 function ribbonGpu(units: RibbonWidthUnits): string {
@@ -44,8 +44,8 @@ function ribbonGpu(units: RibbonWidthUnits): string {
     rbCross * inverseSqrt(max(rbCrossSq, 1e-30)),
     rbCrossSq > 1e-12 * dot(rbTangent, rbTangent) * dot(rbToCamera, rbToCamera)
   );
-  ${HALF_WIDTH_GPU[units]}
-  position = vec4<f32>(position.xyz + rbInverse * (rbSide * rbHalf), position.w);
+  ${OFFSET_GPU[units]}
+  position = vec4<f32>(position.xyz + rbOffset, position.w);
   let rbFacing = cross(rbSide, rbTangent);
   let rbNormal = rbFacing * inverseSqrt(max(dot(rbFacing, rbFacing), 1e-30)) + rbSide * sign(input.aRibbon.w);
   normal = (rbInverse * rbNormal) * vec3<f32>(dot(rbC0, rbC0), dot(rbC1, rbC1), dot(rbC2, rbC2));
@@ -69,8 +69,8 @@ function ribbonGl(units: RibbonWidthUnits): string {
   vec3 rbSide = rbCrossSq > 1e-12 * dot(rbTangent, rbTangent) * dot(rbToCamera, rbToCamera)
     ? rbCross * inversesqrt(max(rbCrossSq, 1e-30))
     : rbRight;
-  ${HALF_WIDTH_GL[units]}
-  position = vec4(position.xyz + rbInverse * (rbSide * rbHalf), position.w);
+  ${OFFSET_GL[units]}
+  position = vec4(position.xyz + rbOffset, position.w);
   vec3 rbFacing = cross(rbSide, rbTangent);
   vec3 rbNormal = rbFacing * inversesqrt(max(dot(rbFacing, rbFacing), 1e-30)) + rbSide * sign(aRibbon.w);
   normal = (rbInverse * rbNormal) * vec3(dot(rbC0, rbC0), dot(rbC1, rbC1), dot(rbC2, rbC2));

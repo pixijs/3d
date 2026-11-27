@@ -178,6 +178,15 @@ describe('RibbonGeometry', () => {
       expect(pixels[(row * SIZE + SIZE - 1) * 4], 'the right-hand column shows the ribbon').toBeGreaterThan(128);
     });
 
+    it.each([2, 0.25])('scales a world width with the mesh, at scale %d', async (scale) => {
+      const ribbon = white(new RibbonGeometry({ points: straightLineAlongXAtDepth(0), width: 1 }));
+      ribbon.scale.set(scale, scale, scale);
+      const pixels = await render(preference, 'orthographic', [ribbon]);
+      const pixelsPerUnit = SIZE / 8;
+
+      expect(Math.abs(whiteRowsInColumn(pixels, SIZE, SIZE / 2) - scale * pixelsPerUnit)).toBeLessThanOrEqual(1);
+    });
+
     it('measures a pixel width in pixels before the resolution', async () => {
       const ribbon = white(
         new RibbonGeometry({ points: straightLineAlongXAtDepth(0), width: 10, widthUnits: 'pixels' }),
