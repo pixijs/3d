@@ -18,7 +18,7 @@ Each has a README and a reference image, and the visual test checks it on WebGPU
 | [instancing_lod](instancing_lod/README.md)                         | Application-level geometry choice, hysteresis, triangle and switch counts           |
 | [materials_video](materials_video/README.md)                       | One decoded video source shared by materials, playback and release/reload           |
 | [shaders_projected-textures](shaders_projected-textures/README.md) | One world-space texture crossing independent meshes, compared with mesh UVs         |
-| [post_depth-of-field](post_depth-of-field/README.md)               | `DepthOfFieldEffect`, tap-to-focus and a comparison with `TiltShiftEffect`          |
+| [post_depth-of-field](post_depth-of-field/README.md)               | `DepthOfFieldEffect`, tap-to-focus, its quality and its focus zones                 |
 | [interaction_decals](interaction_decals/README.md)                 | Marks stamped where the pointer hits a surface, from a pool of planes reused        |
 
 The transmission-map lesson first failed because its renderer setup left out the documented WebGL back buffer; with

@@ -4,8 +4,8 @@ import type { RenderGraph } from '~/core/render-graph/RenderGraph';
 import { DepthClearPass } from '~/core/render-passes/depth-clear/DepthClearPass';
 import { ForwardRenderPass } from '~/core/render-passes/ForwardRenderPass';
 import { BloomEffect } from '~/extras/post-processing/effects/BloomEffect';
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { FxaaEffect } from '~/extras/post-processing/effects/FxaaEffect';
-import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
@@ -103,7 +103,7 @@ function staircaseView(): View3D {
     toneMapping: 'none',
     environment: { skyColor: 0x8899aa, groundColor: 0x223344 },
     passes: [
-      new TiltShiftEffect({ focalDepth: 8.2, focalNear: 0.9, focalFar: 2.4, maxBlur: 10 }),
+      new DepthOfFieldEffect({ focusDistance: 8.2, focusRange: 0.9, focusFalloff: 1.5, maxBlur: 10, quality: 'high' }),
       new BloomEffect({ threshold: 1.1, intensity: 5, radius: 0.7 }),
       new FxaaEffect(),
     ],

@@ -74,7 +74,7 @@ and `fitPortrait` with its `clearBottom` and `refit()`.
 ## See also
 
 - [Depth of field](../post_depth-of-field/README.md): `DepthOfFieldEffect`, a blur by depth from a focus plane.
-- [Tilt shift](../post_tilt-shift/README.md): `TiltShiftEffect`, which blurs a band of depth so a scene reads as a
+- [Tilt shift](../post_tilt-shift/README.md): `DepthOfFieldEffect` with a narrow sharp band, so a scene reads as a
   miniature.
 - [Stacking effects](../post_effect-stack/README.md): several effects in `passes`, in order.
 

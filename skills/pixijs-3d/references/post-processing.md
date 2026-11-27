@@ -1,6 +1,6 @@
 # Post-processing
 
-Full-screen effects on a `View3D`: bloom, ambient occlusion, tilt-shift, motion blur, tint, FXAA. Effects come from `@pixi/3d/extras` and go in the view's `passes` array, never in pixi `filters`.
+Full-screen effects on a `View3D`: bloom, ambient occlusion, depth of field (and tilt-shift), motion blur, tint, FXAA. Effects come from `@pixi/3d/extras` and go in the view's `passes` array, never in pixi `filters`.
 
 ## Quick Start
 
@@ -82,7 +82,7 @@ app.ticker.add((ticker) => {
 
 ## Linear light and the tone curve
 
-A view's default `toneMapping` is `'none'`: the sRGB encode alone, so colours show as authored and anything brighter than 1 clips to white. Bloom, SSAO, tilt-shift, motion blur and custom effects run at the `'beforeToneMapping'` stage: the scene draws as linear light into a float texture, the effects see brightness above 1, and an output pass applies the curve once at the end. `TintEffect` and `FxaaEffect` run at `'afterToneMapping'`, on the picture as it shows.
+A view's default `toneMapping` is `'none'`: the sRGB encode alone, so colours show as authored and anything brighter than 1 clips to white. Bloom, SSAO, depth of field, motion blur and custom effects run at the `'beforeToneMapping'` stage: the scene draws as linear light into a float texture, the effects see brightness above 1, and an output pass applies the curve once at the end. `TintEffect` and `FxaaEffect` run at `'afterToneMapping'`, on the picture as it shows.
 
 Set `toneMapping: 'aces'` (or `'reinhard'`, `'uncharted2'`) when strong emissive or lights push colour past 1 and glow cores clip to flat white. A filmic curve rolls bright light off, and it also shifts and darkens ordinary colours.
 
@@ -119,15 +119,19 @@ Effects run stage by stage: every `'beforeToneMapping'` effect in array order, t
 
 With `antialias: true` on `app.init`, the scene stays multisampled through post effects, so most apps need no `FxaaEffect`. Add `new FxaaEffect()` last in `passes` when the canvas has `antialias: false`, or alongside `new SsaoEffect({ sceneNormals: true })` on WebGL, where the normals attachment turns the scene's MSAA off.
 
-## Depth of field
+## Depth of field and tilt-shift
 
-`DepthOfFieldEffect` is a camera lens's depth of field: one depth in front of the camera is sharp, and everything nearer or farther blurs. Within `focusRange` of `focusDistance` stays sharp; the blur grows to `maxBlur` physical pixels at twice `focusRange`. Sharp edges stay sharp against a blurred background, a blurred foreground spreads over what's behind it, and over a view with no background the blurred edges fade to transparent.
+`DepthOfFieldEffect` is a camera lens's depth of field: one depth in front of the camera is sharp, and everything nearer or farther blurs. Within `focusRange` of `focusDistance` stays sharp; past it the blur grows over `focusFalloff` to `maxBlur` physical pixels. Sharp edges stay sharp against a blurred background, a blurred foreground spreads over what's behind it, and over a view with no background the blurred edges fade to transparent. There is no separate tilt-shift effect: the miniature look is this effect with a narrow `focusRange`, a long `focusFalloff` and a high, angled camera.
 
 ```ts
 import { Vector3 } from '@pixi/3d';
 import { DepthOfFieldEffect } from '@pixi/3d/extras';
 
-const depthOfField = new DepthOfFieldEffect({ focusRange: 0.5, maxBlur: 16 * app.renderer.resolution });
+const depthOfField = new DepthOfFieldEffect({
+  focusRange: 0.5,
+  focusFalloff: 3,
+  maxBlur: 16 * app.renderer.resolution,
+});
 view3d.passes = [depthOfField];
 
 const world = new Vector3();
@@ -138,28 +142,12 @@ app.ticker.add(() => {
   view3d.camera.toLocal(world, undefined, local);
   depthOfField.focusDistance = -local.z;
 });
+depthOfField.debug = true; // white line = focus depth, green = sharp zone, orange/blue = blur in front/behind
 ```
 
-One full-resolution pass with 48 taps and no mips. Large `maxBlur` values look slightly grainy. Use `TiltShiftEffect` for the miniature look; it is cheaper but leaves a soft halo round sharp edges.
+For tilt-shift from an `OrbitCamera`, focus on its target: `orbit.on('change', () => (depthOfField.focusDistance = orbit.distance))`, with something like `{ focusRange: 1.5, focusFalloff: 5.5 }`.
 
-## Tilt-shift
-
-`TiltShiftEffect` keeps a band of depth sharp and blurs the rest, for a miniature look from a high, angled camera. Distances are in view units from the camera. Tie `focalDepth` to the orbit distance so the target stays sharp while zooming, and use `debug` to see the bands.
-
-```ts
-import { OrbitCamera, TiltShiftEffect } from '@pixi/3d/extras';
-
-const tiltShift = new TiltShiftEffect({ focalDepth: 20, focalNear: 1.5, focalFar: 7, maxBlur: 12 });
-view3d.passes = [tiltShift];
-const orbit = new OrbitCamera({ view: view3d, target: { x: 0, y: 0, z: 0 } });
-
-app.ticker.add(() => {
-  tiltShift.focalDepth = orbit.distance; // focal plane follows the orbit target
-});
-tiltShift.debug = true; // white line = focal plane, green = sharp band, orange/blue = blur
-```
-
-Within `focalNear` of the plane stays sharp; the blur grows to `maxBlur` physical pixels at `focalFar`. Taps are weighed by depth, so a sharp object doesn't smear onto a blurred background. It samples a mip chain of its input: a mipmap generation per frame and a third more memory.
+`quality` is fixed at construction: `'high'` takes 48 taps a pixel, `'low'` 16, and the default `'auto'` picks `'low'` when pixi's `isMobile.any` is true. On a Pixel 7 at 1920 × 1080 the effect cost about 26 ms a frame at `'high'` and 7.5 ms at `'low'`; `'low'` looks grainy only at large `maxBlur`. One full-resolution pass, no mips.
 
 ## Other effects
 

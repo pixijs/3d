@@ -22,7 +22,9 @@ export const scene: TestScene = {
       height: SIZE,
       anchor: 0.5,
       toneMapping: 'none',
-      passes: [new DepthOfFieldEffect({ focusDistance: 5, focusRange: 0.4, maxBlur: 12 })],
+      passes: [
+        new DepthOfFieldEffect({ focusDistance: 5, focusRange: 0.4, focusFalloff: 0.4, maxBlur: 12, quality: 'high' }),
+      ],
     });
     view.camera.fov = 45;
     view.camera.position.set(0, 0, 5);

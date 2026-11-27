@@ -3,7 +3,7 @@ import type { Application, Renderer } from 'pixi.js';
 import { describe, it } from 'vitest';
 
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
-import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { TintEffect } from '~/extras/post-processing/effects/TintEffect';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
@@ -45,7 +45,7 @@ function refractionView(passes: TintEffect[] = []): View3D {
   return view3d;
 }
 
-function glassView(passes: (TiltShiftEffect | TintEffect)[]): View3D {
+function glassView(passes: (DepthOfFieldEffect | TintEffect)[]): View3D {
   const view3d = new View3D({ width: WIDTH, height: HEIGHT, passes });
   view3d.camera.position.set(1.2, 0.8, 4);
   view3d.camera.lookAt({ x: 0, y: 0, z: -0.5 });
@@ -111,15 +111,20 @@ for (const preference of ['webgpu'] as const) {
       });
     });
 
-    it('keeps drawing when a disabled tilt-shift is turned on over glass', async () => {
-      await withApp('tilt-shift-enabled', async (app) => {
-        const tiltShift = new TiltShiftEffect({ enabled: false, focalDepth: 5, focalNear: 0.3, focalFar: 2 });
-        const view3d = glassView([tiltShift, new TintEffect()]);
+    it('keeps drawing when a disabled depth of field is turned on over glass', async () => {
+      await withApp('depth-of-field-enabled', async (app) => {
+        const depthOfField = new DepthOfFieldEffect({
+          enabled: false,
+          focusDistance: 5,
+          focusRange: 0.3,
+          focusFalloff: 1.7,
+        });
+        const view3d = glassView([depthOfField, new TintEffect()]);
         app.stage.addChild(view3d);
         await expectCleanRender(app);
         await expectCleanRender(app);
 
-        tiltShift.enabled = true;
+        depthOfField.enabled = true;
         await expectCleanRender(app);
         await expectCleanRender(app);
         await expectCleanRender(app);

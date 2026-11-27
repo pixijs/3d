@@ -31,7 +31,6 @@ export * from './post-processing/effects/DepthOfFieldEffect';
 export * from './post-processing/effects/FxaaEffect';
 export * from './post-processing/effects/MotionBlurEffect';
 export * from './post-processing/effects/SsaoEffect';
-export * from './post-processing/effects/TiltShiftEffect';
 export * from './post-processing/effects/TintEffect';
 export * from './post-processing/passes/OutlinePass';
 export * from './post-processing/passes/portal/mirrorCameraThroughPortal';

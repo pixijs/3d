@@ -504,7 +504,7 @@ shapes. Pane: on and off, radius, samples.
 
 ### post_tilt-shift: Tilt shift
 
-`TiltShiftEffect` blurs above and below a band, so a scene reads as a miniature. Scene: a clay town from above. Pane:
+`DepthOfFieldEffect` with a narrow sharp band and a long falloff, so a scene reads as a miniature. Scene: a clay town from above. Pane:
 band position, width, blur, debug view.
 
 ### post_motion-blur: Motion blur

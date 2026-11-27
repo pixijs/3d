@@ -33,7 +33,7 @@ const ROOF_COLORS: readonly ClayColor[] = ['pink', 'purple', 'sky', 'orange', 'p
 /**
  * Where the spire stands in place of a house: the near-left row. On screen its tip reaches up among the sharp houses,
  * yet it blurs, since it stands nearer the camera than the plane in focus: the blur goes by depth, not by height on
- * screen. A focalDepth of about 19 brings it into focus.
+ * screen. A focusDistance of about 19 brings it into focus.
  */
 const SPIRE = { x: -COLUMNS[0], z: 4 * ROW_STEP, height: 3.2 };
 /** The spire's point: a clay octahedron stretched tall, square to the walls, its lower half inside the tower */

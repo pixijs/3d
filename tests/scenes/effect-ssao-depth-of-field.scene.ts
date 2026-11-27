@@ -1,7 +1,7 @@
 import type { TestScene } from '@test-utils';
 
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { SsaoEffect } from '~/extras/post-processing/effects/SsaoEffect';
-import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
@@ -29,7 +29,7 @@ export const scene: TestScene = {
       environment: { skyColor: 0xffffff, groundColor: 0x445566 },
       passes: [
         new SsaoEffect({ radius: 0.8, intensity: 2, samples: 24, power: 1.6 }),
-        new TiltShiftEffect({ focalDepth: 5.6, focalNear: 0.7, focalFar: 2.0, maxBlur: 8 }),
+        new DepthOfFieldEffect({ focusDistance: 5.6, focusRange: 0.7, focusFalloff: 1.3, maxBlur: 8, quality: 'high' }),
       ],
     });
     view.camera.fov = 45;

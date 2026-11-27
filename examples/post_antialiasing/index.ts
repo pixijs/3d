@@ -59,7 +59,7 @@ await app.init({
 });
 loading.progress(0.2);
 
-// Stands in for any post effect, bloom or tilt shift. White changes no pixel, so the loupe shows only what drawing the
+// Stands in for any post effect, bloom or depth of field. White changes no pixel, so the loupe shows only what drawing the
 // scene into a texture does, and with MSAA that's nothing: the texture takes the canvas's four samples.
 const effect = new TintEffect({ enabled: params.get('effect') === 'on', tint: 0xffffff });
 // A real effect that asks the scene draw for its normals as well as its colour. Every texture a draw writes shares one

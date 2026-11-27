@@ -24,7 +24,15 @@ export const scene: TestScene = {
       anchor: 0.5,
       toneMapping: 'none',
       environment: { skyColor: 0xffffff, groundColor: 0x445566 },
-      passes: [new DepthOfFieldEffect({ focusDistance: 7.3, focusRange: 0.6, maxBlur: 10 })],
+      passes: [
+        new DepthOfFieldEffect({
+          focusDistance: 7.3,
+          focusRange: 0.6,
+          focusFalloff: 0.6,
+          maxBlur: 10,
+          quality: 'high',
+        }),
+      ],
     });
     view.camera.fov = 35;
     view.camera.position.set(0, 2.5, 7);

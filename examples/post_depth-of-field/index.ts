@@ -2,17 +2,18 @@
  * Depth of field: `DepthOfFieldEffect` keeps one camera depth sharp and blurs what's nearer or farther, as a lens does
  *
  * The effect reads the scene's depth and gives every pixel a blur radius from its distance to `focusDistance`: none
- * within `focusRange`, growing to `maxBlur` at twice it. The sharp zone is a plane facing the camera, so the floor at
- * the shape's depth stays sharp with it. Sharp edges stay sharp against the blur behind them, and a blurred shape in
- * front spreads over what's behind it. The pane swaps in `TiltShiftEffect` with the same settings: it blurs by depth
- * too, but from its input's mipmaps, which leaves a soft halo round the sharp shape.
+ * within `focusRange`, growing over `focusFalloff` to `maxBlur`. The sharp zone is a plane facing the camera, so the
+ * floor at the shape's depth stays sharp with it. Sharp edges stay sharp against the blur behind them, and a blurred
+ * shape in front spreads over what's behind it. `quality` picks 48 taps a pixel or 16; `'auto'` takes 16 on a phone.
+ * `debug` paints the zones instead of blurring.
  *
- * Controls: tap a shape to focus on it; drag to orbit; the pane picks the focus, sets a manual distance, widens the
- * sharp zone, sets the blur and swaps the effect. URL flags: `?theme=light|dark`, `?renderer=webgl|webgpu`.
+ * Controls: tap a shape to focus on it; drag to orbit; the pane picks the focus, sets a manual distance, shapes the
+ * sharp zone and the blur, picks the quality and shows the zones. URL flags: `?theme=light|dark`, `?renderer=webgl|webgpu`.
  */
 
 import { Mesh3D, Vector3, View3D } from '@pixi/3d';
-import { DepthOfFieldEffect, OrbitCamera, TiltShiftEffect } from '@pixi/3d/extras';
+import { DepthOfFieldEffect, OrbitCamera } from '@pixi/3d/extras';
+import type { DepthOfFieldEffectOptions } from '@pixi/3d/extras';
 import { Application } from 'pixi.js';
 
 import { rendererPreference } from '../../playground/src/getPreference';
@@ -48,11 +49,13 @@ await app.init({
 });
 loading.progress(0.2);
 
-// maxBlur counts physical pixels, so it's scaled to look the same on a 2× screen.
-const depthOfField = new DepthOfFieldEffect({ focusRange: 0.65, maxBlur: MAX_BLUR * app.renderer.resolution });
-// Off until the pane swaps it in. Its sharp band and full blur are set from the depth of field's each frame.
-const tiltShift = new TiltShiftEffect({ enabled: false });
-const view3d = new View3D({ autoResize: true, passes: [depthOfField, tiltShift] });
+// maxBlur counts physical pixels, so it's scaled to look the same on a 2× screen. The default quality is 'auto'.
+let depthOfField = new DepthOfFieldEffect({
+  focusRange: 0.65,
+  focusFalloff: 0.65,
+  maxBlur: MAX_BLUR * app.renderer.resolution,
+});
+const view3d = new View3D({ autoResize: true, passes: [depthOfField] });
 const stage = new ThemeStage(view3d, { theme, fog: { near: 22, far: 48 } });
 
 // A shadow pass would cost a draw per shape and teach nothing here.
@@ -91,7 +94,11 @@ const orbit = new OrbitCamera({
 
 fitPortrait({ renderer: app.renderer, orbit, stage, minAspect: FIT_ASPECT });
 
-const settings = { focusOn: 1, manualDistance: 13, tiltShift: false };
+const settings = {
+  focusOn: 1,
+  manualDistance: 13,
+  quality: 'auto' as NonNullable<DepthOfFieldEffectOptions['quality']>,
+};
 const pane = new ThemePane({ title: 'Depth of field', stage });
 const focusRow = pane.addBinding(settings, 'focusOn', {
   label: 'Focus on',
@@ -110,16 +117,45 @@ manualRow.on('change', () => {
   focusRow.refresh();
 });
 
-const folder = pane.addFolder({ title: 'DepthOfFieldEffect' });
+let folder = addEffectRows();
 
-folder.addBinding(depthOfField, 'focusDistance', { readonly: true, interval: 300, format: (v) => v.toFixed(1) });
-folder.addBinding(depthOfField, 'focusRange', { min: 0.1, max: 3, step: 0.05 });
-folder.addBinding(depthOfField, 'maxBlur', { min: 0, max: BLUR_RANGE * app.renderer.resolution, step: 1 });
-// Each switch rebuilds the view's render graph once, which is fine for a toggle.
-pane.addBinding(settings, 'tiltShift', { label: 'Compare TiltShiftEffect' }).on('change', () => {
-  depthOfField.enabled = !settings.tiltShift;
-  tiltShift.enabled = settings.tiltShift;
-});
+/** The effect's own rows, bound to whichever effect is in the view */
+function addEffectRows(): ReturnType<typeof pane.addFolder> {
+  const rows = pane.addFolder({ title: 'DepthOfFieldEffect' });
+
+  rows
+    .addBinding(settings, 'quality', { options: { auto: 'auto', high: 'high', low: 'low' } })
+    .on('change', () => replaceEffect());
+  rows.addBinding(depthOfField, 'focusDistance', { readonly: true, interval: 300, format: (v) => v.toFixed(1) });
+  rows.addBinding(depthOfField, 'focusRange', { min: 0, max: 3, step: 0.05 });
+  rows.addBinding(depthOfField, 'focusFalloff', { min: 0.1, max: 6, step: 0.05 });
+  rows.addBinding(depthOfField, 'maxBlur', { min: 0, max: BLUR_RANGE * app.renderer.resolution, step: 1 });
+  rows.addBinding(depthOfField, 'debug');
+
+  return rows;
+}
+
+/**
+ * Swaps in an effect at the picked quality with the same settings: quality is fixed at construction, and replacing
+ * `passes` rebuilds the view's render graph once, which is fine for a pane row
+ */
+function replaceEffect(): void {
+  const { focusDistance, focusRange, focusFalloff, maxBlur, debug } = depthOfField;
+  const next = new DepthOfFieldEffect({
+    focusDistance,
+    focusRange,
+    focusFalloff,
+    maxBlur,
+    debug,
+    quality: settings.quality,
+  });
+
+  view3d.passes = [next];
+  depthOfField.destroy();
+  depthOfField = next;
+  folder.dispose();
+  folder = addEffectRows();
+}
 
 shapes.forEach((shape, i) =>
   shape.on('pointertap', () => {
@@ -142,12 +178,6 @@ function updateFocus(): void {
     view3d.camera.toLocal(worldPoint, undefined, cameraPoint);
     depthOfField.focusDistance = -cameraPoint.z;
   }
-
-  // The same zones in tilt-shift's terms: sharp within focalNear, full blur at focalFar.
-  tiltShift.focalDepth = depthOfField.focusDistance;
-  tiltShift.focalNear = depthOfField.focusRange;
-  tiltShift.focalFar = depthOfField.focusRange * 2;
-  tiltShift.maxBlur = depthOfField.maxBlur;
 }
 
 let elapsed = 0;
