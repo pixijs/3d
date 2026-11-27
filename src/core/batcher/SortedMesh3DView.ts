@@ -213,6 +213,7 @@ export class SortedMesh3DView<T extends Mesh3DData> {
     this._insertionBackoff = 0;
   }
 
+  /** The comparator returns -1, 0 or 1, since a fractional key difference is boxed on every call */
   private _sortFull(): void {
     const count = this.count;
     const keys = this._sortKeys;
@@ -225,7 +226,7 @@ export class SortedMesh3DView<T extends Mesh3DData> {
       localIndices[i] = i;
     }
 
-    localIndices.subarray(0, count).sort((a, b) => keys[a] - keys[b]);
+    localIndices.subarray(0, count).sort((a, b) => (keys[a] < keys[b] ? -1 : keys[a] > keys[b] ? 1 : 0));
 
     for (let i = 0; i < count; i++) {
       const local = localIndices[i];

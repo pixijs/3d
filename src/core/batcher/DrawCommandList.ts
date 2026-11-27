@@ -66,16 +66,28 @@ const _drawOptions: DrawOptions = {
   firstInstance: 0,
 };
 
-interface DrawIndirectEncoder {
-  drawIndirect(options: {
-    geometry: Geometry;
-    shader: Shader;
-    state: State;
-    topology: Topology;
-    indirectBuffer: GPUBuffer;
-    indirectOffset: number;
-  }): void;
+interface DrawIndirectOptions {
+  geometry: Geometry;
+  shader: Shader;
+  state: State;
+  topology: Topology;
+  indirectBuffer: GPUBuffer;
+  indirectOffset: number;
 }
+
+interface DrawIndirectEncoder {
+  drawIndirect(options: DrawIndirectOptions): void;
+}
+
+/** Refilled per draw so a replay allocates nothing, and emptied after so it pins no resource */
+const _drawIndirectOptions: DrawIndirectOptions = {
+  geometry: null!,
+  shader: null!,
+  state: null!,
+  topology: 'triangle-list',
+  indirectBuffer: null!,
+  indirectOffset: 0,
+};
 
 interface DrawCallsResolver {
   getGPUBuffer(buffer: Buffer): GPUBuffer;
@@ -364,8 +376,9 @@ export class DrawCommandList {
     from = 0,
     to = this.count,
   ): void {
-    const indirectBuffer = resolver.getGPUBuffer(data.drawCallsBuffer);
     const { bindGroup } = camera;
+    const options = _drawIndirectOptions;
+    options.indirectBuffer = resolver.getGPUBuffer(data.drawCallsBuffer);
     for (let i = from; i < to; i++) {
       const cmd = this.commands[i];
       if (cmd.dead) {
@@ -375,15 +388,17 @@ export class DrawCommandList {
       cmd.shader.groups[0] = cmd.globalBindGroup;
       cmd.shader.groups[1] = bindGroup;
       if (cmd.batchBindGroup) cmd.shader.groups[2] = cmd.batchBindGroup;
-      encoder.drawIndirect({
-        geometry: cmd.geometry,
-        shader: cmd.shader,
-        state: cmd.state,
-        topology: cmd.topology,
-        indirectBuffer,
-        indirectOffset: i * 20,
-      });
+      options.geometry = cmd.geometry;
+      options.shader = cmd.shader;
+      options.state = cmd.state;
+      options.topology = cmd.topology;
+      options.indirectOffset = i * 20;
+      encoder.drawIndirect(options);
     }
+    options.geometry = null!;
+    options.shader = null!;
+    options.state = null!;
+    options.indirectBuffer = null!;
   }
 
   /** Drops the recorded commands and releases every capture; the numeric args aren't this list's to free */
