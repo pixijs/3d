@@ -148,7 +148,12 @@ function writeCentreline(
       const y = points[p * 3 + 1];
       const z = points[p * 3 + 2];
 
-      if (i > 0) distance += Math.hypot(x - points[p * 3 - 3], y - points[p * 3 - 2], z - points[p * 3 - 1]);
+      if (i > 0) {
+        const dx = x - points[p * 3 - 3];
+        const dy = y - points[p * 3 - 2];
+        const dz = z - points[p * 3 - 1];
+        distance += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
 
       for (let side = 0; side < 2; side++) {
         const v = p * 2 + side;
