@@ -32,7 +32,9 @@ export interface OutputPassOptions {
  * Finishes a view's image: applies the tone curve and display encode to a scene that holds linear
  * light, or copies the image unchanged (see {@link View3D#toneMapping})
  *
- * A see-through background keeps its edges over the 2D content beneath. Unless it copies, the pass
+ * A see-through background keeps its edges over the 2D content beneath. Light brighter than its pixel's
+ * alpha, such as bloom over a soft edge, adds over that content rather than being clamped to the alpha;
+ * light dimmer than the alpha counts as the surface's own colour. Unless it copies, the pass
  * also dithers so smooth gradients don't band in an 8-bit target. A custom graph whose scene is linear
  * ({@link RenderGraph#sceneIsLinear}) needs one to finish the image. Inside a
  * {@link View3DOptions#graph | graph} builder, pass the builder's `options.toneMapping`, so a
