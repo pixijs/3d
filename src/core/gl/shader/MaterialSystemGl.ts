@@ -322,7 +322,7 @@ export class MaterialSystemGl {
     if (ownDescriptor && !level && !ownDescriptor.template) {
       throw new Error(
         `[MaterialSystemGl] The '${pass.name}' pass draws ${material.constructor.name} with a shader that has no ` +
-          "template. Give the pass a `level`, such as 'shape', to draw it on the material's template, or " +
+          "template. Give the pass a `level`, such as 'shape', to draw it with the material's own bits, or " +
           'give the shader a template of its own.',
       );
     }
@@ -413,10 +413,12 @@ export class MaterialSystemGl {
       );
     }
 
-    const outputLocations = addPassMaterialBits(bitsGl, pass, !!materialDescriptor.template);
-
     const level = pass.level;
     const filtered = level !== undefined && level !== 'color';
+    /** A level that drops bits draws on the engine template, which the kept engine bits are written for */
+    const ownTemplate = filtered ? undefined : materialDescriptor.template;
+    const outputLocations = addPassMaterialBits(bitsGl, pass, !!ownTemplate);
+
     const materialOverrides = materialDescriptor.overrides;
     if (filtered) {
       let kept = templateBitCount;
@@ -437,7 +439,7 @@ export class MaterialSystemGl {
 
     return scratchDescriptor.update({
       bitsGl,
-      template: materialDescriptor.template ?? template,
+      template: ownTemplate ?? template,
       overrides: {
         ...(filtered && materialOverrides ? declaredOverrides(materialOverrides, bitsGl) : materialOverrides),
         ...ownDescriptor?.overrides,

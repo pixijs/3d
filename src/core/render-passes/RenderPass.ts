@@ -104,24 +104,17 @@ export interface RenderPassOptions {
    */
   descriptor?: PassDescriptorOptions;
   /**
-   * How much of a material's shader this pass draws it with: the material's bits at this
-   * {@link ShaderBitLevel} and the levels before it, on the material's template
+   * How much of each material's shader this pass draws it with, as a {@link ShaderBitLevel}
    *
-   * The bits of the pass's `shaderDescriptor`, or of the material's entry for the pass, are added
-   * after them, then the `extraBits` of the material's entry. So a pass at `'shape'` can give one
-   * bit that colours the fragment, and each material's own vertex bits still run. On WebGL, leave
-   * `instanceFetchBitGl` out of those bits, since the material's list already fetches.
+   * - `'shape'` or `'cutout'`: the material's bits at this level and the ones before it, on the
+   *   engine's material template.
+   * - `'color'`: every bit, on the material's own template if it has one.
+   * - Left out: a material's main pass draws its whole shader, and any other pass needs a
+   *   `shaderDescriptor` with a template.
    *
-   * A `shaderDescriptor` that brings a template of its own is a whole shader, and is drawn as it
-   * is: it takes nothing from the material, at any level.
-   *
-   * Any of those bits can read the material's values and textures, as long as the material
-   * declares them, in its own bits or in the `extraBits` of its entry. A draw whose shader reads
-   * them binds the material, and one whose shader doesn't binds nothing.
-   *
-   * Left out, a material's main pass (opaque, transparent, transmission or blended refraction)
-   * draws with the whole shader, and any other pass draws only with a `shaderDescriptor` of its
-   * own.
+   * The pass then adds its `shaderDescriptor`'s bits and the `extraBits` of the material's entry
+   * for the pass, which can read only the values and textures the material declares. A
+   * `shaderDescriptor` with a template of its own is drawn as it is, at any level.
    */
   level?: ShaderBitLevel;
   /**
@@ -205,7 +198,7 @@ export class RenderPass<P extends View3DPipe = View3DPipe> {
    * Shader bits a material adds when it draws in this pass, so it writes the attached outputs
    *
    * Each attached output's {@link SceneOutput#bits | bits} entry for this pass's name, in order. A
-   * material with a template of its own ignores them.
+   * material with a template of its own ignores them wherever it draws on that template.
    */
   public readonly materialBits: readonly ShaderBit[];
 

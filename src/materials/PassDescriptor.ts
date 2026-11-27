@@ -41,20 +41,21 @@ export interface PassDescriptorOptions {
  * - `state`: the material's entry, the pass's own, then `material.state`.
  * - `topology`: the material's entry, the pass's own, `material.topology`, then the geometry's.
  *
- * A `shaderDescriptor` that brings a template is a whole shader: it is drawn as it is and takes
- * nothing from the material. One without a template adds its bits to each material's own, up to
- * the pass's level, and those bits can read the material's values and textures.
+ * {@link RenderPassOptions#level} says how a `shaderDescriptor` combines with the material's own
+ * bits.
  *
- * Otherwise a material's main pass
- * (opaque, transparent, transmission or blended refraction) draws with the material's shader, from
- * {@link BaseMaterial3D#getPrimaryDescriptor}, and skips the pass's own entry: `state` comes from
- * the material's entry, then `material.state`, and `topology` from the material's entry,
- * `material.topology`, then the geometry's.
+ * Otherwise a material's main pass (opaque, transparent, transmission or blended refraction) draws
+ * with the material's shader, from {@link BaseMaterial3D#getPrimaryDescriptor}, and skips the
+ * pass's own entry: `state` comes from the material's entry, then `material.state`, and `topology`
+ * from the material's entry, `material.topology`, then the geometry's.
  *
  * Meshes resolve these values when they build their draw data, so giving a field a new value after
  * a render isn't supported: {@link BaseMaterial3D#clone | clone} the material with the new entry
  * and assign the copy. A changed field of a `state`
  * object reaches the meshes after {@link Mesh3D#invalidate} on each one.
+ *
+ * A `shadow` entry makes every mesh with the material cast; set `castShadow = false` on a mesh
+ * after building it to stop one.
  * @example
  * ```ts
  * // Per-material override for one pass
@@ -67,9 +68,23 @@ export interface PassDescriptorOptions {
  *   },
  * });
  *
+ * // A shadow drawn with your own template, as written
+ * new BaseMaterial3D({
+ *   passes: {
+ *     shadow: {
+ *       shaderDescriptor: {
+ *         bitsGpu: [myShadowBit],
+ *         bitsGl: [instanceFetchBitGl, myShadowBit],
+ *         template: myShadowTemplate,
+ *       },
+ *     },
+ *   },
+ * });
+ *
  * // Pass-level default for every mesh in the pass
  * new MeshPass({
  *   name: 'xray',
+ *   level: 'shape',
  *   descriptor: { state: xrayState, shaderDescriptor: xrayShader },
  * });
  * ```
