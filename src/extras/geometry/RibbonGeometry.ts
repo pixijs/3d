@@ -288,7 +288,8 @@ export class RibbonGeometry extends Geometry3D {
       pointsPerLine === undefined
         ? [pointCount]
         : typeof pointsPerLine === 'number'
-          ? Array.from({ length: Math.floor(pointCount / pointsPerLine) }, () => pointsPerLine)
+          ? // oxlint-disable-next-line unicorn/no-new-array -- the argument is the length, and Array.from fills a list this long one element at a time
+            new Array<number>(Math.floor(pointCount / pointsPerLine)).fill(pointsPerLine)
           : pointsPerLine;
     const vertexCount = pointCount * 2;
 
