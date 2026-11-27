@@ -3,7 +3,8 @@ import type { TypedArray } from 'pixi.js';
 
 import type { ShaderBit } from '../../core/shader/ShaderBit';
 import { Geometry3D } from '../../geometry/Geometry3D';
-import { computeBoundsFromPositions } from '../../geometry/utils/Geometry3DUtils';
+import { Box } from '../../math/shapes/Box';
+import { Vector3 } from '../../math/vector/Vector3';
 import { ribbonBits } from './ribbonBit';
 
 /**
@@ -197,6 +198,33 @@ function writeCentreline(
 }
 
 /**
+ * The box round the points, read from the first of each point's two vertices. A function of its own: as a loop in
+ * the constructor it measured 4 to 14 KB of garbage a build
+ */
+function boundsOfPoints(positions: Float32Array): Box {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  for (let i = 0; i < positions.length; i += 6) {
+    const x = positions[i];
+    const y = positions[i + 1];
+    const z = positions[i + 2];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+
+  return new Box(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
+}
+
+/**
  * A line of points drawn as a strip that turns to face the camera, with a width in world units or pixels
  *
  * Use it for wide lines, paths, trails, cables, hair and fibres: the `'line-list'` topology draws lines only 1 px
@@ -327,7 +355,7 @@ export class RibbonGeometry extends Geometry3D {
       start += lineSizes[l];
     }
 
-    const bounds3D = computeBoundsFromPositions(positions);
+    const bounds3D = boundsOfPoints(positions);
     const pad = widthUnits === 'world' ? widest * 0.5 : 0;
     bounds3D.min.set(bounds3D.min.x - pad, bounds3D.min.y - pad, bounds3D.min.z - pad);
     bounds3D.max.set(bounds3D.max.x + pad, bounds3D.max.y + pad, bounds3D.max.z + pad);
