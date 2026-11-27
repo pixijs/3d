@@ -51,7 +51,7 @@ export class InsetPasses {
     this._passes = [
       new InsetSkyPass(camera),
       new MeshPass({ name: 'opaque', camera }),
-      new MeshPass({ name: pass, camera }),
+      new MeshPass({ name: pass, camera, level: 'shape' }),
       new MeshPass({ name: 'transparent', camera, sort: 'distance' }),
     ];
     view3d.passes = [...view3d.passes, ...this._passes];

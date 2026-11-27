@@ -1,3 +1,4 @@
+import { resolveShaderBits } from './resolveShaderBits';
 import type { ShaderBit, ShaderOverrideDef, ShaderOverrideType } from './ShaderBit';
 
 /** @internal */
@@ -74,6 +75,26 @@ export function collectOverrideDefs(bits: ShaderBit[]): Record<string, Normalize
   return defs;
 }
 
+/**
+ * The `overrides` the bits declare, `requires` included, since WebGPU rejects a pipeline that sets
+ * a constant its shader doesn't declare
+ * @internal
+ */
+export function declaredOverrides(overrides: Record<string, number>, bits: ShaderBit[]): Record<string, number> {
+  const declared: Record<string, number> = {};
+  const resolved = resolveShaderBits(bits);
+
+  for (let i = 0; i < resolved.length; i++) {
+    const defs = resolved[i].overrideDefs;
+    if (!defs) continue;
+    for (const name in defs) {
+      if (name in overrides) declared[name] = overrides[name];
+    }
+  }
+
+  return declared;
+}
+
 function formatWgslLiteral(type: ShaderOverrideType, value: number): string {
   if (type === 'u32') {
     const intValue = Math.trunc(value);
@@ -106,7 +127,7 @@ export function emitOverridesWgsl(defs: Record<string, NormalizedShaderOverrideD
 
 /**
  * Gives an integral `f32` a `.0`, or GLSL reads an `int`, and a `u32` no `u` suffix, so shader code
- * compares it with a bare int in both languages, as `toonMaterialBit` does with `HAS_UVS == 1`
+ * compares it with a bare int in both languages
  */
 function formatGlslLiteral(type: ShaderOverrideType, value: number): string {
   if (type === 'u32') {

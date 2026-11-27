@@ -30,8 +30,8 @@ WGSL for WebGPU and GLSL for WebGL.
 - `OrbitCamera` from `@pixi/3d/extras`: drag to orbit, with damping and distance and angle limits.
 - `Application`, and `Color` (the edge colour's conversion to rgb), from `pixi.js`.
 
-The shadow pass draws casters with its own shader, which extra bits never reach, so the logo casts no shadow and the
-stage's key light doesn't render a shadow map (`stage.key.castShadow = false`).
+The shadow pass draws a caster with only the bits that carry a `level`, and these extra bits have none, so the logo
+casts no shadow and the stage's key light doesn't render a shadow map (`stage.key.castShadow = false`).
 
 ## Controls
 

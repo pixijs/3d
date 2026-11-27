@@ -163,7 +163,7 @@ const marker = new Sprite3D({
 - It makes its own unlit, double-sided `FlatMaterial` with `alphaMode: 'blend'`, and draws its colours as authored under the default `toneMapping: 'none'`. `alphaMode: 'mask'` cuts out foliage with depth writes and no sorting.
 - `material: shared` shares one material across sprites, and any `texture`, `tint` or `alpha` you also pass is written into that shared material, changing every sprite that uses it.
 - Pass a `position` (or `scale`/`anchor`) when you create it: a `Sprite3D` whose transform is never set currently draws 1×1 units instead of its texture size.
-- `castShadow` stays off: the shadow pass doesn't turn billboards. Turn it on only with `billboardMode: 'none'`.
+- `castShadow` is off by default. In the shadow pass a billboard turns to face the light, so with it on a sprite casts its whole card whatever the camera sees; with `billboardMode: 'none'` it casts the card as it stands.
 - **Sprite sheets batch.** Sprites batch by shader (billboard mode, blending), geometry and image _source_, not by material, so sprites showing frames of one sheet draw together, past 16 of them as one instanced draw. Animate with `sprite.texture = sheet.textures['walk-02.png']`: a frame of the same source uploads only that sprite's values. Sprites from separate images draw separately, and blended ones interleaving in depth cost close to a draw per sprite, so give each blended effect one sheet and one `billboardMode`. For tens of thousands of static sprites, use `BatchedMesh3D` slots with `PlaneGeometry.spriteQuad`.
 
 ## Pointer events, resolution and resize

@@ -206,7 +206,7 @@ export class BackgroundPass extends RenderPass {
       const bits: ShaderBit[] = [bit];
       if (decodeBit) bits.push(decodeBit);
       if (toneBit) bits.push(toneBit);
-      this._shader = this.pipe.renderer.material3d.compilePassShader(bits, template);
+      this._shader = this.pipe.renderer.material3d.compileViewShader(bits, template);
       this._cachedToneBit = toneBit;
       this._cachedBackgroundBit = bit;
       this._cachedDecodeBit = decodeBit;

@@ -438,7 +438,7 @@ export class DrawList {
 
     const kinds = this._kinds;
     const mask = kinds.length - 1;
-    const bound = this.commandList.commands[0].batchBindGroup ? item.material._textureSetId : 0;
+    const bound = cache.bindsMaterial ? item.material._textureSetId : 0;
 
     for (let h = kindHash(cache.batchKey, bound) & mask; ; h = (h + 1) & mask) {
       const entry = kinds[h];
@@ -499,8 +499,7 @@ export class DrawList {
   }
 
   /**
-   * Records a tail command for a kind no command draws; a list's commands all carry a material
-   * group or none do, as the batchers build them, so the first says which
+   * Records a tail command for a kind no command draws
    * @returns The command's index, or -1 when the tail is full
    */
   private _record(item: Mesh3DData, cache: MeshPassCache): number {
@@ -517,7 +516,7 @@ export class DrawList {
     }
 
     const webgl = this.glData.indexStaging !== null;
-    const bindsMaterial = commands[0].batchBindGroup !== undefined;
+    const bindsMaterial = cache.bindsMaterial;
     const material = item.material;
     const alloc = item.geometry._geometryAtlasAllocation;
     const geometry = alloc ? alloc.atlas.geometry : item.geometry;

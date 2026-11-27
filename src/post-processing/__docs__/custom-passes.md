@@ -27,6 +27,7 @@ view3d.passes = [
   new OutlinePass(),
   new MeshPass({
     name: 'highlight',
+    level: 'shape',
     descriptor: { shaderDescriptor: solidMeshDescriptor({ color: 0xffffff, extrude: 0.06 }), state: shell },
   }),
 ];
@@ -36,7 +37,9 @@ mesh.onpointerenter = () => mesh.enablePass('highlight');
 mesh.onpointerleave = () => mesh.disablePass('highlight');
 ```
 
-- **A name of your own needs a shader.** It comes from the pass's `descriptor`, or from a material's entry for that name in its {@link BaseMaterial3DOptions#passes | passes} option. {@link solidMeshDescriptor} draws in one flat colour, which you set when you create it and can't change later. The first hover can stall while the pass's shader compiles, as [When shaders compile](../../__docs__/concepts/rendering.md#when-shaders-compile) describes.
+- **A name of your own needs a shader.** It comes from the pass's `descriptor`, or from a material's entry for that name in its {@link BaseMaterial3DOptions#passes | passes} option. {@link solidMeshDescriptor} draws in one flat colour, which you set when you create it and can't change later.
+- **`level: 'shape'` draws each mesh in its own shape.** The pass keeps each mesh's skinning, morph targets and billboard, and the material's bits whose {@link ShaderBit#level | level} is `'shape'`. Then it adds its own shader's code. {@link solidMeshDescriptor} needs it, since it brings no {@link ShaderBitTemplate | template} of its own. The first hover can stall while the pass's shader compiles, as [When shaders compile](../../__docs__/concepts/rendering.md#when-shaders-compile) describes.
+- **A material can bring its own bits to the pass.** `passes: { highlight: { extraBits: [glowBit] } }` adds `glowBit` for that pass alone. Its fields join the material's `data`, so it can read them, as {@link PassDescriptorOptions#extraBits} says.
 - **Give the pass a `state` too.** Without one, the pass uses the material's state. A pushed-out shell then covers the whole mesh, and a second draw of an opaque mesh with no `extrude` lands exactly on the first. The depth test keeps only what's nearer than what's already there, so it rejects that draw. Cull the front faces of a shell, as above. For a draw with no `extrude`, turn `depthTest` off so it draws over what's already there.
 - **Names are limited.** All views on the page share a limited number of name slots, and a name past the last slot joins nothing. Use a few fixed names rather than one per object. {@link RenderPassBit} has the details.
 
@@ -148,6 +151,7 @@ const view3d = new View3D({
         name: 'opaque',
         sort: 'key',
         camera: maskCamera,
+        level: 'shape',
         descriptor: { shaderDescriptor: solidMeshDescriptor({ color: 0xffffff }) },
       }),
     );
@@ -160,9 +164,9 @@ view3d.root.addChild(maskCamera);
 app.stage.addChild(view3d, new Sprite(mask));
 ```
 
-- The {@link ForwardRenderPass} is named `'opaque'`, so it draws the meshes whose materials put them in the opaque pass. It uses the shader in its `descriptor` rather than the materials' own shaders.
+- The {@link ForwardRenderPass} is named `'opaque'`, so it draws the meshes whose materials put them in the opaque pass. At `level: 'shape'` it keeps each mesh's shape and colours every pixel with the shader in its `descriptor`, in place of the materials' own colour and lighting.
 - It draws from the mask's camera, so place and move that camera. No pass here draws from `view3d.camera`, so moving it changes nothing. The mask's camera has a render texture, so the view puts nothing on screen and the sprite shows the texture instead.
-- Give a pass's `descriptor` a whole {@link ShaderDescriptorOptions | shader descriptor}, such as the one {@link solidMeshDescriptor} returns, because a pass has no default {@link ShaderBitTemplate | template}. A template is the shader source that shader bits fill in, and shader bits are small pieces of shader code. [Toon and custom materials](../../extras/__docs__/custom-materials.md#adding-your-own-shader-code) covers writing shader bits.
+- A pass with no `level` draws with its `descriptor`'s shader alone, so that {@link ShaderDescriptorOptions | shader descriptor} must bring a {@link ShaderBitTemplate | template} of its own. A template is the shader source that shader bits fill in, and shader bits are small pieces of shader code. [Toon and custom materials](../../extras/__docs__/custom-materials.md#adding-your-own-shader-code) covers writing shader bits.
 
 ## Next steps
 

@@ -1,5 +1,6 @@
 import type { RenderGraph } from '../../core/render-graph/RenderGraph';
 import { ForwardRenderPass } from '../../core/render-passes/ForwardRenderPass';
+import type { ShaderBitLevel } from '../../core/shader/ShaderBit';
 import type { PassDescriptorOptions } from '../../materials/PassDescriptor';
 import type { Camera3D } from '../../scene/cameras/Camera3D';
 import { Pass3D } from '../Pass3D';
@@ -32,6 +33,8 @@ export interface MeshPassOptions extends Pass3DOptions {
    * back to this, then to the material's own state and topology.
    */
   descriptor?: PassDescriptorOptions;
+  /** How much of each material's shader the pass draws it with; see {@link RenderPassOptions#level} */
+  level?: ShaderBitLevel;
   /**
    * Draw order; {@link ForwardRenderPassOptions#sort} has the choices
    * @default 'key'
@@ -59,7 +62,7 @@ export interface MeshPassOptions extends Pass3DOptions {
  * draw.
  * @example
  * ```ts
- * new View3D({ passes: [new MeshPass({ name: 'wireframe', descriptor: wireframeDescriptor })] });
+ * new View3D({ passes: [new MeshPass({ name: 'wireframe', level: 'shape', descriptor: wireframeDescriptor })] });
  * new Material3D({ passes: { wireframe: true } });
  * ```
  * @category rendering
@@ -95,6 +98,7 @@ export class MeshPass extends Pass3D {
         name: options.name,
         description: options.description,
         descriptor: options.descriptor,
+        level: options.level,
         sort: options.sort ?? 'key',
         camera: options.camera,
       }),

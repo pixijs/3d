@@ -83,9 +83,8 @@ export function createCards(material: BaseMaterial3D, parent: Container3D): Card
       material,
       position: { x, y, z },
       angle: { x: 0, y: turn, z: 0 },
-      // The shadow pass doesn't read `alphaMode` or `doubleSided` yet: a masked card would cast a solid rectangle,
-      // and a card whose back faces the light none. The guide's advice is to turn casting off on such cards; turn it
-      // back on once shadows follow the mask.
+      // The shadow pass doesn't read `doubleSided` yet: a card whose back faces the light would cast nothing. The
+      // guide's advice is to turn casting off on such cards; turn it back on once shadows draw both sides.
       castShadow: false,
       parent,
     });

@@ -1,3 +1,5 @@
+import { baseAlphaBit } from '../../../core/shader/bits/baseAlphaBit';
+import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
@@ -8,7 +10,8 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 export const pbrMaterialBit: ShaderBit = {
   name: 'pbrMaterial',
 
-  textures: ['baseColor', 'metallicRoughness', 'occlusion', 'normal'],
+  textures: ['metallicRoughness', 'occlusion', 'normal'],
+  requires: [baseColorTextureBit, baseAlphaBit],
   bindings: {
     material: {
       baseColor: 'vec4<f32>',
@@ -41,10 +44,8 @@ export const pbrMaterialBit: ShaderBit = {
   let iorRatio = (ior - 1.0) / (ior + 1.0);
   fresnelF0 = vec3<f32>(iorRatio * iorRatio);
 
-  var baseTex = sampleBaseColor(input.vUV);
   let baseTexLinear = baseTex.rgb / max(baseTex.a, 0.001);
-  baseTex = vec4<f32>(pow(baseTexLinear, vec3<f32>(2.2)), baseTex.a);
-  baseColor *= baseTex;
+  baseColor *= vec4<f32>(pow(baseTexLinear, vec3<f32>(2.2)), baseTex.a);
 
   let mrTex = sampleMetallicRoughness(input.vUV);
   metallic *= mrTex.b;
@@ -59,7 +60,6 @@ export const pbrMaterialBit: ShaderBit = {
   roughness = clamp(max(roughness, 0.045) + geometricRoughness, 0.0, 1.0);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 
   viewDir = normalize(camera.uCameraPosition.xyz - input.vPosition);
   fresnelF0 = mix(fresnelF0, albedo, metallic);
@@ -91,10 +91,8 @@ export const pbrMaterialBit: ShaderBit = {
   float iorRatio = (ior - 1.0) / (ior + 1.0);
   fresnelF0 = vec3(iorRatio * iorRatio);
 
-  vec4 baseTex = sampleBaseColor(vUV);
   vec3 baseTexLinear = baseTex.rgb / max(baseTex.a, 0.001);
-  baseTex.rgb = pow(baseTexLinear, vec3(2.2));
-  baseColor *= baseTex;
+  baseColor *= vec4(pow(baseTexLinear, vec3(2.2)), baseTex.a);
 
   vec4 mrTex = sampleMetallicRoughness(vUV);
   metallic *= mrTex.b;
@@ -109,7 +107,6 @@ export const pbrMaterialBit: ShaderBit = {
   roughness = clamp(max(roughness, 0.045) + geometricRoughness, 0.0, 1.0);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 
   viewDir = normalize(uCameraPosition.xyz - vPosition);
   fresnelF0 = mix(fresnelF0, albedo, metallic);

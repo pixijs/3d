@@ -530,9 +530,10 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    *
    * Local `+Z` turns to face the viewer, so author a card facing `+Z`; any material works, lit or
    * unlit. A solid mesh keeps its depth and the scale along each axis as it turns, but loses the
-   * shear of a non-uniformly scaled parent under a rotation. Its shadow and its culling use the
-   * unturned mesh, so geometry off-centre from its origin can be culled while on screen, and meshes
-   * with different modes don't share a draw.
+   * shear of a non-uniformly scaled parent under a rotation. Its culling uses the unturned mesh, so
+   * geometry off-centre from its origin can be culled while on screen; a spherical one's shadow
+   * faces the light and a cylindrical one's turns about its up axis toward it, and meshes with
+   * different modes don't share a draw.
    * @example
    * ```ts
    * card.billboardMode = 'cylindrical';
@@ -616,6 +617,7 @@ export class Mesh3D extends Container3D implements Mesh3DData {
    * ```
    */
   public invalidate(): void {
+    for (const bit in this._passCache) this._passCache[bit].markStale();
     this._markBatchDirty();
   }
 

@@ -1,3 +1,5 @@
+import { baseAlphaBit } from '../../../core/shader/bits/baseAlphaBit';
+import { baseColorTextureBit } from '../../../core/shader/bits/baseColorTextureBit';
 import type { ShaderBit } from '../../../core/shader/ShaderBit';
 
 /**
@@ -8,7 +10,7 @@ import type { ShaderBit } from '../../../core/shader/ShaderBit';
 export const flatMaterialBit: ShaderBit = {
   name: 'flatMaterial',
 
-  textures: ['baseColor'],
+  requires: [baseColorTextureBit, baseAlphaBit],
 
   bindings: {
     material: {
@@ -23,11 +25,9 @@ export const flatMaterialBit: ShaderBit = {
       material: /*wgsl*/ `
   var baseColor = inputTint(material.baseColor, material.displayBaseColor);
 
-  let baseTex = sampleBaseColor(input.vUV);
   baseColor *= vec4<f32>(decodeColor(baseTex.rgb / max(baseTex.a, 0.001)), baseTex.a);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 `,
     },
   },
@@ -37,11 +37,9 @@ export const flatMaterialBit: ShaderBit = {
       material: /*glsl*/ `
   vec4 baseColor = inputTint(material.baseColor, material.displayBaseColor);
 
-  vec4 baseTex = sampleBaseColor(vUV);
   baseColor *= vec4(decodeColor(baseTex.rgb / max(baseTex.a, 0.001)), baseTex.a);
 
   albedo *= baseColor.rgb;
-  alpha *= baseColor.a;
 `,
     },
   },

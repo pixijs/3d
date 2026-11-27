@@ -90,8 +90,8 @@ setEdgeColor(edge.color);
 data.dissolve = START_DISSOLVE;
 data.wobble = START_WOBBLE;
 
-// The model's own material, since this one replaces it at once. The shadow pass draws casters with a shader of its
-// own, which a material's extra bits never reach, so the logo casts nothing rather than a whole, still shadow.
+// The model's own material, since this one replaces it at once. The shadow pass draws a caster with only the bits
+// that carry a `level`, which these extra bits don't, so the logo casts nothing rather than a whole, still shadow.
 const logo = await loading.load(() => loadPixiLogo({ material: 'source', castShadow: false }));
 
 logo.setMaterial(material);

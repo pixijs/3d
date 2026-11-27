@@ -20,8 +20,8 @@ ones follow you.
   anchor, since an off-centre one would drift as the camera moves.
 - `Mesh3D` `billboardMode`: on the clay cubes, `'cylindrical'` replaces their turn about the up axis and `'spherical'`
   their whole rotation, both keeping their scale; a mesh's default is `'none'`, where they spin at their own angles.
-- Nothing casts here: a `Sprite3D` doesn't cast by default, and the cubes set `castShadow: false`, since the shadow
-  pass doesn't turn billboards. `stage.key.castShadow = false` then skips the shadow pass.
+- Nothing casts here: a `Sprite3D` doesn't cast by default, and the cubes set `castShadow: false`, since a billboard
+  turns to face the light in the shadow pass. `stage.key.castShadow = false` then skips the shadow pass.
 - `Container3D` and `Vector3`: the cubes' parent, and the camera's up, which the visuals use to hang the spherical
   sprite's tag under its bottom edge.
 - `View3D`: the 3D scene inside pixi's stage, and its `camera`.

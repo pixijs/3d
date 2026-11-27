@@ -45,15 +45,15 @@ export function materialBitsFor(outputs: readonly SceneOutput[], pass: string): 
 }
 
 /**
- * Returns `undefined`, which compiles the colour alone, when there's no `pass` yet or `ownTemplate` is set
+ * Returns `undefined`, which compiles the colour alone, when `ownTemplate` is set
  * @internal
  */
 export function addPassMaterialBits(
   bits: ShaderBit[],
-  pass: RenderPass | undefined,
+  pass: RenderPass,
   ownTemplate: boolean,
 ): readonly string[] | undefined {
-  if (!pass || ownTemplate) return undefined;
+  if (ownTemplate) return undefined;
 
   const materialBits = pass.materialBits;
   for (let i = 0; i < materialBits.length; i++) bits.push(materialBits[i]);

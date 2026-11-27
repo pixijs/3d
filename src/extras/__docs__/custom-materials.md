@@ -62,7 +62,7 @@ The first hover can stall a frame while the outline's shader compiles, as [When 
 
 - {@link OutlinePassOptions#width | width} is in each mesh's own units, so a model scaled down to fit gets a thinner outline.
 - A shape with hard edges, such as a cube, has separate normals on each side of an edge, so its outline has gaps there.
-- Keep a mesh whose geometry has no normals, such as the fox from the [Quick start](../../__docs__/getting-started/quick-start.md#load-a-model), out of the pass. If it joins, rendering throws and the app stops drawing.
+- Keep a mesh whose geometry has no normals, such as the fox from the [Quick start](../../__docs__/getting-started/quick-start.md#load-a-model), out of the pass. With no normals to push along, every vertex moves the same way, so its outline is the mesh shifted to one side and not a rim.
 - You set the pass's width and colour when you create it, and can't change them later. To give one material its own width and colour, pass a {@link solidMeshDescriptor} when you create the material: `passes: { outline: { shaderDescriptor: solidMeshDescriptor({ color: 0x241a33, extrude: 0.1 }) } }`.
 - Setting the pass's {@link Pass3D#enabled | enabled} to `false` hides every outline.
 
@@ -130,11 +130,13 @@ When {@link BaseMaterial3D#alphaMode | alphaMode} is `'opaque'`, the default, th
 
 Fragment code can also read the world position and the texture coordinates: `input.vPosition` and `input.vUV` in WGSL, `vPosition` and `vUV` in GLSL. Every material's shader also has `global.uTime`, the seconds since the page loaded, and `camera.uCameraPosition`, the camera's position. In GLSL they're `uTime` and `uCameraPosition`.
 
-Shadows and outlines don't run your vertex code. If a bit moves vertices, their shadow and outline stay where the vertices were.
+Shadows and outlines run a bit's vertex code only when the bit sets {@link ShaderBit#level | level} to `'shape'`. Without it, the shadow and outline stay where the vertices were. A bit that discards pixels with `level: 'cutout'` cuts the same holes in the shadow, but not in the outline. A bit with a level can use only the template's locals, such as `albedo`, `alpha` and `finalColor`, unless it requires the bit that declares the local. Put code that writes `emissive` or `roughness` in a second bit with no level.
+
+A material whose `descriptor` brings its own template draws its shadow and outline on the engine's template, with only its bits that have a level. Those bits can't rely on your template. To draw one of those passes your own way, give the material's entry for it a shader with a template, which is drawn as written: `passes: { shadow: { shaderDescriptor: { bitsGpu, bitsGl, template } } }`. On WebGL, list `instanceFetchBitGl` in its `bitsGl`. A `shadow` entry makes every mesh with the material cast.
 
 A bit can also sample its own textures. For each one, {@link ShaderBit#textures} names the functions the shader gets, and says how to undo the alpha that PixiJS multiplies into images by default. Set the textures with the {@link BaseMaterial3DOptions#textures | textures} option, or later through {@link BaseMaterial3D#textures | material.textures}. After dividing out the alpha, pass a colour image through `decodeColor` to convert it to the colour space the shader works in, as {@link BaseMaterial3D#colorSpace} explains.
 
-The extras include two ready-made bits for `extraBits`. {@link glossBit} adds a sharp, wet-plastic reflection of the view's environment to a {@link Material3D} or {@link PhongMaterial}, but not to a `ToonMaterial`. {@link dissolveBit} cuts away any material's surface in a noise pattern as the material's `data.dissolve` goes from 0 to 1. At 0 the surface is whole, and at 1 it's gone. The bit adds a glow along the cut in the colour of `data.dissolveEdgeColor`. By default that colour is black, so the cut has no glow. Shadows and outlines draw with their own shaders, so they stay whole.
+The extras include two ready-made bits for `extraBits`. {@link glossBit} adds a sharp, wet-plastic reflection of the view's environment to a {@link Material3D} or {@link PhongMaterial}, but not to a `ToonMaterial`. {@link dissolveBit} cuts away any material's surface in a noise pattern as the material's `data.dissolve` goes from 0 to 1. At 0 the surface is whole, and at 1 it's gone. The bit adds a glow along the cut in the colour of `data.dissolveEdgeColor`. By default that colour is black, so the cut has no glow. Its level is `'cutout'`, so a dissolving mesh's shadow has the same holes, but an outline stays whole.
 
 You can't change `extraBits` after you create a material. To add a bit to an existing material, such as one that came with a loaded model, {@link BaseMaterial3D#clone | clone} it. Here, assigning {@link Model3D#materials | materials} gives one model, `enemy`, its own copies, as [Loading models](../../assets/__docs__/models.md#a-source-and-its-models) shows:
 

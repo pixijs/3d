@@ -222,6 +222,7 @@ export class Mesh3DBatch {
 
   public invalidate(index: number): void {
     const item = this.items[index] as Mesh3DSlot;
+    for (const bit in item._passCache) item._passCache[bit].markStale();
     if (!item._batchDirty) {
       item._batchDirty = true;
       if (this._dirtyIndices) {

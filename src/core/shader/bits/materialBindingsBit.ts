@@ -1,6 +1,8 @@
 import { collectTextureNames } from '../../../materials/utils/validateMaterialTextureSlots';
-import { mergeMaterialStruct } from '../codegen/materialStruct';
-import type { BindingGroup, ShaderBit } from '../ShaderBit';
+import { assertBitIdentity } from '../bitRegistry';
+import { materialStructSnapshot, mergeMaterialStruct } from '../codegen/materialStruct';
+import { resolveShaderBits } from '../resolveShaderBits';
+import type { BindingGroup, ShaderBit, StructDefinition } from '../ShaderBit';
 
 /**
  * `'direct'` draws one material, reading its row as a uniform; `'merged'` instances a run of
@@ -38,4 +40,49 @@ export function materialBindingsBit(bits: readonly ShaderBit[], form: MaterialSh
   materialBits.set(key, bit);
 
   return bit;
+}
+
+const layoutBits = new Map<string, ShaderBit>();
+
+/** Hashes the content, so a module evaluated twice names a layout the same (`assertBitIdentity`) */
+function layoutId(key: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 0x01000193);
+
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * A bit with no code that declares a material's whole struct and texture list; listed first, it
+ * fixes the shader's layout, and its name stands for that layout in shader cache keys
+ * @internal
+ */
+export function materialLayoutBit(struct: StructDefinition, textureNames: readonly string[]): ShaderBit {
+  const key = `${materialStructSnapshot(struct)}|${textureNames.join('|')}`;
+  let bit = layoutBits.get(key);
+  if (bit) return bit;
+
+  bit = { name: `materialLayout:${layoutId(key)}`, bindings: { material: struct }, textures: [...textureNames] };
+  assertBitIdentity(bit);
+  layoutBits.set(key, bit);
+
+  return bit;
+}
+
+function declaresMaterialData(bit: ShaderBit): boolean {
+  return !!bit.bindings?.material || !!bit.textures?.length;
+}
+
+/**
+ * The index of the first bit that reads the material, through `requires` too, or -1
+ * @internal
+ */
+export function firstBitReadingMaterial(bits: readonly ShaderBit[]): number {
+  for (let i = 0; i < bits.length; i++) {
+    const bit = bits[i];
+
+    if ((bit._readsMaterial ??= resolveShaderBits([bit]).some(declaresMaterialData))) return i;
+  }
+
+  return -1;
 }

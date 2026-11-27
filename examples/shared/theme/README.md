@@ -354,8 +354,8 @@ bars.count = 2;
 bars.update();
 ```
 
-A pass helper's `MeshPass` needs no options of its own: InsetView builds a plain `new MeshPass({ name, camera })`, and
-each helper's pass material brings its solid shader.
+A pass helper's `MeshPass` needs one option of its own: InsetView builds `new MeshPass({ name, camera, level: 'shape' })`,
+and each helper's pass material brings its solid shader, which draws at that level.
 
 ## PathHelper.ts, RingHelper.ts, DimensionHelper.ts and GridHelper.ts
 

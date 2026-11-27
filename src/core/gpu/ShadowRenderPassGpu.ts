@@ -10,59 +10,15 @@ import type { RenderSession } from '../render-passes/RenderSession';
 import { MAX_CASCADES } from '../render-passes/shadow/csmUtils';
 import { cascadeCountFor, castsShadowThisFrame } from '../render-passes/shadow/shadowPassUtils';
 import { ShadowRenderPassBase } from '../render-passes/shadow/ShadowRenderPassBase';
-import type { ShaderBitTemplate } from '../shader/ShaderBitTemplate';
+import { DEPTH_EMPTY } from '../textures/DefaultTextures';
 import { produceCpuCompaction, produceVisibilityCompaction } from './cull';
-import { shadowGlobalBitGpu } from './shader/shadowGlobalBitGpu';
+import { bindBatchStorage } from './renderForwardBatchesGpu';
 import type { View3DPipeGpu } from './View3DPipeGpu';
 
 interface ShadowRenderPassGpuOptions {
   renderer: WebGPURenderer;
   shadowMapHandle: DepthHandle;
 }
-
-/** Declares `normal` and `tangent` with the material template's types, for the morph and skinning bits to write */
-const shadowGpuTemplate = /*wgsl*/ `
-
-{{header}}
-{{vertexHeader}}
-
-@vertex
-fn mainVertex(
-  input: VertexInput,
-  @builtin(instance_index) ii: u32,
-  @builtin(vertex_index) vid: u32
-) -> VertexOutput {
-  var output: VertexOutput;
-
-  var position: vec4<f32>;
-
-  let renderable = uRenderableStorage[uRenderableInstanceStorage[ii].id];
-  let batchWorldMatrix = uRenderableStorage[0].transform;
-
-  var normal = vec3<f32>(0.0);
-  var tangent = vec3<f32>(0.0);
-
-  {{vertexInput}}
-
-  let worldPosition = batchWorldMatrix * renderable.transform * position;
-  let clipPosition = camera.uViewProjectionMatrix * worldPosition;
-
-  output.position = clipPosition;
-
-  {{vertexEnd}}
-
-  return output;
-}
-
-@fragment
-fn mainFragment(input: FragmentInput){
-}
-`;
-
-const shadowTemplate: ShaderBitTemplate = {
-  bindGroups: [{ name: 'global', ubo: true }, 'camera', 'local'],
-  gpu: shadowGpuTemplate,
-};
 
 /** @internal */
 export interface ShadowDataGpu extends ShadowData {
@@ -89,12 +45,8 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
       description: 'Renders shadow-casting scene geometry into each light shadow map.',
       bit: RenderPassBit.SHADOW,
       shadowMapHandle: options.shadowMapHandle,
+      level: 'cutout',
       descriptor: {
-        shaderDescriptor: {
-          bitsGpu: [shadowGlobalBitGpu],
-          template: shadowTemplate,
-          includeGlobal: false,
-        },
         state: shadowState,
       },
     });
@@ -137,7 +89,6 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           commandList: list.commandList,
           drawData: list.drawData,
           passBit: this.bit,
-          bindsMaterial: false,
           batch,
           view3d,
         });
@@ -202,7 +153,8 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
   /**
    * Binds each layer rather than pushing it, and resets `activeTarget`, as the next pass binds its own;
    * cascade camera buffers opt out of pixi's GC, which can't see bundles use them, and
-   * `releaseShadowCascades` frees them
+   * `releaseShadowCascades` frees them. `uShadowMap` holds `DEPTH_EMPTY` while the cascades draw, as
+   * WebGPU rejects sampling a depth attachment; both swaps are unwatched, so they move no listener
    */
   public override render(session: RenderSession): void {
     const { view3d, lights } = session;
@@ -210,7 +162,10 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
     const renderer = this.pipe.renderer;
     const encoder = renderer.encoder;
     const pipeline = renderer.pipeline;
+    const { group, slot } = view3d._graph.globalTextureBindings.shadowMap;
+    const shadowMapIndex = group.layout![slot];
 
+    group.setResourceUnwatched(DEPTH_EMPTY.source, shadowMapIndex);
     pipeline.setColorMask(0b0000);
 
     for (const light of lights) {
@@ -246,10 +201,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           const recorded = result.bundle;
 
           if (!recorded || result.isBundleStale(list, cameraBindGroup) || !encoder.isBundleValid(recorded)) {
-            const { globalBindGroup } = session;
-
-            globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
 
             encoder.beginBundle(`shadow cascade ${c} batch ${batch.uid}`);
             if (result.direct) list.commandList.replayDirect(encoder, result.indirectDrawData, cascade.cameraData);
@@ -271,8 +223,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
           commandList.touch(renderer.gc.now);
           this._bundleRun.push(result.bundle!);
           if (!result.direct && commandList.count > commandList.bodyCount) {
-            session.globalBindGroup.setResource(batch.storeBuffer.bufferResource, 'uRenderableStorage');
-            session.globalBindGroup.setResource(result.survivors.bufferResource, 'uRenderableInstanceStorage');
+            bindBatchStorage(session, batch, result);
             commandList.replay(
               encoder,
               renderer.buffer,
@@ -293,6 +244,7 @@ export class ShadowRenderPassGpu extends ShadowRenderPassBase<View3DPipeGpu, Sha
     }
 
     pipeline.setColorMask(0b1111);
+    group.setResourceUnwatched(this.renderTarget.depthStencilTexture!, shadowMapIndex);
 
     session.activeTarget = null;
   }

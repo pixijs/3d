@@ -73,7 +73,7 @@ export function createShapes(parent: Container3D): Mesh3D[] {
       new Mesh3D({
         geometry: clayGeometry('cube'),
         material: clayMaterial(color),
-        // The shadow pass doesn't turn billboards, so a cube would cast the shadow of its unturned pose.
+        // In the shadow pass a billboard turns to face the light, so a cube would cast that pose's shadow, not this one's.
         castShadow: false,
         scale: SHAPE_SCALE,
         position: { x: (i - 1) * SHAPE_SPACING, y: ROW.y, z: ROW.z },

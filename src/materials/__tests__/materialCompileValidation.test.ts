@@ -16,7 +16,7 @@ function addCube(view3d: View3D, material: Material3D): void {
 }
 
 for (const preference of ['webgl', 'webgpu'] as const) {
-  describe(`material validation on a shader-cache hit (${preference})`, () => {
+  describe(`material validation when a shader compiles (${preference})`, () => {
     async function afterFirstCube(id: string, run: (app: App, view3d: View3D, cached: number) => void): Promise<void> {
       const app = await getApp<WebGLRenderer | WebGPURenderer>({
         id: `${id}-${preference}`,
@@ -47,9 +47,9 @@ for (const preference of ['webgl', 'webgpu'] as const) {
       });
     });
 
-    it('still rejects a material whose struct no longer matches the cached layout', async () => {
-      await afterFirstCube('cache-hit-validation', (app, view3d, cached) => {
-        const material = new Material3D({ baseColor: 0x00ff00 });
+    it("rejects a material whose struct doesn't match the shader compiled for it, and keeps no shader", async () => {
+      await afterFirstCube('compile-validation', (app, view3d, cached) => {
+        const material = new Material3D({ baseColor: 0x00ff00, alphaMode: 'mask' });
         material._materialStructSnapshot = 'tampered';
         addCube(view3d, material);
 

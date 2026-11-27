@@ -5,8 +5,6 @@ import type { CullResults } from './CullResults';
 export interface RenderForwardDescriptor {
   readonly bit: number;
 
-  readonly bindsMaterial: boolean;
-
   /** Per pass, since passes on one bit share each batch's draw list but can each have their own camera */
   readonly cullResults: CullResults;
 

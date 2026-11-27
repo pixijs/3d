@@ -1,8 +1,12 @@
 import type { ShaderBit } from '../ShaderBit';
 
-/** @internal */
+/**
+ * `'cutout'` because its alpha reaches `alphaMaskBit`, so the shadow cuts the same holes the mesh shows
+ * @internal
+ */
 export const vertexColorBit: ShaderBit = {
   name: 'vertexColor',
+  level: 'cutout',
   attributes: {
     aColor: 'float32x4',
   },

@@ -23,7 +23,11 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       });
 
       try {
-        const view3d = new View3D({ width: SIZE, height: SIZE, passes: [new MeshPass({ name: 'xray' })] });
+        const view3d = new View3D({
+          width: SIZE,
+          height: SIZE,
+          passes: [new MeshPass({ name: 'xray', level: 'shape' })],
+        });
         view3d.camera.position.set(0, 0, 10);
         app.stage.addChild(view3d);
 

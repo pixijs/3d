@@ -80,7 +80,6 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
   private readonly _forwardOptions: Parameters<typeof renderForwardBatchesGl>[0] = {
     pipe: this,
     bit: 0,
-    bindsMaterial: false,
     camera: null,
     session: null!,
     alwaysRebuild: true,
@@ -121,7 +120,6 @@ export class View3DPipeGl implements View3DPipe, InstructionPipe<View3D> {
   public renderForward(desc: RenderForwardDescriptor, session: RenderSession): void {
     const options = this._forwardOptions;
     options.bit = desc.bit;
-    options.bindsMaterial = desc.bindsMaterial;
     options.camera = desc.camera;
     options.session = session;
     options.alwaysRebuild = !cachesDrawWork(desc);

@@ -1,6 +1,8 @@
 import type { BLEND_MODES, Texture } from 'pixi.js';
 
 import { alphaMaskBit } from '../../core/shader/bits/alphaMaskBit';
+import { baseAlphaBit } from '../../core/shader/bits/baseAlphaBit';
+import { baseColorTextureBit } from '../../core/shader/bits/baseColorTextureBit';
 import { uvTransformBit } from '../../core/shader/bits/uvTransformBit';
 import type { ShaderBit } from '../../core/shader/ShaderBit';
 import { ShaderDescriptor } from '../../core/shader/ShaderDescriptor';
@@ -149,8 +151,10 @@ export class ParticleMaterial extends BaseMaterial3D<MaterialData, MaterialTextu
     this._descriptor = new ShaderDescriptor({});
 
     this._bits = [
-      flatMaterialBit,
       uvTransformBit,
+      baseColorTextureBit,
+      baseAlphaBit,
+      flatMaterialBit,
       getParticleBit({ billboard, frames: useFrames, localSpace }),
       ...this.extraBits,
     ];

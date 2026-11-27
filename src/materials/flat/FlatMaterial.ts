@@ -1,4 +1,6 @@
 import { alphaMaskBit } from '../../core/shader/bits/alphaMaskBit';
+import { baseAlphaBit } from '../../core/shader/bits/baseAlphaBit';
+import { baseColorTextureBit } from '../../core/shader/bits/baseColorTextureBit';
 import { uvTransformBit } from '../../core/shader/bits/uvTransformBit';
 import type { ShaderBit } from '../../core/shader/ShaderBit';
 import { ShaderDescriptor } from '../../core/shader/ShaderDescriptor';
@@ -56,7 +58,7 @@ export class FlatMaterial extends BaseMaterial3D {
     super(options);
     this._descriptor = new ShaderDescriptor({});
 
-    const derivationBits = [flatMaterialBit, uvTransformBit, ...this.extraBits];
+    const derivationBits = [uvTransformBit, baseColorTextureBit, baseAlphaBit, flatMaterialBit, ...this.extraBits];
     this._deriveLayoutFromBits(derivationBits, {
       baseColor: options.baseColorTexture,
       ...options.textures,
@@ -71,7 +73,7 @@ export class FlatMaterial extends BaseMaterial3D {
   public override getPrimaryDescriptor(_view: View3D): ShaderDescriptor {
     if (!this._variantDirty) return this._descriptor!;
 
-    const bits: ShaderBit[] = [flatMaterialBit, uvTransformBit];
+    const bits: ShaderBit[] = [uvTransformBit, baseColorTextureBit, baseAlphaBit, flatMaterialBit];
     for (let i = 0; i < this.extraBits.length; i++) bits.push(this.extraBits[i]);
     if (this._alphaMode === 'mask') bits.push(alphaMaskBit);
 
