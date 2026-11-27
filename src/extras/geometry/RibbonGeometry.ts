@@ -179,8 +179,8 @@ function writeCentreline(
  * - A pixel ribbon is never frustum-culled, since its edge lies a number of pixels from its points that no bounds
  *   in world units can hold, and a light's automatic shadow box leaves it out. Its shadow is its width in shadow
  *   map texels.
- * - The {@link OutlinePass} and {@link solidMeshDescriptor} read normals, which a ribbon has none of, so it can't
- *   join their passes.
+ * - An {@link OutlinePass} outline doesn't show: it draws the mesh's back faces, and a ribbon always faces the
+ *   camera.
  * @example
  * ```ts
  * const helix: number[] = [];

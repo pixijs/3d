@@ -494,6 +494,7 @@ export class MaterialSystemGpu {
 
     const geometryBits = geometry.extraBits;
     for (let i = 0; i < geometryBits.length; i++) bitsGpu.push(geometryBits[i]);
+    if (geometry._vertexBit) bitsGpu.push(geometry._vertexBit);
 
     const hasTangent = !!geometry.attributes.aTangent;
     for (let i = 0; i < materialDescriptor.bitsGpu.length; i++) {

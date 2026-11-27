@@ -532,7 +532,7 @@ export class Geometry3D extends Geometry {
   public _morphTargets: { positions: Float32Array; normals?: Float32Array }[] | null = null;
 
   /**
-   * Added after skinning by both material systems' `compileShader`, so every pass that draws the geometry runs it
+   * Added beside the billboard bit by both material systems' pass descriptors; a `'shape'` level keeps it in level passes
    * @internal
    */
   public _vertexBit: ShaderBit | null = null;
