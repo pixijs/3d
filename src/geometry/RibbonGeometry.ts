@@ -91,8 +91,8 @@ export interface RibbonGeometryOptions {
    */
   pointAttributes?: Record<string, Float32Array>;
   /**
-   * Draw from the geometry's own buffers, for a ribbon whose points move every frame with
-   * {@link RibbonGeometry#setPoints | setPoints}
+   * Draw from the geometry's own buffers, so {@link RibbonGeometry#setPoints | setPoints} can move the points, as
+   * often as every frame for a trail
    * @default false
    * @example
    * ```ts
@@ -176,7 +176,9 @@ function writeCentreline(
  * - Each line ends flat at its first and last point; repeat the first point at the end to close a loop.
  * - Picking can't hit the strip, since it only exists on the GPU; give the mesh a box or sphere
  *   {@link Container3D#hitVolume | hitVolume} instead.
- * - A pixel ribbon casts a shadow its width in shadow map texels.
+ * - A pixel ribbon is never frustum-culled, since its edge lies a number of pixels from its points that no bounds
+ *   in world units can hold, and a light's automatic shadow box leaves it out. Its shadow is its width in shadow
+ *   map texels.
  * - The {@link OutlinePass} and {@link solidMeshDescriptor} read normals, which a ribbon has none of, so it can't
  *   join their passes.
  * @example
@@ -219,8 +221,6 @@ export class RibbonGeometry extends Geometry3D {
 
   /** Points in each line, in order */
   private readonly _lineSizes: number[];
-  /** Half the widest width in world units, added to the bounds on every side; 0 for pixel widths */
-  private readonly _boundsPadding: number = 0;
 
   /**
    * Creates a new `RibbonGeometry`
@@ -274,7 +274,10 @@ export class RibbonGeometry extends Geometry3D {
       start += lineSizes[l];
     }
 
-    const boundsPadding = widthUnits === 'world' ? widest * 0.5 : 0;
+    const bounds3D = computeBoundsFromPositions(positions);
+    const pad = widthUnits === 'world' ? widest * 0.5 : 0;
+    bounds3D.min.set(bounds3D.min.x - pad, bounds3D.min.y - pad, bounds3D.min.z - pad);
+    bounds3D.max.set(bounds3D.max.x + pad, bounds3D.max.y + pad, bounds3D.max.z + pad);
 
     super({
       positions,
@@ -282,7 +285,9 @@ export class RibbonGeometry extends Geometry3D {
       colors: colors && doublePerPoint(colors, 4),
       indices,
       dynamic,
-      bounds3D: computeBoundsFromPositions(positions),
+      bounds3D,
+      interleave: false,
+      topology: 'triangle-list',
     });
 
     this.addAttribute('aRibbon', { buffer: ribbon, format: 'float32x4' });
@@ -297,17 +302,17 @@ export class RibbonGeometry extends Geometry3D {
 
     this.widthUnits = widthUnits!;
     this._lineSizes = lineSizes;
-    this._boundsPadding = boundsPadding;
     this._vertexBit = ribbonBits[this.widthUnits];
-    this._padBounds();
+    if (this.widthUnits === 'pixels') this.boundsSphere.makeEmpty();
   }
 
   /**
    * Moves every point, keeping the lines, widths and colours
    *
-   * Pass as many points as the ribbon was built with. On a {@link RibbonGeometryOptions#dynamic | dynamic}
-   * ribbon the next frame draws them, so call it every frame for a trail. Any other ribbon uploads itself again,
-   * which suits an occasional change, and its mesh keeps the culling sphere of its old points until it moves.
+   * Only a {@link RibbonGeometryOptions#dynamic | dynamic} ribbon draws the new points, from the next frame, so
+   * call it every frame for a trail. A ribbon built without `dynamic` keeps drawing the points it was built with;
+   * build a new one for a new shape. Pass as many points as the ribbon was built with. The bounds stay as built,
+   * and a dynamic ribbon is never frustum-culled.
    * @param points - The new points, x, y and z for each, in the order the ribbon was built with.
    * @example
    * ```ts
@@ -329,25 +334,8 @@ export class RibbonGeometry extends Geometry3D {
       attributes.aRibbon.buffer.data as Float32Array,
       attributes.aUV.buffer.data as Float32Array,
     );
-    this.bounds3D.copyFrom(computeBoundsFromPositions(this.positions));
-    this._padBounds();
-
-    if (!this.dynamic) {
-      this.unload();
-      return;
-    }
-
     attributes.aPosition.buffer.update();
     attributes.aRibbon.buffer.update();
     attributes.aUV.buffer.update();
-  }
-
-  private _padBounds(): void {
-    const { min, max } = this.bounds3D;
-    const pad = this._boundsPadding;
-
-    min.set(min.x - pad, min.y - pad, min.z - pad);
-    max.set(max.x + pad, max.y + pad, max.z + pad);
-    this.boundsSphere.setFromBox(this.bounds3D);
   }
 }

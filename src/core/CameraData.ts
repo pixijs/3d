@@ -73,7 +73,7 @@ export class CameraData {
   public readonly viewportUvScale = new Point(1, 1);
   /**
    * The size NDC spans, in logical pixels on screen, texels over resolution in a render texture, or texels in a
-   * shadow map; read by `ribbonBit` for pixel widths, and written before `set`, which uploads it
+   * shadow map; read by `ribbonBit` for pixel widths
    */
   public readonly viewportSize = new Point(1, 1);
   public readonly lightTiles = new LightTiles();
@@ -147,6 +147,13 @@ export class CameraData {
 
   public setViewportUvScale(x: number, y: number): this {
     this.viewportUvScale.set(x, y);
+    this.uniformGroup.update();
+
+    return this;
+  }
+
+  public setViewportSize(width: number, height: number): this {
+    this.viewportSize.set(width, height);
     this.uniformGroup.update();
 
     return this;

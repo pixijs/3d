@@ -2,6 +2,7 @@ import { getApp, renderFrame } from '@test-utils';
 import type { Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { Geometry3D } from '~/geometry/Geometry3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { RibbonGeometry } from '~/geometry/RibbonGeometry';
 import type { RibbonGeometryOptions } from '~/geometry/RibbonGeometry';
@@ -33,6 +34,7 @@ async function render(
   mode: CameraMode,
   meshes: Mesh3D[],
   resolution = 1,
+  betweenFrames?: () => void,
 ): Promise<Uint8ClampedArray> {
   const app = await getApp<Renderer>({
     id: `ribbon-${preference}`,
@@ -46,6 +48,10 @@ async function render(
     view3d.camera.fov = 60;
     view3d.camera.orthographicSize = 4;
     view3d.camera.position.set(0, 0, 5);
+    if (betweenFrames) {
+      await renderFrame(app);
+      betweenFrames();
+    }
 
     return await renderFrame(app);
   } finally {
@@ -101,15 +107,28 @@ describe('RibbonGeometry', () => {
     expect(Array.from(aWind.buffer.data)).toEqual([1, 2, 1, 2, 3, 4, 3, 4]);
   });
 
-  it('setPoints moves the strip, its distances along the line and its bounds', () => {
+  it("keeps a triangle list in buffers of its own, whatever Geometry3D's defaults say", () => {
+    const { interleave, topology } = Geometry3D.defaultOptions;
+    Geometry3D.defaultOptions.interleave = true;
+    Geometry3D.defaultOptions.topology = 'line-list';
+    try {
+      const ribbon = new RibbonGeometry({ points: [0, 0, 0, 1, 0, 0] });
+
+      expect(ribbon.topology).toBe('triangle-list');
+      expect(ribbon.attributes.aPosition.buffer).not.toBe(ribbon.attributes.aUV.buffer);
+    } finally {
+      Geometry3D.defaultOptions.interleave = interleave;
+      Geometry3D.defaultOptions.topology = topology;
+    }
+  });
+
+  it('setPoints moves the strip and its distances along the line', () => {
     const ribbon = new RibbonGeometry({ points: [0, 0, 0, 1, 0, 0], width: 0, dynamic: true });
 
     ribbon.setPoints([0, 2, 0, 0, 5, 0]);
 
     expect(Array.from(ribbon.positions)).toEqual([0, 2, 0, 0, 2, 0, 0, 5, 0, 0, 5, 0]);
     expect(Array.from(ribbon.uvs!)).toEqual([0, 0, 0, 1, 3, 0, 3, 1]);
-    expect(ribbon.bounds3D.min.y).toBe(2);
-    expect(ribbon.bounds3D.max.y).toBe(5);
   });
 
   describe.each(BACKENDS)('on %s', (preference) => {
@@ -134,6 +153,29 @@ describe('RibbonGeometry', () => {
         expect(planeRows, 'the plane shows').toBeGreaterThan(4);
         expect(Math.abs(ribbonRows - planeRows)).toBeLessThanOrEqual(1);
       });
+    });
+
+    it('draws a dynamic ribbon where setPoints moves it, from off screen into view', async () => {
+      const geometry = new RibbonGeometry({
+        points: straightLineAlongXAtDepth(0, 20, 30),
+        width: 10,
+        widthUnits: 'pixels',
+        dynamic: true,
+      });
+      const pixels = await render(preference, 'perspective', [white(geometry)], 1, () =>
+        geometry.setPoints(straightLineAlongXAtDepth(0)),
+      );
+
+      expect(Math.abs(whiteRowsInColumn(pixels, SIZE, SIZE / 2) - 10)).toBeLessThanOrEqual(1);
+    });
+
+    it('keeps drawing a pixel ribbon whose points are off screen while its edge is on it', async () => {
+      const justPastRightEdge = [3.5, -0.3, 0, 3.5, 0.3, 0];
+      const ribbon = white(new RibbonGeometry({ points: justPastRightEdge, width: 24, widthUnits: 'pixels' }));
+      const pixels = await render(preference, 'perspective', [ribbon]);
+      const row = SIZE / 2;
+
+      expect(pixels[(row * SIZE + SIZE - 1) * 4], 'the right-hand column shows the ribbon').toBeGreaterThan(128);
     });
 
     it('measures a pixel width in pixels before the resolution', async () => {

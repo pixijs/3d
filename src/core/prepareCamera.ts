@@ -188,7 +188,7 @@ export function prepareCamera(camera: Camera3D, session: RenderSession): void {
   }
 
   const pixelScale = texture ? texture.source.resolution : 1;
-  cameraData.viewportSize.set(cameraData.frame.width / pixelScale, cameraData.frame.height / pixelScale);
+  cameraData.setViewportSize(cameraData.frame.width / pixelScale, cameraData.frame.height / pixelScale);
 
   const viewport =
     camera === view3d.camera

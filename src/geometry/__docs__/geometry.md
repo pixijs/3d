@@ -122,7 +122,7 @@ The CPU builds the strip once: two vertices at each point, holding the line's di
 - **Many lines.** {@link RibbonGeometryOptions#pointsPerLine | pointsPerLine} splits the points into lines, so thousands of strands draw as one mesh.
 - **Per point.** `width` takes one number per point to taper the line. {@link RibbonGeometryOptions#colors | colors} takes an RGBA colour per point, and {@link RibbonGeometryOptions#pointAttributes | pointAttributes} any data of your own, which a [shader bit](../../extras/__docs__/custom-materials.md) reads as a vertex attribute. Each point's values go to both of its vertices.
 - **In a shader bit.** `uv.x` is the distance along the line and `uv.y` runs from 0 on one edge to 1 on the other, so a bit can draw dashes or a soft edge. The attribute `aRibbon` holds the line's direction in `xyz` and the width in `w`, negative on the first edge.
-- **Moving points.** {@link RibbonGeometry#setPoints | setPoints} moves every point and keeps the rest. Build the ribbon with `dynamic: true` to call it every frame, for a trail.
+- **Moving points.** On a ribbon built with `dynamic: true`, {@link RibbonGeometry#setPoints | setPoints} moves every point and keeps the rest, as often as every frame for a trail. For a ribbon built without it, build a new one.
 - **Corners.** The width runs square to the line's average direction at each point, so a sharp turn draws narrower. Add points either side of a corner to keep it full.
 
 The [ribbons example](../../../examples/geometry_ribbons/README.md) shows both units side by side.
