@@ -101,7 +101,7 @@ Use `FlatMaterial` (unlit) for screens: under the default `toneMapping: 'none'` 
 
 ## Feeds in a view with bloom or other effects
 
-An 8-bit feed (the default format) holds a finished picture with the view's tone curve applied, which is right for a 2D `Sprite`. Shown on a mesh under a filmic curve (`'aces'`), that picture goes through the curve again and looks washed out. When the view has a `'beforeToneMapping'` effect (`BloomEffect`, `SsaoEffect`, `TiltShiftEffect`, `MotionBlurEffect`), the documented fix is `format: 'rgba16float'`, which holds linear light, and `PortalMaterial` is built for it. On a `FlatMaterial` monitor a float feed currently draws much darker than the scene (measured 176/41/13 against 214/145/70), so compare the screen with the scene by eye, or show the feed through a 2D `Sprite`.
+An 8-bit feed (the default format) holds a finished picture with the view's tone curve applied, which is right for a 2D `Sprite`. Shown on a mesh under a filmic curve (`'aces'`), that picture goes through the curve again and looks washed out. When the view has a `'beforeToneMapping'` effect (`BloomEffect`, `SsaoEffect`, `DepthOfFieldEffect`, `MotionBlurEffect`), the documented fix is `format: 'rgba16float'`, which holds linear light, and `PortalMaterial` is built for it. On a `FlatMaterial` monitor a float feed currently draws much darker than the scene (measured 176/41/13 against 214/145/70), so compare the screen with the scene by eye, or show the feed through a 2D `Sprite`.
 
 ```ts
 const feed = RenderTexture.create({ width: 512, height: 288, antialias: true, format: 'rgba16float' });

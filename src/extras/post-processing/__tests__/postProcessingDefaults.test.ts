@@ -1,10 +1,11 @@
+import { isMobile } from 'pixi.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ShaderDescriptorOptions } from '~/core/shader/ShaderDescriptor';
 import { BloomEffect } from '~/extras/post-processing/effects/BloomEffect';
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { FxaaEffect } from '~/extras/post-processing/effects/FxaaEffect';
 import { SsaoEffect } from '~/extras/post-processing/effects/SsaoEffect';
-import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
 import { TintEffect } from '~/extras/post-processing/effects/TintEffect';
 import { OutlinePass } from '~/extras/post-processing/passes/OutlinePass';
 import { WireframePass } from '~/extras/post-processing/passes/WireframePass';
@@ -21,7 +22,7 @@ describe('post-processing defaultOptions', () => {
   const bloom = { ...BloomEffect.defaultOptions };
   const fxaa = { ...FxaaEffect.defaultOptions };
   const tint = { ...TintEffect.defaultOptions };
-  const tiltShift = { ...TiltShiftEffect.defaultOptions };
+  const depthOfField = { ...DepthOfFieldEffect.defaultOptions };
   const ssao = { ...SsaoEffect.defaultOptions };
   const outline = { ...OutlinePass.defaultOptions };
   const wireframe = { ...WireframePass.defaultOptions };
@@ -30,7 +31,7 @@ describe('post-processing defaultOptions', () => {
     BloomEffect.defaultOptions = { ...bloom };
     FxaaEffect.defaultOptions = { ...fxaa };
     TintEffect.defaultOptions = { ...tint };
-    TiltShiftEffect.defaultOptions = { ...tiltShift };
+    DepthOfFieldEffect.defaultOptions = { ...depthOfField };
     SsaoEffect.defaultOptions = { ...ssao };
     OutlinePass.defaultOptions = { ...outline };
     WireframePass.defaultOptions = { ...wireframe };
@@ -72,14 +73,34 @@ describe('post-processing defaultOptions', () => {
     expect(overridden.edgeThreshold).toBeCloseTo(0.166);
   });
 
-  it('TiltShiftEffect writes every default into its uniforms', () => {
-    const effect = new TiltShiftEffect();
+  it('DepthOfFieldEffect writes every default into its uniforms', () => {
+    const effect = new DepthOfFieldEffect();
 
-    expect([effect.focalDepth, effect.focalNear, effect.focalFar, effect.maxBlur]).toEqual([35, 3, 14, 12]);
+    expect([effect.focusDistance, effect.focusRange, effect.focusFalloff, effect.maxBlur]).toEqual([10, 1, 3, 12]);
     expect(effect.debug).toBe(false);
+    expect(effect.stage).toBe('beforeToneMapping');
 
-    TiltShiftEffect.defaultOptions.maxBlur = 6;
-    expect(new TiltShiftEffect({ maxBlur: undefined, focalDepth: 10 })).toMatchObject({ maxBlur: 6, focalDepth: 10 });
+    DepthOfFieldEffect.defaultOptions.maxBlur = 6;
+    expect(new DepthOfFieldEffect({ maxBlur: undefined, focusDistance: 4 })).toMatchObject({
+      maxBlur: 6,
+      focusDistance: 4,
+    });
+  });
+
+  it("DepthOfFieldEffect's 'auto' quality is low on phones and tablets, as pixi's isMobile reports them", () => {
+    const wasMobile = isMobile.any;
+
+    try {
+      isMobile.any = false;
+      expect(new DepthOfFieldEffect().quality).toBe('high');
+      expect(new DepthOfFieldEffect({ quality: 'low' }).quality).toBe('low');
+
+      isMobile.any = true;
+      expect(new DepthOfFieldEffect().quality).toBe('low');
+      expect(new DepthOfFieldEffect({ quality: 'high' }).quality).toBe('high');
+    } finally {
+      isMobile.any = wasMobile;
+    }
   });
 
   it('SsaoEffect reads its defaults and derives maxDistance from the resolved radius', () => {

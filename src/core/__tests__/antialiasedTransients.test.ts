@@ -7,13 +7,14 @@ import type { RenderGraph } from '~/core/render-graph/RenderGraph';
 import type { SceneOutput } from '~/core/render-graph/SceneOutput';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import type { ShaderBit } from '~/core/shader/ShaderBit';
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { MotionBlurEffect } from '~/extras/post-processing/effects/MotionBlurEffect';
 import { SsaoEffect } from '~/extras/post-processing/effects/SsaoEffect';
-import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
 import { TintEffect } from '~/extras/post-processing/effects/TintEffect';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { FullscreenPass } from '~/post-processing/effects/FullscreenPass';
+import { PostEffect } from '~/post-processing/effects/PostEffect';
 import type { EffectFragment } from '~/post-processing/effects/PostEffect';
 import { Pass3D } from '~/post-processing/Pass3D';
 import type { PassContext, PassStage } from '~/post-processing/Pass3D';
@@ -116,6 +117,14 @@ class CopyCoverage extends Pass3D {
       }),
     );
   }
+}
+
+class MipDepthEffect extends PostEffect {
+  public override readonly inputMips = true;
+  protected override readonly fragment: EffectFragment = {
+    gpu: 'fn effect(uv: vec2<f32>) -> vec4<f32> { return select(sampleColor(uv), sampleColorLod(uv, 0.0), sampleDepth(uv) < 1.0); }',
+    gl: 'vec4 effect(vec2 uv) { return sampleDepth(uv) < 1.0 ? sampleColorLod(uv, 0.0) : sampleColor(uv); }',
+  };
 }
 
 function sortedUids(textures: Texture[]): number[] {
@@ -370,7 +379,12 @@ for (const preference of ['webgpu', 'webgl'] as const) {
 
     for (const [name, effect, readsMips] of [
       ['SSAO', () => new SsaoEffect(), false],
-      ['tilt-shift', () => new TiltShiftEffect({ focalDepth: 3.25, focalNear: 0.5, focalFar: 1.5 }), true],
+      [
+        'depth of field',
+        () => new DepthOfFieldEffect({ focusDistance: 3.25, focusRange: 0.5, focusFalloff: 1 }),
+        false,
+      ],
+      ['an effect with a mipmapped input', () => new MipDepthEffect(), true],
     ] as const) {
       it(`resolves a multisampled depth for ${name} into a single-sample copy, and gives the copy back to the pool`, async () => {
         const app = await getApp<Renderer>({

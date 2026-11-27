@@ -6,14 +6,14 @@
  * greyscale is grey, while the blur runs at an earlier stage wherever it sits. `enabled = false` skips an effect but
  * keeps it in the list, and with every effect off the view draws straight to the screen. A flip or a new array
  * rebuilds the render graph once, fine for a toggle but not every frame, while an effect's own settings, such as
- * `tint.tint` and `tiltShift.focalDepth`, are uniform writes cheap enough for every frame.
+ * `tint.tint` and `depthOfField.focusDistance`, are uniform writes cheap enough for every frame.
  *
  * Controls: drag to orbit; the pane picks the order of `view3d.passes`, switches each effect on and off, and sets the
  * tint's colour. URL flags: `?theme=light|dark`, `?renderer=webgl|webgpu`.
  */
 
 import { View3D } from '@pixi/3d';
-import { OrbitCamera, TiltShiftEffect, TintEffect } from '@pixi/3d/extras';
+import { OrbitCamera, DepthOfFieldEffect, TintEffect } from '@pixi/3d/extras';
 import { Application } from 'pixi.js';
 
 import { rendererPreference } from '../../playground/src/getPreference';
@@ -57,29 +57,29 @@ app.stage.addChild(view3d);
 logo.root.position.y = 1.7;
 view3d.root.addChild(logo.root);
 
-// Blurs by depth, so it reads the scene's depth as well as its image. A sharp band 1 unit either side of the focal
+// Blurs by depth, so it reads the scene's depth as well as its image. A sharp band 1 unit either side of the focus
 // plane keeps the whole logo in focus through its sway.
-const tiltShift = new TiltShiftEffect({ focalNear: 1, focalFar: 4 });
+const depthOfField = new DepthOfFieldEffect({ focusRange: 1, focusFalloff: 3 });
 // Ours, from ./GreyscaleEffect: every pixel's luma in all three channels.
 const greyscale = new GreyscaleEffect();
 // The simplest built-in effect: every pixel times `tint`.
 const tint = new TintEffect({ tint: SEPIA });
 
 // They run in this order, each reading the image the one before it wrote; the last enabled one draws to the screen.
-view3d.passes = [tiltShift, greyscale, tint];
+view3d.passes = [depthOfField, greyscale, tint];
 
 // The orders the pane offers, each named by the array it assigns. The first is the one above: sepia. Swapping the
 // last two runs greyscale after the tint, which throws the tint away. Moving the blur last changes nothing: it runs at
 // the default 'beforeToneMapping' stage, before the other two, wherever it sits in the list.
 const ORDERS = {
-  '[tiltShift, greyscale, tint]': [tiltShift, greyscale, tint],
-  '[tiltShift, tint, greyscale]': [tiltShift, tint, greyscale],
-  '[greyscale, tint, tiltShift]': [greyscale, tint, tiltShift],
+  '[depthOfField, greyscale, tint]': [depthOfField, greyscale, tint],
+  '[depthOfField, tint, greyscale]': [depthOfField, tint, greyscale],
+  '[greyscale, tint, depthOfField]': [greyscale, tint, depthOfField],
 };
 
 type Order = keyof typeof ORDERS;
 
-const stack: { order: Order } = { order: '[tiltShift, greyscale, tint]' };
+const stack: { order: Order } = { order: '[depthOfField, greyscale, tint]' };
 
 // Level with the logo, so it stands over the haze: once greyscale takes the hue away, the dark floor's lit checks are
 // as light as the logo's face.
@@ -111,7 +111,7 @@ orderRow.on('change', () => {
   view3d.passes = ORDERS[stack.order];
 });
 // A folder per effect, so each row is labelled with the property it sets and the label fits.
-pane.addFolder({ title: 'tiltShift' }).addBinding(tiltShift, 'enabled');
+pane.addFolder({ title: 'depthOfField' }).addBinding(depthOfField, 'enabled');
 pane.addFolder({ title: 'greyscale' }).addBinding(greyscale, 'enabled');
 
 const tintFolder = pane.addFolder({ title: 'tint' });
@@ -128,14 +128,14 @@ app.ticker.add((ticker) => {
   time += dt;
   stage.update(dt);
   logo.root.rotation.y = Math.sin(time * 0.4) * 0.25;
-  // The focal plane is a distance from the camera, so it follows the orbit's zoom and the portrait back-off; a uniform
+  // The focus plane is a distance from the camera, so it follows the orbit's zoom and the portrait back-off; a uniform
   // write, fine every frame.
-  tiltShift.focalDepth = orbit.distance;
+  depthOfField.focusDistance = orbit.distance;
 });
 
 // The canvas joins with its first frame already drawn, then the loading screen dissolves onto it.
 orbit.update();
-tiltShift.focalDepth = orbit.distance;
+depthOfField.focusDistance = orbit.distance;
 app.render();
 document.body.appendChild(app.canvas);
 await loading.finish();

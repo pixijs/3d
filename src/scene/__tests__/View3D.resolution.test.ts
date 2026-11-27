@@ -10,9 +10,9 @@ import type { ColorHandle, ResourceHandle } from '~/core/render-graph/ResourceHa
 import { DepthClearPass } from '~/core/render-passes/depth-clear/DepthClearPass';
 import { ForwardRenderPass } from '~/core/render-passes/ForwardRenderPass';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { MotionBlurEffect } from '~/extras/post-processing/effects/MotionBlurEffect';
 import { SsaoEffect } from '~/extras/post-processing/effects/SsaoEffect';
-import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
 import { TintEffect } from '~/extras/post-processing/effects/TintEffect';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
@@ -405,11 +405,16 @@ for (const preference of ['webgpu', 'webgl'] as const) {
     });
 
     for (const followed of [false, true]) {
-      it(`keeps tilt-shift's blur the same width on screen at half resolution, ${followed ? 'with an effect after it' : 'as the last effect'}`, async () => {
-        const tiltShift = new TiltShiftEffect({ focalDepth: 1000, focalNear: 0, focalFar: 1, maxBlur: 16 });
+      it(`keeps depth of field's blur the same width on screen at half resolution, ${followed ? 'with an effect after it' : 'as the last effect'}`, async () => {
+        const depthOfField = new DepthOfFieldEffect({
+          focusDistance: 1000,
+          focusRange: 0,
+          focusFalloff: 1,
+          maxBlur: 16,
+        });
         await setup(
-          `tilt-width-${followed}`,
-          { passes: followed ? [tiltShift, new TintEffect({ tint: 0xffffff })] : [tiltShift] },
+          `dof-width-${followed}`,
+          { passes: followed ? [depthOfField, new TintEffect({ tint: 0xffffff })] : [depthOfField] },
           BLUR_SIZE,
         );
         view3d.camera.useOrthographic(10, 0.1, 100);

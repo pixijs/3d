@@ -1,6 +1,6 @@
 import type { TestScene } from '@test-utils';
 
-import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { CubeGeometry } from '~/geometry/CubeGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
@@ -24,7 +24,9 @@ export const scene: TestScene = {
       anchor: 0.5,
       toneMapping: 'none',
       environment: { skyColor: 0xffffff, groundColor: 0x445566 },
-      passes: [new TiltShiftEffect({ focalDepth: 7.3, focalNear: 0.6, focalFar: 2.2, maxBlur: 10 })],
+      passes: [
+        new DepthOfFieldEffect({ focusDistance: 7.3, focusRange: 0.6, focusFalloff: 0.6, maxBlur: 10, quality: 'low' }),
+      ],
     });
     view.camera.fov = 35;
     view.camera.position.set(0, 2.5, 7);

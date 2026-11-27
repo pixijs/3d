@@ -46,26 +46,30 @@ An effect's other properties, such as {@link BloomEffect#intensity | intensity} 
 
 ## Built-in effects
 
-| Effect                   | What it does                                                                     | Stage by default      |
-| ------------------------ | -------------------------------------------------------------------------------- | --------------------- |
-| {@link BloomEffect}      | Bright parts of the picture glow into their surroundings.                        | `'beforeToneMapping'` |
-| {@link SsaoEffect}       | Ambient occlusion: darkens creases, corners and the places where objects meet.   | `'beforeToneMapping'` |
-| {@link TiltShiftEffect}  | Keeps a band of depth sharp and blurs the rest, so the scene looks like a model. | `'beforeToneMapping'` |
-| {@link MotionBlurEffect} | Streaks opaque meshes as the camera moves or turns.                              | `'beforeToneMapping'` |
-| {@link FxaaEffect}       | Smooths jagged edges.                                                            | `'afterToneMapping'`  |
-| {@link TintEffect}       | Multiplies the picture by a colour, as `Container.tint` does in 2D.              | `'afterToneMapping'`  |
+| Effect                     | What it does                                                                     | Stage by default      |
+| -------------------------- | -------------------------------------------------------------------------------- | --------------------- |
+| {@link BloomEffect}        | Bright parts of the picture glow into their surroundings.                        | `'beforeToneMapping'` |
+| {@link SsaoEffect}         | Ambient occlusion: darkens creases, corners and the places where objects meet.   | `'beforeToneMapping'` |
+| {@link DepthOfFieldEffect} | Keeps one depth sharp and blurs what's nearer or farther, as a camera lens does. | `'beforeToneMapping'` |
+| {@link MotionBlurEffect}   | Streaks opaque meshes as the camera moves or turns.                              | `'beforeToneMapping'` |
+| {@link FxaaEffect}         | Smooths jagged edges.                                                            | `'afterToneMapping'`  |
+| {@link TintEffect}         | Multiplies the picture by a colour, as `Container.tint` does in 2D.              | `'afterToneMapping'`  |
 
 ### Bloom
 
 By default, {@link BloomEffect} works on the scene's light. So at its default {@link BloomEffect#threshold | threshold}, mostly the parts brighter than white glow, such as an emissive glow with a `strength` above 1, as [PBR materials](../../materials/__docs__/pbr.md#emissive-glow) shows. Lower the threshold to make bright but ordinary surfaces glow too. [Bloom](/3d/examples?example=post_bloom) shows which parts glow at the default threshold.
 
-### Ambient occlusion and tilt-shift
+### Ambient occlusion and depth of field
 
 Use both with a camera in its default perspective {@link Camera3D#mode | mode}, not an orthographic one, which draws far things as large as near ones.
 
 {@link SsaoEffect#radius | SsaoEffect.radius} is how far around each point the effect looks for surfaces that block light. It's in world units, so set it for the size of your scene. On a phone, create the effect with {@link SsaoEffectOptions#resolution | resolution: 1}. That works out the occlusion once per CSS pixel, which is a quarter as many pixels as at the examples' resolution of 2.
 
-{@link TiltShiftEffect#focalDepth | TiltShiftEffect.focalDepth} is a distance straight out from the camera, so set it to about the camera's distance from what should stay sharp. Zooming an {@link OrbitCamera} changes that distance. When the subject is at the orbit's {@link OrbitCamera#target | target}, keep it sharp with `orbit.on('change', () => (tiltShift.focalDepth = orbit.distance))`. {@link TiltShiftEffect#debug | debug} paints the sharp band and the blurred zones instead of blurring, which helps you place them.
+{@link DepthOfFieldEffect#focusDistance | DepthOfFieldEffect.focusDistance} is a depth along the camera's view, so to focus on an object, move its position into camera space and use `-z`. When the subject is at an {@link OrbitCamera}'s {@link OrbitCamera#target | target}, keep it sharp while zooming with `orbit.on('change', () => (depthOfField.focusDistance = orbit.distance))`. Within {@link DepthOfFieldEffect#focusRange | focusRange} of it stays sharp, and the blur builds over {@link DepthOfFieldEffect#focusFalloff | focusFalloff}. Sharp edges stay sharp against the blur behind them, and a blurred foreground spreads over what's behind it. Over a view with no background, blurred edges fade to transparent. {@link DepthOfFieldEffect#debug | debug} paints the sharp zone and the blurred zones instead of blurring, which helps you place them. [Depth of field](/3d/examples?example=post_depth-of-field) focuses on whichever shape you tap.
+
+The tilt-shift look, a full-size scene that reads as a miniature, is the same effect with a narrow sharp zone, a long falloff and a high, angled camera, as [Tilt shift](/3d/examples?example=post_tilt-shift) shows.
+
+The effect is the most expensive of these. {@link DepthOfFieldEffectOptions#quality | quality} picks 48 taps a pixel at full resolution, or 16 at half the screen's resolution, and its default, `'auto'`, takes the second on phones and tablets. On a 2022 mid-range phone at 1920 × 1080 that cut the effect from about 26 ms a frame to 4.6 ms, with a slight grain at large blur radii.
 
 ### Motion blur
 

@@ -1,13 +1,14 @@
 /**
  * Tilt shift: a blur that keeps one slab of depth sharp, so a full-size scene reads as a miniature
  *
- * A `TiltShiftEffect` in `view3d.passes` blurs the finished frame by depth: how far each pixel is in front of the
- * camera, along the way it looks. The plane in focus sits `focalDepth` away; within `focalNear` of it, in front or
- * behind, a pixel stays sharp, and past that its blur grows until it reaches `maxBlur` device pixels at `focalFar`
- * from the plane. The plane faces the camera, so from a high, angled camera it cuts the town in a band straight
- * across the screen, and the bus on its loop drives in and out of focus. Every focus setting is a uniform write, so the
- * focus can follow the zoom each frame. `debug` paints the zones over a grey copy of the frame to tune them by eye: a
- * white line on the plane, green in the sharp band, orange in front of it and blue behind.
+ * The tilt-shift look is a depth of field with a narrow sharp zone, seen from high up. A `DepthOfFieldEffect` in
+ * `view3d.passes` blurs the frame by depth: how far each pixel is in front of the camera, along the way it looks.
+ * The plane in focus sits `focusDistance` away; within `focusRange` of it, in front or behind, a pixel stays sharp,
+ * and past that its blur grows over `focusFalloff` until it reaches `maxBlur` device pixels. The plane faces the camera, so from a high,
+ * angled camera it cuts the town in a band straight across the screen, and the bus on its loop drives in and out of
+ * focus. Every focus setting is a uniform write, so the focus can follow the zoom each frame. `debug` paints the
+ * zones over a grey copy of the frame to tune them by eye: a white line on the plane, green in the sharp band,
+ * orange in front of it and blue behind.
  *
  * Controls: drag to orbit, scroll to zoom; the pane turns the effect off and on, moves the plane in focus, widens the
  * sharp band and the blur ramp, sets the blur's strength, shows the debug view and makes the focus follow the zoom.
@@ -15,7 +16,7 @@
  */
 
 import { Spherical, View3D } from '@pixi/3d';
-import { FxaaEffect, OrbitCamera, TiltShiftEffect } from '@pixi/3d/extras';
+import { DepthOfFieldEffect, FxaaEffect, OrbitCamera } from '@pixi/3d/extras';
 import type { BindingApi } from '@tweakpane/core';
 import { Application, DEG_TO_RAD } from 'pixi.js';
 
@@ -88,57 +89,63 @@ const orbit = new OrbitCamera({
 fitPortrait({ renderer: app.renderer, orbit, stage, minAspect: FIT_ASPECT });
 
 // The orbit's target sits `orbit.distance` in front of the camera, so the plane in focus starts there.
-const tiltShift = new TiltShiftEffect({
-  focalDepth: orbit.distance,
-  focalNear: 1.5,
-  focalFar: 7,
+const depthOfField = new DepthOfFieldEffect({
+  focusDistance: orbit.distance,
+  focusRange: 1.5,
+  // A long falloff: the blur builds over several rows of houses rather than all at once, which sells the miniature.
+  focusFalloff: 5.5,
   // maxBlur counts device pixels, so it's scaled to look the same on a 2× screen.
   maxBlur: MAX_BLUR * app.renderer.resolution,
 });
 
 // The scene keeps the canvas's MSAA through post effects; FXAA, last, smooths what edges it leaves.
-view3d.passes = [tiltShift, new FxaaEffect()];
+view3d.passes = [depthOfField, new FxaaEffect()];
 
 const pane = new ThemePane({ title: 'Tilt shift', stage });
-const folder = pane.addFolder({ title: 'TiltShiftEffect' });
+const folder = pane.addFolder({ title: 'DepthOfFieldEffect' });
 const settings = { followTarget: false };
 
 // Flipping `enabled` rebuilds the view's render graph: fine for a toggle, never per frame. The rows under it are
 // uniform writes.
-folder.addBinding(tiltShift, 'enabled');
+folder.addBinding(depthOfField, 'enabled');
 
 /**
- * The focalDepth row, from in front of the nearest roof at the closest zoom to the town's far end at the farthest;
+ * The focusDistance row, from in front of the nearest roof at the closest zoom to the town's far end at the farthest;
  * Tweakpane can't change a slider's range in place, so a refit that moves the orbit's limits makes the row again
  */
-function addFocalDepthRow(): BindingApi {
+function addFocusDistanceRow(): BindingApi {
   const min = Math.round(orbit.minDistance / 2);
   const max = Math.round(orbit.maxDistance + town.radius);
 
   // A refit can carry the plane past the new range, and a new row doesn't clamp the value it starts from.
-  tiltShift.focalDepth = Math.min(Math.max(tiltShift.focalDepth, min), max);
+  depthOfField.focusDistance = Math.min(Math.max(depthOfField.focusDistance, min), max);
 
-  return folder.addBinding(tiltShift, 'focalDepth', { index: 1, min, max, step: 0.1, disabled: settings.followTarget });
+  return folder.addBinding(depthOfField, 'focusDistance', {
+    index: 1,
+    min,
+    max,
+    step: 0.1,
+    disabled: settings.followTarget,
+  });
 }
 
-let focalDepthRow = addFocalDepthRow();
+let focusDistanceRow = addFocusDistanceRow();
 
-// The shader's smoothstep(focalNear, focalFar, …) is undefined unless focalFar is past focalNear, so the ranges part.
-folder.addBinding(tiltShift, 'focalNear', { min: 0, max: 4, step: 0.1 });
-folder.addBinding(tiltShift, 'focalFar', { min: 4.5, max: 20, step: 0.1 });
+folder.addBinding(depthOfField, 'focusRange', { min: 0, max: 4, step: 0.1 });
+folder.addBinding(depthOfField, 'focusFalloff', { min: 0.5, max: 16, step: 0.1 });
 // In device pixels, so the slider spans the same 0 to BLUR_RANGE CSS px on any screen.
-folder.addBinding(tiltShift, 'maxBlur', { min: 0, max: BLUR_RANGE * app.renderer.resolution, step: 0.5 });
-folder.addBinding(tiltShift, 'debug');
+folder.addBinding(depthOfField, 'maxBlur', { min: 0, max: BLUR_RANGE * app.renderer.resolution, step: 0.5 });
+folder.addBinding(depthOfField, 'debug');
 
 /** Keeps the plane on the orbit's target: a uniform write, so doing it on every camera move costs nothing */
 function followTarget(): void {
   if (!settings.followTarget) return;
-  tiltShift.focalDepth = orbit.distance;
-  focalDepthRow.refresh();
+  depthOfField.focusDistance = orbit.distance;
+  focusDistanceRow.refresh();
 }
 
 pane.addBinding(settings, 'followTarget', { label: 'Follow target' }).on('change', () => {
-  focalDepthRow.disabled = settings.followTarget;
+  focusDistanceRow.disabled = settings.followTarget;
   followTarget();
 });
 orbit.on('change', followTarget);
@@ -153,10 +160,10 @@ app.renderer.on('resize', () => {
   // The fit scales the distance by the same factor as the limits.
   const before = (orbit.distance * fitMinDistance) / orbit.minDistance;
 
-  if (!settings.followTarget) tiltShift.focalDepth += orbit.distance - before;
+  if (!settings.followTarget) depthOfField.focusDistance += orbit.distance - before;
   fitMinDistance = orbit.minDistance;
-  focalDepthRow.dispose();
-  focalDepthRow = addFocalDepthRow();
+  focusDistanceRow.dispose();
+  focusDistanceRow = addFocusDistanceRow();
 });
 
 let time = 0;

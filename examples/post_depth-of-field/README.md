@@ -1,55 +1,53 @@
 # Depth of field
 
-A post effect of your own that keeps one camera depth sharp and blurs what's nearer or farther. `DepthOfFieldEffect`
-reads each pixel's depth with `viewPos(uv)` and samples a coarser mip level of its input the farther that depth is
-from `focusDistance`. The sharp band is a plane facing the camera, so the floor at the torus's depth stays sharp with
-it. Picking the blur per pixel is cheap but wrong at silhouettes: the sharp torus wears a soft blue halo, and the
-blurred cube stops dead where it crosses the sharp band, both things `TiltShiftEffect` handles.
+A camera lens's depth of field: one depth in front of the camera stays sharp, and what's nearer or farther blurs.
+Three clay shapes stand at three depths, and tapping one brings it into focus. The sharp zone is a plane facing the
+camera, so a band of the floor at the shape's depth stays sharp with it. The sharp shape keeps a clean edge against the
+blur behind it, and a blurred shape in front spreads over the sharp floor. The pane picks how many taps the blur takes
+and paints the focus zones.
 
-![The light checker floor with three clay shapes at three depths, a pink cube near on the left, a sky-blue torus in the middle and an orange crystal far on the right: the torus and a band of floor at its depth are sharp, while the cube, the crystal and the rest of the floor blur; the pane in the top right shows Focus on Middle torus and the DepthOfFieldEffect folder with enabled on, focusDistance 13.3, focusRange 0.65, blurRadius 20 and showFocus off](reference.png)
+![The light checker floor with three clay shapes at three depths, a pink cube near on the left, a sky-blue torus in the middle and an orange crystal far on the right: the torus and a band of floor at its depth are sharp, while the cube, the crystal and the rest of the floor blur, the cube's soft edge spreading over the sharp band; the pane in the top right shows Focus on Middle torus, Manual distance 13.0, and the DepthOfFieldEffect folder with quality auto, focusDistance 13.3, focusRange 0.65, focusFalloff 0.65, maxBlur 16 and debug off](reference.png)
 
 ## API
 
-- `PostEffect`: the engine class `DepthOfFieldEffect` extends. `DepthOfFieldEffect.ts` holds the shader, an
-  `EffectFragment` in WGSL and GLSL: `-viewPos(uv).z` is the pixel's camera depth, a `smoothstep` from `focusRange`
-  to twice it turns the gap to `focusDistance` into a blur amount, and `sampleColorLod(uv, lod)` reads the mip level
-  that amount picks. Calling `viewPos` is what makes the base class's `build()` give the pass the scene depth.
-- `PostEffect` `inputMips = true`: the chain allocates the effect's input with a mip chain and generates its levels
-  after the scene draws, for a mipmap generation and about a third more texture memory.
-- The effect's properties are lanes of one `uFocus` vec4 in a `UniformGroup`, written with `writeLane()`, so each is
-  a uniform write: `focusDistance` (the plane, in world units in front of the camera), `focusRange` (half the sharp
-  band), `blurRadius` (the most blur, in device pixels, so the example multiplies 20 by `app.renderer.resolution`)
-  and `showFocus` (tints the sharp band green and the blurred depths purple).
-- `PostEffectOptions`: the base options the effect's options extend, here `enabled`.
+- `DepthOfFieldEffect` from `@pixi/3d/extras`: blurs the scene by each pixel's depth in front of the camera. Within
+  `focusRange` (0.65) of `focusDistance` a pixel stays sharp, and its blur grows over `focusFalloff` (0.65) to
+  `maxBlur` physical pixels. `maxBlur` is 16 CSS pixels times `app.renderer.resolution`, so it looks the same on a 2×
+  screen. Every setting but `quality` is a uniform write, so the focus follows the picked shape every frame for free.
+- `DepthOfFieldEffect` `quality`: `'high'` takes 48 taps a pixel, `'low'` 16 at half the screen's resolution, and the
+  default `'auto'` takes `'low'` on a phone. It's fixed at construction, so the pane's row builds a new effect with the same settings (`DepthOfFieldEffectOptions`)
+  and replaces `view3d.passes`, which rebuilds the render graph once. Raise `maxBlur` to see where `'low'` turns grainy.
+- `DepthOfFieldEffect` `debug`: paints the zones over a grey copy of the frame, a white line at the depth in focus,
+  green in the sharp zone, orange in front of it and blue behind.
 - `View3D` with `passes: [depthOfField]`: the effect runs at the default `'beforeToneMapping'` stage, on the scene's
-  linear light, so the scene draws into a float texture first.
+  linear light.
 - `Vector3`, `getGlobalPosition()` and `camera.toLocal()`: each frame the picked shape's position goes into camera
   space, and its `-z` becomes `focusDistance`. A depth, not a straight-line distance, so orbiting keeps it in focus.
 - `Mesh3D` with `eventMode = 'static'`, `cursor = 'pointer'` and a `pointertap` listener: tapping a shape focuses on
   it.
 - `OrbitCamera` from `@pixi/3d/extras`: drag to orbit, kept above the floor.
-- `Application` and `UniformGroup` from `pixi.js`.
+- `Application` from `pixi.js`.
 
 ## Controls
 
 - Tap a shape to focus on it; drag to orbit.
 - Pane: `Focus on` picks Near cube, Middle torus, Far crystal or Manual distance; `Manual distance` sets the plane by
-  hand and switches to it. The `DepthOfFieldEffect` folder has `enabled`, `focusDistance` (read-only, it follows the
-  focus), `focusRange`, `blurRadius` and `showFocus`.
+  hand and switches to it. The `DepthOfFieldEffect` folder has `quality`, `focusDistance` (read-only, it follows the
+  focus), `focusRange`, `focusFalloff`, `maxBlur` and `debug`.
 
 ## Files
 
-- `index.ts`: the lesson. The three shapes, tap to focus, the pane, and the plane following the picked shape.
-- `DepthOfFieldEffect.ts`: the effect, its shader and its uniform properties.
+- `index.ts`: the lesson. The three shapes, the effect, tap to focus, the pane and its quality swap, and the plane
+  following the picked shape.
 
 From the theme kit (`examples/shared/theme/README.md`): `ThemeStage`, `clayGeometry` and `clayMaterial`, `THEMES` and
 `themeFromUrl`, `ThemePane`, `LoadingScreen` and `fitPortrait`.
 
 ## See also
 
-- [Tilt shift](../post_tilt-shift/README.md): `TiltShiftEffect`, which weighs its taps by depth so sharp edges don't
-  smear and a blurred foreground spreads over what's behind it.
-- [Custom effect](../post_custom-effect/README.md): a post effect's two forms, one fragment or its own `build()`.
+- [Tilt shift](../post_tilt-shift/README.md): the same effect on a clay town, with a long falloff, so it reads as a
+  miniature.
+- [Custom effect](../post_custom-effect/README.md): a post effect of your own, one fragment or its own `build()`.
 - [Motion blur](../post_motion-blur/README.md): `MotionBlurEffect`, a blur by the camera's motion rather than by depth.
 
 ## Reference image
