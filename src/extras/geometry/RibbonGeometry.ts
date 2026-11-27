@@ -134,41 +134,65 @@ function writeCentreline(
   ribbon: Float32Array,
   uvs: Float32Array,
 ): void {
-  let start = 0;
+  let at = 0;
+  let position = 0;
+  let direction = 0;
+  let uv = 0;
 
   for (let l = 0; l < lineSizes.length; l++) {
     const count = lineSizes[l];
+    if (count === 0) continue;
+
+    const last = at + (count - 1) * 3;
     let distance = 0;
+    let prevX = points[at];
+    let prevY = points[at + 1];
+    let prevZ = points[at + 2];
+    let x = prevX;
+    let y = prevY;
+    let z = prevZ;
 
-    for (let i = 0; i < count; i++) {
-      const p = start + i;
-      const prev = (start + Math.max(i - 1, 0)) * 3;
-      const next = (start + Math.min(i + 1, count - 1)) * 3;
-      const x = points[p * 3];
-      const y = points[p * 3 + 1];
-      const z = points[p * 3 + 2];
+    for (; at <= last; at += 3) {
+      const next = at < last ? at + 3 : at;
+      const nextX = points[next];
+      const nextY = points[next + 1];
+      const nextZ = points[next + 2];
+      const stepX = x - prevX;
+      const stepY = y - prevY;
+      const stepZ = z - prevZ;
+      const alongX = nextX - prevX;
+      const alongY = nextY - prevY;
+      const alongZ = nextZ - prevZ;
 
-      if (i > 0) {
-        const dx = x - points[p * 3 - 3];
-        const dy = y - points[p * 3 - 2];
-        const dz = z - points[p * 3 - 1];
-        distance += Math.sqrt(dx * dx + dy * dy + dz * dz);
-      }
+      distance += Math.sqrt(stepX * stepX + stepY * stepY + stepZ * stepZ);
 
-      for (let side = 0; side < 2; side++) {
-        const v = p * 2 + side;
-        positions[v * 3] = x;
-        positions[v * 3 + 1] = y;
-        positions[v * 3 + 2] = z;
-        ribbon[v * 4] = points[next] - points[prev];
-        ribbon[v * 4 + 1] = points[next + 1] - points[prev + 1];
-        ribbon[v * 4 + 2] = points[next + 2] - points[prev + 2];
-        uvs[v * 2] = distance;
-        uvs[v * 2 + 1] = side;
-      }
+      positions[position] = x;
+      positions[position + 1] = y;
+      positions[position + 2] = z;
+      positions[position + 3] = x;
+      positions[position + 4] = y;
+      positions[position + 5] = z;
+      ribbon[direction] = alongX;
+      ribbon[direction + 1] = alongY;
+      ribbon[direction + 2] = alongZ;
+      ribbon[direction + 4] = alongX;
+      ribbon[direction + 5] = alongY;
+      ribbon[direction + 6] = alongZ;
+      uvs[uv] = distance;
+      uvs[uv + 1] = 0;
+      uvs[uv + 2] = distance;
+      uvs[uv + 3] = 1;
+
+      position += 6;
+      direction += 8;
+      uv += 4;
+      prevX = x;
+      prevY = y;
+      prevZ = z;
+      x = nextX;
+      y = nextY;
+      z = nextZ;
     }
-
-    start += count;
   }
 }
 
