@@ -40,8 +40,10 @@ function ribbonGpu(units: RibbonWidthUnits): string {
   ${HALF_WIDTH_GPU[units]}
   worldPosition = vec4<f32>(worldPosition.xyz + rbSide * rbHalf, 1.0);
   clipPosition = camera.uViewProjectionMatrix * worldPosition;
-  let rbFacing = cross(rbSide, rbTangent);
-  worldNormal = rbFacing * inverseSqrt(max(dot(rbFacing, rbFacing), 1e-30)) + rbSide * sign(input.aRibbon.w);
+  let rbView = normalize(rbToCamera);
+  let rbAlong = rbTangent * inverseSqrt(max(dot(rbTangent, rbTangent), 1e-30));
+  let rbAcross = rbView - rbAlong * dot(rbAlong, rbView);
+  worldNormal = normalize(rbAcross + rbView * (1.0 - length(rbAcross))) + rbSide * sign(input.aRibbon.w);
 }`;
 }
 
@@ -59,14 +61,16 @@ function ribbonGl(units: RibbonWidthUnits): string {
   ${HALF_WIDTH_GL[units]}
   worldPosition = vec4(worldPosition.xyz + rbSide * rbHalf, 1.0);
   gl_Position = uViewProjectionMatrix * worldPosition;
-  vec3 rbFacing = cross(rbSide, rbTangent);
-  worldNormal = rbFacing * inversesqrt(max(dot(rbFacing, rbFacing), 1e-30)) + rbSide * sign(aRibbon.w);
+  vec3 rbView = normalize(rbToCamera);
+  vec3 rbAlong = rbTangent * inversesqrt(max(dot(rbTangent, rbTangent), 1e-30));
+  vec3 rbAcross = rbView - rbAlong * dot(rbAlong, rbView);
+  worldNormal = normalize(rbAcross + rbView * (1.0 - length(rbAcross))) + rbSide * sign(aRibbon.w);
 }`;
 }
 
 /**
- * Rewrites `worldPosition`, the clip position and `worldNormal` in the vertex `afterTransform` slot, as the billboard
- * bit does; `'shape'` keeps it in level passes, so shadows turn it toward their light
+ * Rewrites `worldPosition`, the clip position and `worldNormal` after the transform, as the billboard bit does;
+ * `'shape'` keeps it in shadows. The normal leans to the view where the line points at the camera, as its side flips
  * @internal
  */
 export const ribbonBits: Record<RibbonWidthUnits, ShaderBit> = {
