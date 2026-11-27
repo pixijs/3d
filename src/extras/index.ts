@@ -27,6 +27,7 @@ export * from './particles/utils/generateSpawnPolyfill';
 export * from './particles/utils/spawnOverrides';
 export * from './particles/utils/spawnPlan';
 export * from './post-processing/effects/BloomEffect';
+export * from './post-processing/effects/DepthOfFieldEffect';
 export * from './post-processing/effects/FxaaEffect';
 export * from './post-processing/effects/MotionBlurEffect';
 export * from './post-processing/effects/SsaoEffect';

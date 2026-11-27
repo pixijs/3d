@@ -46,8 +46,8 @@ From the theme kit (`examples/shared/theme/README.md`): `ThemeStage` with its fo
 
 ## See also
 
-- [Depth of field](../post_depth-of-field/README.md): a depth blur of your own, and the silhouette smears that
-  `TiltShiftEffect` avoids by weighing its taps by depth.
+- [Depth of field](../post_depth-of-field/README.md): `DepthOfFieldEffect`, a lens blur by depth that keeps sharp
+  edges free of the halo the tilt shift leaves, side by side with it.
 - [Stacking effects](../post_effect-stack/README.md): the tilt shift in a list with other effects, and why order
   matters.
 - [Anti-aliasing](../post_antialiasing/README.md): the canvas's MSAA, and what `FxaaEffect` can and can't smooth.

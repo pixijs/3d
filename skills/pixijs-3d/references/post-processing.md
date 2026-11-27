@@ -119,6 +119,29 @@ Effects run stage by stage: every `'beforeToneMapping'` effect in array order, t
 
 With `antialias: true` on `app.init`, the scene stays multisampled through post effects, so most apps need no `FxaaEffect`. Add `new FxaaEffect()` last in `passes` when the canvas has `antialias: false`, or alongside `new SsaoEffect({ sceneNormals: true })` on WebGL, where the normals attachment turns the scene's MSAA off.
 
+## Depth of field
+
+`DepthOfFieldEffect` is a camera lens's depth of field: one depth in front of the camera is sharp, and everything nearer or farther blurs. Within `focusRange` of `focusDistance` stays sharp; the blur grows to `maxBlur` physical pixels at twice `focusRange`. Sharp edges stay sharp against a blurred background, a blurred foreground spreads over what's behind it, and over a view with no background the blurred edges fade to transparent.
+
+```ts
+import { Vector3 } from '@pixi/3d';
+import { DepthOfFieldEffect } from '@pixi/3d/extras';
+
+const depthOfField = new DepthOfFieldEffect({ focusRange: 0.5, maxBlur: 16 * app.renderer.resolution });
+view3d.passes = [depthOfField];
+
+const world = new Vector3();
+const local = new Vector3();
+app.ticker.add(() => {
+  // focusDistance is a depth along the view, -z in camera space, not a straight-line distance.
+  hero.getGlobalPosition(world);
+  view3d.camera.toLocal(world, undefined, local);
+  depthOfField.focusDistance = -local.z;
+});
+```
+
+One full-resolution pass with 48 taps and no mips. Large `maxBlur` values look slightly grainy. Use `TiltShiftEffect` for the miniature look; it is cheaper but leaves a soft halo round sharp edges.
+
 ## Tilt-shift
 
 `TiltShiftEffect` keeps a band of depth sharp and blurs the rest, for a miniature look from a high, angled camera. Distances are in view units from the camera. Tie `focalDepth` to the orbit distance so the target stays sharp while zooming, and use `debug` to see the bands.

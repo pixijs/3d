@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ShaderDescriptorOptions } from '~/core/shader/ShaderDescriptor';
 import { BloomEffect } from '~/extras/post-processing/effects/BloomEffect';
+import { DepthOfFieldEffect } from '~/extras/post-processing/effects/DepthOfFieldEffect';
 import { FxaaEffect } from '~/extras/post-processing/effects/FxaaEffect';
 import { SsaoEffect } from '~/extras/post-processing/effects/SsaoEffect';
 import { TiltShiftEffect } from '~/extras/post-processing/effects/TiltShiftEffect';
@@ -22,6 +23,7 @@ describe('post-processing defaultOptions', () => {
   const fxaa = { ...FxaaEffect.defaultOptions };
   const tint = { ...TintEffect.defaultOptions };
   const tiltShift = { ...TiltShiftEffect.defaultOptions };
+  const depthOfField = { ...DepthOfFieldEffect.defaultOptions };
   const ssao = { ...SsaoEffect.defaultOptions };
   const outline = { ...OutlinePass.defaultOptions };
   const wireframe = { ...WireframePass.defaultOptions };
@@ -31,6 +33,7 @@ describe('post-processing defaultOptions', () => {
     FxaaEffect.defaultOptions = { ...fxaa };
     TintEffect.defaultOptions = { ...tint };
     TiltShiftEffect.defaultOptions = { ...tiltShift };
+    DepthOfFieldEffect.defaultOptions = { ...depthOfField };
     SsaoEffect.defaultOptions = { ...ssao };
     OutlinePass.defaultOptions = { ...outline };
     WireframePass.defaultOptions = { ...wireframe };
@@ -80,6 +83,19 @@ describe('post-processing defaultOptions', () => {
 
     TiltShiftEffect.defaultOptions.maxBlur = 6;
     expect(new TiltShiftEffect({ maxBlur: undefined, focalDepth: 10 })).toMatchObject({ maxBlur: 6, focalDepth: 10 });
+  });
+
+  it('DepthOfFieldEffect writes every default into its uniforms', () => {
+    const effect = new DepthOfFieldEffect();
+
+    expect([effect.focusDistance, effect.focusRange, effect.maxBlur]).toEqual([10, 1, 12]);
+    expect(effect.stage).toBe('beforeToneMapping');
+
+    DepthOfFieldEffect.defaultOptions.maxBlur = 6;
+    expect(new DepthOfFieldEffect({ maxBlur: undefined, focusDistance: 4 })).toMatchObject({
+      maxBlur: 6,
+      focusDistance: 4,
+    });
   });
 
   it('SsaoEffect reads its defaults and derives maxDistance from the resolved radius', () => {

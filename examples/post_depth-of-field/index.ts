@@ -1,20 +1,18 @@
 /**
- * Depth of field: a post effect of your own keeps one camera depth sharp and blurs what's nearer or farther
+ * Depth of field: `DepthOfFieldEffect` keeps one camera depth sharp and blurs what's nearer or farther, as a lens does
  *
- * `DepthOfFieldEffect` is a `PostEffect` that reads each pixel's view-space depth with `viewPos(uv)` and blurs by
- * sampling a coarser level of its mipmapped input (`inputMips`). The sharp band is a plane `focusDistance` in front
- * of the camera, so the floor at the same depth as the shape in focus stays sharp too. Each pixel picks its blur from
- * its own depth, which is cheap but wrong at silhouettes: the blur round a sharp shape smears its colour outwards,
- * and a blurred shape in front of the sharp band stops dead at it, since a sharp pixel never reads its neighbours.
- * `TiltShiftEffect` in `@pixi/3d/extras` weighs its taps by depth, so sharp edges don't smear and a blurred
- * foreground still spreads over what's behind it.
+ * The effect reads the scene's depth and gives every pixel a blur radius from its distance to `focusDistance`: none
+ * within `focusRange`, growing to `maxBlur` at twice it. The sharp zone is a plane facing the camera, so the floor at
+ * the shape's depth stays sharp with it. Sharp edges stay sharp against the blur behind them, and a blurred shape in
+ * front spreads over what's behind it. The pane swaps in `TiltShiftEffect` with the same settings: it blurs by depth
+ * too, but from its input's mipmaps, which leaves a soft halo round the sharp shape.
  *
  * Controls: tap a shape to focus on it; drag to orbit; the pane picks the focus, sets a manual distance, widens the
- * band, sets the blur and shows the focus mask. URL flags: `?theme=light|dark`, `?renderer=webgl|webgpu`.
+ * sharp zone, sets the blur and swaps the effect. URL flags: `?theme=light|dark`, `?renderer=webgl|webgpu`.
  */
 
 import { Mesh3D, Vector3, View3D } from '@pixi/3d';
-import { OrbitCamera } from '@pixi/3d/extras';
+import { DepthOfFieldEffect, OrbitCamera, TiltShiftEffect } from '@pixi/3d/extras';
 import { Application } from 'pixi.js';
 
 import { rendererPreference } from '../../playground/src/getPreference';
@@ -25,12 +23,11 @@ import { THEMES, themeFromUrl } from '../shared/theme/palette';
 import { clayGeometry } from '../shared/theme/shapes';
 import { ThemePane } from '../shared/theme/ThemePane';
 import { ThemeStage } from '../shared/theme/ThemeStage';
-import { DepthOfFieldEffect } from './DepthOfFieldEffect';
 
 /** Fits the three shapes across a portrait screen without changing their relative depths */
 const FIT_ASPECT = 0.9;
 /** The blur at full strength, in CSS pixels: enough to soften a shape without losing it */
-const BLUR_RADIUS = 20;
+const MAX_BLUR = 16;
 /** The most blur the pane allows, in CSS pixels */
 const BLUR_RANGE = 32;
 /** The focus list's value for focusing at the manual distance instead of on a shape */
@@ -51,9 +48,11 @@ await app.init({
 });
 loading.progress(0.2);
 
-// blurRadius counts device pixels, so it's scaled to look the same on a 2× screen.
-const depthOfField = new DepthOfFieldEffect({ blurRadius: BLUR_RADIUS * app.renderer.resolution });
-const view3d = new View3D({ autoResize: true, passes: [depthOfField] });
+// maxBlur counts physical pixels, so it's scaled to look the same on a 2× screen.
+const depthOfField = new DepthOfFieldEffect({ focusRange: 0.65, maxBlur: MAX_BLUR * app.renderer.resolution });
+// Off until the pane swaps it in. Its sharp band and full blur are set from the depth of field's each frame.
+const tiltShift = new TiltShiftEffect({ enabled: false });
+const view3d = new View3D({ autoResize: true, passes: [depthOfField, tiltShift] });
 const stage = new ThemeStage(view3d, { theme, fog: { near: 22, far: 48 } });
 
 // A shadow pass would cost a draw per shape and teach nothing here.
@@ -92,7 +91,7 @@ const orbit = new OrbitCamera({
 
 fitPortrait({ renderer: app.renderer, orbit, stage, minAspect: FIT_ASPECT });
 
-const settings = { focusOn: 1, manualDistance: 13 };
+const settings = { focusOn: 1, manualDistance: 13, tiltShift: false };
 const pane = new ThemePane({ title: 'Depth of field', stage });
 const focusRow = pane.addBinding(settings, 'focusOn', {
   label: 'Focus on',
@@ -113,11 +112,14 @@ manualRow.on('change', () => {
 
 const folder = pane.addFolder({ title: 'DepthOfFieldEffect' });
 
-folder.addBinding(depthOfField, 'enabled');
 folder.addBinding(depthOfField, 'focusDistance', { readonly: true, interval: 300, format: (v) => v.toFixed(1) });
 folder.addBinding(depthOfField, 'focusRange', { min: 0.1, max: 3, step: 0.05 });
-folder.addBinding(depthOfField, 'blurRadius', { min: 0, max: BLUR_RANGE * app.renderer.resolution, step: 1 });
-folder.addBinding(depthOfField, 'showFocus');
+folder.addBinding(depthOfField, 'maxBlur', { min: 0, max: BLUR_RANGE * app.renderer.resolution, step: 1 });
+// Each switch rebuilds the view's render graph once, which is fine for a toggle.
+pane.addBinding(settings, 'tiltShift', { label: 'Compare TiltShiftEffect' }).on('change', () => {
+  depthOfField.enabled = !settings.tiltShift;
+  tiltShift.enabled = settings.tiltShift;
+});
 
 shapes.forEach((shape, i) =>
   shape.on('pointertap', () => {
@@ -133,15 +135,19 @@ const cameraPoint = new Vector3();
 function updateFocus(): void {
   if (settings.focusOn === MANUAL) {
     depthOfField.focusDistance = settings.manualDistance;
-
-    return;
+  } else {
+    shapes[settings.focusOn].getGlobalPosition(worldPoint);
+    // The camera looks down its -z, so depth is -z in camera space. The straight-line distance from the camera
+    // would focus on a sphere round it rather than a plane.
+    view3d.camera.toLocal(worldPoint, undefined, cameraPoint);
+    depthOfField.focusDistance = -cameraPoint.z;
   }
 
-  shapes[settings.focusOn].getGlobalPosition(worldPoint);
-  // The camera looks down its -z, so depth is -z in camera space. The straight-line distance from the camera would
-  // focus on a sphere round it rather than a plane.
-  view3d.camera.toLocal(worldPoint, undefined, cameraPoint);
-  depthOfField.focusDistance = -cameraPoint.z;
+  // The same zones in tilt-shift's terms: sharp within focalNear, full blur at focalFar.
+  tiltShift.focalDepth = depthOfField.focusDistance;
+  tiltShift.focalNear = depthOfField.focusRange;
+  tiltShift.focalFar = depthOfField.focusRange * 2;
+  tiltShift.maxBlur = depthOfField.maxBlur;
 }
 
 let elapsed = 0;

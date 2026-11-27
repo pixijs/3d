@@ -51,7 +51,7 @@ From the theme kit (`examples/shared/theme/README.md`): `ThemeStage` with its sp
 ## See also
 
 - [Stacking effects](../post_effect-stack/README.md): the built-in effects in one `passes` array, and their order.
-- [Depth of field](../post_depth-of-field/README.md): a single-fragment effect that reads depth and a mipmapped input.
+- [Depth of field](../post_depth-of-field/README.md): `DepthOfFieldEffect`, a built-in effect that blurs by the scene's depth.
 - [Custom tone mapping](../post_custom-tone-mapping/README.md): an effect that runs in a render graph of your own.
 
 ## Reference image
