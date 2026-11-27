@@ -1,7 +1,7 @@
 import type { TestScene } from '@test-utils';
 
+import { RibbonGeometry } from '~/extras/geometry/RibbonGeometry';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
-import { RibbonGeometry } from '~/geometry/RibbonGeometry';
 import { Material3D } from '~/materials/pbr/Material3D';
 import { Container3D } from '~/scene/Container3D';
 import { DirectionalLight } from '~/scene/lights/DirectionalLight';

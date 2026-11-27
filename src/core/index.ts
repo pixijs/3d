@@ -102,7 +102,6 @@ export * from './shader/bits/normalBit';
 export * from './shader/bits/normalMappingBit';
 export * from './shader/bits/noShadowBit';
 export * from './shader/bits/positionBit';
-export * from './shader/bits/ribbonBit';
 export * from './shader/bits/shaderStructs';
 export * from './shader/bits/shadowTaps';
 export * from './shader/bits/tangentNormalMappingBit';

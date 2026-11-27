@@ -11,9 +11,9 @@
  * the points. URL flags: `?theme=light|dark`, `?renderer=webgl|webgpu`.
  */
 
-import { Mesh3D, RibbonGeometry, View3D } from '@pixi/3d';
-import type { RibbonWidthUnits } from '@pixi/3d';
-import { OrbitCamera } from '@pixi/3d/extras';
+import { Mesh3D, View3D } from '@pixi/3d';
+import { OrbitCamera, RibbonGeometry } from '@pixi/3d/extras';
+import type { RibbonWidthUnits } from '@pixi/3d/extras';
 import { Application } from 'pixi.js';
 
 import { rendererPreference } from '../../playground/src/getPreference';

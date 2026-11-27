@@ -1,5 +1,5 @@
-import type { RibbonWidthUnits } from '../../../geometry/RibbonGeometry';
-import type { ShaderBit } from '../ShaderBit';
+import type { ShaderBit } from '../../core/shader/ShaderBit';
+import type { RibbonWidthUnits } from './RibbonGeometry';
 
 /**
  * The offset across the line in local space, from the signed full width in `aRibbon.w`: a world width is a local

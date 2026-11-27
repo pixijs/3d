@@ -1,8 +1,8 @@
 import type { TypedArray } from 'pixi.js';
 
-import { ribbonBits } from '../core/shader/bits/ribbonBit';
-import { Geometry3D } from './Geometry3D';
-import { computeBoundsFromPositions } from './utils/Geometry3DUtils';
+import { Geometry3D } from '../../geometry/Geometry3D';
+import { computeBoundsFromPositions } from '../../geometry/utils/Geometry3DUtils';
+import { ribbonBits } from './ribbonBit';
 
 /**
  * What a {@link RibbonGeometry}'s widths measure
@@ -14,7 +14,7 @@ import { computeBoundsFromPositions } from './utils/Geometry3DUtils';
  * const units: RibbonWidthUnits = 'pixels';
  * const path = new RibbonGeometry({ points, width: 3, widthUnits: units });
  * ```
- * @category geometry
+ * @category extras:geometry
  * @standard
  */
 export type RibbonWidthUnits = 'world' | 'pixels';
@@ -26,7 +26,7 @@ export type RibbonWidthUnits = 'world' | 'pixels';
  * const options: RibbonGeometryOptions = { points: [0, 0, 0, 1, 1, 0, 2, 0, 0], width: 0.1 };
  * const ribbon = new RibbonGeometry(options);
  * ```
- * @category geometry
+ * @category extras:geometry
  * @standard
  */
 export interface RibbonGeometryOptions {
@@ -191,7 +191,7 @@ function writeCentreline(
  *   material: new Material3D({ baseColor: 0xe72264 }),
  * });
  * ```
- * @category geometry
+ * @category extras:geometry
  * @standard
  */
 export class RibbonGeometry extends Geometry3D {

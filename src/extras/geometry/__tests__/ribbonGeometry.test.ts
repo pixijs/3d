@@ -2,10 +2,10 @@ import { getApp, renderFrame } from '@test-utils';
 import type { Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { RibbonGeometry } from '~/extras/geometry/RibbonGeometry';
+import type { RibbonGeometryOptions } from '~/extras/geometry/RibbonGeometry';
 import { Geometry3D } from '~/geometry/Geometry3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
-import { RibbonGeometry } from '~/geometry/RibbonGeometry';
-import type { RibbonGeometryOptions } from '~/geometry/RibbonGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import type { CameraMode } from '~/scene/cameras/Camera3D';
 import { Mesh3D } from '~/scene/Mesh3D';

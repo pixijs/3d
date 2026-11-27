@@ -16,7 +16,7 @@ width all the way back, tagged widthUnits: 'pixels'; the pane shows Theme Light,
 
 ## API
 
-- `RibbonGeometry` from `@pixi/3d`: built from `points`, x, y and z for each, and `width`, one number for every point
+- `RibbonGeometry` from `@pixi/3d/extras`: built from `points`, x, y and z for each, and `width`, one number for every point
   or a `Float32Array` with one per point, which the Taper row passes to swell each ribbon from nothing at its ends.
 - `RibbonWidthUnits`, the `widthUnits` option: `'world'` measures `width` in the units of the points, so it scales with the mesh, `'pixels'` in
   pixels on screen at any distance.

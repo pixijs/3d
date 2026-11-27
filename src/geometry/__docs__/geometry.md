@@ -102,10 +102,11 @@ Lines are one pixel wide on both WebGL and WebGPU. For a wider line, use a [ribb
 
 ### Ribbons
 
-A {@link RibbonGeometry} draws a line of points as a strip that turns to face the camera, with a {@link RibbonGeometryOptions#width | width} in the units of its points, which scales with the mesh, or, with {@link RibbonGeometryOptions#widthUnits | widthUnits} set to `'pixels'`, in pixels on screen. Use it for paths, trails, cables, hair and fibres. Any material draws it, and a lit one shades it as a round cord:
+A {@link RibbonGeometry}, from `@pixi/3d/extras`, draws a line of points as a strip that turns to face the camera, with a {@link RibbonGeometryOptions#width | width} in the units of its points, which scales with the mesh, or, with {@link RibbonGeometryOptions#widthUnits | widthUnits} set to `'pixels'`, in pixels on screen. Use it for paths, trails, cables, hair and fibres. Any material draws it, and a lit one shades it as a round cord:
 
 ```ts
-import { Material3D, Mesh3D, RibbonGeometry } from '@pixi/3d';
+import { Material3D, Mesh3D } from '@pixi/3d';
+import { RibbonGeometry } from '@pixi/3d/extras';
 
 const points: number[] = [];
 for (let i = 0; i <= 64; i++) points.push(Math.cos(i * 0.3), i * 0.05, Math.sin(i * 0.3));

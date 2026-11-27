@@ -7,6 +7,8 @@ export * from './debug/GraphDebugOverlay';
 export * from './debug/GraphDebugRecording';
 export * from './debug/GraphDebugSnapshot';
 export * from './debug/VelocityViewer';
+export * from './geometry/ribbonBit';
+export * from './geometry/RibbonGeometry';
 export * from './materials/bits/dissolveBit';
 export * from './materials/bits/glossBit';
 export * from './materials/portal/portalBit';
