@@ -197,7 +197,8 @@ export class MaterialSystemGl {
   /**
    * Appends the mesh's position, morph and skinning bits in the order they deform the vertex, and every bit
    * added here joins the cache key. A shader whose bits read the material gets its layout bit. The bit's name
-   * joins the key, so the material is checked only when the shader compiles
+   * joins the key, so the material is checked only when the shader compiles.
+   * Names the program by the key, so pixi's compile error log lists the bits.
    */
   public compileShader(
     descriptor: ShaderDescriptor,
@@ -275,7 +276,7 @@ export class MaterialSystemGl {
       }
 
       const shader = Shader.from({
-        gl,
+        gl: { ...gl, name: key },
         groups: {},
         overrides: descriptor.overrides,
         groupMap: gl.groupMap,
