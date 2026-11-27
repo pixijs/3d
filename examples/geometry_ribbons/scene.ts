@@ -49,8 +49,8 @@ export function taperedWidths(width: number): Float32Array {
  * scale the lighting works in, so each sRGB colour picked from the palette is converted first or it comes out pale.
  */
 export function gradientColors(near: number, far: number): Float32Array {
-  const from = new Color(near).toRgbArray().map(srgbToLinear);
-  const to = new Color(far).toRgbArray().map(srgbToLinear);
+  const from = Color.shared.setValue(near).toRgbArray().map(srgbToLinear);
+  const to = Color.shared.setValue(far).toRgbArray().map(srgbToLinear);
   const colors = new Float32Array(POINT_COUNT * 4);
 
   for (let i = 0; i < POINT_COUNT; i++) {
