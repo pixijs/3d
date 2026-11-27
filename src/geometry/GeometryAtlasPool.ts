@@ -1,7 +1,8 @@
-import { GlobalResourceRegistry } from 'pixi.js';
+import { GlobalResourceRegistry, warn } from 'pixi.js';
+import type { WebGLRenderer, WebGPURenderer } from 'pixi.js';
 
 import type { Geometry3D } from './Geometry3D';
-import { GeometryAtlas } from './GeometryAtlas';
+import { GeometryAtlas, MAX_ATLAS_BUFFER_BYTES } from './GeometryAtlas';
 import type { GeometryAllocation } from './GeometryAtlas';
 
 interface GeometryAtlasPoolOptions {
@@ -15,7 +16,8 @@ const sharedPools: Record<string, GeometryAtlasPool> = Object.create(null);
  * @internal
  */
 export class GeometryAtlasPool {
-  private _atlases: Record<string, GeometryAtlas> = Object.create(null);
+  /** Per attribute layout; a layout opens another atlas only when the others would pass the buffer cap */
+  private _atlases: Record<string, GeometryAtlas[]> = Object.create(null);
   private readonly _rebaseIndices: boolean;
   private _bufferVersion = 0;
 
@@ -53,14 +55,27 @@ export class GeometryAtlasPool {
    */
   public allocate(geometry: Geometry3D): GeometryAllocation {
     const key = geometry.attributeKey;
-    let atlas = this._atlases[key];
+    const atlases = (this._atlases[key] ??= []);
 
     const existing = geometry._geometryAtlasAllocation;
-    if (existing && existing.atlas === atlas) return existing;
+    if (existing && atlases.includes(existing.atlas)) return existing;
+
+    let atlas = atlases.find((a) => a.fits(geometry));
 
     if (!atlas) {
-      atlas = new GeometryAtlas({ referenceGeometry: geometry, rebaseIndices: this._rebaseIndices });
-      this._atlases[key] = atlas;
+      atlas = new GeometryAtlas({
+        referenceGeometry: geometry,
+        rebaseIndices: this._rebaseIndices,
+      });
+      atlases.push(atlas);
+
+      if (!atlas.fits(geometry)) {
+        warn(
+          `GeometryAtlasPool: a geometry of ${geometry.vertexCount} vertices exceeds the atlas buffer cap ` +
+            `(${MAX_ATLAS_BUFFER_BYTES} bytes) once interleaved. ` +
+            `Make it dynamic to draw it from its own buffers.`,
+        );
+      }
     }
 
     const atlasVersion = atlas._bufferVersion;
@@ -70,14 +85,25 @@ export class GeometryAtlasPool {
     return allocation;
   }
 
-  /** Uploads what this frame's `allocate` calls wrote, so call it after them and before drawing */
-  public update(): void {
-    for (const key in this._atlases) this._atlases[key].update();
+  /** Brings the renderer's copy of every atlas up to date, so call it after this frame's `allocate` calls and before drawing */
+  public update(renderer: WebGLRenderer | WebGPURenderer): void {
+    for (const key in this._atlases) {
+      for (const atlas of this._atlases[key]) atlas.update(renderer);
+    }
+  }
+
+  /** Call it when a renderer's context is lost or the renderer goes, since the pool outlives both */
+  public invalidateUploads(rendererUid: number): void {
+    for (const key in this._atlases) {
+      for (const atlas of this._atlases[key]) atlas.invalidateUploads(rendererUid);
+    }
   }
 
   /** Destroys every atlas, leaving the pool usable; named for pixi's `Cleanable`, which the registry calls */
   public clear(): void {
-    for (const key in this._atlases) this._atlases[key].destroy();
+    for (const key in this._atlases) {
+      for (const atlas of this._atlases[key]) atlas.destroy();
+    }
     this._atlases = Object.create(null);
   }
 }

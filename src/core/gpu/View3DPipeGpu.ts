@@ -126,6 +126,8 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
       );
     }
 
+    this.atlasPool.invalidateUploads(this.renderer.uid);
+
     this.materialStoreBuffer ??= new MaterialDataStoreBuffer({
       alignment: this.renderer.limits.minUniformBufferOffsetAlignment,
       rendererType: this.renderer.type,
@@ -353,7 +355,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     gpuData.globalBindGroup.setResource(this.geometryDataStoreBuffer.bufferResource, 'uGeometryStorage');
     this.materialStoreBuffer.update();
     this.geometryDataStoreBuffer.update();
-    this.atlasPool.update();
+    this.atlasPool.update(this.renderer);
 
     if (
       detectSharedCacheInvalidation(
@@ -393,6 +395,7 @@ export class View3DPipeGpu implements View3DPipe, InstructionPipe<View3D> {
     (this._iblEnvironmentMap as Map<TextureSource, CubeTexture> | null) = null;
 
     this.renderer.runners.contextChange.remove(this);
+    this.atlasPool.invalidateUploads(this.renderer.uid);
     this.materialStoreBuffer.destroy();
     (this.materialStoreBuffer as MaterialDataStoreBuffer | null) = null;
     this._morphStoreBuffer.destroy();

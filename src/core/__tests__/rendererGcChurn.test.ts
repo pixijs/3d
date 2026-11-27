@@ -182,15 +182,12 @@ async function runCycle(app: Application<Renderer>, cycle: number): Promise<void
 interface StoreProbe {
   _freeCount: number;
   _count: number;
-  _retiredBuffers: unknown[];
-  _retiredTextures: unknown[];
   bufferVersion: number;
 }
 
 interface MaterialStoreProbe {
   _end: number;
   _freePlaces: Map<number, number[]>;
-  _retiredTextures: unknown[];
   bufferVersion: number;
 }
 
@@ -199,14 +196,11 @@ interface MorphStoreProbe {
   _weightCursor: number;
   _freeSlots: Map<number, number[]>;
   _freeDeltaBlocks: Map<number, number[]>;
-  _retiredBuffers: unknown[];
   bufferVersion: number;
 }
 
 interface AtlasProbe {
   _liveAllocations: unknown[];
-  _retiredBuffers: unknown[];
-  _retiredGeometries: unknown[];
   _deadVertexCount: number;
   _vertexCount: number;
   _bufferVersion: number;
@@ -216,7 +210,7 @@ interface PipeProbe {
   materialStoreBuffer: MaterialStoreProbe;
   geometryDataStoreBuffer: StoreProbe;
   _morphStoreBuffer: MorphStoreProbe;
-  atlasPool: { _atlases: Record<string, AtlasProbe> };
+  atlasPool: { _atlases: Record<string, AtlasProbe[]> };
   _managedViews: { _managedViews: { items: Record<number, unknown> } };
 }
 
@@ -284,14 +278,11 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   const freedTexels = sumOver(material._freePlaces.entries(), ([length, places]) => length * places.length);
   flat['store.material.live'] = material._end - freedTexels;
   flat['store.material.highWater'] = material._end;
-  flat['store.material.retiredTextures'] = material._retiredTextures.length;
   info['store.material.bufferVersion'] = material.bufferVersion;
 
   const geometry = pipe.geometryDataStoreBuffer;
   flat['store.geometry.live'] = geometry._count - geometry._freeCount;
   flat['store.geometry.highWater'] = geometry._count;
-  flat['store.geometry.retired'] = geometry._retiredBuffers.length;
-  flat['store.geometry.retiredTextures'] = geometry._retiredTextures.length;
   info['store.geometry.bufferVersion'] = geometry.bufferVersion;
 
   const morph = pipe._morphStoreBuffer;
@@ -299,14 +290,11 @@ function sample(app: Application<Renderer>, resident: View3D): Sample {
   flat['store._morph.weightCursor'] = morph._weightCursor;
   flat['store._morph.freeSlots'] = sumOver(morph._freeSlots.values(), (list) => list.length);
   flat['store._morph.freeDeltaBlocks'] = sumOver(morph._freeDeltaBlocks.values(), (list) => list.length);
-  flat['store._morph.retired'] = morph._retiredBuffers.length;
   info['store._morph.bufferVersion'] = morph.bufferVersion;
 
-  const atlases = Object.values(pipe.atlasPool._atlases);
+  const atlases = Object.values(pipe.atlasPool._atlases).flat();
   flat['atlas.count'] = atlases.length;
   flat['atlas.liveAllocations'] = sumOver(atlases, (atlas) => atlas._liveAllocations.length);
-  flat['atlas.retiredBuffers'] = sumOver(atlases, (atlas) => atlas._retiredBuffers.length);
-  flat['atlas.retiredGeometries'] = sumOver(atlases, (atlas) => atlas._retiredGeometries.length);
   info['atlas.vertexHighWater'] = sumOver(atlases, (atlas) => atlas._vertexCount);
   info['atlas.deadVertices'] = sumOver(atlases, (atlas) => atlas._deadVertexCount);
   info['atlas.bufferVersion'] = sumOver(atlases, (atlas) => atlas._bufferVersion);

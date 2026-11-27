@@ -1,6 +1,7 @@
 import { BufferImageSource, BufferResource, BufferUsage, Texture } from 'pixi.js';
 
 import type { Skeleton } from '../../scene/Skeleton';
+import { retire } from '../retire';
 import { Buffer3D } from './Buffer3D';
 import { alignToDataTextureRows, dataTextureSize, uploadFloatRange } from './dataTextureLayout';
 
@@ -33,8 +34,6 @@ export class BonePit {
 
   private _texture: Texture | null = null;
   private _textureSource: BufferImageSource | null = null;
-
-  private readonly _retiredBuffers: Buffer3D[] = [];
 
   /**
    * The `Skeleton._worldId` each `add` slot last copied. A match skips the copy only while no earlier
@@ -124,7 +123,7 @@ export class BonePit {
     if (this._textureSource) uploadFloatRange(this._textureSource, 0, floats);
   }
 
-  /** Retires the buffer rather than destroying it, since draws recorded earlier still bind it; `_freeRetired` frees it */
+  /** Retires the buffer rather than destroying it, since draws recorded earlier still bind it */
   private _ensureCapacity(requiredBoneCount: number): void {
     const requiredFloats = requiredBoneCount * BONE_MATRIX_FLOATS;
     if (requiredFloats <= this.data.length) return;
@@ -138,7 +137,7 @@ export class BonePit {
     this.data = newData;
 
     if (this._buffer) {
-      this._retiredBuffers.push(this._buffer);
+      retire(this._buffer);
       this._buffer = null;
       this._bufferResource = null;
     }
@@ -156,17 +155,11 @@ export class BonePit {
     }
   }
 
-  private _freeRetired(): void {
-    for (let i = 0; i < this._retiredBuffers.length; i++) this._retiredBuffers[i].destroy();
-    this._retiredBuffers.length = 0;
-  }
-
   public unload(): void {
     if (!this.data) return;
 
     this._buffer?.unload();
     this._textureSource?.unload();
-    this._freeRetired();
   }
 
   public destroy(): void {
@@ -174,8 +167,6 @@ export class BonePit {
 
     this._bufferResource?.destroy(false);
     this._buffer?.destroy();
-
-    this._freeRetired();
 
     this._texture?.destroy(true);
 
