@@ -3,6 +3,7 @@ import { Graphics } from 'pixi.js';
 import type { Application, Renderer } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 
+import { BloomEffect } from '~/extras/post-processing/effects/BloomEffect';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { SphereGeometry } from '~/geometry/SphereGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
@@ -169,6 +170,49 @@ for (const preference of ['webgpu', 'webgl'] as const) {
         } finally {
           view3d.destroy({ children: true, geometry: true, material: true });
         }
+      });
+    });
+
+    it('keeps bloom over a faint pane as bright as on an opaque background, over black', async () => {
+      await withApp('tone-output-glow-pane', (app) => {
+        const row = (background: number | null): number[] => {
+          const strip = new Mesh3D({
+            geometry: new PlaneGeometry({ width: 0.15, height: 10 }),
+            material: new FlatMaterial(),
+          });
+          const pane = new Mesh3D({
+            geometry: new PlaneGeometry({ width: 5, height: 10 }),
+            material: new FlatMaterial({ baseColor: 0x000000, alphaMode: 'blend', alpha: 0.01 }),
+          });
+          pane.position.set(2.5, 0, -0.5);
+          const view3d = new View3D({
+            width: SIZE,
+            height: SIZE,
+            background,
+            exposure: 4,
+            passes: [new BloomEffect()],
+          });
+          view3d.root.addChild(pane, strip);
+          view3d.camera.position.set(0, 0, 2.5);
+          app.stage.addChild(view3d);
+          try {
+            app.render();
+            const pixels = readCanvasPixels(app.canvas, 0, SIZE / 2, SIZE, 1);
+            return Array.from({ length: SIZE }, (_, x) => pixels[x * 4]);
+          } finally {
+            view3d.destroy({ children: true, geometry: true, material: true });
+          }
+        };
+
+        const clear = row(null);
+        const opaque = row(0x000000);
+        const glowRight = opaque.slice(SIZE / 2 + 2);
+        expect(Math.min(...glowRight), 'the glow reaches across the pane').toBeGreaterThan(40);
+        const worst = Math.max(...clear.map((red, x) => Math.abs(red - opaque[x])));
+        expect(
+          worst,
+          'a black pane at 1% hides almost nothing over black, so the glow over it stays',
+        ).toBeLessThanOrEqual(8);
       });
     });
 
