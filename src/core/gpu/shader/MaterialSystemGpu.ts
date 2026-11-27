@@ -275,7 +275,8 @@ export class MaterialSystemGpu {
 
   /**
    * Appends the position, morph and skinning bits in that order, so skinning moves the morphed vertex,
-   * and adds what it appends to the key; validation reads the material, so it runs on cache hits too
+   * and adds what it appends to the key; validation reads the material, so it runs on cache hits too.
+   * Names the program by the key, so the browser's compile warning lists the bits.
    */
   public compileShader(
     descriptor: ShaderDescriptor,
@@ -345,7 +346,10 @@ export class MaterialSystemGpu {
         gpu.bits,
       );
 
-      entry = { shader: Shader.from({ gpu, overrides: descriptor.overrides }), layout: getMaterialLayout(gpu.bits) };
+      entry = {
+        shader: Shader.from({ gpu: { ...gpu, name: key }, overrides: descriptor.overrides }),
+        layout: getMaterialLayout(gpu.bits),
+      };
       this._shaderCache.set(key, entry);
     }
 

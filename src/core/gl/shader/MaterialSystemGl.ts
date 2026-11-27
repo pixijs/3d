@@ -202,6 +202,7 @@ export class MaterialSystemGl {
   /**
    * Appends the mesh's position, morph and skinning bits in the order they deform the vertex, and every bit added
    * here joins the cache key. Validation runs on cache hits too, since it checks the material, not the shader.
+   * Names the program by the key, so pixi's compile error log lists the bits.
    */
   public compileShader(
     descriptor: ShaderDescriptor,
@@ -268,7 +269,7 @@ export class MaterialSystemGl {
       assertBindGroups(gl.bits, descriptor.template!);
 
       const shader = Shader.from({
-        gl,
+        gl: { ...gl, name: key },
         groups: {},
         overrides: descriptor.overrides,
         groupMap: gl.groupMap,
