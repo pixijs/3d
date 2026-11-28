@@ -12,7 +12,6 @@
  */
 
 import { Mesh3D, View3D } from '@pixi/3d';
-import type { Material3D } from '@pixi/3d';
 import { OrbitCamera, RibbonGeometry } from '@pixi/3d/extras';
 import type { RibbonWidthUnits } from '@pixi/3d/extras';
 import { Application } from 'pixi.js';
@@ -79,33 +78,16 @@ function buildRibbon(widthUnits: RibbonWidthUnits): RibbonGeometry {
   });
 }
 
-/**
- * Any material draws a ribbon once its `extraBits` hold the ribbon's `shaderBit`, the bit that turns the strip to
- * the camera. Each width unit has its own bit, so each ribbon gets its own material; a rebuilt geometry with the
- * same units keeps the same bit. A lit material shades the strip as a round cord, and `vertexColors` lets it read
- * the geometry's `colors`.
- */
-function ribbonMaterial(geometry: RibbonGeometry): Material3D {
-  const material = createClayMaterial({ color: 'white', extraBits: [geometry.shaderBit] });
-  material.vertexColors = true;
-  return material;
-}
+// Any material draws a ribbon: the geometry carries the shader bit that turns the strip to the camera, so both
+// ribbons share one. A lit material shades the strip as a round cord, and `vertexColors` lets it read the
+// geometry's `colors`.
+const material = createClayMaterial({ color: 'white' });
+material.vertexColors = true;
 
-const worldGeometry = buildRibbon('world');
-const worldRibbon = new Mesh3D({
-  geometry: worldGeometry,
-  material: ribbonMaterial(worldGeometry),
-  parent: view3d.root,
-});
+const worldRibbon = new Mesh3D({ geometry: buildRibbon('world'), material, parent: view3d.root });
 // Shadows face their light, so the world ribbon casts one its own width. A pixel width means nothing to the
 // light, whose shadow map has pixels of its own, so the purple ribbon casts none.
-const pixelGeometry = buildRibbon('pixels');
-const pixelRibbon = new Mesh3D({
-  geometry: pixelGeometry,
-  material: ribbonMaterial(pixelGeometry),
-  castShadow: false,
-  parent: view3d.root,
-});
+const pixelRibbon = new Mesh3D({ geometry: buildRibbon('pixels'), material, castShadow: false, parent: view3d.root });
 
 /** Builds both ribbons again for the pane's settings, and frees the geometries they leave */
 function rebuildRibbons(): void {

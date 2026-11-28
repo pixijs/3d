@@ -37,7 +37,6 @@ export const scene: TestScene = {
         baseColor: 0xffffff,
         roughness: 0.5,
         vertexColors: true,
-        extraBits: [helixRibbon.shaderBit],
       }),
       parent: tiltedSquashedParent,
     });
@@ -55,7 +54,7 @@ export const scene: TestScene = {
     });
     new Mesh3D({
       geometry: pixelRibbon,
-      material: new Material3D({ baseColor: 0x6a41e2, roughness: 0.6, extraBits: [pixelRibbon.shaderBit] }),
+      material: new Material3D({ baseColor: 0x6a41e2, roughness: 0.6 }),
       parent: view3d.root,
     });
 

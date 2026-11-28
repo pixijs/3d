@@ -60,8 +60,7 @@ async function render(
 }
 
 function white(geometry: RibbonGeometry | PlaneGeometry): Mesh3D {
-  const extraBits = geometry instanceof RibbonGeometry ? [geometry.shaderBit] : [];
-  return new Mesh3D({ geometry, material: new FlatMaterial({ baseColor: 0xffffff, extraBits }) });
+  return new Mesh3D({ geometry, material: new FlatMaterial({ baseColor: 0xffffff }) });
 }
 
 describe('RibbonGeometry', () => {

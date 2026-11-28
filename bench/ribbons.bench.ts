@@ -186,7 +186,7 @@ function curlField({ view }: PixiStage, widthUnits: RibbonWidthUnits, lines: num
     width: WIDTHS[widthUnits],
     widthUnits,
   });
-  const material = new Material3D({ baseColor: 0xe7_22_64, roughness: 0.6, extraBits: [geometry.shaderBit] });
+  const material = new Material3D({ baseColor: 0xe7_22_64, roughness: 0.6 });
   const mesh = new Mesh3D({ geometry, material, parent: view.root });
   mesh.rotation.z = 0.25;
   mesh.scale.set(1, 0.8, 1.3);
