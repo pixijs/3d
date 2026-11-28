@@ -1,6 +1,6 @@
 ---
 title: Geometry
-description: The nine built-in shapes and how textures map onto them, building a shape from your own vertex arrays, editing a geometry's vertices, and querying its triangles.
+description: The nine built-in shapes and how textures map onto them, building a shape from your own vertex arrays, editing a geometry's vertices or moving them in the shader, and querying its triangles.
 category: geometry
 ---
 
@@ -172,6 +172,33 @@ app.ticker.add(() => {
   ribbon.attributes.aPosition.buffer.update();
 });
 ```
+
+## Moving vertices in the shader
+
+Some shapes need a step in the vertex shader to look right, such as grass that sways in the wind. A {@link ShaderBit} can do that step, as [Adding your own shader code](../../extras/__docs__/custom-materials.md#adding-your-own-shader-code) shows. On a material it works only for meshes with that material. Pass the bit in the geometry's {@link Geometry3DOptions#extraBits | extraBits} instead, and any material draws the geometry with it:
+
+```ts
+import { FlatMaterial, Geometry3D, Material3D, Mesh3D } from '@pixi/3d';
+import type { ShaderBit } from '@pixi/3d';
+
+const swayBit: ShaderBit = {
+  name: 'grassSway',
+  level: 'shape',
+  // The blade's tip, high in its own y, sways most; uTime counts seconds
+  gpu: { vertex: { beforeTransform: 'position.x += sin(global.uTime + position.z) * 0.1 * position.y;' } },
+  gl: { vertex: { beforeTransform: 'position.x += sin(uTime + position.z) * 0.1 * position.y;' } },
+};
+
+const grass = new Geometry3D({ positions, normals, indices, extraBits: [swayBit] });
+
+const lit = new Mesh3D({ geometry: grass, material: new Material3D({ baseColor: 0x5a8f3c }) });
+const unlit = new Mesh3D({ geometry: grass, material: new FlatMaterial({ baseColor: 0x5a8f3c }) });
+view3d.root.addChild(lit, unlit); // both sway
+```
+
+A geometry bit says only where the surface is, and the material still decides its colour. So each bit has `level: 'shape'` and puts its code only in vertex slots and `header`. It declares no `material` or `instance` bindings and no `textures`, since those belong to a material and a geometry is shared between materials. It reads per-vertex values from an attribute it declares instead. The constructor throws, naming the bit, when one breaks a rule. The bits are fixed once the geometry is built.
+
+Shadows and outlines follow the bits, as they follow any bit with `level: 'shape'`. Culling and the shadow's fit still use the geometry's bounds, so pass a {@link Geometry3DOptions#bounds3D | bounds3D} that holds every place the bit can move a vertex to. Meshes whose geometries carry different bits compile different shaders and draw separately.
 
 ## Querying a mesh's triangles
 

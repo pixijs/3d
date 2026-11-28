@@ -163,3 +163,18 @@ app.ticker.add((ticker) => {
 ```
 
 Normals are stored quantized (`Int16Array`, 4 per vertex, 32767 = 1) by default. To rewrite them every frame, pass `quantizeNormals: false` with `dynamic: true`, write `geometry.normals as Float32Array`, then call `geometry.attributes.aNormal.buffer.update()`. The `positions` setter needs an array at least as long as the original; you can't grow a geometry.
+
+## A vertex shader step on the geometry: extraBits
+
+When the shape itself needs a vertex step (grass swaying, a strip turning to the camera), put the `ShaderBit` in the geometry's `extraBits`, not the material's: every material that draws the geometry then adds it, and shadows and outlines follow it. Fixed at construction; built-ins accept it too. The constructor throws, naming the bit, unless each bit has `level: 'shape'`, code only in `vertex` slots and `header`, no `material` or `instance` bindings and no `textures`. Read per-vertex values from an attribute the bit declares, and `uTime` for time. Pass a `bounds3D` that holds every place the bit moves a vertex to, or culling and the shadow fit clip it. Meshes on geometries with different bits draw separately.
+
+```ts
+const swayBit: ShaderBit = {
+  name: 'grassSway',
+  level: 'shape',
+  gpu: { vertex: { beforeTransform: 'position.x += sin(global.uTime + position.z) * 0.1 * position.y;' } },
+  gl: { vertex: { beforeTransform: 'position.x += sin(uTime + position.z) * 0.1 * position.y;' } },
+};
+const blade = new PlaneGeometry({ width: 0.1, height: 1, heightSegments: 4, extraBits: [swayBit] });
+const grass = new Mesh3D({ geometry: blade, material: new Material3D({ baseColor: 0x5a8f3c, doubleSided: true }) });
+```
