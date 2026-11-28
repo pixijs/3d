@@ -1,3 +1,4 @@
+import { Point } from 'pixi.js';
 import type { RenderTarget, TextureSource } from 'pixi.js';
 
 import { Matrix4 } from '../../../math/matrix/Matrix4';
@@ -35,6 +36,7 @@ import type { CascadeSlot, ShadowQuality } from './shadowPassUtils';
 
 const tempEyeMatrix = new Matrix4();
 const tempEye = new Vector3();
+const tempFrameSize = new Point();
 
 const _scratchSphere = new Sphere();
 const _scratchBox = new Box();
@@ -264,8 +266,8 @@ export abstract class ShadowRenderPassBase<
 
     const cameraData = slot.cameraData;
 
-    cameraData.setFrameSize(mapSize, mapSize);
-    cameraData.set(tempEye, view, projection);
+    tempFrameSize.set(mapSize, mapSize);
+    cameraData.set(tempEye, view, projection, tempFrameSize);
     cameraData.frustum.setFromProjectionMatrix(cameraData.viewProjection);
   }
 

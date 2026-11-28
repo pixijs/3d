@@ -10,6 +10,7 @@ import type { ReadonlyRect, RenderSession } from './render-passes/RenderSession'
 
 const scratchCameraPosition = new Vector3();
 const scratchJitter = new Point();
+const scratchFrameSize = new Point();
 const NO_JITTER: PointData = { x: 0, y: 0 };
 
 function flipProjectionY(projection: Matrix4): void {
@@ -72,8 +73,8 @@ export class CameraData {
   public readonly previousViewProjection = new Matrix4();
   public readonly viewportUvScale = new Point(1, 1);
   /**
-   * The size of the image NDC spans, in pixels: `frame`'s logical pixels on screen, texels over resolution in a
-   * render texture, or the shadow map's texels; read by `ribbonBit` for pixel widths
+   * The image's size in pixels: `frame`'s logical pixels, a render texture's texels over resolution, or the shadow
+   * map's texels; read by `ribbonBit`
    */
   public readonly frameSize = new Point(1, 1);
   public readonly lightTiles = new LightTiles();
@@ -122,6 +123,7 @@ export class CameraData {
    * @param position - Eye position in world space.
    * @param view - World to view.
    * @param projection - As built, in the GL convention.
+   * @param frameSize - The size in pixels the projection's NDC spans; see `frameSize`.
    * @param flipY - Whether the target's front face is inverted.
    * @param zeroToOneDepth - Whether to remap clip z to `[0, w]`, for WebGPU.
    * @param jitter - In NDC with Y up, not the pixels `Camera3D.jitter` holds.
@@ -130,6 +132,7 @@ export class CameraData {
     position: Vector3,
     view: Matrix4,
     projection: Matrix4,
+    frameSize: PointData,
     flipY = false,
     zeroToOneDepth = false,
     jitter: PointData = NO_JITTER,
@@ -137,6 +140,7 @@ export class CameraData {
     this.position.copyFrom(position);
     this.view.copyFrom(view);
     this.projection.copyFrom(projection);
+    this.frameSize.copyFrom(frameSize);
     toGpuMatrix(this.projection, jitter, flipY, zeroToOneDepth);
     this.viewProjection.multiplyMatrices(this.projection, view);
     this.lightTiles.invalidate();
@@ -147,13 +151,6 @@ export class CameraData {
 
   public setViewportUvScale(x: number, y: number): this {
     this.viewportUvScale.set(x, y);
-    this.uniformGroup.update();
-
-    return this;
-  }
-
-  public setFrameSize(width: number, height: number): this {
-    this.frameSize.set(width, height);
     this.uniformGroup.update();
 
     return this;
@@ -184,7 +181,18 @@ export class CameraData {
     const valid = viewport && viewport.width > 0 && viewport.height > 0;
     scratchJitter.set(valid ? (2 * x) / viewport.width : 0, valid ? (-2 * y) / viewport.height : 0);
 
-    this.set(scratchCameraPosition, camera.view, camera.projection, flipY, zeroToOneDepth, scratchJitter);
+    const pixelScale = camera.renderTexture?.source.resolution ?? 1;
+    scratchFrameSize.set(this.frame.width / pixelScale, this.frame.height / pixelScale);
+
+    this.set(
+      scratchCameraPosition,
+      camera.view,
+      camera.projection,
+      scratchFrameSize,
+      flipY,
+      zeroToOneDepth,
+      scratchJitter,
+    );
 
     const previous = this.previousViewProjection;
     previous.copyFrom(this._hasHistory ? this._lastViewProjection : camera.viewProjection);

@@ -10,6 +10,8 @@ import { Vector3 } from '~/math/vector/Vector3';
 import { Mesh3D } from '~/scene/Mesh3D';
 import { View3D } from '~/scene/View3D';
 
+const ANY_FRAME_SIZE = { x: 800, y: 600 };
+
 function ndc(projection: Matrix4, x: number, y: number, z: number): [number, number] {
   const e = projection.elements;
   const w = e[3] * x + e[7] * y + e[11] * z + e[15];
@@ -25,8 +27,11 @@ describe('CameraData jitter', () => {
       new Matrix4().makePerspective(1, 1, 0.5, 40),
       new Matrix4().makeOrthographic(-5, 5, 5, -5, 0.5, 40),
     ]) {
-      const plain = new CameraData().set(position, view, projection);
-      const jittered = new CameraData().set(position, view, projection, false, false, { x: 0.01, y: -0.02 });
+      const plain = new CameraData().set(position, view, projection, ANY_FRAME_SIZE);
+      const jittered = new CameraData().set(position, view, projection, ANY_FRAME_SIZE, false, false, {
+        x: 0.01,
+        y: -0.02,
+      });
 
       for (const z of [-0.5, -3, -39]) {
         const [x0, y0] = ndc(plain.projection, 0.3, -0.2, z);
@@ -39,8 +44,8 @@ describe('CameraData jitter', () => {
 
   it('shifts before the flip, so the offset points the same way on screen either way', () => {
     const projection = new Matrix4().makePerspective(1, 1, 0.5, 40);
-    const plain = new CameraData().set(position, view, projection, true);
-    const jittered = new CameraData().set(position, view, projection, true, false, { x: 0, y: 0.02 });
+    const plain = new CameraData().set(position, view, projection, ANY_FRAME_SIZE, true);
+    const jittered = new CameraData().set(position, view, projection, ANY_FRAME_SIZE, true, false, { x: 0, y: 0.02 });
 
     const [, y0] = ndc(plain.projection, 0, 0, -3);
     const [, y1] = ndc(jittered.projection, 0, 0, -3);
