@@ -18,6 +18,7 @@ const CATEGORIES = new Set([
   'materials',
   'extras:camera',
   'extras:debug',
+  'extras:geometry',
   'extras:materials',
   'extras:particles',
   'extras:post-processing',

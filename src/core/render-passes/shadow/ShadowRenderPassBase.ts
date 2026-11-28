@@ -1,3 +1,4 @@
+import { Point } from 'pixi.js';
 import type { RenderTarget, TextureSource } from 'pixi.js';
 
 import { Matrix4 } from '../../../math/matrix/Matrix4';
@@ -35,6 +36,7 @@ import type { CascadeSlot, ShadowQuality } from './shadowPassUtils';
 
 const tempEyeMatrix = new Matrix4();
 const tempEye = new Vector3();
+const tempFrameSize = new Point();
 
 const _scratchSphere = new Sphere();
 const _scratchBox = new Box();
@@ -258,13 +260,14 @@ export abstract class ShadowRenderPassBase<
    * Writes a fitted cascade's matrices and cull volume into its camera data, so a cascade throttled
    * off later frames keeps a frustum that matches its frozen matrices
    */
-  protected _commitCascadeCamera(slot: CascadeSlot, view: Matrix4, projection: Matrix4): void {
+  protected _commitCascadeCamera(slot: CascadeSlot, view: Matrix4, projection: Matrix4, mapSize: number): void {
     tempEyeMatrix.getInverse(view);
     tempEyeMatrix.extractPosition(tempEye);
 
     const cameraData = slot.cameraData;
 
-    cameraData.set(tempEye, view, projection);
+    tempFrameSize.set(mapSize, mapSize);
+    cameraData.set(tempEye, view, projection, tempFrameSize);
     cameraData.frustum.setFromProjectionMatrix(cameraData.viewProjection);
   }
 
@@ -291,14 +294,14 @@ export abstract class ShadowRenderPassBase<
       if (!renderSkip) {
         if (light.type === 'spot') {
           updateSpotShadowMatrices(light as SpotLight, inverseLightMatrix, lightProjectionMatrix, this._applyZRangeFix);
-          this._commitCascadeCamera(slot, inverseLightMatrix, lightProjectionMatrix);
+          this._commitCascadeCamera(slot, inverseLightMatrix, lightProjectionMatrix, mapSize);
           slot.normalBias = light.shadow.normalBias ?? SPOT_SHADOW_NORMAL_BIAS;
         } else {
           const bounds = light.shadow.bounds ?? this._resolveAutoShadowBounds(light, view3d, mapSize);
           if (bounds !== undefined && !bounds.isEmpty()) {
             inverseLightMatrix.getInverse(light.worldTransform);
             computeFixedBoxMatrix(bounds, inverseLightMatrix, lightProjectionMatrix, mapSize, this._applyZRangeFix);
-            this._commitCascadeCamera(slot, inverseLightMatrix, lightProjectionMatrix);
+            this._commitCascadeCamera(slot, inverseLightMatrix, lightProjectionMatrix, mapSize);
             slot.normalBias = this._resolveNormalBias(light, lightProjectionMatrix, mapSize);
           }
         }
@@ -333,7 +336,7 @@ export abstract class ShadowRenderPassBase<
       if (!renderSkip) {
         const splitNear = c === 0 ? camera.near : splits[c - 1];
         computeCascadeMatrix(camera, splitNear, splits[c], lightProjectionMatrix, mapSize, this._applyZRangeFix);
-        this._commitCascadeCamera(slot, inverseLightMatrix, lightProjectionMatrix);
+        this._commitCascadeCamera(slot, inverseLightMatrix, lightProjectionMatrix, mapSize);
         slot.normalBias = this._resolveNormalBias(light, lightProjectionMatrix, mapSize);
       }
 

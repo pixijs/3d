@@ -7,6 +7,8 @@ import { Vector3 } from '~/math/vector/Vector3';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { View3D } from '~/scene/View3D';
 
+const ANY_FRAME_SIZE = { x: 800, y: 600 };
+
 describe('CameraData', () => {
   const near = 0.5;
   const far = 40;
@@ -25,7 +27,7 @@ describe('CameraData', () => {
   });
 
   it('lights everything until the camera is uploaded, then uploads what was binned', () => {
-    const data = new CameraData().set(position, view, new Matrix4().makePerspective(1, 1, near, far));
+    const data = new CameraData().set(position, view, new Matrix4().makePerspective(1, 1, near, far), ANY_FRAME_SIZE);
 
     expect(data.lightTiles.masks.every((mask) => mask === -1)).toBe(true);
     expect(data.uniformGroup.uniforms.uLightTiles).toBe(data.lightTiles.masks);
@@ -167,7 +169,7 @@ describe('CameraData previous view-projection', () => {
     });
 
     const previous = Float32Array.from(data.previousViewProjection.elements);
-    data.set(new Vector3(), new Matrix4(), new Matrix4().makeOrthographic(-1, 1, 1, -1, 0.1, 10));
+    data.set(new Vector3(), new Matrix4(), new Matrix4().makeOrthographic(-1, 1, 1, -1, 0.1, 10), ANY_FRAME_SIZE);
     expect(data.previousViewProjection.elements, 'set() alone, as a shadow cascade calls it, never rolls').toEqual(
       previous,
     );

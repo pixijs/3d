@@ -98,7 +98,32 @@ const outline = new Geometry3D({
 view3d.root.addChild(new Mesh3D({ geometry: outline, material: new FlatMaterial() }));
 ```
 
-Lines are one pixel wide on both WebGL and WebGPU. For a thicker line, build a strip of triangles.
+Lines are one pixel wide on both WebGL and WebGPU. For a wider line, use a [ribbon](#ribbons).
+
+### Ribbons
+
+A {@link RibbonGeometry}, from `@pixi/3d/extras`, draws a line of points as a strip that turns to face the camera, with a {@link RibbonGeometryOptions#width | width} in the units of its points, which scales with the mesh, or, with {@link RibbonGeometryOptions#widthUnits | widthUnits} set to `'pixels'`, in pixels on screen. Use it for paths, trails, cables, hair and fibres. Any material draws it, and a lit one shades it as a round cord:
+
+```ts
+import { Material3D, Mesh3D } from '@pixi/3d';
+import { RibbonGeometry } from '@pixi/3d/extras';
+
+const points: number[] = [];
+for (let i = 0; i <= 64; i++) points.push(Math.cos(i * 0.3), i * 0.05, Math.sin(i * 0.3));
+
+const ribbon = new RibbonGeometry({ points, width: 0.08 });
+const spring = new Mesh3D({ geometry: ribbon, material: new Material3D({ baseColor: 0xe72264 }), parent: view3d.root });
+```
+
+The CPU builds the strip once: two vertices at each point, holding the line's direction there and the width. A shader bit in the ribbon's [`extraBits`](#moving-vertices-in-the-shader) pushes them apart across the line, square to the direction to the camera, each time the ribbon draws, so the strip never shows its edge. Shadows run the same step facing their light, so a ribbon casts a shadow its own width. A pixel width means nothing to a light, whose shadow map has pixels of its own, so turn {@link Mesh3D#castShadow | castShadow} off on a pixel ribbon.
+
+- **Many lines.** {@link RibbonGeometryOptions#pointsPerLine | pointsPerLine} splits the points into lines, so thousands of strands draw as one mesh.
+- **Per point.** `width` takes one number per point to taper the line. {@link RibbonGeometryOptions#colors | colors} takes an RGBA colour per point, and {@link RibbonGeometryOptions#pointAttributes | pointAttributes} any data of your own, which a [shader bit](../../extras/__docs__/custom-materials.md) reads as a vertex attribute. Each point's values go to both of its vertices.
+- **In a shader bit.** `uv.x` is the distance along the line and `uv.y` runs from 0 on one edge to 1 on the other, so a bit can draw dashes or a soft edge. The attribute `aRibbon` holds the line's direction in `xyz` and the width in `w`, negative on the first edge.
+- **Moving points.** On a ribbon built with `dynamic: true`, {@link RibbonGeometry#setPoints | setPoints} moves every point and keeps the rest, as often as every frame for a trail. For a ribbon built without it, build a new one.
+- **Corners.** The width runs square to the line's average direction at each point, so a sharp turn draws narrower. Add points either side of a corner to keep it full.
+
+The [ribbons example](../../../examples/geometry_ribbons/README.md) shows both units side by side.
 
 ### Vertex colours
 

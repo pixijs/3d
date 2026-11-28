@@ -53,6 +53,7 @@ From the theme kit (`examples/shared/theme/README.md`): `ThemeStage` with bigger
 - [Geometry from arrays](../geometry_custom/README.md): building a geometry's arrays yourself, and rewriting them
   every frame.
 - [Built-in shapes](../geometry_shapes/README.md): the shapes the engine builds, the torus among them.
+- [Ribbons](../geometry_ribbons/README.md): lines of any width, in world units or pixels.
 
 ## Reference image
 

@@ -103,6 +103,7 @@
     "geometry",
     "extras:camera",
     "extras:materials",
+    "extras:geometry",
     "extras:debug",
     "filters",
     "utils",
